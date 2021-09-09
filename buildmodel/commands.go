@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitpr"
 )
@@ -44,7 +45,7 @@ func ParseBoundFlags(name, description string) {
 
 // UpdateFlags is a list of flags used for an update command.
 type UpdateFlags struct {
-	manifest        *string
+	buildAssetJSON  *string
 	skipDockerfiles *bool
 }
 
@@ -52,7 +53,7 @@ type UpdateFlags struct {
 // ParseBoundFlags.
 func CreateBoundUpdateFlags() *UpdateFlags {
 	return &UpdateFlags{
-		manifest: flag.String("manifest", "", "The build asset manifest describing the Go build to update to."),
+		buildAssetJSON: flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
 
 		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
 	}
@@ -92,9 +93,14 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 		return err
 	}
 
-	if *f.manifest != "" {
+	manifest := dockermanifest.Manifest{}
+	if err := ReadJSONFile(manifestJsonPath, &manifest); err != nil {
+		return err
+	}
+
+	if *f.buildAssetJSON != "" {
 		assets := &buildassets.BuildAssets{}
-		if err := ReadJSONFile(*f.manifest, &assets); err != nil {
+		if err := ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
 			return err
 		}
 		if err := UpdateVersions(assets, versions); err != nil {
@@ -107,7 +113,7 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 
 	fmt.Printf("Generating '%v' based on '%v'...\n", manifestJsonPath, versionsJsonPath)
 
-	manifest := GenerateManifest(versions)
+	UpdateManifest(&manifest, versions)
 	if err := WriteJSONFile(manifestJsonPath, &manifest); err != nil {
 		return err
 	}

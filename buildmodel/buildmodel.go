@@ -45,10 +45,10 @@ func WriteJSONFile(path string, i interface{}) error {
 	return nil
 }
 
-// GenerateManifest takes a 'versions.json' model and generates a 'manifest.json' model that would
-// build and tag all versions specified. Slices in the generated model are sorted for diff
-// stability. Map stability is handled by the Go JSON library when the model is serialized.
-func GenerateManifest(versions dockerversions.Versions) dockermanifest.Manifest {
+// UpdateManifest takes a 'versions.json' model and updates a build manifest to make it build and
+// tag all versions specified. Slices in the generated model are sorted, for diff stability. Map
+// stability is handled by the Go JSON library when the model is serialized.
+func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.Versions) {
 	sortedMajorMinorKeys := make([]string, 0, len(versions))
 	for key := range versions {
 		sortedMajorMinorKeys = append(sortedMajorMinorKeys, key)
@@ -147,19 +147,27 @@ func GenerateManifest(versions dockerversions.Versions) dockermanifest.Manifest 
 		}
 	}
 
-	return dockermanifest.Manifest{
-		Readme:    "README.md",
-		Registry:  "mcr.microsoft.com",
-		Variables: map[string]interface{}{},
-		Includes:  []string{},
-		Repos: []*dockermanifest.Repo{
-			{
-				ID:     "golang",
-				Name:   "oss/go/golang/alpha",
-				Images: images,
-			},
-		},
+	// If no existing manifest or list of repos was provided, set up default values.
+	if manifest == nil {
+		manifest = &dockermanifest.Manifest{
+			Readme:    "README.md",
+			Registry:  "mcr.microsoft.com",
+			Variables: map[string]interface{}{},
+			Includes:  []string{},
+		}
 	}
+
+	if len(manifest.Repos) == 0 {
+		manifest.Repos = []*dockermanifest.Repo{
+			{
+				ID:   "golang",
+				Name: "oss/go/microsoft/golang/alpha",
+			},
+		}
+	}
+
+	// Always update the 0th repo. Only one repo per branch is supported by auto-update.
+	manifest.Repos[0].Images = images
 }
 
 // NoMajorMinorUpgradeMatchError indicates that while running UpdateVersions, the input assets file
