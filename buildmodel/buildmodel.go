@@ -24,6 +24,12 @@ func ReadJSONFile(path string, i interface{}) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}()
+
 	d := json.NewDecoder(f)
 	if err := d.Decode(i); err != nil {
 		return err
@@ -37,6 +43,12 @@ func WriteJSONFile(path string, i interface{}) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}()
+
 	d := json.NewEncoder(f)
 	d.SetIndent("", "  ")
 	if err := d.Encode(i); err != nil {
