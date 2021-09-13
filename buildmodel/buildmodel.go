@@ -19,14 +19,14 @@ import (
 )
 
 // ReadJSONFile reads one JSON value from the specified file.
-func ReadJSONFile(path string, i interface{}) error {
+func ReadJSONFile(path string, i interface{}) (err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := f.Close(); err != nil {
-			panic(err)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
 		}
 	}()
 
@@ -38,14 +38,14 @@ func ReadJSONFile(path string, i interface{}) error {
 }
 
 // WriteJSONFile writes one specified value to a file as indented JSON with a trailing newline.
-func WriteJSONFile(path string, i interface{}) error {
+func WriteJSONFile(path string, i interface{}) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := f.Close(); err != nil {
-			panic(err)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
 		}
 	}()
 
