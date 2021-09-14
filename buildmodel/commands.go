@@ -271,11 +271,12 @@ func SubmitUpdatePR(uf *UpdateFlags, pf *PRFlags) error {
 		fmt.Printf("---- Approving with reviewer account...\n")
 		err = gitpr.MutateGraphQL(
 			*pf.githubPATReviewer,
-			`mutation {
-						addPullRequestReview(input: {pullRequestId: "`+p.NodeID+`", event: APPROVE, body: "Thanks! Auto-approving."}) {
-							clientMutationId
-						}
-					}`)
+			`mutation ($nodeID: ID!) {
+				addPullRequestReview(input: {pullRequestId: $nodeID, event: APPROVE, body: "Thanks! Auto-approving."}) {
+					clientMutationId
+				}
+			}`,
+			map[string]interface{}{"nodeID": p.NodeID})
 		if err != nil {
 			return err
 		}
@@ -284,11 +285,12 @@ func SubmitUpdatePR(uf *UpdateFlags, pf *PRFlags) error {
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
 	err = gitpr.MutateGraphQL(
 		*pf.githubPATReviewer,
-		`mutation {
-					enablePullRequestAutoMerge(input: {pullRequestId: "`+p.NodeID+`", mergeMethod: MERGE}) {
-						clientMutationId
-					}
-				}`)
+		`mutation ($nodeID: ID!) {
+			enablePullRequestAutoMerge(input: {pullRequestId: $nodeID, mergeMethod: MERGE}) {
+				clientMutationId
+			}
+		}`,
+		map[string]interface{}{"nodeID": p.NodeID})
 	if err != nil {
 		return err
 	}

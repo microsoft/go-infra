@@ -245,10 +245,14 @@ func PostGitHub(ownerRepo string, request GitHubRequest, pat string) (response *
 	return
 }
 
-func QueryGraphQL(pat string, query string, result interface{}) error {
+func QueryGraphQL(pat string, query string, variables map[string]interface{}, result interface{}) error {
 	queryBytes, err := json.Marshal(&struct {
-		Query string `json:"query"`
-	}{query})
+		Query     string                 `json:"query"`
+		Variables map[string]interface{} `json:"variables,omitempty"`
+	}{
+		query,
+		variables,
+	})
 	if err != nil {
 		return err
 	}
@@ -262,15 +266,15 @@ func QueryGraphQL(pat string, query string, result interface{}) error {
 	return sendJSONRequestSuccessful(httpRequest, result)
 }
 
-func MutateGraphQL(pat string, query string) error {
+func MutateGraphQL(pat string, query string, variables map[string]interface{}) error {
 	// Queries and mutations use the same API. But with a mutation, the results aren't useful to us.
-	return QueryGraphQL(pat, query, &struct{}{})
+	return QueryGraphQL(pat, query, variables, &struct{}{})
 }
 
 func FindExistingPR(b *PRBranch, githubUser string, originOwner string, githubPAT string) (string, error) {
-	prQuery := `{
-		user(login: "` + githubUser + `") {
-			pullRequests(states: OPEN, baseRefName: "` + b.Name + `", first: 5) {
+	prQuery := `query ($githubUser: String!, $baseRefName: String!) {
+		user(login: $githubUser) {
+			pullRequests(states: OPEN, baseRefName: $baseRefName, first: 5) {
 				nodes {
 					title
 					id
@@ -286,6 +290,10 @@ func FindExistingPR(b *PRBranch, githubUser string, originOwner string, githubPA
 			}
 		}
 	}`
+	variables := map[string]interface{}{
+		"githubUser":  githubUser,
+		"baseRefName": b.Name,
+	}
 	// Output structure from the query. We pull out some data to make sure our search result is what
 	// we expect and avoid relying solely on the search engine query. This may be expanded in the
 	// future to search for a specific PR among the search results, if necessary. (Needed if we want
@@ -318,7 +326,7 @@ func FindExistingPR(b *PRBranch, githubUser string, originOwner string, githubPA
 		}
 	}{}
 
-	if err := QueryGraphQL(githubPAT, prQuery, result); err != nil {
+	if err := QueryGraphQL(githubPAT, prQuery, variables, result); err != nil {
 		return "", err
 	}
 	fmt.Printf("%+v\n", result)
