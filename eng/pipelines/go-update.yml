@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: build
+      source: microsoft-go
+      trigger:
+        branches:
+          include:
+            - microsoft/main
+            - microsoft/release-branch.*
+
+variables:
+  - group: Microsoft-GoLang-bot
+
+jobs:
+  - job: Update
+    workspace:
+      clean: all
+    pool:
+      # This is a utility job: use generic recent LTS.
+      vmImage: ubuntu-20.04
+    variables:
+      assetJsonPath: $(Pipeline.Workspace)/build/BuildAssets/assets.json
+    steps:
+      - template: steps/checkout-unix-task.yml
+      - template: steps/init-pwsh-task.yml
+
+      - pwsh: |
+          echo "pipelineName: $(resources.pipeline.build.pipelineName)"
+          echo "pipelineID: $(resources.pipeline.build.pipelineID)"
+          echo "runName: $(resources.pipeline.build.runName)"
+          echo "runID: $(resources.pipeline.build.runID)"
+          echo "sourceBranch: $(resources.pipeline.build.sourceBranch)"
+          echo "sourceCommit: $(resources.pipeline.build.sourceCommit)"
+        displayName: Log source build/pipeline info
+
+      - download: build
+        artifact: BuildAssets
+
+      - task: GoTool@0
+        inputs:
+          version: 1.17.1
+
+      - pwsh: |
+          git config --global user.name 'microsoft-golang-bot'
+          git config --global user.email 'microsoft-golang-bot@users.noreply.github.com'
+
+          go run ./cmd/dockerupdatepr `
+            -branch microsoft/main `
+            -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-docker `
+            -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+            -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
+            -build-asset-json "$(assetJsonPath)"
+        displayName: Update go-docker
