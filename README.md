@@ -2,7 +2,7 @@
 
 This repository contains libraries and utilities that Microsoft uses to:
 
-* Build Go inside Microsoft infrastructure using up to date source code.
+* Build Go inside Microsoft infrastructure using up-to-date source code.
 * Build Docker images that contain the Microsoft build of Go.
 
 To build Go from source or download a binary release, visit
