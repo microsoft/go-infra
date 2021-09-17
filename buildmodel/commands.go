@@ -53,9 +53,9 @@ type BuildAssetJsonFlags struct {
 	output *string
 }
 
-// CreateBoundBuildAssetJsonFlags creates BuildAssetJsonFlags with the 'flag' package, registering
-// them for ParseBoundFlags.
-func CreateBoundBuildAssetJsonFlags() *BuildAssetJsonFlags {
+// BindBuildAssetJsonFlags creates BuildAssetJsonFlags with the 'flag' package, globally registering
+// them in the flag package so ParseBoundFlags will find them.
+func BindBuildAssetJsonFlags() *BuildAssetJsonFlags {
 	return &BuildAssetJsonFlags{
 		artifactsDir:   flag.String("artifacts-dir", "eng/artifacts/bin", "The path of the directory to scan for artifacts."),
 		branch:         flag.String("branch", "unknown", "The name of the branch that produced these artifacts."),
@@ -69,7 +69,7 @@ func CreateBoundBuildAssetJsonFlags() *BuildAssetJsonFlags {
 // GenerateBuildAssetJson uses the specified parameters to summarize a build in a build asset json
 // file.
 func GenerateBuildAssetJson(f *BuildAssetJsonFlags) error {
-	m, err := buildassets.NewFromBuildResults(*f.sourceDir, *f.artifactsDir, *f.destinationURL, *f.branch)
+	m, err := buildassets.CreateFromBuildResultsDirectory(*f.sourceDir, *f.artifactsDir, *f.destinationURL, *f.branch)
 	if err != nil {
 		return err
 	}
@@ -97,8 +97,9 @@ type PRFlags struct {
 	skipDockerfiles *bool
 }
 
-// CreateBoundPRFlags creates PRFlags with the 'flag' package, registering them for ParseBoundFlags.
-func CreateBoundPRFlags() *PRFlags {
+// BindPRFlags creates PRFlags with the 'flag' package, globally registering them in the flag
+// package so ParseBoundFlags will find them.
+func BindPRFlags() *PRFlags {
 	var artifactsDir = filepath.Join(getwd(), "eng", "artifacts")
 	return &PRFlags{
 		dryRun:     flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),

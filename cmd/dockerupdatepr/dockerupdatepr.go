@@ -25,7 +25,7 @@ This script creates a temporary copy of the Go Docker repository in 'eng/artifac
 `
 
 func main() {
-	f := buildmodel.CreateBoundPRFlags()
+	f := buildmodel.BindPRFlags()
 
 	buildmodel.ParseBoundFlags(description)
 

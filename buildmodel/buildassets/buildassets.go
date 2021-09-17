@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
@@ -39,11 +40,11 @@ type BuildAssets struct {
 var archiveSuffixes = []string{".tar.gz", ".zip"}
 var checksumSuffix = ".sha256"
 
-// NewFromBuildResults scans a source directory, a directory of build outputs, and environment
-// variables to summarize the outputs in a BuildAssets struct. It also takes a URL where the assets
-// will be uploaded, and includes the expected URL of each asset in the summary. The build's branch
-// is also included. This struct is used later to perform auto-updates.
-func NewFromBuildResults(sourceDir string, artifactsDir string, destinationURL string, branch string) (*BuildAssets, error) {
+// CreateFromBuildResultsDirectory scans a source directory, a directory of build outputs, and
+// environment variables to summarize the outputs in a BuildAssets struct. It also takes a URL where
+// the assets will be uploaded, and includes the expected URL of each asset in the summary. The
+// build's branch is also included. This struct is used later to perform auto-updates.
+func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, destinationURL string, branch string) (*BuildAssets, error) {
 	buildID := "unknown"
 	if id, ok := os.LookupEnv("BUILD_BUILDID"); ok {
 		buildID = id
@@ -57,7 +58,7 @@ func NewFromBuildResults(sourceDir string, artifactsDir string, destinationURL s
 
 	// Store the set of artifacts discovered in a map. This lets us easily associate a "go.tar.gz"
 	// with its "go.tar.gz.sha256" file.
-	archMap := map[string]*dockerversions.Arch{}
+	archMap := make(map[string]*dockerversions.Arch)
 	getOrCreateArch := func(name string) *dockerversions.Arch {
 		if arch, ok := archMap[name]; ok {
 			return arch
@@ -116,6 +117,11 @@ func NewFromBuildResults(sourceDir string, artifactsDir string, destinationURL s
 		arches = append(arches, v)
 	}
 
+	// Sort arch entries by unique field (URL) for stable order.
+	sort.Slice(arches, func(i, j int) bool {
+		return arches[i].URL < arches[j].URL
+	})
+
 	return &BuildAssets{
 		Branch:  branch,
 		BuildID: buildID,
@@ -129,10 +135,10 @@ func NewFromBuildResults(sourceDir string, artifactsDir string, destinationURL s
 // helps with the "VERSION" files that are only present in Go release branches.
 func getVersion(path string, defaultVersion string) (version string) {
 	bytes, err := ioutil.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return defaultVersion
-	}
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaultVersion
+		}
 		panic(err)
 	}
 	return string(bytes)
