@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AzureFunctionsVersion>v4</AzureFunctionsVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Azure.Functions.Extensions" Version="1.0.0" />
+    <PackageReference Include="Microsoft.Azure.WebJobs.Extensions.Storage" Version="3.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.AzureKeyVault" Version="3.1.18" />
+    <PackageReference Include="Microsoft.NET.Sdk.Functions" Version="3.0.13" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GoLang.Mirror\GoLang.Mirror.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="host.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+</Project>
