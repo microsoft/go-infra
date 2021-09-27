@@ -40,18 +40,33 @@ type BuildAssets struct {
 var archiveSuffixes = []string{".tar.gz", ".zip"}
 var checksumSuffix = ".sha256"
 
-// CreateFromBuildResultsDirectory scans a source directory, a directory of build outputs, and
-// environment variables to summarize the outputs in a BuildAssets struct. It also takes a URL where
-// the assets will be uploaded, and includes the expected URL of each asset in the summary. The
-// build's branch is also included. This struct is used later to perform auto-updates.
-func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, destinationURL string, branch string) (*BuildAssets, error) {
-	buildID := "unknown"
-	if id, ok := os.LookupEnv("BUILD_BUILDID"); ok {
-		buildID = id
-	}
+// BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
+// source, and includes extra information that helps make sense of the build results.
+type BuildResultsDirectoryInfo struct {
+	// SourceDir is the path to the source code that was built. This is checked for files that
+	// indicate what version of Go was built.
+	SourceDir string
+	// ArtifactsDir is the path to the directory that contains the artifacts (.tar.gz, .zip,
+	// .sha256) that were built.
+	ArtifactsDir string
+	// DestinationURL is the URL where the assets will be uploaded, if this is an internal build
+	// that will be published somewhere. This lets us include the final URL in the build asset data
+	// so auto-update can pick it up easily.
+	DestinationURL string
+	// Branch is the Git branch this build was built with. In many cases it can be determined with
+	// Git commands, but this is not always possible (or reliable), so we pass it through as a
+	// simple arg.
+	Branch string
+	// BuildID uniquely identifies the CI pipeline build that produced this result. This allows devs
+	// to quickly trace back to the originating build if something goes wrong later on.
+	BuildID string
+}
 
-	goVersion := getVersion(path.Join(sourceDir, "VERSION"), "main")
-	goRevision := getVersion(path.Join(sourceDir, "MICROSOFT_REVISION"), "1")
+// CreateSummary scans the paths/info from a BuildResultsDirectoryInfo to summarize the outputs of
+// the build in a BuildAssets struct. The result can be used later to perform an auto-update.
+func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
+	goVersion := getVersion(path.Join(b.SourceDir, "VERSION"), "main")
+	goRevision := getVersion(path.Join(b.SourceDir, "MICROSOFT_REVISION"), "1")
 
 	// Go version file content begins with "go", matching the tags, but we just want numbers.
 	goVersion = strings.TrimPrefix(goVersion, "go")
@@ -68,8 +83,8 @@ func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, dest
 		return a
 	}
 
-	if artifactsDir != "" {
-		entries, err := os.ReadDir(artifactsDir)
+	if b.ArtifactsDir != "" {
+		entries, err := os.ReadDir(b.ArtifactsDir)
 		if err != nil {
 			panic(err)
 		}
@@ -80,7 +95,7 @@ func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, dest
 			}
 			fmt.Printf("Artifact file: %v\n", e.Name())
 
-			fullPath := path.Join(artifactsDir, e.Name())
+			fullPath := path.Join(b.ArtifactsDir, e.Name())
 
 			// Is it a checksum file?
 			if strings.HasSuffix(e.Name(), checksumSuffix) {
@@ -101,7 +116,7 @@ func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, dest
 					goOS, goArch := osArchParts[0], osArchParts[1]
 
 					a := getOrCreateArch(e.Name())
-					a.URL = destinationURL + "/" + e.Name()
+					a.URL = b.DestinationURL + "/" + e.Name()
 					a.Env = dockerversions.ArchEnv{
 						GOOS:   goOS,
 						GOARCH: goArch,
@@ -123,8 +138,8 @@ func CreateFromBuildResultsDirectory(sourceDir string, artifactsDir string, dest
 	})
 
 	return &BuildAssets{
-		Branch:  branch,
-		BuildID: buildID,
+		Branch:  b.Branch,
+		BuildID: b.BuildID,
 		Version: goVersion + "-" + goRevision,
 		Arches:  arches,
 	}, nil

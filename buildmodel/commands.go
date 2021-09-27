@@ -69,7 +69,22 @@ func BindBuildAssetJsonFlags() *BuildAssetJsonFlags {
 // GenerateBuildAssetJson uses the specified parameters to summarize a build in a build asset json
 // file.
 func GenerateBuildAssetJson(f *BuildAssetJsonFlags) error {
-	m, err := buildassets.CreateFromBuildResultsDirectory(*f.sourceDir, *f.artifactsDir, *f.destinationURL, *f.branch)
+	// Look up value of Build.BuildId Azure Pipelines predefined variable:
+	// https://docs.microsoft.com/en-us/azure/devops/pipelines/build/variables?view=azure-devops&tabs=yaml#build-variables-devops-services
+	buildID := "unknown"
+	if id, ok := os.LookupEnv("BUILD_BUILDID"); ok {
+		buildID = id
+	}
+
+	b := &buildassets.BuildResultsDirectoryInfo{
+		SourceDir:      *f.sourceDir,
+		ArtifactsDir:   *f.artifactsDir,
+		DestinationURL: *f.destinationURL,
+		Branch:         *f.branch,
+		BuildID:        buildID,
+	}
+
+	m, err := b.CreateSummary()
 	if err != nil {
 		return err
 	}
