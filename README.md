@@ -1,22 +1,14 @@
 # Microsoft Go Infrastructure
 
-The `github.com/microsoft/go-infra` module is a library used by Microsoft to
-build Go from source. The repository also contains other utilities that help
-Microsoft to build and use Go.
+This repository contains libraries and utilities that Microsoft uses to:
 
-## Branches
+* Build Go inside Microsoft infrastructure using up-to-date source code.
+* Build Docker images that contain the Microsoft build of Go.
+* Support the secure use of Go and the Go ecosystem across Microsoft.
 
-This repository has only one maintained branch, `main`, rather than maintaining
-one branch per release.
-
-Using a single branch makes this repository easy to maintain. It also means we
-can use the infra module to share code between the Go release branches without
-as many cherry-picks, only module dependency updates.
-
-The cost of a single branch is that any change to the branch needs to be
-compatible with *all* release branches. This is why some infra must still be
-maintained in the release branches themselves: differences between the branches
-create different infra requirements.
+To build Go from source or download a binary release, visit
+https://golang.org/dl/. This repository is not involved in the official Go
+distribution.
 
 ## Contributing
 
