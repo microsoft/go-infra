@@ -44,9 +44,9 @@ func (b PRBranch) PRPushRefspec() string {
 }
 
 // CreateGitHubPR creates the data model that can be sent to GitHub to create a PR for this branch.
-func (b PRBranch) CreateGitHubPR(githubUser string) GitHubRequest {
+func (b PRBranch) CreateGitHubPR(headOwner string) GitHubRequest {
 	return GitHubRequest{
-		Head: githubUser + ":" + b.PRBranch(),
+		Head: headOwner + ":" + b.PRBranch(),
 		Base: b.Name,
 
 		Title: fmt.Sprintf("Update dependencies in `%v`", b.Name),
@@ -148,7 +148,7 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 	return
 }
 
-// sendJSONRequestSuccessful sends a request for JSON information via sendJsonRequest and verifies
+// sendJSONRequestSuccessful sends a request for JSON information via sendJSONRequest and verifies
 // the status code is success.
 func sendJSONRequestSuccessful(request *http.Request, response interface{}) error {
 	status, err := sendJSONRequest(request, response)
@@ -271,7 +271,10 @@ func MutateGraphQL(pat string, query string, variables map[string]interface{}) e
 	return QueryGraphQL(pat, query, variables, &struct{}{})
 }
 
-func FindExistingPR(b *PRBranch, githubUser string, originOwner string, githubPAT string) (string, error) {
+// FindExistingPR looks for a PR submitted to a target branch with a set of filters. Returns the
+// result's graphql identity if one match is found, empty string if no matches are found, and an
+// error if more than one match was found.
+func FindExistingPR(b *PRBranch, githubUser string, headOwner string, originOwner string, githubPAT string) (string, error) {
 	prQuery := `query ($githubUser: String!, $baseRefName: String!) {
 		user(login: $githubUser) {
 			pullRequests(states: OPEN, baseRefName: $baseRefName, first: 5) {
@@ -334,20 +337,23 @@ func FindExistingPR(b *PRBranch, githubUser string, originOwner string, githubPA
 	// Basic search result validation. We could be more flexible in some cases, but the goal here is
 	// to detect an unknown state early so we don't end up doing something strange.
 
-	if prNodes := len(result.Data.User.PullRequests.Nodes); prNodes != 1 {
-		return "", fmt.Errorf("expected 1 PR search result, found %v", prNodes)
+	if prNodes := len(result.Data.User.PullRequests.Nodes); prNodes > 1 {
+		return "", fmt.Errorf("expected 0/1 PR search result, found %v", prNodes)
 	}
 	if result.Data.User.PullRequests.PageInfo.HasNextPage {
-		return "", fmt.Errorf("expected 1 PR search result, but the results say there's another page")
+		return "", fmt.Errorf("expected 0/1 PR search result, but the results say there's another page")
+	}
+
+	if len(result.Data.User.PullRequests.Nodes) == 0 {
+		return "", nil
 	}
 
 	n := result.Data.User.PullRequests.Nodes[0]
-	if headOwner := n.HeadRepositoryOwner.Login; headOwner != githubUser {
-		return "", fmt.Errorf("pull request head owner is %v, expected %v", headOwner, githubUser)
+	if foundHeadOwner := n.HeadRepositoryOwner.Login; foundHeadOwner != headOwner {
+		return "", fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, headOwner)
 	}
-	if baseOwner := n.BaseRepository.Owner.Login; baseOwner != originOwner {
-		return "", fmt.Errorf("pull request base owner is %v, expected %v", baseOwner, originOwner)
+	if foundBaseOwner := n.BaseRepository.Owner.Login; foundBaseOwner != originOwner {
+		return "", fmt.Errorf("pull request base owner is %v, expected %v", foundBaseOwner, originOwner)
 	}
-
 	return n.ID, nil
 }

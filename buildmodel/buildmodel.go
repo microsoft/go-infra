@@ -22,7 +22,7 @@ import (
 func ReadJSONFile(path string, i interface{}) (err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to open JSON file %v for reading: %w", path, err)
 	}
 	defer func() {
 		if closeErr := f.Close(); err == nil {
@@ -32,7 +32,7 @@ func ReadJSONFile(path string, i interface{}) (err error) {
 
 	d := json.NewDecoder(f)
 	if err := d.Decode(i); err != nil {
-		return err
+		return fmt.Errorf("unable to decode JSON file %v: %w", path, err)
 	}
 	return nil
 }
@@ -41,7 +41,7 @@ func ReadJSONFile(path string, i interface{}) (err error) {
 func WriteJSONFile(path string, i interface{}) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to open JSON file %v for writing: %w", path, err)
 	}
 	defer func() {
 		if closeErr := f.Close(); err == nil {
@@ -52,7 +52,7 @@ func WriteJSONFile(path string, i interface{}) (err error) {
 	d := json.NewEncoder(f)
 	d.SetIndent("", "  ")
 	if err := d.Encode(i); err != nil {
-		return err
+		return fmt.Errorf("unable to encode model into JSON file %v: %w", path, err)
 	}
 	return nil
 }
