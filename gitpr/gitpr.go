@@ -148,7 +148,7 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 	return
 }
 
-// sendJSONRequestSuccessful sends a request for JSON information via sendJsonRequest and verifies
+// sendJSONRequestSuccessful sends a request for JSON information via sendJSONRequest and verifies
 // the status code is success.
 func sendJSONRequestSuccessful(request *http.Request, response interface{}) error {
 	status, err := sendJSONRequest(request, response)

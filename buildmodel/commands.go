@@ -43,8 +43,8 @@ func ParseBoundFlags(description string) {
 	}
 }
 
-// BuildAssetJsonFlags is a list of flags to create a build asset JSON file.
-type BuildAssetJsonFlags struct {
+// BuildAssetJSONFlags is a list of flags to create a build asset JSON file.
+type BuildAssetJSONFlags struct {
 	artifactsDir   *string
 	branch         *string
 	destinationURL *string
@@ -53,10 +53,10 @@ type BuildAssetJsonFlags struct {
 	output *string
 }
 
-// BindBuildAssetJsonFlags creates BuildAssetJsonFlags with the 'flag' package, globally registering
+// BindBuildAssetJSONFlags creates BuildAssetJSONFlags with the 'flag' package, globally registering
 // them in the flag package so ParseBoundFlags will find them.
-func BindBuildAssetJsonFlags() *BuildAssetJsonFlags {
-	return &BuildAssetJsonFlags{
+func BindBuildAssetJSONFlags() *BuildAssetJSONFlags {
+	return &BuildAssetJSONFlags{
 		artifactsDir:   flag.String("artifacts-dir", "eng/artifacts/bin", "The path of the directory to scan for artifacts."),
 		branch:         flag.String("branch", "unknown", "The name of the branch that produced these artifacts."),
 		destinationURL: flag.String("destination-url", "https://example.org/default", "The base URL where all files in the source directory can be downloaded from."),
@@ -66,9 +66,9 @@ func BindBuildAssetJsonFlags() *BuildAssetJsonFlags {
 	}
 }
 
-// GenerateBuildAssetJson uses the specified parameters to summarize a build in a build asset json
+// GenerateBuildAssetJSON uses the specified parameters to summarize a build in a build asset JSON
 // file.
-func GenerateBuildAssetJson(f *BuildAssetJsonFlags) error {
+func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 	// Look up value of Build.BuildId Azure Pipelines predefined variable:
 	// https://docs.microsoft.com/en-us/azure/devops/pipelines/build/variables?view=azure-devops&tabs=yaml#build-variables-devops-services
 	buildID := "unknown"
@@ -327,8 +327,8 @@ type updateResults struct {
 // options. It finds the 'versions.json' and 'manifest.json' files, updates them appropriately, and
 // optionally regenerates the Dockerfiles.
 func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
-	var versionsJsonPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
-	var manifestJsonPath = filepath.Join(repoRoot, "manifest.json")
+	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
+	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
 
 	var dockerfileUpdateScript = filepath.Join(repoRoot, "eng", "update-dockerfiles.sh")
 
@@ -347,12 +347,12 @@ func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
 	}
 
 	versions := dockerversions.Versions{}
-	if err := ReadJSONFile(versionsJsonPath, &versions); err != nil {
+	if err := ReadJSONFile(versionsJSONPath, &versions); err != nil {
 		return nil, err
 	}
 
 	manifest := dockermanifest.Manifest{}
-	if err := ReadJSONFile(manifestJsonPath, &manifest); err != nil {
+	if err := ReadJSONFile(manifestJSONPath, &manifest); err != nil {
 		return nil, err
 	}
 
@@ -365,15 +365,15 @@ func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
 		if err := UpdateVersions(assets, versions); err != nil {
 			return nil, err
 		}
-		if err := WriteJSONFile(versionsJsonPath, &versions); err != nil {
+		if err := WriteJSONFile(versionsJSONPath, &versions); err != nil {
 			return nil, err
 		}
 	}
 
-	fmt.Printf("Generating '%v' based on '%v'...\n", manifestJsonPath, versionsJsonPath)
+	fmt.Printf("Generating '%v' based on '%v'...\n", manifestJSONPath, versionsJSONPath)
 
 	UpdateManifest(&manifest, versions)
-	if err := WriteJSONFile(manifestJsonPath, &manifest); err != nil {
+	if err := WriteJSONFile(manifestJSONPath, &manifest); err != nil {
 		return nil, err
 	}
 
