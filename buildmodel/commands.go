@@ -237,7 +237,12 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return nil
 	}
 
-	runOrPanic(newGitCmd("commit", "-a", "-m", "Update "+b.Name+" to "+r.buildAssets.Version))
+	commitMessage := "Update " + b.Name
+	if r.buildAssets != nil {
+		commitMessage += " to " + r.buildAssets.Version
+	}
+
+	runOrPanic(newGitCmd("commit", "-a", "-m", commitMessage))
 
 	// Push the commit.
 	args := []string{"push", *f.origin, b.PRPushRefspec()}
