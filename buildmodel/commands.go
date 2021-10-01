@@ -109,8 +109,7 @@ type PRFlags struct {
 	githubPAT         *string
 	githubPATReviewer *string
 
-	buildAssetJSON  *string
-	skipDockerfiles *bool
+	UpdateFlags
 }
 
 // BindPRFlags creates PRFlags with the 'flag' package, globally registering them in the flag
@@ -128,8 +127,7 @@ func BindPRFlags() *PRFlags {
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-		buildAssetJSON:  flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
-		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+		UpdateFlags: *BindUpdateFlags(),
 	}
 }
 
@@ -227,8 +225,8 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 	runOrPanic(newGitCmd("checkout", b.PRBranch()))
 
-	// Make changes to the files ins the temp repo.
-	r, err := runUpdate(gitDir, f)
+	// Make changes to the files in the temp repo.
+	r, err := RunUpdate(gitDir, &f.UpdateFlags)
 	if err != nil {
 		return err
 	}
@@ -329,14 +327,29 @@ func MakeWorkDir(rootDir string) (string, error) {
 	return os.MkdirTemp(rootDir, fmt.Sprintf("%s_*", pathDate))
 }
 
-type updateResults struct {
+// UpdateFlags is a list of flags used for an update command.
+type UpdateFlags struct {
+	buildAssetJSON  *string
+	skipDockerfiles *bool
+}
+
+// BindUpdateFlags creates UpdateFlags with the 'flag' package, globally registering them in
+// the flag package so ParseBoundFlags will find them.
+func BindUpdateFlags() *UpdateFlags {
+	return &UpdateFlags{
+		buildAssetJSON:  flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
+		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+	}
+}
+
+type UpdateResults struct {
 	buildAssets *buildassets.BuildAssets
 }
 
-// runUpdate runs an auto-update process in the given Go Docker repository using the given update
+// RunUpdate runs an auto-update process in the given Go Docker repository using the given update
 // options. It finds the 'versions.json' and 'manifest.json' files, updates them appropriately, and
 // optionally regenerates the Dockerfiles.
-func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
+func RunUpdate(repoRoot string, f *UpdateFlags) (*UpdateResults, error) {
 	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
 	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
 
@@ -393,7 +406,7 @@ func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
 			return nil, err
 		}
 	}
-	return &updateResults{
+	return &UpdateResults{
 		buildAssets: assets,
 	}, nil
 }
