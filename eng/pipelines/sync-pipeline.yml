@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+trigger: none
+pr: none
+schedules:
+  - cron: '0 16 * * Mon,Wed,Fri'
+    displayName: Sync from upstream three times a week
+    branches:
+      include:
+        - microsoft/main
+    always: true
+
+variables:
+  - group: Microsoft-GoLang-bot
+
+jobs:
+  - job: Sync
+    pool:
+      vmImage: ubuntu-20.04
+    workspace:
+      clean: all
+    steps:
+      - template: steps/checkout-unix-task.yml
+      - template: steps/init-pwsh-task.yml
+
+      - template: steps/init-go.yml
+      - template: steps/set-bot-git-author.yml
+
+      - pwsh: |
+          go run ./cmd/sync `
+            -git-auth-pat `
+            -github-user microsoft-golang-bot `
+            -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+            -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT)
+        displayName: Sync

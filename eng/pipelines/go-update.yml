@@ -42,14 +42,10 @@ jobs:
       - download: build
         artifact: BuildAssets
 
-      - task: GoTool@0
-        inputs:
-          version: 1.17.1
+      - template: steps/init-go.yml
+      - template: steps/set-bot-git-author.yml
 
       - pwsh: |
-          git config --global user.name 'microsoft-golang-bot'
-          git config --global user.email 'microsoft-golang-bot@users.noreply.github.com'
-
           go run ./cmd/dockerupdatepr `
             -branch microsoft/main `
             -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-docker `
