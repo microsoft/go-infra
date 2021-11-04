@@ -16,10 +16,7 @@ jobs:
       vmImage: ubuntu-20.04
     steps:
       - template: steps/checkout-unix-task.yml
-
-      - task: GoTool@0
-        inputs:
-          version: 1.17.1
+      - template: steps/init-go.yml
 
       # Install the version of gotestsum specified in the ci-tools module.
       - script: |
