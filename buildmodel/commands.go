@@ -137,7 +137,7 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	gitDir, err := GetWorkPathInDir(*f.tempGitDir)
+	gitDir, err := MakeWorkDir(*f.tempGitDir)
 	if err != nil {
 		return err
 	}
@@ -317,12 +317,15 @@ func SubmitUpdatePR(f *PRFlags) error {
 	return nil
 }
 
-// GetWorkPathInDir creates a unique path inside the given root dir to use as a workspace. The name
+// MakeWorkDir creates a unique path inside the given root dir to use as a workspace. The name
 // starts with the local time in a sortable format to help with browsing multiple workspaces. This
 // function allows a command to run multiple times in sequence without overwriting or deleting the
-// old data, for diagnostic purposes.
-func GetWorkPathInDir(rootDir string) (string, error) {
+// old data, for diagnostic purposes. This function uses os.MkdirAll to ensure the root dir exists.
+func MakeWorkDir(rootDir string) (string, error) {
 	pathDate := time.Now().Format("2006-01-02_15-04-05")
+	if err := os.MkdirAll(rootDir, os.ModePerm); err != nil {
+		return "", err
+	}
 	return os.MkdirTemp(rootDir, fmt.Sprintf("%s_*", pathDate))
 }
 
