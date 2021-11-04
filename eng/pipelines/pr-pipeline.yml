@@ -1,0 +1,37 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# This pipeline validates PRs. It builds the repo and runs inner loop tests.
+
+trigger: none
+pr:
+  - main
+
+jobs:
+  - job: Test
+    workspace:
+      clean: all
+    pool:
+      # Use generic recent LTS.
+      vmImage: ubuntu-20.04
+    steps:
+      - template: steps/checkout-unix-task.yml
+      - template: steps/init-go.yml
+
+      # Install the version of gotestsum specified in the ci-tools module.
+      - script: |
+          go install gotest.tools/gotestsum
+        displayName: Install gotestsum
+        workingDirectory: $(Build.SourcesDirectory)/eng/ci-tools
+
+      - script: |
+          "$(go env GOPATH)/bin/gotestsum" --junitfile $(Build.StagingDirectory)/TestResults.xml
+        displayName: Test
+
+      - task: PublishTestResults@2
+        displayName: Publish test results
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFormat: JUnit
+          testResultsFiles: $(Build.StagingDirectory)/TestResults.xml
+          publishRunAttachments: true
