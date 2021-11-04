@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -17,48 +18,74 @@ var client = http.Client{
 	Timeout: time.Second * 30,
 }
 
-// PRBranch contains information about the specific branch to update. During the sync process,
-// more info can be added to this struct to be used later. This struct has methods that help
-// calculate derived information such as Git ref names.
-type PRBranch struct {
-	// Name of the branch to update, without "refs/heads/".
+// PRRefSet contains information about an automatic PR branch and calculates the set of refs that
+// would correspond to that PR.
+type PRRefSet struct {
+	// Name of the base branch to update. Do not include "refs/heads/".
 	Name string
 	// Purpose of the PR. This is used to generate the PR branch name, "dev/{Purpose}/{Name}".
 	Purpose string
 }
 
-func (b PRBranch) PRBranch() string {
+// PRBranch is the name of the "head" branch name for this PR, under "dev/{Purpose}/{Name}"
+// convention, without the "refs/heads/" prefix.
+func (b PRRefSet) PRBranch() string {
 	return "dev/" + b.Purpose + "/" + b.Name
 }
 
-func (b PRBranch) BaseBranchFetchRefspec() string {
-	return "refs/heads/" + b.Name + ":refs/heads/" + b.PRBranch()
+// BaseBranchFetchRefspec is the refspec with src: PR base branch src, dst: PR head branch dst. This
+// can be used with "fetch" to create a fresh dev branch.
+func (b PRRefSet) BaseBranchFetchRefspec() string {
+	return createRefspec(b.Name, b.PRBranch())
 }
 
-func (b PRBranch) PRBranchFetchRefspec() string {
-	return "refs/heads/" + b.PRBranch() + ":refs/heads/" + b.PRBranch()
-}
-
-func (b PRBranch) PRPushRefspec() string {
-	return b.PRBranch() + ":refs/heads/" + b.PRBranch()
+// PRBranchRefspec is the refspec that syncs the dev branch between two repos.
+func (b PRRefSet) PRBranchRefspec() string {
+	return createRefspec(b.PRBranch(), b.PRBranch())
 }
 
 // CreateGitHubPR creates the data model that can be sent to GitHub to create a PR for this branch.
-func (b PRBranch) CreateGitHubPR(headOwner string) GitHubRequest {
-	return GitHubRequest{
+func (b PRRefSet) CreateGitHubPR(headOwner, title, body string) *GitHubRequest {
+	return &GitHubRequest{
 		Head: headOwner + ":" + b.PRBranch(),
 		Base: b.Name,
 
-		Title: fmt.Sprintf("Update dependencies in `%v`", b.Name),
-		Body: fmt.Sprintf(
-			"🔃 This is an automatically generated PR updating the version of Go in `%v`.\n\n"+
-				"This PR should auto-merge itself when PR validation passes.\n\n",
-			b.Name,
-		),
+		Title: title,
+		Body:  body,
 
 		MaintainerCanModify: true,
 		Draft:               false,
 	}
+}
+
+// SyncPRRefSet calculates the set of refs that correspond to a PR branch that is performing a Git
+// sync from an upstream repository.
+type SyncPRRefSet struct {
+	// UpstreamName is the name of the upstream branch being synced from.
+	UpstreamName string
+	PRRefSet
+}
+
+// NewSyncPRRefSet creates a SyncPRRefSet based on the name of an upstream branch. Mapping from
+// upstream branch name to "microsoft/"-prefixed branch name happens here.
+func NewSyncPRRefSet(upstreamName string) *SyncPRRefSet {
+	return &SyncPRRefSet{
+		upstreamName,
+		PRRefSet{
+			Name:    "microsoft/" + strings.ReplaceAll(upstreamName, "master", "main"),
+			Purpose: "auto-merge",
+		},
+	}
+}
+
+// UpstreamLocalBranch is the name of the upstream ref after it has been fetched locally.
+func (b SyncPRRefSet) UpstreamLocalBranch() string {
+	return "fetched-upstream/" + b.UpstreamName
+}
+
+// UpstreamFetchRefspec fetches the current upstream ref into the local branch.
+func (b SyncPRRefSet) UpstreamFetchRefspec() string {
+	return createRefspec(b.UpstreamName, b.UpstreamLocalBranch())
 }
 
 // Remote is a parsed version of a Git Remote. It helps determine how to send a GitHub PR.
@@ -102,7 +129,7 @@ func (r Remote) GetOwnerSlashRepo() string {
 func GetUsername(pat string) string {
 	request, err := http.NewRequest("GET", "https://api.github.com/user", nil)
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 	request.SetBasicAuth("", pat)
 
@@ -111,7 +138,7 @@ func GetUsername(pat string) string {
 	}{}
 
 	if err := sendJSONRequestSuccessful(request, response); err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 
 	return response.Login
@@ -190,7 +217,7 @@ type GitHubRequestError struct {
 	Message string `json:"message"`
 }
 
-func PostGitHub(ownerRepo string, request GitHubRequest, pat string) (response *GitHubResponse, err error) {
+func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response *GitHubResponse, err error) {
 	prSubmitContent, err := json.MarshalIndent(request, "", "")
 	fmt.Printf("Submitting payload: %s\n", prSubmitContent)
 
@@ -274,10 +301,10 @@ func MutateGraphQL(pat string, query string, variables map[string]interface{}) e
 // FindExistingPR looks for a PR submitted to a target branch with a set of filters. Returns the
 // result's graphql identity if one match is found, empty string if no matches are found, and an
 // error if more than one match was found.
-func FindExistingPR(b *PRBranch, githubUser string, headOwner string, originOwner string, githubPAT string) (string, error) {
-	prQuery := `query ($githubUser: String!, $baseRefName: String!) {
+func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser, githubPAT string) (string, error) {
+	prQuery := `query ($githubUser: String!, $headRefName: String!, $baseRefName: String!) {
 		user(login: $githubUser) {
-			pullRequests(states: OPEN, baseRefName: $baseRefName, first: 5) {
+			pullRequests(states: OPEN, headRefName: $headRefName, baseRefName: $baseRefName, first: 5) {
 				nodes {
 					title
 					id
@@ -294,8 +321,9 @@ func FindExistingPR(b *PRBranch, githubUser string, headOwner string, originOwne
 		}
 	}`
 	variables := map[string]interface{}{
-		"githubUser":  githubUser,
-		"baseRefName": b.Name,
+		"githubUser":  submitterUser,
+		"headRefName": headBranch,
+		"baseRefName": r.Base,
 	}
 	// Output structure from the query. We pull out some data to make sure our search result is what
 	// we expect and avoid relying solely on the search engine query. This may be expanded in the
@@ -349,11 +377,42 @@ func FindExistingPR(b *PRBranch, githubUser string, headOwner string, originOwne
 	}
 
 	n := result.Data.User.PullRequests.Nodes[0]
-	if foundHeadOwner := n.HeadRepositoryOwner.Login; foundHeadOwner != headOwner {
-		return "", fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, headOwner)
+	if foundHeadOwner := n.HeadRepositoryOwner.Login; foundHeadOwner != head.GetOwner() {
+		return "", fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, head.GetOwner())
 	}
-	if foundBaseOwner := n.BaseRepository.Owner.Login; foundBaseOwner != originOwner {
-		return "", fmt.Errorf("pull request base owner is %v, expected %v", foundBaseOwner, originOwner)
+	if foundBaseOwner := n.BaseRepository.Owner.Login; foundBaseOwner != target.GetOwner() {
+		return "", fmt.Errorf("pull request base owner is %v, expected %v", foundBaseOwner, target.GetOwner())
 	}
 	return n.ID, nil
+}
+
+// ApprovePR adds an approving review on the target GraphQL PR node ID. The review author is the user
+// associated with the PAT.
+func ApprovePR(nodeID string, pat string) error {
+	return MutateGraphQL(
+		pat,
+		`mutation ($nodeID: ID!) {
+				addPullRequestReview(input: {pullRequestId: $nodeID, event: APPROVE, body: "Thanks! Auto-approving."}) {
+					clientMutationId
+				}
+			}`,
+		map[string]interface{}{"nodeID": nodeID})
+}
+
+// EnablePRAutoMerge enables PR automerge on the target GraphQL PR node ID.
+func EnablePRAutoMerge(nodeID string, pat string) error {
+	return MutateGraphQL(
+		pat,
+		`mutation ($nodeID: ID!) {
+			enablePullRequestAutoMerge(input: {pullRequestId: $nodeID, mergeMethod: MERGE}) {
+				clientMutationId
+			}
+		}`,
+		map[string]interface{}{"nodeID": nodeID})
+}
+
+// createRefspec makes a refspec that will fetch or push a branch "source" to "dest". The args must
+// not already have a "refs/heads/" prefix.
+func createRefspec(source, dest string) string {
+	return fmt.Sprintf("refs/heads/%v:refs/heads/%v", source, dest)
 }

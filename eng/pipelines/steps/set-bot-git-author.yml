@@ -1,0 +1,10 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Set up the Git author, in preparation to create a PR.
+
+steps:
+  - script: |
+      git config --global user.name 'microsoft-golang-bot'
+      git config --global user.email 'microsoft-golang-bot@users.noreply.github.com'
+    displayName: Set up Git author

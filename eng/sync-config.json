@@ -1,0 +1,36 @@
+[
+  {
+    "Upstream": "https://go.googlesource.com/go",
+    "Target": "https://github.com/microsoft/go",
+    "SourceBranches": [
+      "master",
+      "release-branch.go1.15",
+      "release-branch.go1.16",
+      "release-branch.go1.17"
+    ],
+    "AutoResolveOurs": [
+      ".gitattributes",
+      ".github",
+      "CODE_OF_CONDUCT.md",
+      "README.md",
+      "SECURITY.md",
+      "SUPPORT.md"
+    ]
+  },
+  {
+    "Upstream": "https://github.com/docker-library/golang",
+    "Target": "https://github.com/microsoft/go-docker",
+    "SourceBranches": [
+      "master"
+    ],
+    "AutoResolveOurs": [
+      ".gitattributes",
+      ".github",
+      ".gitignore",
+      "CODE_OF_CONDUCT.md",
+      "README.md",
+      "SECURITY.md",
+      "SUPPORT.md"
+    ]
+  }
+]

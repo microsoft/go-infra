@@ -1,0 +1,9 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Set up Go tool in the build machine. This is in a template to make version updates easy.
+
+steps:
+  - task: GoTool@0
+    inputs:
+      version: 1.17.2
