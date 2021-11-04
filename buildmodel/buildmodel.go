@@ -123,14 +123,20 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				}
 			}
 
+			// Normally, no build args are necessary and this is nil in the output model.
 			var buildArgs map[string]string
-			// The nanoserver Dockerfile requires some args so it can be connected properly to its
-			// dependency, windowsservercore.
-			if strings.Contains(osVersion, "nanoserver") {
+
+			// The nanoserver Dockerfile requires a build arg to connect it properly to its
+			// dependency, windowsservercore. The version (1809, ltsc2022, ...) needs to match,
+			// because CI splits up platform builds onto independent machines based on Windows
+			// version, and the nanoserver image build needs to access the windowsservercore image.
+			nanoserverPrefix := "nanoserver-"
+			if strings.HasPrefix(osVersion, nanoserverPrefix) {
+				windowsVersion := strings.TrimPrefix(osVersion, nanoserverPrefix)
 				buildArgs = map[string]string{
 					// nanoserver doesn't have good download capability, so it copies the Go install
 					// from the windowsservercore image.
-					"DOWNLOADER_TAG": v.Version + "-" + v.Revision + "-windowsservercore-1809-amd64",
+					"DOWNLOADER_TAG": v.Version + "-" + v.Revision + "-windowsservercore-" + windowsVersion + "-amd64",
 					// The nanoserver Dockerfile needs to know what repository we're building for so
 					// it can figure out the windowsservercore tag's full name.
 					"REPO": "$(Repo:golang)",

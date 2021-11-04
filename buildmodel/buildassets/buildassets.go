@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 	"sort"
@@ -86,7 +87,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 	if b.ArtifactsDir != "" {
 		entries, err := os.ReadDir(b.ArtifactsDir)
 		if err != nil {
-			panic(err)
+			log.Panic(err)
 		}
 
 		for _, e := range entries {
@@ -154,7 +155,7 @@ func getVersion(path string, defaultVersion string) (version string) {
 		if errors.Is(err, os.ErrNotExist) {
 			return defaultVersion
 		}
-		panic(err)
+		log.Panic(err)
 	}
 	return string(bytes)
 }
@@ -162,7 +163,7 @@ func getVersion(path string, defaultVersion string) (version string) {
 func readFileOrPanic(path string) string {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 	return string(bytes)
 }

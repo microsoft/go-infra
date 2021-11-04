@@ -4,12 +4,13 @@
 package buildmodel
 
 import (
-	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
@@ -136,8 +137,9 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	if _, err := os.Stat(*f.tempGitDir); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("temporary Git dir already exists: %v", *f.tempGitDir)
+	gitDir, err := GetWorkPathInDir(*f.tempGitDir)
+	if err != nil {
+		return err
 	}
 
 	if *f.origin == "" {
@@ -153,7 +155,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		f.to = f.origin
 	}
 
-	b := gitpr.PRBranch{
+	b := gitpr.PRRefSet{
 		Name:    *f.branch,
 		Purpose: "auto-update",
 	}
@@ -168,6 +170,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return err
 	}
 
+	title := fmt.Sprintf("Update dependencies in `%v`", b.Name)
+	body := fmt.Sprintf(
+		"🔃 This is an automatically generated PR updating the version of Go in `%v`.\n\n"+
+			"This PR should auto-merge itself when PR validation passes.\n\n",
+		b.Name,
+	)
+	request := b.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), title, body)
+
 	// If we find a PR, fetch its head branch and push the new commit to its tip. We need to support
 	// updating from many branches -> one branch, and force pushing each time would drop updates.
 	// Note that we do assume our calculated head branch is the same as what the PR uses: it would
@@ -181,10 +191,11 @@ func SubmitUpdatePR(f *PRFlags) error {
 		if parsedOrigin != nil {
 			fmt.Println("---- Checking for an existing PR for this base branch and origin...")
 			existingPR, err = gitpr.FindExistingPR(
-				&b,
+				request,
+				parsedPRHeadRemote,
+				parsedOrigin,
+				b.PRBranch(),
 				githubUser,
-				parsedPRHeadRemote.GetOwner(),
-				parsedOrigin.GetOwner(),
 				*f.githubPAT)
 			if err != nil {
 				return err
@@ -198,18 +209,18 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 
 	// We're updating the target repo inside a clone of the go-infra repo, so we want a fresh clone.
-	runOrPanic(exec.Command("git", "init", *f.tempGitDir))
+	runOrPanic(exec.Command("git", "init", gitDir))
 
 	// newGitCmd creates a "git {args}" command that runs in the temp git dir.
 	newGitCmd := func(args ...string) *exec.Cmd {
 		c := exec.Command("git", args...)
-		c.Dir = *f.tempGitDir
+		c.Dir = gitDir
 		return c
 	}
 
 	if existingPR != "" {
 		// Fetch the existing PR head branch to add onto.
-		runOrPanic(newGitCmd("fetch", "--no-tags", *f.to, b.PRBranchFetchRefspec()))
+		runOrPanic(newGitCmd("fetch", "--no-tags", *f.to, b.PRBranchRefspec()))
 	} else {
 		// Fetch the base branch to start the PR head branch.
 		runOrPanic(newGitCmd("fetch", "--no-tags", *f.origin, b.BaseBranchFetchRefspec()))
@@ -217,7 +228,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	runOrPanic(newGitCmd("checkout", b.PRBranch()))
 
 	// Make changes to the files ins the temp repo.
-	r, err := runUpdate(*f.tempGitDir, f)
+	r, err := runUpdate(gitDir, f)
 	if err != nil {
 		return err
 	}
@@ -229,7 +240,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 			fmt.Printf("---- Detected changes in Git stage. Continuing to commit and submit PR.\n")
 		} else {
 			// Make sure we don't ignore more than we intended.
-			panic(err)
+			log.Panic(err)
 		}
 	} else {
 		// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
@@ -240,7 +251,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	runOrPanic(newGitCmd("commit", "-a", "-m", "Update "+b.Name+" to "+r.buildAssets.Version))
 
 	// Push the commit.
-	args := []string{"push", *f.origin, b.PRPushRefspec()}
+	args := []string{"push", *f.origin, b.PRBranchRefspec()}
 	if *f.dryRun {
 		// Show what would be pushed, but don't actually push it.
 		args = append(args, "-n")
@@ -277,7 +288,10 @@ func SubmitUpdatePR(f *PRFlags) error {
 	if existingPR == "" {
 		// POST the PR. The call returns success if the PR is created or if we receive a specific error
 		// message back from GitHub saying the PR is already created.
-		p, err := gitpr.PostGitHub(parsedOrigin.GetOwnerSlashRepo(), b.CreateGitHubPR(parsedPRHeadRemote.GetOwner()), *f.githubPAT)
+		p, err := gitpr.PostGitHub(
+			parsedOrigin.GetOwnerSlashRepo(),
+			request,
+			*f.githubPAT)
 		fmt.Printf("%+v\n", p)
 		if err != nil {
 			return err
@@ -288,35 +302,28 @@ func SubmitUpdatePR(f *PRFlags) error {
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
 
 		fmt.Printf("---- Approving with reviewer account...\n")
-		err = gitpr.MutateGraphQL(
-			*f.githubPATReviewer,
-			`mutation ($nodeID: ID!) {
-				addPullRequestReview(input: {pullRequestId: $nodeID, event: APPROVE, body: "Thanks! Auto-approving."}) {
-					clientMutationId
-				}
-			}`,
-			map[string]interface{}{"nodeID": p.NodeID})
-		if err != nil {
+		if err = gitpr.ApprovePR(existingPR, *f.githubPATReviewer); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-	err = gitpr.MutateGraphQL(
-		*f.githubPATReviewer,
-		`mutation ($nodeID: ID!) {
-			enablePullRequestAutoMerge(input: {pullRequestId: $nodeID, mergeMethod: MERGE}) {
-				clientMutationId
-			}
-		}`,
-		map[string]interface{}{"nodeID": existingPR})
-	if err != nil {
+	if err = gitpr.EnablePRAutoMerge(existingPR, *f.githubPATReviewer); err != nil {
 		return err
 	}
 
 	fmt.Printf("---- PR for %v: Done.\n", b.Name)
 
 	return nil
+}
+
+// GetWorkPathInDir creates a unique path inside the given root dir to use as a workspace. The name
+// starts with the local time in a sortable format to help with browsing multiple workspaces. This
+// function allows a command to run multiple times in sequence without overwriting or deleting the
+// old data, for diagnostic purposes.
+func GetWorkPathInDir(rootDir string) (string, error) {
+	pathDate := time.Now().Format("2006-01-02_15-04-05")
+	return os.MkdirTemp(rootDir, fmt.Sprintf("%s_*", pathDate))
 }
 
 type updateResults struct {
@@ -392,7 +399,7 @@ func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
 func getwd() string {
 	wd, err := os.Getwd()
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 	return wd
 }
@@ -400,7 +407,7 @@ func getwd() string {
 // runOrPanic uses 'run', then panics on error (such as nonzero exit code).
 func runOrPanic(c *exec.Cmd) {
 	if err := run(c); err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 }
 

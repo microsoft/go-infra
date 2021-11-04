@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/microsoft/go-infra/buildmodel"
 )
@@ -30,7 +31,7 @@ func main() {
 	buildmodel.ParseBoundFlags(description)
 
 	if err := buildmodel.SubmitUpdatePR(f); err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 
 	fmt.Println("\nSuccess.")
