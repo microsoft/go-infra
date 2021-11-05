@@ -83,7 +83,7 @@ func main() {
 		fmt.Printf("No entries found in config file: %v\n", *syncConfig)
 	}
 
-	currentRunGitDir, err := buildmodel.GetWorkPathInDir(*tempGitDir)
+	currentRunGitDir, err := buildmodel.MakeWorkDir(*tempGitDir)
 	if err != nil {
 		log.Panic(err)
 	}
