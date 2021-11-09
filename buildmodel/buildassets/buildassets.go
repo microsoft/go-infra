@@ -9,6 +9,7 @@
 package buildassets
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -148,16 +149,21 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 
 // getVersion reads the file at path, if it exists. If it doesn't exist, returns the default
 // provided by the caller. If the file cannot be read for some other reason, panics. This logic
-// helps with the "VERSION" files that are only present in Go release branches.
+// helps with the "VERSION" files that are only present in Go release branches, and handles unusual
+// VERSION files that may contain a newline by only reading the first line.
 func getVersion(path string, defaultVersion string) (version string) {
-	bytes, err := ioutil.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return defaultVersion
 		}
 		log.Panic(err)
 	}
-	return string(bytes)
+	defer f.Close()
+
+	s := bufio.NewScanner(f)
+	s.Scan()
+	return s.Text()
 }
 
 func readFileOrPanic(path string) string {
