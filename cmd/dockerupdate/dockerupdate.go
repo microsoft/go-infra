@@ -18,7 +18,7 @@ specified by the given build asset JSON file.
 Example: Update the existing repository in a specified directory to the new build listed in a
 assets.json file that has been downloaded to the local machine:
 
-  go run ./cmd/dockerupdate -d ~/git/go-docker -build-asset-json ~/downloads/assets.json
+  go run ./cmd/dockerupdate -d ~/git/go-images -build-asset-json ~/downloads/assets.json
 
 This command is useful to update the Dockerfile contents e.g. when adding Dockerfiles for a new
 branch or changing the Dockerfile templates. The 'dockerupdatepr' command could be used to do this,
@@ -39,7 +39,7 @@ func main() {
 		d = &w
 	}
 
-	if _, err := buildmodel.RunUpdate(*d, f); err != nil {
+	if err := buildmodel.RunUpdate(*d, f); err != nil {
 		panic(err)
 	}
 

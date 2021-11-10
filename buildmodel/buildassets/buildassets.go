@@ -36,6 +36,19 @@ type BuildAssets struct {
 	Arches []*dockerversions.Arch `json:"arches"`
 }
 
+// GetDockerRepoTargetBranch returns the Go Docker images repo branch that needs to be updated based
+// on the branch of the Go repo that was built, or returns empty string if no branch needs to be
+// updated.
+func (b BuildAssets) GetDockerRepoTargetBranch() string {
+	if b.Branch == "main" || strings.HasPrefix(b.Branch, "release-branch.") {
+		return "microsoft/main"
+	}
+	if strings.HasPrefix(b.Branch, "dev/official/") {
+		return b.Branch
+	}
+	return ""
+}
+
 // Basic information about how the build output assets are formatted by Microsoft builds of Go. The
 // archiving infra is stored in each release branch to make it local to the code it operates on and
 // less likely to unintentionally break, so some of that information is duplicated here.

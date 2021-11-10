@@ -47,9 +47,8 @@ jobs:
 
       - pwsh: |
           go run ./cmd/dockerupdatepr `
-            -branch microsoft/main `
-            -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-docker `
+            -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-images `
             -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
             -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
             -build-asset-json "$(assetJsonPath)"
-        displayName: Update go-docker
+        displayName: Update go-images
