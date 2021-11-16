@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package foo
 
 import "github.com/microsoft/go-infra/cmd/fips/internal/boring"
