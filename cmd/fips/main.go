@@ -38,7 +38,7 @@ type fnReport struct {
 	BoringCalls      []string
 }
 
-var goos = flag.String("goos", "", "The operating system for which to compile the examinded packaged. Defaults to GOOS")
+var goos = flag.String("goos", "", "The operating system for which to compile the examined packages. Defaults to GOOS")
 
 func main() {
 	log.SetFlags(0)
