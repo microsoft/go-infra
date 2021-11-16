@@ -38,11 +38,14 @@ type fnReport struct {
 	BoringCalls      []string
 }
 
+var goos = flag.String("goos", "", "The operating system for which to compile the examinded packaged. Defaults to GOOS")
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("fips: ")
 
 	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(flag.CommandLine.Output(), "%s\n\n", description)
 	}
@@ -93,8 +96,12 @@ func main() {
 }
 
 func parsePackages() ([]*packages.Package, error) {
+	env := os.Environ()
+	if *goos != "" {
+		env = append(env, "GOOS="+*goos)
+	}
 	cfg := &packages.Config{
-		Env: append(os.Environ(), "GOOS=linux"),
+		Env: env,
 		Mode: packages.NeedImports | packages.NeedDeps | packages.NeedSyntax |
 			packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedTypesSizes,
