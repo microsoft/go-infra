@@ -23,10 +23,10 @@ type fnReport struct {
 
 const description = `
 Fips examines Go source code and reports which public APIs are backed by openssl
-primitives, together with other usefull information such as the name of the
+primitives, together with other useful information such as the
 openssl function names.
 
-Set the appropiate GOROOT when checking std packagesnot in your default Go toolchain. 
+Set the appropriate GOROOT when checking std packages not in your default Go toolchain. 
 
 Packages are specified using the notation of "go list".
 This command checks the package in the current directory:
