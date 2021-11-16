@@ -66,16 +66,25 @@ func main() {
 		for _, src := range pkg.Syntax {
 			for _, decl := range src.Decls {
 				if decl, ok := decl.(*ast.FuncDecl); ok {
+					if decl.Body == nil {
+						continue
+					}
+					if decl.Recv != nil {
+						// We are only interested in top level functions.
+						// Methods may contain boring calls but these are always
+						// called from top level functions.
+						continue
+					}
 					if !ast.IsExported(decl.Name.Name) {
 						// We are only interested in exported declarations.
 						continue
 					}
-					var report fnReport
-					report.PackageID = pkg.ID
-					report.Name = decl.Name.Name
-					if processFuncDecl(decl, pkg.Syntax, &report) {
-						log.Println(report)
+					report := fnReport{
+						PackageID: pkg.ID,
+						Name:      decl.Name.Name,
 					}
+					processFuncDecl(decl, pkg.Syntax, &report)
+					log.Println(report)
 				}
 			}
 		}
@@ -160,6 +169,11 @@ func searchBoringCalls(node ast.Node, files []*ast.File, calls []string) []strin
 		case *ast.CallExpr: // enableBoring()
 			fn := resolveFun(n, files)
 			if fn != nil {
+				if fn.Recv != nil {
+					// TODO: This may require dynamic dispatch analysis.
+					// See https://github.com/microsoft/go/issues/278
+					return false
+				}
 				calls = searchBoringCalls(fn.Body, files, calls)
 				return false
 			}
@@ -176,14 +190,7 @@ func searchBoringCalls(node ast.Node, files []*ast.File, calls []string) []strin
 	return calls
 }
 
-func processFuncDecl(decl *ast.FuncDecl, files []*ast.File, report *fnReport) bool {
-	if decl.Body == nil {
-		return false
-	}
-	if decl.Recv != nil {
-		// TODO: check methods.
-		return false
-	}
+func processFuncDecl(decl *ast.FuncDecl, files []*ast.File, report *fnReport) {
 	seen := make(map[*ast.FuncDecl]struct{})
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
 		switch stmt := n.(type) {
@@ -197,5 +204,4 @@ func processFuncDecl(decl *ast.FuncDecl, files []*ast.File, report *fnReport) bo
 		}
 		return true
 	})
-	return true
 }
