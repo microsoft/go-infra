@@ -29,6 +29,10 @@ This command checks the package in the current directory:
 whereas this one checks the std crypto package in GOROOT, as specified:
 
 	go run ./cmd/fips crypto/...
+
+The GOOS can also be specified. This allows, for example, examining the openssl APIs while running Windows:
+
+	go run ./cmd/fips crypto/... -goos linux
 `
 
 type fnReport struct {
