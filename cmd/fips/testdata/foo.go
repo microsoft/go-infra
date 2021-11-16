@@ -1,6 +1,6 @@
 package foo
 
-import "fips/internal/boring"
+import "github.com/microsoft/go-infra/cmd/fips/internal/boring"
 
 func F1() {
 	if boringEnabled() {
