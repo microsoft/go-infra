@@ -63,6 +63,7 @@ func main() {
 		if strings.Contains(pkg.ID, "/internal/") {
 			continue
 		}
+		tryResolveMissingObjects(pkg.Syntax)
 		for _, src := range pkg.Syntax {
 			for _, decl := range src.Decls {
 				if decl, ok := decl.(*ast.FuncDecl); ok {
@@ -83,7 +84,7 @@ func main() {
 						PackageID: pkg.ID,
 						Name:      decl.Name.Name,
 					}
-					processFuncDecl(decl, pkg.Syntax, &report)
+					processFuncDecl(decl, &report)
 					log.Println(report)
 				}
 			}
@@ -106,7 +107,35 @@ func parsePackages() ([]*packages.Package, error) {
 
 }
 
-func resolveFun(expr *ast.CallExpr, files []*ast.File) *ast.FuncDecl {
+// Ideally objects are always resolved by the package loader but that's not always true
+// so we try to resolve objects looking at other files within the same package.
+func tryResolveMissingObjects(files []*ast.File) {
+	funcDecls := make(map[string]*ast.Object)
+	for _, f := range files {
+		for _, d := range f.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok {
+				if fn.Recv == nil && fn.Name.Obj != nil {
+					funcDecls[fn.Name.Name] = fn.Name.Obj
+				}
+			}
+		}
+	}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				if ident, ok := n.Fun.(*ast.Ident); ok && ident.Obj == nil {
+					if ident.Obj, ok = funcDecls[ident.Name]; ok {
+						return false
+					}
+				}
+			}
+			return true
+		})
+	}
+}
+
+func resolveFun(expr *ast.CallExpr) *ast.FuncDecl {
 	if ident, ok := expr.Fun.(*ast.Ident); ok {
 		if ident.Obj != nil {
 			fn, ok := ident.Obj.Decl.(*ast.FuncDecl)
@@ -115,36 +144,53 @@ func resolveFun(expr *ast.CallExpr, files []*ast.File) *ast.FuncDecl {
 			}
 			return fn
 		}
-		// Ideally objects are always resolved by the package loader,
-		// but that's not always true so we try to resolve the function
-		// looking at other files within the same package.
-		for _, f := range files {
-			for _, d := range f.Decls {
-				if fn, ok := d.(*ast.FuncDecl); ok {
-					if fn.Name.Name == ident.Name {
-						return fn
-					}
-				}
-			}
-		}
 	}
 	return nil
 }
 
+// findBoringCalls traverses the node searching for calls to the boring package.
+func findBoringCalls(node ast.Node) []string {
+	var calls []string
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr: // enableBoring()
+			fn := resolveFun(n)
+			if fn != nil {
+				if fn.Recv != nil {
+					// TODO: This may require dynamic dispatch analysis.
+					// See https://github.com/microsoft/go/issues/278
+					return false
+				}
+				calls = append(calls, findBoringCalls(fn.Body)...)
+				return false
+			}
+		case *ast.SelectorExpr: // boring.Fn(...)
+			if ident, ok := n.X.(*ast.Ident); ok {
+				if ident.Name == "boring" && n.Sel.Name != "Enabled" {
+					calls = append(calls, n.Sel.Name)
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return calls
+}
+
 // hasBoringEnabled traverses the node to find if it has a boring.Enabled() call.
-// Function calls which are not yet resolved yet will be in files.
-func hasBoringEnabled(node ast.Node, seen map[*ast.FuncDecl]struct{}, files []*ast.File) bool {
+func hasBoringEnabled(node ast.Node, seen map[*ast.FuncDecl]struct{}) bool {
 	var ret bool
 	ast.Inspect(node, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.CallExpr: // enableBoring()
-			fn := resolveFun(n, files)
+			fn := resolveFun(n)
 			if fn != nil {
 				if _, ok := seen[fn]; ok {
+					// Avoid infinite loop.
 					return false
 				}
 				seen[fn] = struct{}{}
-				if hasBoringEnabled(fn, seen, files) {
+				if hasBoringEnabled(fn, seen) {
 					ret = true
 					return false
 				}
@@ -164,44 +210,15 @@ func hasBoringEnabled(node ast.Node, seen map[*ast.FuncDecl]struct{}, files []*a
 	return ret
 }
 
-// searchBoringCalls traverses the node searching for calls to the boring package.
-// Function calls which are not yet resolved will be searched in files.
-func searchBoringCalls(node ast.Node, files []*ast.File, calls []string) []string {
-	ast.Inspect(node, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.CallExpr: // enableBoring()
-			fn := resolveFun(n, files)
-			if fn != nil {
-				if fn.Recv != nil {
-					// TODO: This may require dynamic dispatch analysis.
-					// See https://github.com/microsoft/go/issues/278
-					return false
-				}
-				calls = searchBoringCalls(fn.Body, files, calls)
-				return false
-			}
-		case *ast.SelectorExpr: // boring.Fn(...)
-			if ident, ok := n.X.(*ast.Ident); ok {
-				if ident.Name == "boring" && n.Sel.Name != "Enabled" {
-					calls = append(calls, n.Sel.Name)
-					return false
-				}
-			}
-		}
-		return true
-	})
-	return calls
-}
-
-func processFuncDecl(decl *ast.FuncDecl, files []*ast.File, report *fnReport) {
+func processFuncDecl(decl *ast.FuncDecl, report *fnReport) {
 	seen := make(map[*ast.FuncDecl]struct{})
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
 		switch stmt := n.(type) {
 		// Only search for boring calls that are inside a boring.Enabled if block.
 		case *ast.IfStmt:
-			if hasBoringEnabled(stmt.Cond, seen, files) { // if boring.Enabled() {...}
+			if hasBoringEnabled(stmt.Cond, seen) { // if boring.Enabled() {...}
 				report.HasBoringEnabled = true
-				report.BoringCalls = searchBoringCalls(stmt.Body, files, nil) // boring.Fn()
+				report.BoringCalls = findBoringCalls(stmt.Body) // boring.Fn()
 				return false
 			}
 		}
