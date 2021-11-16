@@ -33,7 +33,7 @@ This command checks the package in the current directory:
 
 	go run ./cmd/fips
 
-whereas this one checks the packages whose path is provided:
+whereas this one checks the std crypto package in GOROOT, as specified:
 
 	go run ./cmd/fips crypto/...
 `
