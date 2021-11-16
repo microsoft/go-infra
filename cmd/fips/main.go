@@ -109,7 +109,10 @@ func parsePackages() ([]*packages.Package, error) {
 func resolveFun(expr *ast.CallExpr, files []*ast.File) *ast.FuncDecl {
 	if ident, ok := expr.Fun.(*ast.Ident); ok {
 		if ident.Obj != nil {
-			fn, _ := ident.Obj.Decl.(*ast.FuncDecl)
+			fn, ok := ident.Obj.Decl.(*ast.FuncDecl)
+			if !ok {
+				log.Fatalf("An Ident.Obj referenced from a CallExpr.Fun should always be a FuncDecl but is a %T\n", ident.Obj.Decl)
+			}
 			return fn
 		}
 		// Ideally objects are always resolved by the package loader,
