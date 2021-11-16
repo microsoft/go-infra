@@ -111,7 +111,6 @@ func parsePackages() ([]*packages.Package, error) {
 		return nil, err
 	}
 	return pkgs, nil
-
 }
 
 // Ideally objects are always resolved by the package loader but that's not always true
