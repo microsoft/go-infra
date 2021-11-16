@@ -14,13 +14,6 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-type fnReport struct {
-	PackageID        string
-	Name             string
-	HasBoringEnabled bool
-	BoringCalls      []string
-}
-
 const description = `
 Fips examines Go source code and reports which public APIs are backed by openssl
 primitives, together with other usefull information such as the name of the
@@ -37,6 +30,13 @@ whereas this one checks the packages whose path is provided:
 
 	go run ./cmd/fips crypto/...
 `
+
+type fnReport struct {
+	PackageID        string
+	Name             string
+	HasBoringEnabled bool
+	BoringCalls      []string
+}
 
 func main() {
 	log.SetFlags(0)
