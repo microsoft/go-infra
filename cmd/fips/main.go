@@ -120,6 +120,8 @@ func parsePackages() ([]*packages.Package, error) {
 // Ideally objects are always resolved by the package loader but that's not always true
 // so we try to resolve objects looking at other files within the same package.
 func tryResolveMissingObjects(files []*ast.File) {
+	// First create a map with all top-level functions objects
+	// indexed by its name.
 	funcDecls := make(map[string]*ast.Object)
 	for _, f := range files {
 		for _, d := range f.Decls {
@@ -130,13 +132,15 @@ func tryResolveMissingObjects(files []*ast.File) {
 			}
 		}
 	}
+	// Then recursively traverse the AST looking for function calls
+	// whose function object is not resolved and try to resolve it from funcDecls.
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.CallExpr:
-				if ident, ok := n.Fun.(*ast.Ident); ok && ident.Obj == nil {
-					if ident.Obj, ok = funcDecls[ident.Name]; ok {
-						return false
+				if ident, ok := n.Fun.(*ast.Ident); ok {
+					if ident.Obj == nil {
+						ident.Obj = funcDecls[ident.Name]
 					}
 				}
 			}
