@@ -19,7 +19,7 @@
   },
   {
     "Upstream": "https://github.com/docker-library/golang",
-    "Target": "https://github.com/microsoft/go-docker",
+    "Target": "https://github.com/microsoft/go-images",
     "SourceBranches": [
       "master"
     ],

@@ -99,9 +99,9 @@ func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 
 // PRFlags is a list of flags used to submit a Docker update PR.
 type PRFlags struct {
-	dryRun     *bool
-	tempGitDir *string
-	branch     *string
+	dryRun       *bool
+	tempGitDir   *string
+	manualBranch *string
 
 	origin *string
 	to     *string
@@ -109,8 +109,7 @@ type PRFlags struct {
 	githubPAT         *string
 	githubPATReviewer *string
 
-	buildAssetJSON  *string
-	skipDockerfiles *bool
+	UpdateFlags
 }
 
 // BindPRFlags creates PRFlags with the 'flag' package, globally registering them in the flag
@@ -118,18 +117,17 @@ type PRFlags struct {
 func BindPRFlags() *PRFlags {
 	var artifactsDir = filepath.Join(getwd(), "eng", "artifacts")
 	return &PRFlags{
-		dryRun:     flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
-		tempGitDir: flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
-		branch:     flag.String("branch", "", "Branch to submit PR into. Required, if origin is provided."),
+		dryRun:       flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
+		tempGitDir:   flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
+		manualBranch: flag.String("manual-branch", "", "Branch to submit PR into. Overrides branch detection."),
 
-		origin: flag.String("origin", "git@github.com:microsoft/go-docker", "Submit PR to this repo. \n[Need fetch Git permission.]"),
+		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
 
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-		buildAssetJSON:  flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
-		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+		UpdateFlags: *BindUpdateFlags(),
 	}
 }
 
@@ -137,6 +135,12 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
+	if !*f.skipDockerfiles {
+		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
+			return err
+		}
+	}
+
 	gitDir, err := MakeWorkDir(*f.tempGitDir)
 	if err != nil {
 		return err
@@ -146,17 +150,30 @@ func SubmitUpdatePR(f *PRFlags) error {
 		fmt.Println("Origin not specified. Nothing to do.")
 		return nil
 	}
-	if *f.branch == "" {
-		fmt.Println("No base branch is specified")
-		return nil
-	}
-
 	if *f.to == "" {
 		f.to = f.origin
 	}
 
+	var assets *buildassets.BuildAssets
+	if *f.buildAssetJSON != "" {
+		assets = &buildassets.BuildAssets{}
+		if err := ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
+			return err
+		}
+	}
+
+	targetBranch := *f.manualBranch
+	if targetBranch == "" && assets != nil {
+		targetBranch = assets.GetDockerRepoTargetBranch()
+	}
+	if targetBranch == "" {
+		fmt.Println("This build assets JSON file isn't associated with any Docker image repo branch.\nSee the GetDockerRepoTargetBranch Go func in 'buildmodel/buildassets'.")
+		return nil
+	}
+	fmt.Printf("---- Target branch for PR: %v\n", targetBranch)
+
 	b := gitpr.PRRefSet{
-		Name:    *f.branch,
+		Name:    targetBranch,
 		Purpose: "auto-update",
 	}
 
@@ -227,10 +244,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 	runOrPanic(newGitCmd("checkout", b.PRBranch()))
 
-	// Make changes to the files ins the temp repo.
-	r, err := runUpdate(gitDir, f)
-	if err != nil {
+	// Make changes to the files in the temp repo.
+	if err := UpdateGoImagesRepo(gitDir, assets); err != nil {
 		return err
+	}
+	if !*f.skipDockerfiles {
+		if err := RunDockerfileGeneration(gitDir); err != nil {
+			return err
+		}
 	}
 
 	// Check if there are any files in the stage. If not, we don't need to process this branch
@@ -248,7 +269,12 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return nil
 	}
 
-	runOrPanic(newGitCmd("commit", "-a", "-m", "Update "+b.Name+" to "+r.buildAssets.Version))
+	commitMessage := "Update " + b.Name
+	if assets != nil {
+		commitMessage += " to " + assets.Version
+	}
+
+	runOrPanic(newGitCmd("commit", "-a", "-m", commitMessage))
 
 	// Push the commit.
 	args := []string{"push", *f.origin, b.PRBranchRefspec()}
@@ -329,54 +355,72 @@ func MakeWorkDir(rootDir string) (string, error) {
 	return os.MkdirTemp(rootDir, fmt.Sprintf("%s_*", pathDate))
 }
 
-type updateResults struct {
-	buildAssets *buildassets.BuildAssets
+// UpdateFlags is a list of flags used for an update command.
+type UpdateFlags struct {
+	buildAssetJSON  *string
+	skipDockerfiles *bool
 }
 
-// runUpdate runs an auto-update process in the given Go Docker repository using the given update
-// options. It finds the 'versions.json' and 'manifest.json' files, updates them appropriately, and
-// optionally regenerates the Dockerfiles.
-func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
-	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
-	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
+// BindUpdateFlags creates UpdateFlags with the 'flag' package, globally registering them in
+// the flag package so ParseBoundFlags will find them.
+func BindUpdateFlags() *UpdateFlags {
+	return &UpdateFlags{
+		buildAssetJSON:  flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
+		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+	}
+}
 
-	var dockerfileUpdateScript = filepath.Join(repoRoot, "eng", "update-dockerfiles.sh")
-
+// RunUpdate updates the given Go Docker image repository with the provided flags.
+func RunUpdate(repoRoot string, f *UpdateFlags) error {
 	if !*f.skipDockerfiles {
-		missingTools := false
-		for _, requiredCmd := range []string{"bash", "jq", "awk"} {
-			if _, err := exec.LookPath(requiredCmd); err != nil {
-				fmt.Printf("Unable to find '%s' in PATH. It is required to run 'eng/update-dockerfiles.sh'.\n", requiredCmd)
-				fmt.Printf("Error: %s\n", err)
-				missingTools = true
-			}
+		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
+			return err
 		}
-		if missingTools {
-			return nil, fmt.Errorf("missing required tools to generate Dockerfiles. Make sure the tools are in PATH and try again, or pass '-skip-dockerfiles' to the command")
-		}
-	}
-
-	versions := dockerversions.Versions{}
-	if err := ReadJSONFile(versionsJSONPath, &versions); err != nil {
-		return nil, err
-	}
-
-	manifest := dockermanifest.Manifest{}
-	if err := ReadJSONFile(manifestJSONPath, &manifest); err != nil {
-		return nil, err
 	}
 
 	var assets *buildassets.BuildAssets
 	if *f.buildAssetJSON != "" {
 		assets = &buildassets.BuildAssets{}
 		if err := ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
-			return nil, err
+			return err
 		}
-		if err := UpdateVersions(assets, versions); err != nil {
-			return nil, err
+	}
+
+	if err := UpdateGoImagesRepo(repoRoot, assets); err != nil {
+		return err
+	}
+
+	if !*f.skipDockerfiles {
+		if err := RunDockerfileGeneration(repoRoot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpdateGoImagesRepo runs an auto-update process in the given Go Docker images repository. It finds
+// the 'versions.json' and 'manifest.json' files and updates them based on the given build assets
+// struct. If the struct pointer is nil, only updates the 'manifest.json'.
+func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
+	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
+	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
+
+	versions := dockerversions.Versions{}
+	if err := ReadJSONFile(versionsJSONPath, &versions); err != nil {
+		return err
+	}
+
+	manifest := dockermanifest.Manifest{}
+	if err := ReadJSONFile(manifestJSONPath, &manifest); err != nil {
+		return err
+	}
+
+	if b != nil {
+		if err := UpdateVersions(b, versions); err != nil {
+			return err
 		}
 		if err := WriteJSONFile(versionsJSONPath, &versions); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -384,18 +428,37 @@ func runUpdate(repoRoot string, f *PRFlags) (*updateResults, error) {
 
 	UpdateManifest(&manifest, versions)
 	if err := WriteJSONFile(manifestJSONPath, &manifest); err != nil {
-		return nil, err
+		return err
 	}
 
-	if !*f.skipDockerfiles {
-		fmt.Println("Generating Dockerfiles...")
-		if err := run(exec.Command("bash", dockerfileUpdateScript)); err != nil {
-			return nil, err
+	return nil
+}
+
+// EnsureDockerfileGenerationPrerequisites checks if Dockerfile generation prerequisites are
+// satisfied and returns a descriptive error if not.
+func EnsureDockerfileGenerationPrerequisites() error {
+	missingTools := false
+	for _, requiredCmd := range []string{"bash", "jq", "awk"} {
+		if _, err := exec.LookPath(requiredCmd); err != nil {
+			fmt.Printf("Unable to find '%s' in PATH. It is required to run 'eng/update-dockerfiles.sh'.\n", requiredCmd)
+			fmt.Printf("Error: %s\n", err)
+			missingTools = true
 		}
 	}
-	return &updateResults{
-		buildAssets: assets,
-	}, nil
+	if missingTools {
+		return fmt.Errorf("missing required tools to generate Dockerfiles. Make sure the tools are in PATH and try again, or pass '-skip-dockerfiles' to the command")
+	}
+	return nil
+}
+
+// RunDockerfileGeneration runs the Dockerfile generation script in the given go-images repo root.
+// Call this after updating the versions.json file to synchronize the Dockerfiles. This function
+// doesn't check for prerequisites: EnsureDockerfileGenerationPrerequisites should be called before
+// any auto-update code runs to detect problems before wasting time on an incompletable update.
+func RunDockerfileGeneration(repoRoot string) error {
+	fmt.Println("Generating Dockerfiles...")
+	var dockerfileUpdateScript = filepath.Join(repoRoot, "eng", "update-dockerfiles.sh")
+	return run(exec.Command("bash", dockerfileUpdateScript))
 }
 
 // getwd gets the current working dir or panics, for easy use in expressions.

@@ -90,37 +90,42 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 			}
 
 			// The main tag that is shared by all architectures.
-			mainSharedTag := v.Version + "-" + v.Revision + "-" + osVersion
+			mainSharedTagVersion := v.Version + "-" + v.Revision + "-" + osVersion
 
-			sharedTags := map[string]dockermanifest.Tag{
-				mainSharedTag: {},
+			tagVersions := []string{
+				mainSharedTagVersion,
 				// Revisionless tag.
-				v.Version + "-" + osVersion: {},
+				v.Version + "-" + osVersion,
 				// We only maintain one patch version, so it's always preferred. Add major.minor tag.
-				majorMinor + "-" + osVersion: {},
+				majorMinor + "-" + osVersion,
 			}
 
 			// If this is a preferred major.minor version, create major-only tag.
 			if v.PreferredMinor {
-				sharedTags[major+"-"+osVersion] = dockermanifest.Tag{}
+				tagVersions = append(tagVersions, major+"-"+osVersion)
 			}
 			// If this is the preferred major version, create versionless tag.
 			if v.PreferredMajor {
-				sharedTags[osVersion] = dockermanifest.Tag{}
+				tagVersions = append(tagVersions, osVersion)
 			}
 
 			// If this is the preferred variant, create tags without the variant (OS) part.
 			if v.PreferredVariant == variant {
-				sharedTags[v.Version+"-"+v.Revision] = dockermanifest.Tag{}
-				sharedTags[v.Version] = dockermanifest.Tag{}
-				sharedTags[majorMinor] = dockermanifest.Tag{}
+				tagVersions = append(tagVersions, v.Version+"-"+v.Revision)
+				tagVersions = append(tagVersions, v.Version)
+				tagVersions = append(tagVersions, majorMinor)
 
 				if v.PreferredMinor {
-					sharedTags[major] = dockermanifest.Tag{}
+					tagVersions = append(tagVersions, major)
 				}
 				if v.PreferredMajor {
-					sharedTags["latest"] = dockermanifest.Tag{}
+					tagVersions = append(tagVersions, "latest")
 				}
+			}
+
+			sharedTags := make(map[string]dockermanifest.Tag, len(tagVersions))
+			for _, tag := range tagVersions {
+				sharedTags[v.TagPrefix+tag] = dockermanifest.Tag{}
 			}
 
 			// Normally, no build args are necessary and this is nil in the output model.
@@ -136,7 +141,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				buildArgs = map[string]string{
 					// nanoserver doesn't have good download capability, so it copies the Go install
 					// from the windowsservercore image.
-					"DOWNLOADER_TAG": v.Version + "-" + v.Revision + "-windowsservercore-" + windowsVersion + "-amd64",
+					"DOWNLOADER_TAG": v.TagPrefix + v.Version + "-" + v.Revision + "-windowsservercore-" + windowsVersion + "-amd64",
 					// The nanoserver Dockerfile needs to know what repository we're building for so
 					// it can figure out the windowsservercore tag's full name.
 					"REPO": "$(Repo:golang)",
@@ -157,7 +162,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 						Tags: map[string]dockermanifest.Tag{
 							// We only build amd64 at the moment. The way to implement other
 							// architectures in the future is to add more Platform entries.
-							mainSharedTag + "-amd64": {},
+							v.TagPrefix + mainSharedTagVersion + "-amd64": {},
 						},
 					},
 				},

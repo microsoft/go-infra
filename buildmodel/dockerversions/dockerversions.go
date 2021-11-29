@@ -36,6 +36,10 @@ type MajorMinorVersion struct {
 	// "preferred" in the tagging structure. For example, if buster is preferred over stretch, the
 	// generated "1.16.6" tag will point at a buster image.
 	PreferredVariant string `json:"preferredVariant,omitempty"`
+
+	// TagPrefix extends the upstream model, specifying a prefix to include in every tag when
+	// generating the 'manifest.json' file.
+	TagPrefix string `json:"tagPrefix,omitempty"`
 }
 
 // Arch points at the publicly accessible artifacts for a specific OS/arch.

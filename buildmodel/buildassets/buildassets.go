@@ -9,10 +9,9 @@
 package buildassets
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"os"
 	"path"
 	"sort"
@@ -33,6 +32,19 @@ type BuildAssets struct {
 	// Arches is the list of artifacts that was produced for this version, typically one per target
 	// os/architecture. The name "Arches" is shared with the versions.json format.
 	Arches []*dockerversions.Arch `json:"arches"`
+}
+
+// GetDockerRepoTargetBranch returns the Go Docker images repo branch that needs to be updated based
+// on the branch of the Go repo that was built, or returns empty string if no branch needs to be
+// updated.
+func (b BuildAssets) GetDockerRepoTargetBranch() string {
+	if b.Branch == "main" || strings.HasPrefix(b.Branch, "release-branch.") {
+		return "microsoft/main"
+	}
+	if strings.HasPrefix(b.Branch, "dev/official/") {
+		return b.Branch
+	}
+	return ""
 }
 
 // Basic information about how the build output assets are formatted by Microsoft builds of Go. The
@@ -66,8 +78,14 @@ type BuildResultsDirectoryInfo struct {
 // CreateSummary scans the paths/info from a BuildResultsDirectoryInfo to summarize the outputs of
 // the build in a BuildAssets struct. The result can be used later to perform an auto-update.
 func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
-	goVersion := getVersion(path.Join(b.SourceDir, "VERSION"), "main")
-	goRevision := getVersion(path.Join(b.SourceDir, "MICROSOFT_REVISION"), "1")
+	goVersion, err := getVersion(path.Join(b.SourceDir, "VERSION"), "main")
+	if err != nil {
+		return nil, err
+	}
+	goRevision, err := getVersion(path.Join(b.SourceDir, "MICROSOFT_REVISION"), "1")
+	if err != nil {
+		return nil, err
+	}
 
 	// Go version file content begins with "go", matching the tags, but we just want numbers.
 	goVersion = strings.TrimPrefix(goVersion, "go")
@@ -87,7 +105,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 	if b.ArtifactsDir != "" {
 		entries, err := os.ReadDir(b.ArtifactsDir)
 		if err != nil {
-			log.Panic(err)
+			return nil, err
 		}
 
 		for _, e := range entries {
@@ -103,7 +121,11 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				// Find/create the arch that matches up with this checksum file.
 				a := getOrCreateArch(strings.TrimSuffix(e.Name(), checksumSuffix))
 				// Extract the checksum column from the file and store it in the summary.
-				a.SHA256 = strings.Fields(readFileOrPanic(fullPath))[0]
+				checksumLine, err := os.ReadFile(fullPath)
+				if err != nil {
+					return nil, fmt.Errorf("unable to read checksum file '%v': %w", fullPath, err)
+				}
+				a.SHA256 = strings.Fields(string(checksumLine))[0]
 				continue
 			}
 			// Is it an archive?
@@ -147,23 +169,23 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 }
 
 // getVersion reads the file at path, if it exists. If it doesn't exist, returns the default
-// provided by the caller. If the file cannot be read for some other reason, panics. This logic
-// helps with the "VERSION" files that are only present in Go release branches.
-func getVersion(path string, defaultVersion string) (version string) {
-	bytes, err := ioutil.ReadFile(path)
+// provided by the caller. If the file cannot be read for some other reason, return the error. This
+// logic helps with the "VERSION" files that are only present in Go release branches, and handles
+// unusual VERSION files that may contain a newline by only reading the first line.
+func getVersion(path string, defaultVersion string) (string, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return defaultVersion
+			return defaultVersion, nil
 		}
-		log.Panic(err)
+		return "", fmt.Errorf("unable to open VERSION file '%v': %w", path, err)
 	}
-	return string(bytes)
-}
+	defer f.Close()
 
-func readFileOrPanic(path string) string {
-	bytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		log.Panic(err)
+	s := bufio.NewScanner(f)
+	_ = s.Scan()
+	if err := s.Err(); err != nil {
+		return "", fmt.Errorf("unable to read VERSION file '%v': %w", path, err)
 	}
-	return string(bytes)
+	return s.Text(), nil
 }
