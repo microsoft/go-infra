@@ -8,7 +8,7 @@ schedules:
     displayName: Sync from upstream three times a week
     branches:
       include:
-        - microsoft/main
+        - main
     always: true
 
 variables:
