@@ -11,8 +11,13 @@ resources:
       trigger:
         branches:
           include:
-            - microsoft/main
+            # go-images doesn't currently have a place for updates from microsoft/main to go. This
+            # should be addressed once the repo has a nightly branch:
+            # https://github.com/microsoft/go/issues/169. Until then, don't trigger on
+            # microsoft/main because those updates will always fail to generate.
+            # - microsoft/main
             - microsoft/release-branch.*
+            - dev/official/*
 
 variables:
   - group: Microsoft-GoLang-bot
