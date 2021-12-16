@@ -94,13 +94,9 @@ func main() {
 		syncNum := fmt.Sprintf("%v/%v", i+1, len(entries))
 		fmt.Printf("=== Beginning sync %v, from %v -> %v\n", syncNum, entry.Upstream, entry.Target)
 
-		// Add authentication to Target URL if necessary.
-		targetRepoOwnerSlashName := strings.TrimPrefix(entry.Target, "https://github.com/")
-		if *gitAuthSSH {
-			entry.Target = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
-		} else if *gitAuthPAT {
-			entry.Target = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
-		}
+		// Add authentication to Target and Upstream URLs if necessary.
+		entry.Target = createAuthorizedGitUrl(entry.Target, *gitAuthSSH, *gitAuthPAT)
+		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, *gitAuthSSH, *gitAuthPAT)
 
 		if entry.Head == "" {
 			entry.Head = entry.Target
@@ -126,6 +122,21 @@ func main() {
 	}
 }
 
+// createAuthorizedGitUrl takes a URL, auth options, and returns an authorized URL. The authorized
+// URL may be the same as the original URL, depending on the options given and the URL content.
+func createAuthorizedGitUrl(url string, gitAuthSSH bool, gitAuthPAT bool) string {
+	const githubPrefix = "https://github.com"
+	if strings.HasPrefix(url, githubPrefix) {
+		targetRepoOwnerSlashName := strings.TrimPrefix(url, githubPrefix)
+		if gitAuthSSH {
+			url = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
+		} else if gitAuthPAT {
+			url = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
+		}
+	}
+	return url
+}
+
 // changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
 // of files being changed in the PR for use in the PR body.
 type changedBranch struct {
@@ -145,9 +156,26 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		return c
 	}
 
-	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.SourceBranches))
-	for _, b := range entry.SourceBranches {
-		nb := gitpr.NewSyncPRRefSet(b)
+	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.UpstreamMergeBranches)+len(entry.MergeMap))
+	for _, b := range entry.UpstreamMergeBranches {
+		// Map from upstream branch name to "microsoft/"-prefixed branch name.
+		nb := &gitpr.SyncPRRefSet{
+			UpstreamName: b,
+			PRRefSet: gitpr.PRRefSet{
+				Name:    "microsoft/" + strings.ReplaceAll(b, "master", "main"),
+				Purpose: "auto-merge",
+			},
+		}
+		branches = append(branches, nb)
+	}
+	for upstream, target := range entry.MergeMap {
+		nb := &gitpr.SyncPRRefSet{
+			UpstreamName: upstream,
+			PRRefSet: gitpr.PRRefSet{
+				Name:    target,
+				Purpose: "auto-merge",
+			},
+		}
 		branches = append(branches, nb)
 	}
 
@@ -190,11 +218,11 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			}
 		}
 
-		if len(entry.AutoResolveOurs) > 0 {
+		if len(entry.AutoResolveTarget) > 0 {
 			// Automatically resolve conflicts in specific project doc files. Use '--no-overlay' to make
 			// sure we delete new files in e.g. '.github' that are in upstream but don't exist locally.
 			// '--ours' auto-deletes if upstream modifies a file that we deleted in our branch.
-			if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveOurs...)...)); err != nil {
+			if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveTarget...)...)); err != nil {
 				return err
 			}
 		}
