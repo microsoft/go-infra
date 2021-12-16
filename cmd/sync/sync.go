@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -46,6 +47,14 @@ var dryRun = flag.Bool("n", false, "Enable dry run: do not push, do not submit P
 var githubUser = flag.String("github-user", "", "Use this github user to submit pull requests.")
 var githubPAT = flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified.")
 var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified.")
+
+// maxDiffLinesToDisplay is the number of lines of the file diff to show in the console log and
+// include in the PR description before truncating the remaining lines. A dev branch may have a
+// large number of changes that can cause issues like extremely long email notifications, breaking
+// Azure Pipelines by being too long to store in an environment variable, and performance hits due
+// to the time it takes to log (in particular on Windows terminals). This infra hasn't hit these
+// issues, but other tools have hit some, and it seems reasonable to set a limit ahead of time.
+const maxDiffLinesToDisplay = 200
 
 func main() {
 	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
@@ -261,6 +270,23 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			return err
 		}
 
+		// The diff may be large. Truncate it if it seems unreasonable to show on the console, or to
+		// include in a PR description. The user can use Git to dig deeper if needed.
+		var diffLines strings.Builder
+		diffLineScanner := bufio.NewScanner(strings.NewReader(diff))
+		for lineNumber := 0; diffLineScanner.Scan(); lineNumber++ {
+			if err := diffLineScanner.Err(); err != nil {
+				return err
+			}
+			if lineNumber == maxDiffLinesToDisplay {
+				diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
+				break
+			}
+			diffLines.WriteString(diffLineScanner.Text())
+			diffLines.WriteString("\n")
+		}
+		diff = diffLines.String()
+
 		fmt.Printf("---- Files changed from '%v' to '%v' ----\n", b.UpstreamName, b.Name)
 		fmt.Print(diff)
 		fmt.Println("--------")
@@ -359,10 +385,11 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			title := fmt.Sprintf("Merge upstream `%v` into `%v`", b.Refs.UpstreamName, b.Refs.Name)
 			body := fmt.Sprintf(
 				"🔃 This is an automatically generated PR merging upstream `%v` into `%v`.\n\n"+
-					"This PR should auto-merge itself when PR validation passes. If CI fails and you need to make fixups, be sure to use a merge commit, not a squash or rebase!\n\n"+
-					"---\n\n"+
-					"After these changes, the difference between upstream and the branch is:\n\n"+
-					"```\n%v\n```",
+					"This PR is configured to auto-merge with a merge commit when PR validation passes. If CI fails and you need to make fixups, make sure to use a merge commit, not a squash or rebase!\n\n"+
+					"For more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).\n\n"+
+					"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
+					"```\n%v\n```"+
+					"\n\n</details>",
 				b.Refs.UpstreamName,
 				b.Refs.Name,
 				strings.TrimSpace(b.Diff),
