@@ -56,6 +56,17 @@ var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR a
 // issues, but other tools have hit some, and it seems reasonable to set a limit ahead of time.
 const maxDiffLinesToDisplay = 200
 
+// GitAuthOption contains a string value given on the command line to indicate what type of auth to
+// use with GitHub URLs.
+type GitAuthOption string
+
+// String values given on the command line. See usage help for details.
+const (
+	GitAuthNone GitAuthOption = "none"
+	GitAuthSSH  GitAuthOption = "ssh"
+	GitAuthPAT  GitAuthOption = "pat"
+)
+
 func main() {
 	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
 	var tempGitDir = flag.String(
@@ -63,19 +74,35 @@ func main() {
 		filepath.Join(getwdOrPanic(), "eng", "artifacts", "sync-upstream-temp-repo"),
 		"Location to create the temporary Git repo. A timestamped subdirectory is created to reduce chance of collision.")
 
-	var gitAuthSSH = flag.Bool("git-auth-ssh", false, "If enabled, automatically convert Target GitHub URLs into SSH format for authentication. 'git-auth-pat' is ignored if also specified.")
-	var gitAuthPAT = flag.Bool("git-auth-pat", false, "If enabled, automatically modify GitHub URLs to use 'github-user' and 'github-pat' for fetch/push access.")
+	var gitAuthString = flag.String(
+		"git-auth",
+		string(GitAuthNone),
+		// List valid options. Indent one space, to line up with the automatic ' (default "none")'.
+		"The type of Git auth to inject into upstream and target GitHub URLs for fetch/push access. String options:\n"+
+			" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
+			" ssh - Change the GitHub URL to SSH format.\n"+
+			" pat - Add the 'github-user' and 'github-pat' values into the URL.\n")
 
 	buildmodel.ParseBoundFlags(description)
 
-	if *gitAuthPAT {
+	gitAuth := GitAuthOption(*gitAuthString)
+	switch gitAuth {
+	case GitAuthNone, GitAuthSSH, GitAuthPAT:
+		break
+	default:
+		fmt.Printf("Error: git-auth value '%v' is not an accepted value.\n", *gitAuthString)
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if gitAuth == GitAuthPAT {
 		missingArgs := false
 		if *githubUser == "" {
-			fmt.Printf("Error: git-auth-pat is specified but github-user is not.")
+			fmt.Printf("Error: git-auth pat is specified but github-user is not.")
 			missingArgs = true
 		}
 		if *githubPAT == "" {
-			fmt.Printf("Error: git-auth-pat is specified but github-pat is not.")
+			fmt.Printf("Error: git-auth pat is specified but github-pat is not.")
 			missingArgs = true
 		}
 		if missingArgs {
@@ -104,8 +131,8 @@ func main() {
 		fmt.Printf("=== Beginning sync %v, from %v -> %v\n", syncNum, entry.Upstream, entry.Target)
 
 		// Add authentication to Target and Upstream URLs if necessary.
-		entry.Target = createAuthorizedGitUrl(entry.Target, *gitAuthSSH, *gitAuthPAT)
-		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, *gitAuthSSH, *gitAuthPAT)
+		entry.Target = createAuthorizedGitUrl(entry.Target, gitAuth)
+		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, gitAuth)
 
 		if entry.Head == "" {
 			entry.Head = entry.Target
@@ -133,14 +160,18 @@ func main() {
 
 // createAuthorizedGitUrl takes a URL, auth options, and returns an authorized URL. The authorized
 // URL may be the same as the original URL, depending on the options given and the URL content.
-func createAuthorizedGitUrl(url string, gitAuthSSH bool, gitAuthPAT bool) string {
+func createAuthorizedGitUrl(url string, gitAuth GitAuthOption) string {
 	const githubPrefix = "https://github.com"
 	if strings.HasPrefix(url, githubPrefix) {
 		targetRepoOwnerSlashName := strings.TrimPrefix(url, githubPrefix)
-		if gitAuthSSH {
+
+		switch gitAuth {
+		case GitAuthSSH:
 			url = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
-		} else if gitAuthPAT {
+			break
+		case GitAuthPAT:
 			url = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
+			break
 		}
 	}
 	return url
