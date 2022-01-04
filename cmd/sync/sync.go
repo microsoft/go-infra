@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -47,6 +48,25 @@ var githubUser = flag.String("github-user", "", "Use this github user to submit 
 var githubPAT = flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified.")
 var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified.")
 
+// maxDiffLinesToDisplay is the number of lines of the file diff to show in the console log and
+// include in the PR description before truncating the remaining lines. A dev branch may have a
+// large number of changes that can cause issues like extremely long email notifications, breaking
+// Azure Pipelines by being too long to store in an environment variable, and performance hits due
+// to the time it takes to log (in particular on Windows terminals). This infra hasn't hit these
+// issues, but other tools have hit some, and it seems reasonable to set a limit ahead of time.
+const maxDiffLinesToDisplay = 200
+
+// GitAuthOption contains a string value given on the command line to indicate what type of auth to
+// use with GitHub URLs.
+type GitAuthOption string
+
+// String values given on the command line. See usage help for details.
+const (
+	GitAuthNone GitAuthOption = "none"
+	GitAuthSSH  GitAuthOption = "ssh"
+	GitAuthPAT  GitAuthOption = "pat"
+)
+
 func main() {
 	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
 	var tempGitDir = flag.String(
@@ -54,19 +74,35 @@ func main() {
 		filepath.Join(getwdOrPanic(), "eng", "artifacts", "sync-upstream-temp-repo"),
 		"Location to create the temporary Git repo. A timestamped subdirectory is created to reduce chance of collision.")
 
-	var gitAuthSSH = flag.Bool("git-auth-ssh", false, "If enabled, automatically convert Target GitHub URLs into SSH format for authentication. 'git-auth-pat' is ignored if also specified.")
-	var gitAuthPAT = flag.Bool("git-auth-pat", false, "If enabled, automatically modify GitHub URLs to use 'github-user' and 'github-pat' for fetch/push access.")
+	var gitAuthString = flag.String(
+		"git-auth",
+		string(GitAuthNone),
+		// List valid options. Indent one space, to line up with the automatic ' (default "none")'.
+		"The type of Git auth to inject into upstream and target GitHub URLs for fetch/push access. String options:\n"+
+			" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
+			" ssh - Change the GitHub URL to SSH format.\n"+
+			" pat - Add the 'github-user' and 'github-pat' values into the URL.\n")
 
 	buildmodel.ParseBoundFlags(description)
 
-	if *gitAuthPAT {
+	gitAuth := GitAuthOption(*gitAuthString)
+	switch gitAuth {
+	case GitAuthNone, GitAuthSSH, GitAuthPAT:
+		break
+	default:
+		fmt.Printf("Error: git-auth value '%v' is not an accepted value.\n", *gitAuthString)
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if gitAuth == GitAuthPAT {
 		missingArgs := false
 		if *githubUser == "" {
-			fmt.Printf("Error: git-auth-pat is specified but github-user is not.")
+			fmt.Printf("Error: git-auth pat is specified but github-user is not.")
 			missingArgs = true
 		}
 		if *githubPAT == "" {
-			fmt.Printf("Error: git-auth-pat is specified but github-pat is not.")
+			fmt.Printf("Error: git-auth pat is specified but github-pat is not.")
 			missingArgs = true
 		}
 		if missingArgs {
@@ -94,13 +130,9 @@ func main() {
 		syncNum := fmt.Sprintf("%v/%v", i+1, len(entries))
 		fmt.Printf("=== Beginning sync %v, from %v -> %v\n", syncNum, entry.Upstream, entry.Target)
 
-		// Add authentication to Target URL if necessary.
-		targetRepoOwnerSlashName := strings.TrimPrefix(entry.Target, "https://github.com/")
-		if *gitAuthSSH {
-			entry.Target = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
-		} else if *gitAuthPAT {
-			entry.Target = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
-		}
+		// Add authentication to Target and Upstream URLs if necessary.
+		entry.Target = createAuthorizedGitUrl(entry.Target, gitAuth)
+		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, gitAuth)
 
 		if entry.Head == "" {
 			entry.Head = entry.Target
@@ -126,6 +158,25 @@ func main() {
 	}
 }
 
+// createAuthorizedGitUrl takes a URL, auth options, and returns an authorized URL. The authorized
+// URL may be the same as the original URL, depending on the options given and the URL content.
+func createAuthorizedGitUrl(url string, gitAuth GitAuthOption) string {
+	const githubPrefix = "https://github.com"
+	if strings.HasPrefix(url, githubPrefix) {
+		targetRepoOwnerSlashName := strings.TrimPrefix(url, githubPrefix)
+
+		switch gitAuth {
+		case GitAuthSSH:
+			url = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
+			break
+		case GitAuthPAT:
+			url = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
+			break
+		}
+	}
+	return url
+}
+
 // changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
 // of files being changed in the PR for use in the PR body.
 type changedBranch struct {
@@ -145,9 +196,26 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		return c
 	}
 
-	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.SourceBranches))
-	for _, b := range entry.SourceBranches {
-		nb := gitpr.NewSyncPRRefSet(b)
+	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.UpstreamMergeBranches)+len(entry.MergeMap))
+	for _, b := range entry.UpstreamMergeBranches {
+		// Map from upstream branch name to "microsoft/"-prefixed branch name.
+		nb := &gitpr.SyncPRRefSet{
+			UpstreamName: b,
+			PRRefSet: gitpr.PRRefSet{
+				Name:    "microsoft/" + strings.ReplaceAll(b, "master", "main"),
+				Purpose: "auto-merge",
+			},
+		}
+		branches = append(branches, nb)
+	}
+	for upstream, target := range entry.MergeMap {
+		nb := &gitpr.SyncPRRefSet{
+			UpstreamName: upstream,
+			PRRefSet: gitpr.PRRefSet{
+				Name:    target,
+				Purpose: "auto-merge",
+			},
+		}
 		branches = append(branches, nb)
 	}
 
@@ -190,11 +258,11 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			}
 		}
 
-		if len(entry.AutoResolveOurs) > 0 {
+		if len(entry.AutoResolveTarget) > 0 {
 			// Automatically resolve conflicts in specific project doc files. Use '--no-overlay' to make
 			// sure we delete new files in e.g. '.github' that are in upstream but don't exist locally.
 			// '--ours' auto-deletes if upstream modifies a file that we deleted in our branch.
-			if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveOurs...)...)); err != nil {
+			if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveTarget...)...)); err != nil {
 				return err
 			}
 		}
@@ -232,6 +300,23 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		if err != nil {
 			return err
 		}
+
+		// The diff may be large. Truncate it if it seems unreasonable to show on the console, or to
+		// include in a PR description. The user can use Git to dig deeper if needed.
+		var diffLines strings.Builder
+		diffLineScanner := bufio.NewScanner(strings.NewReader(diff))
+		for lineNumber := 0; diffLineScanner.Scan(); lineNumber++ {
+			if err := diffLineScanner.Err(); err != nil {
+				return err
+			}
+			if lineNumber == maxDiffLinesToDisplay {
+				diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
+				break
+			}
+			diffLines.WriteString(diffLineScanner.Text())
+			diffLines.WriteString("\n")
+		}
+		diff = diffLines.String()
 
 		fmt.Printf("---- Files changed from '%v' to '%v' ----\n", b.UpstreamName, b.Name)
 		fmt.Print(diff)
@@ -331,10 +416,11 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			title := fmt.Sprintf("Merge upstream `%v` into `%v`", b.Refs.UpstreamName, b.Refs.Name)
 			body := fmt.Sprintf(
 				"🔃 This is an automatically generated PR merging upstream `%v` into `%v`.\n\n"+
-					"This PR should auto-merge itself when PR validation passes. If CI fails and you need to make fixups, be sure to use a merge commit, not a squash or rebase!\n\n"+
-					"---\n\n"+
-					"After these changes, the difference between upstream and the branch is:\n\n"+
-					"```\n%v\n```",
+					"This PR is configured to auto-merge with a merge commit when PR validation passes. If CI fails and you need to make fixups, make sure to use a merge commit, not a squash or rebase!\n\n"+
+					"For more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).\n\n"+
+					"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
+					"```\n%v\n```"+
+					"\n\n</details>",
 				b.Refs.UpstreamName,
 				b.Refs.Name,
 				strings.TrimSpace(b.Diff),

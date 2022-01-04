@@ -66,18 +66,6 @@ type SyncPRRefSet struct {
 	PRRefSet
 }
 
-// NewSyncPRRefSet creates a SyncPRRefSet based on the name of an upstream branch. Mapping from
-// upstream branch name to "microsoft/"-prefixed branch name happens here.
-func NewSyncPRRefSet(upstreamName string) *SyncPRRefSet {
-	return &SyncPRRefSet{
-		upstreamName,
-		PRRefSet{
-			Name:    "microsoft/" + strings.ReplaceAll(upstreamName, "master", "main"),
-			Purpose: "auto-merge",
-		},
-	}
-}
-
 // UpstreamLocalBranch is the name of the upstream ref after it has been fetched locally.
 func (b SyncPRRefSet) UpstreamLocalBranch() string {
 	return "fetched-upstream/" + b.UpstreamName

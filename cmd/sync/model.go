@@ -16,12 +16,19 @@ type SyncConfigEntry struct {
 	// the value of Target. This can be used to run the PR from a GitHub fork.
 	Head string
 
-	// SourceBranches is the list of branches in Upstream to merge into Target.
-	SourceBranches []string
+	// UpstreamMergeBranches is the list of branches in Upstream to merge into Target, where Target
+	// is a fork repo of Upstream. The branch name in Target associated with each Upstream branch is
+	// determined automatically, including a "microsoft/" prefix to distinguish it.
+	UpstreamMergeBranches []string
+	// MergeMap is a map of source branch name in Upstream to target branch name in Target. This map
+	// should only be used by the configuration file when there is no reasonable way to determine
+	// the target branch name automatically, like UpstreamMergeBranches.
+	MergeMap map[string]string
 
-	// AutoResolveOurs contains files and dirs that upstream may modify, but we want to ignore those
-	// modifications and keep our changes to them. Normally our files are all in the 'eng/'
-	// directory, but some files are required by GitHub to be in the root of the repo or in the
-	// '.github' directory. In those cases, we must modify them in place and auto-resolve conflicts.
-	AutoResolveOurs []string
+	// AutoResolveTarget lists files and dirs that Upstream may have modified, but we want to keep
+	// the contents as they are in Target. Normally files that are modified in our fork repos are
+	// all in the 'eng/' directory to avoid merge conflicts (and keep the repository tidy), but in
+	// some cases this isn't possible. In these cases, Target has in-place modifications that must
+	// be auto-resolved during the sync process.
+	AutoResolveTarget []string
 }
