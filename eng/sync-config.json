@@ -6,7 +6,8 @@
       "master",
       "release-branch.go1.15",
       "release-branch.go1.16",
-      "release-branch.go1.17"
+      "release-branch.go1.17",
+      "dev.boringcrypto.go1.17"
     ],
     "AutoResolveTarget": [
       ".gitattributes",
