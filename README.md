@@ -1,5 +1,7 @@
 # Microsoft Go Infrastructure
 
+[![go](https://github.com/microsoft/go-infra/actions/workflows/go.yaml/badge.svg)](https://github.com/microsoft/go-infra/actions/workflows/go.yaml)
+
 This repository contains libraries and utilities that Microsoft uses to:
 
 * Build Go inside Microsoft infrastructure using up-to-date source code.
