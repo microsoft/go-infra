@@ -71,9 +71,27 @@ func (b SyncPRRefSet) UpstreamLocalBranch() string {
 	return "fetched-upstream/" + b.UpstreamName
 }
 
+// UpstreamMirrorLocalBranch is the name of the upstream ref after it has been fetched locally from
+// the mirror of the upstream.
+func (b SyncPRRefSet) UpstreamMirrorLocalBranch() string {
+	return "fetched-upstream-mirror/" + b.UpstreamName
+}
+
 // UpstreamFetchRefspec fetches the current upstream ref into the local branch.
 func (b SyncPRRefSet) UpstreamFetchRefspec() string {
 	return createRefspec(b.UpstreamName, b.UpstreamLocalBranch())
+}
+
+// UpstreamMirrorFetchRefspec fetches the current upstream ref as it is in an upstream mirror into a
+// local branch.
+func (b SyncPRRefSet) UpstreamMirrorFetchRefspec() string {
+	return createRefspec(b.UpstreamName, b.UpstreamMirrorLocalBranch())
+}
+
+// UpstreamMirrorRefspec is the refspec that mirrors the original branch name to the same name in another
+// repo. This can be used with "push" for a mirror operation.
+func (b SyncPRRefSet) UpstreamMirrorRefspec() string {
+	return createRefspec(b.UpstreamLocalBranch(), b.UpstreamName)
 }
 
 // Remote is a parsed version of a Git Remote. It helps determine how to send a GitHub PR.
