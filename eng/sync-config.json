@@ -19,16 +19,6 @@
     ]
   },
   {
-    "Upstream": "https://go.googlesource.com/go",
-    "UpstreamMirror": "https://github.com/golang/go",
-    "Target": "https://github.com/microsoft/go",
-    "MirrorTarget": "https://dnceng@dev.azure.com/dnceng/internal/_git/microsoft-go-mirror",
-    "BranchMap": {
-      "release-branch.go1.17": "dev/dagood/submodule-1.17"
-    },
-    "SubmoduleTarget": "go"
-  },
-  {
     "Upstream": "https://github.com/microsoft/go",
     "Target": "https://github.com/microsoft/go",
     "BranchMap": {
