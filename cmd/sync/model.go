@@ -8,7 +8,6 @@ package main
 type SyncConfigEntry struct {
 	// Upstream is the upstream Git repository to take updates from.
 	Upstream string
-
 	// UpstreamMirror is an optional upstream-maintained mirror of the Upstream repository.
 	// Specifically, for Upstream 'https://go.googlesource.com/go', the UpstreamMirror is
 	// 'https://github.com/golang/go'.

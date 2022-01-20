@@ -17,6 +17,7 @@ func Test_createCommitMessageSnippet(t *testing.T) {
 		message string
 		want    string
 	}{
+		// Test snippet truncation.
 		{"short", "Test message", "Test message"},
 		{
 			"near cutoff",
@@ -34,15 +35,14 @@ func Test_createCommitMessageSnippet(t *testing.T) {
 			"1234567890123456[...]",
 		},
 		{"long", strings.Repeat("words ", 80), "words words word[...]"},
+
+		// Test that snippet creation only takes the first line.
+		{"newline", "PR Title\nContent", "PR Title"},
+		{"newline Windows", "PR Title\r\nContent", "PR Title"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := createCommitMessageSnippet(tt.message)
-			if err != nil {
-				t.Errorf("createCommitMessageSnippet() error = %v", err)
-				return
-			}
-			if got != tt.want {
+			if got := createCommitMessageSnippet(tt.message); got != tt.want {
 				t.Errorf("createCommitMessageSnippet() got = %v, want %v", got, tt.want)
 			}
 		})

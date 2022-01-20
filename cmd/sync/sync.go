@@ -101,7 +101,7 @@ func main() {
 	case GitAuthNone, GitAuthSSH, GitAuthPAT:
 		break
 	default:
-		fmt.Printf("Error: git-auth value '%v' is not an accepted value.\n", *gitAuthString)
+		fmt.Printf("Error: git-auth value %q is not an accepted value.\n", *gitAuthString)
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -282,7 +282,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	changedBranches := make([]changedBranch, 0, len(branches))
 
 	for _, b := range branches {
-		fmt.Printf("---- Processing branch '%v' for entry targeting %v\n", b.Name, entry.Target)
+		fmt.Printf("---- Processing branch %q for entry targeting %v\n", b.Name, entry.Target)
 
 		if err := run(newGitCmd("checkout", b.PRBranch())); err != nil {
 			return err
@@ -295,7 +295,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			// This is not a submodule update, so merge with the upstream repository.
 			if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalBranch())); err != nil {
 				if exitError, ok := err.(*exec.ExitError); ok {
-					fmt.Printf("---- Merge hit an ExitError: '%v'. A non-zero exit code is expected if there were conflicts. The script will try to resolve them, next.\n", exitError)
+					fmt.Printf("---- Merge hit an ExitError: %q. A non-zero exit code is expected if there were conflicts. The script will try to resolve them, next.\n", exitError)
 				} else {
 					// Make sure we don't ignore more than we intended.
 					return err
@@ -310,8 +310,8 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 					return err
 				}
 			}
-			c.PRTitle = fmt.Sprintf("Merge upstream `%v` into `%v`", b.UpstreamName, b.Name)
-			commitMessage = fmt.Sprintf("Merge upstream branch '%v' into %v", b.UpstreamName, b.Name)
+			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
+			commitMessage = fmt.Sprintf("Merge upstream branch %q into %v", b.UpstreamName, b.Name)
 		} else {
 			// This is a submodule update. We'll be doing more evaluation to figure out which commit
 			// to update to, so define a helper func with captured context.
@@ -364,11 +364,9 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			if err != nil {
 				return err
 			}
-			snippet, err := createCommitMessageSnippet(upstreamCommitMessage)
-			if err != nil {
-				return err
-			}
-			c.PRTitle = fmt.Sprintf("Update submodule to latest `%v` in `%v`", b.UpstreamName, b.Name)
+			snippet := createCommitMessageSnippet(upstreamCommitMessage)
+
+			c.PRTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
 			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 		}
 
@@ -424,7 +422,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			}
 			c.Diff = diffLines.String()
 
-			fmt.Printf("---- Files changed from '%v' to '%v' ----\n", b.UpstreamName, b.Name)
+			fmt.Printf("---- Files changed from %q to %q ----\n", b.UpstreamName, b.Name)
 			fmt.Print(diff)
 			fmt.Println("--------")
 		}
@@ -522,12 +520,12 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
 			if entry.SubmoduleTarget != "" {
 				body += fmt.Sprintf(
-					"\n\nThis PR updates the submodule at `%v` to the latest version of `%v` at %v.",
+					"\n\nThis PR updates the submodule at %#q to the latest version of %#q at %v.",
 					entry.SubmoduleTarget, b.Refs.UpstreamName, entry.Upstream,
 				)
 			} else {
 				body += fmt.Sprintf(
-					"\n\nThis PR merges `%v` into `%v`.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
+					"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
 					b.Refs.UpstreamName, b.Refs.Name,
 				)
 			}
@@ -635,16 +633,12 @@ func combinedOutput(c *exec.Cmd) (string, error) {
 	return string(out), nil
 }
 
-func createCommitMessageSnippet(message string) (string, error) {
-	s := bufio.NewScanner(strings.NewReader(message))
-	s.Scan()
-	if err := s.Err(); err != nil {
-		return "", err
+func createCommitMessageSnippet(message string) string {
+	if i := strings.IndexAny(message, "\r\n"); i >= 0 {
+		message = message[:i]
 	}
-
-	snippet := s.Text()
-	if len(snippet) > maxUpstreamCommitMessageInSnippet {
-		snippet = snippet[:maxUpstreamCommitMessageInSnippet-len(snippetCutoffIndicator)+1] + snippetCutoffIndicator
+	if len(message) > maxUpstreamCommitMessageInSnippet {
+		message = message[:maxUpstreamCommitMessageInSnippet-len(snippetCutoffIndicator)+1] + snippetCutoffIndicator
 	}
-	return snippet, nil
+	return message
 }
