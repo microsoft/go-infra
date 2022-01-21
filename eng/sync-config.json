@@ -3,11 +3,8 @@
     "Upstream": "https://go.googlesource.com/go",
     "Target": "https://github.com/microsoft/go",
     "BranchMap": {
-      "master": "microsoft/main",
       "release-branch.go1.15": "microsoft/?",
-      "release-branch.go1.16": "microsoft/?",
-      "release-branch.go1.17": "microsoft/?",
-      "dev.boringcrypto.go1.17": "microsoft/?"
+      "release-branch.go1.16": "microsoft/?"
     },
     "AutoResolveTarget": [
       ".gitattributes",
@@ -17,6 +14,18 @@
       "SECURITY.md",
       "SUPPORT.md"
     ]
+  },
+  {
+    "Upstream": "https://go.googlesource.com/go",
+    "UpstreamMirror": "https://github.com/golang/go",
+    "Target": "https://github.com/microsoft/go",
+    "MirrorTarget": "https://dnceng@dev.azure.com/dnceng/internal/_git/microsoft-go-mirror",
+    "BranchMap": {
+      "master": "microsoft/main",
+      "release-branch.go1.17": "microsoft/?",
+      "dev.boringcrypto.go1.17": "microsoft/?"
+    },
+    "SubmoduleTarget": "go"
   },
   {
     "Upstream": "https://github.com/microsoft/go",
