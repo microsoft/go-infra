@@ -2,13 +2,13 @@
   {
     "Upstream": "https://go.googlesource.com/go",
     "Target": "https://github.com/microsoft/go",
-    "UpstreamMergeBranches": [
-      "master",
-      "release-branch.go1.15",
-      "release-branch.go1.16",
-      "release-branch.go1.17",
-      "dev.boringcrypto.go1.17"
-    ],
+    "BranchMap": {
+      "master": "microsoft/main",
+      "release-branch.go1.15": "microsoft/?",
+      "release-branch.go1.16": "microsoft/?",
+      "release-branch.go1.17": "microsoft/?",
+      "dev.boringcrypto.go1.17": "microsoft/?"
+    },
     "AutoResolveTarget": [
       ".gitattributes",
       ".github",
@@ -21,16 +21,16 @@
   {
     "Upstream": "https://github.com/microsoft/go",
     "Target": "https://github.com/microsoft/go",
-    "MergeMap": {
+    "BranchMap": {
       "microsoft/release-branch.go1.17": "dev/official/go1.17-openssl-fips"
     }
   },
   {
     "Upstream": "https://github.com/docker-library/golang",
     "Target": "https://github.com/microsoft/go-images",
-    "UpstreamMergeBranches": [
-      "master"
-    ],
+    "BranchMap": {
+      "master": "microsoft/main"
+    },
     "AutoResolveTarget": [
       ".gitattributes",
       ".github",

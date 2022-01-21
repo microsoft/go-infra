@@ -48,6 +48,8 @@ var githubUser = flag.String("github-user", "", "Use this github user to submit 
 var githubPAT = flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified.")
 var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified.")
 
+var azdoDncengPAT = flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs.")
+
 // maxDiffLinesToDisplay is the number of lines of the file diff to show in the console log and
 // include in the PR description before truncating the remaining lines. A dev branch may have a
 // large number of changes that can cause issues like extremely long email notifications, breaking
@@ -55,6 +57,15 @@ var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR a
 // to the time it takes to log (in particular on Windows terminals). This infra hasn't hit these
 // issues, but other tools have hit some, and it seems reasonable to set a limit ahead of time.
 const maxDiffLinesToDisplay = 200
+
+var (
+	// maxUpstreamCommitMessageInSnippet is the maximum number of characters to include in the
+	// commit message snippet for a submodule update commit message. The snippet gives context to
+	// the current submodule pointer in a "git log" or when viewed on GitHub.
+	maxUpstreamCommitMessageInSnippet = 40
+	// snippetCutoffIndicator is the text to put at the end of the snippet when it is cut off.
+	snippetCutoffIndicator = "[...]"
+)
 
 // GitAuthOption contains a string value given on the command line to indicate what type of auth to
 // use with GitHub URLs.
@@ -90,7 +101,7 @@ func main() {
 	case GitAuthNone, GitAuthSSH, GitAuthPAT:
 		break
 	default:
-		fmt.Printf("Error: git-auth value '%v' is not an accepted value.\n", *gitAuthString)
+		fmt.Printf("Error: git-auth value %q is not an accepted value.\n", *gitAuthString)
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -133,6 +144,8 @@ func main() {
 		// Add authentication to Target and Upstream URLs if necessary.
 		entry.Target = createAuthorizedGitUrl(entry.Target, gitAuth)
 		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, gitAuth)
+		entry.UpstreamMirror = createAuthorizedGitUrl(entry.UpstreamMirror, gitAuth)
+		entry.MirrorTarget = createAuthorizedGitUrl(entry.MirrorTarget, gitAuth)
 
 		if entry.Head == "" {
 			entry.Head = entry.Target
@@ -174,14 +187,23 @@ func createAuthorizedGitUrl(url string, gitAuth GitAuthOption) string {
 			break
 		}
 	}
+	const azdoDncengPrefix = "https://dnceng@dev.azure.com"
+	if strings.HasPrefix(url, azdoDncengPrefix) {
+		url = fmt.Sprintf(
+			// Username doesn't matter. PAT is identity.
+			"https://arbitraryusername:%v@dev.azure.com%v",
+			*azdoDncengPAT, strings.TrimPrefix(url, azdoDncengPrefix),
+		)
+	}
 	return url
 }
 
 // changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
 // of files being changed in the PR for use in the PR body.
 type changedBranch struct {
-	Refs *gitpr.SyncPRRefSet
-	Diff string
+	Refs    *gitpr.SyncPRRefSet
+	Diff    string
+	PRTitle string
 }
 
 func syncRepository(dir string, entry SyncConfigEntry) error {
@@ -196,24 +218,13 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		return c
 	}
 
-	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.UpstreamMergeBranches)+len(entry.MergeMap))
-	for _, b := range entry.UpstreamMergeBranches {
-		// Map from upstream branch name to "microsoft/"-prefixed branch name.
-		nb := &gitpr.SyncPRRefSet{
-			UpstreamName: b,
-			PRRefSet: gitpr.PRRefSet{
-				Name:    "microsoft/" + strings.ReplaceAll(b, "master", "main"),
-				Purpose: "auto-merge",
-			},
-		}
-		branches = append(branches, nb)
-	}
-	for upstream, target := range entry.MergeMap {
+	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.BranchMap))
+	for upstream, target := range entry.BranchMap {
 		nb := &gitpr.SyncPRRefSet{
 			UpstreamName: upstream,
 			PRRefSet: gitpr.PRRefSet{
-				Name:    target,
-				Purpose: "auto-merge",
+				Name:    strings.ReplaceAll(target, "?", upstream),
+				Purpose: "auto-sync",
 			},
 		}
 		branches = append(branches, nb)
@@ -238,33 +249,125 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		return err
 	}
 
+	// Fetch the state of the official/upstream-maintained mirror (if specified) so we can check
+	// against it later.
+	if entry.UpstreamMirror != "" {
+		fetchUpstreamMirror := newGitCmd("fetch", "--no-tags", entry.UpstreamMirror)
+		for _, b := range branches {
+			fetchUpstreamMirror.Args = append(fetchUpstreamMirror.Args, b.UpstreamMirrorFetchRefspec())
+		}
+		if err := run(fetchUpstreamMirror); err != nil {
+			return err
+		}
+	}
+
+	// Before attempting any update, mirror everything (if specified). Only continue once this is
+	// complete, to avoid a potentially broken internal build state.
+	if entry.MirrorTarget != "" {
+		mirror := newGitCmd("push", entry.MirrorTarget)
+		for _, b := range branches {
+			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
+		}
+		if *dryRun {
+			mirror.Args = append(mirror.Args, "-n")
+		}
+
+		if err := run(mirror); err != nil {
+			return err
+		}
+	}
+
 	// While looping through the branches and trying to sync, use this slice to keep track of which
 	// branches have changes, so we can push changes and submit PRs later.
 	changedBranches := make([]changedBranch, 0, len(branches))
 
 	for _, b := range branches {
-		fmt.Printf("---- Processing branch '%v' for entry targeting %v\n", b.Name, entry.Target)
+		fmt.Printf("---- Processing branch %q for entry targeting %v\n", b.Name, entry.Target)
 
 		if err := run(newGitCmd("checkout", b.PRBranch())); err != nil {
 			return err
 		}
 
-		if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalBranch())); err != nil {
-			if exitError, ok := err.(*exec.ExitError); ok {
-				fmt.Printf("---- Merge hit an ExitError: '%v'. A non-zero exit code is expected if there were conflicts. The script will try to resolve them, next.\n", exitError)
-			} else {
-				// Make sure we don't ignore more than we intended.
-				return err
-			}
-		}
+		c := changedBranch{Refs: b}
+		var commitMessage string
 
-		if len(entry.AutoResolveTarget) > 0 {
-			// Automatically resolve conflicts in specific project doc files. Use '--no-overlay' to make
-			// sure we delete new files in e.g. '.github' that are in upstream but don't exist locally.
-			// '--ours' auto-deletes if upstream modifies a file that we deleted in our branch.
-			if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveTarget...)...)); err != nil {
+		if entry.SubmoduleTarget == "" {
+			// This is not a submodule update, so merge with the upstream repository.
+			if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalBranch())); err != nil {
+				if exitError, ok := err.(*exec.ExitError); ok {
+					fmt.Printf("---- Merge hit an ExitError: %q. A non-zero exit code is expected if there were conflicts. The script will try to resolve them, next.\n", exitError)
+				} else {
+					// Make sure we don't ignore more than we intended.
+					return err
+				}
+			}
+
+			if len(entry.AutoResolveTarget) > 0 {
+				// Automatically resolve conflicts in specific project doc files. Use '--no-overlay' to make
+				// sure we delete new files in e.g. '.github' that are in upstream but don't exist locally.
+				// '--ours' auto-deletes if upstream modifies a file that we deleted in our branch.
+				if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveTarget...)...)); err != nil {
+					return err
+				}
+			}
+			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
+			commitMessage = fmt.Sprintf("Merge upstream branch %q into %v", b.UpstreamName, b.Name)
+		} else {
+			// This is a submodule update. We'll be doing more evaluation to figure out which commit
+			// to update to, so define a helper func with captured context.
+			getTrimmedCmdOutput := func(args ...string) (string, error) {
+				out, err := combinedOutput(newGitCmd(args...))
+				if err != nil {
+					return "", err
+				}
+				return strings.TrimSpace(out), nil
+			}
+
+			// This update uses a submodule, so find the latest version of upstream and update the
+			// submodule to point at it.
+			newCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamLocalBranch())
+			if err != nil {
 				return err
 			}
+
+			// Get the latest commit available in every known official location.
+			if entry.UpstreamMirror != "" {
+				upstreamMirrorCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamMirrorLocalBranch())
+				if err != nil {
+					return err
+				}
+				if newCommit != upstreamMirrorCommit {
+					// Point out mismatches, so we can keep track of them later by searching logs.
+					// This happening normally isn't a concern: our sync schedule most likely
+					// coincided with the potential time window where a commit has been pushed to
+					// Upstream before being pushed to UpstreamMirror.
+					fmt.Printf("--- Upstream and upstream mirror commits do not match: %v != %v\n", newCommit, upstreamMirrorCommit)
+				}
+
+				commonCommit, err := getTrimmedCmdOutput("merge-base", newCommit, upstreamMirrorCommit)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("---- Common commit of upstream and upstream mirror: %v\n", commonCommit)
+				newCommit = commonCommit
+			}
+
+			// Set the submodule commit directly in the Git index. This avoids the need to
+			// init/clone the submodule, which can be time-consuming. Mode 160000 means the tree
+			// entry is a submodule.
+			cacheInfo := fmt.Sprintf("160000,%v,%v", newCommit, entry.SubmoduleTarget)
+			if err := run(newGitCmd("update-index", "--cacheinfo", cacheInfo)); err != nil {
+				return err
+			}
+
+			upstreamCommitMessage, err := getTrimmedCmdOutput("log", "--format=%B", "-n", "1", newCommit)
+			if err != nil {
+				return err
+			}
+			snippet := createCommitMessageSnippet(upstreamCommitMessage)
+
+			c.PRTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
+			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 		}
 
 		// Check if there are any files in the stage. If not, we don't need to process this branch
@@ -284,48 +387,47 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 
 		// If we still have unmerged files, 'git commit' will exit non-zero, causing the script to
 		// exit. This prevents the script from pushing a bad merge.
-		if err := run(newGitCmd("commit", "-m", "Merge upstream branch '"+b.UpstreamName+"' into "+b.Name)); err != nil {
+		if err := run(newGitCmd("commit", "-m", commitMessage)); err != nil {
 			return err
 		}
 
-		// Show a summary of which files are in our branch vs. upstream. This is just informational.
-		// CI is a better place to *enforce* a low diff: it's more visible, can be fixed up more
-		// easily, and doesn't block other branch mirror/merge operations.
-		diff, err := combinedOutput(newGitCmd(
-			"diff",
-			"--name-status",
-			b.UpstreamLocalBranch(),
-			b.PRBranch(),
-		))
-		if err != nil {
-			return err
-		}
-
-		// The diff may be large. Truncate it if it seems unreasonable to show on the console, or to
-		// include in a PR description. The user can use Git to dig deeper if needed.
-		var diffLines strings.Builder
-		diffLineScanner := bufio.NewScanner(strings.NewReader(diff))
-		for lineNumber := 0; diffLineScanner.Scan(); lineNumber++ {
-			if err := diffLineScanner.Err(); err != nil {
+		if entry.SubmoduleTarget == "" {
+			// Show a summary of which files are in our fork branch vs. upstream. This is just
+			// informational. CI is a better place to *enforce* a low diff: it's more visible, can
+			// be fixed up more easily, and doesn't block other branch mirror/merge operations.
+			diff, err := combinedOutput(newGitCmd(
+				"diff",
+				"--name-status",
+				b.UpstreamLocalBranch(),
+				b.PRBranch(),
+			))
+			if err != nil {
 				return err
 			}
-			if lineNumber == maxDiffLinesToDisplay {
-				diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
-				break
+
+			// The diff may be large. Truncate it if it seems unreasonable to show on the console, or to
+			// include in a PR description. The user can use Git to dig deeper if needed.
+			var diffLines strings.Builder
+			diffLineScanner := bufio.NewScanner(strings.NewReader(diff))
+			for lineNumber := 0; diffLineScanner.Scan(); lineNumber++ {
+				if err := diffLineScanner.Err(); err != nil {
+					return err
+				}
+				if lineNumber == maxDiffLinesToDisplay {
+					diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
+					break
+				}
+				diffLines.WriteString(diffLineScanner.Text())
+				diffLines.WriteString("\n")
 			}
-			diffLines.WriteString(diffLineScanner.Text())
-			diffLines.WriteString("\n")
+			c.Diff = diffLines.String()
+
+			fmt.Printf("---- Files changed from %q to %q ----\n", b.UpstreamName, b.Name)
+			fmt.Print(diff)
+			fmt.Println("--------")
 		}
-		diff = diffLines.String()
 
-		fmt.Printf("---- Files changed from '%v' to '%v' ----\n", b.UpstreamName, b.Name)
-		fmt.Print(diff)
-		fmt.Println("--------")
-
-		changedBranches = append(changedBranches, changedBranch{
-			Refs: b,
-			Diff: diff,
-		})
+		changedBranches = append(changedBranches, c)
 	}
 
 	if len(changedBranches) == 0 {
@@ -413,19 +515,31 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		err := func() error {
 			fmt.Printf("---- PR for %v: Submitting...\n", prFlowDescription)
 
-			title := fmt.Sprintf("Merge upstream `%v` into `%v`", b.Refs.UpstreamName, b.Refs.Name)
-			body := fmt.Sprintf(
-				"🔃 This is an automatically generated PR merging upstream `%v` into `%v`.\n\n"+
-					"This PR is configured to auto-merge with a merge commit when PR validation passes. If CI fails and you need to make fixups, make sure to use a merge commit, not a squash or rebase!\n\n"+
-					"For more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).\n\n"+
-					"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
-					"```\n%v\n```"+
-					"\n\n</details>",
-				b.Refs.UpstreamName,
-				b.Refs.Name,
-				strings.TrimSpace(b.Diff),
-			)
-			request := b.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), title, body)
+			body := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
+				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration.\n\n" +
+				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
+			if entry.SubmoduleTarget != "" {
+				body += fmt.Sprintf(
+					"\n\nThis PR updates the submodule at %#q to the latest version of %#q at %v.",
+					entry.SubmoduleTarget, b.Refs.UpstreamName, entry.Upstream,
+				)
+			} else {
+				body += fmt.Sprintf(
+					"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
+					b.Refs.UpstreamName, b.Refs.Name,
+				)
+			}
+			if b.Diff != "" {
+				body += fmt.Sprintf(
+					"\n\n"+
+						"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
+						"```\n%v\n```"+
+						"\n\n</details>",
+					b.Diff,
+				)
+			}
+
+			request := b.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), b.PRTitle, body)
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
@@ -517,4 +631,14 @@ func combinedOutput(c *exec.Cmd) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+func createCommitMessageSnippet(message string) string {
+	if i := strings.IndexAny(message, "\r\n"); i >= 0 {
+		message = message[:i]
+	}
+	if len(message) > maxUpstreamCommitMessageInSnippet {
+		message = message[:maxUpstreamCommitMessageInSnippet-len(snippetCutoffIndicator)+1] + snippetCutoffIndicator
+	}
+	return message
 }
