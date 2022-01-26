@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Licensed under the MIT License.
 
+// Package submodule manages submodules as used by the Microsoft Go repository.
 package submodule
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/microsoft/go-infra/executil"
 )
 
 // Init initializes and updates the submodule, but does not clean it. This func offers more options
@@ -29,18 +30,19 @@ func Init(rootDir, origin, fetchBearerToken string, shallow bool) error {
 		command = append(command, "--depth", "1")
 	}
 
-	if err := run(rootDir, command...); err != nil {
+	if err := executil.Run(dirCmd(rootDir, command...)); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Reset updates the submodule (with '--init'), resets all changes, and cleans all untracked files.
+// Reset updates the submodule (with '--init'), aborts all in-progress Git operations like rebases,
+// resets all changes, and cleans all untracked files.
 func Reset(rootDir string) error {
 	goDir := filepath.Join(rootDir, "go")
 
 	// Update the submodule commit, and initialize if it hasn't been done already.
-	if err := run(rootDir, "git", "submodule", "update", "--init"); err != nil {
+	if err := executil.Run(dirCmd(rootDir, "git", "submodule", "update", "--init")); err != nil {
 		return err
 	}
 
@@ -61,38 +63,32 @@ func Reset(rootDir string) error {
 		return fmt.Errorf("go submodule (%v) toplevel is the same as root (%v) toplevel: %v", goDir, rootDir, goToplevel)
 	}
 
+	// Abort long-running Git operations--sequences that span multiple commands. These may be active
+	// and can interfere with the reset process. Ignore errors and output: aborting returns non-zero
+	// exit codes and emits alarming-seeming output when there is nothing to do.
+	_ = executil.RunQuiet(dirCmd(goDir, "git", "am", "--abort"))
+	_ = executil.RunQuiet(dirCmd(goDir, "git", "rebase", "--abort"))
+	_ = executil.RunQuiet(dirCmd(goDir, "git", "merge", "--abort"))
+
 	// Reset the index and working directory. This doesn't clean up new untracked files.
-	if err := run(goDir, "git", "reset", "--hard"); err != nil {
+	if err := executil.Run(dirCmd(goDir, "git", "reset", "--hard")); err != nil {
 		return err
 	}
 	// Delete untracked files detected by Git. Deliberately leave files that are ignored in
 	// '.gitignore': these files shouldn't interfere with the build process and could be used for
 	// incremental builds.
-	if err := run(goDir, "git", "clean", "-df"); err != nil {
+	if err := executil.Run(dirCmd(goDir, "git", "clean", "-df")); err != nil {
 		return err
 	}
 	return nil
 }
 
 func getToplevel(dir string) (string, error) {
-	c := exec.Command("git", "rev-parse", "--show-toplevel")
-	c.Dir = dir
-	out, err := c.CombinedOutput()
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return executil.CombinedOutput(dirCmd(dir, "git", "rev-parse", "--show-toplevel"))
 }
 
-func run(dir string, args ...string) error {
+func dirCmd(dir string, args ...string) *exec.Cmd {
 	c := exec.Command(args[0], args[1:]...)
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
 	c.Dir = dir
-	return runCmd(c)
-}
-
-func runCmd(cmd *exec.Cmd) error {
-	fmt.Printf("---- Running command: %v\n", cmd.Args)
-	return cmd.Run()
+	return c
 }

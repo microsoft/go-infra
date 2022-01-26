@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Licensed under the MIT License.
 
+// Package patch manages patch files as stored in the Microsoft Go repository alongside a submodule.
 package patch
 
 import (
@@ -9,17 +9,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/microsoft/go-infra/executil"
 )
 
 type ApplyMode int
 
 const (
 	// ApplyModeCommits applies patches as commits. This is useful for developing changes to the
-	// patches, because the commits can be automatically extracted back into patch files.
+	// patches, because the commits can later be automatically extracted back into patch files.
+	// Creating these commits creates new commit hashes, so it is not desirable if the HEAD commit
+	// should correspond to a "real" commit.
 	ApplyModeCommits ApplyMode = iota
-	// ApplyModeIndex applies patches as changes to the Git index and working tree. This means
-	// further changes to the Go source code will show up as unstaged changes, so if any intentional
-	// changes are performed in this state, they can be differentiated from the patch changes.
+	// ApplyModeIndex applies patches as changes to the Git index and working tree. Doesn't change
+	// HEAD: it will continue to point to the same commit--likely upstream.
+	//
+	// This makes it more difficult to develop and save changes, but it is still possible. Patch
+	// changes show up as staged changes, and additional changes show up as unstaged changes, so
+	// they can still be differentiated and preserved.
 	ApplyModeIndex
 )
 
@@ -27,11 +34,8 @@ const (
 // command used ("am" or "apply") depends on the patch mode.
 func Apply(rootDir string, mode ApplyMode) error {
 	goDir := filepath.Join(rootDir, "go")
-	patchDir := filepath.Join(rootDir, "patches")
 
 	cmd := exec.Command("git")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.Dir = goDir
 
 	switch mode {
@@ -48,7 +52,26 @@ func Apply(rootDir string, mode ApplyMode) error {
 	// too late to cause noisy warnings because of them.
 	cmd.Args = append(cmd.Args, "--whitespace=nowarn")
 
+	err := WalkPatches(rootDir, func(file string) error {
+		cmd.Args = append(cmd.Args, file)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := executil.Run(cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+// WalkPatches finds patches in the given Microsoft Go repository root directory and runs fn once
+// per patch file path. If fn returns an error, walking terminates and the error is returned.
+func WalkPatches(rootDir string, fn func(string) error) error {
 	// ReadDir returns alphabetical order for patches: we depend on it for the patch apply order.
+	patchDir := filepath.Join(rootDir, "patches")
+
 	entries, err := os.ReadDir(patchDir)
 	if err != nil {
 		return err
@@ -61,16 +84,10 @@ func Apply(rootDir string, mode ApplyMode) error {
 		if filepath.Ext(entry.Name()) != ".patch" {
 			continue
 		}
-		cmd.Args = append(cmd.Args, filepath.Join(patchDir, entry.Name()))
-	}
 
-	if err := runCmd(cmd); err != nil {
-		return err
+		if err := fn(filepath.Join(patchDir, entry.Name())); err != nil {
+			return err
+		}
 	}
 	return nil
-}
-
-func runCmd(cmd *exec.Cmd) error {
-	fmt.Printf("---- Running command: %v\n", cmd.Args)
-	return cmd.Run()
 }
