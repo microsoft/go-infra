@@ -20,11 +20,11 @@ git go-patch -h
 
 > `git` detects binaries that start with `git-` and makes them available as `git {command}`.
 
-## Workflow
+## `am` Workflow
 
-> ⚠️`am` destroys work in progress in the submodule. See `git go-patch am -h`.
+> ⚠️ `am` destroys work in progress in the submodule. See `git go-patch am -h`.
 
-To make changes to a patch file:
+### Make changes to a patch file
 
 1. Open a terminal anywhere within the Microsoft Go repository or its submodule.
 2. Use `git go-patch am` to apply patches onto the submodule as a series of commits.
@@ -32,4 +32,21 @@ To make changes to a patch file:
    1. If it fits your workflow, use `git commit --fixup={commit}` to create fixup commits and `git go-patch rebase` to apply them.
 4. Use `git go-patch fp` to rewrite the patch files based on the changes in the submodule.
 
-If the patch files do not apply cleanly (for example, a patch has a conflict after a submodule update), use `git am` inside the submodule to continue the process. Consider using `git am --reject` to create `.rej` files, then use that information to redo the changes, stage the result, and use `git am --continue` to move on to the next patch. See [`git am` documentation](https://git-scm.com/docs/git-am) for more information.
+### Fix up patch files after a submodule update
+
+After a submodule update, patches may fail to apply and cause an error like this:
+
+```
+error: patch failed: src/[...].go:329
+```
+
+To fix this, follow the process to make changes to a patch file. After running `git go-patch am`, you will see the patch failure error appear, with extra instructions about how to use `git am` to resolve it. Then:
+
+1. Make sure your terminal is inside the submodule.
+2. Resolve the conflict. There are several ways:
+   1. Run `git am -3`. This performs a 3-way merge, and leaves merge conflict markers in the files for manual or tool-assisted fixing.
+   2. Run `git am --reject`. This creates a `.rej` file for each file that couldn't be patched, containing the failed chunks for you to apply manually.
+   3. Redo the change from scratch.
+3. Run `git am --continue` after staging fixes.
+
+See [`git am` documentation](https://git-scm.com/docs/git-am) for more information.
