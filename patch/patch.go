@@ -6,7 +6,6 @@ package patch
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -70,14 +69,14 @@ func Apply(rootDir string, mode ApplyMode) error {
 // per patch file path. If fn returns an error, walking terminates and the error is returned.
 func WalkPatches(rootDir string, fn func(string) error) error {
 	// ReadDir returns alphabetical order for patches: we depend on it for the patch apply order.
-        matches, err := filepath.Glob(filepath.Join(rootDir, "patches", "*.patch"))
+	matches, err := filepath.Glob(filepath.Join(rootDir, "patches", "*.patch"))
 	if err != nil {
 		return err
 	}
 	for _, match := range matches {
-	        if err := fn(match); err != nil {
-	        	return err
-	        }
+		if err := fn(match); err != nil {
+			return err
+		}
 	}
 	return nil
 }
