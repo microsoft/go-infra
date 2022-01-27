@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 
 	"github.com/microsoft/go-infra/executil"
 )
@@ -68,11 +69,14 @@ func Apply(rootDir string, mode ApplyMode) error {
 // WalkPatches finds patches in the given Microsoft Go repository root directory and runs fn once
 // per patch file path. If fn returns an error, walking terminates and the error is returned.
 func WalkPatches(rootDir string, fn func(string) error) error {
-	// ReadDir returns alphabetical order for patches: we depend on it for the patch apply order.
 	matches, err := filepath.Glob(filepath.Join(rootDir, "patches", "*.patch"))
 	if err != nil {
 		return err
 	}
+
+	// We depend on alphabetical patch apply order.
+	sort.Strings(matches)
+
 	for _, match := range matches {
 		if err := fn(match); err != nil {
 			return err
