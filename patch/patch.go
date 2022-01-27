@@ -70,24 +70,14 @@ func Apply(rootDir string, mode ApplyMode) error {
 // per patch file path. If fn returns an error, walking terminates and the error is returned.
 func WalkPatches(rootDir string, fn func(string) error) error {
 	// ReadDir returns alphabetical order for patches: we depend on it for the patch apply order.
-	patchDir := filepath.Join(rootDir, "patches")
-
-	entries, err := os.ReadDir(patchDir)
+        matches, err := filepath.Glob(filepath.Join(rootDir, "patches", "*.patch"))
 	if err != nil {
 		return err
 	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if filepath.Ext(entry.Name()) != ".patch" {
-			continue
-		}
-
-		if err := fn(filepath.Join(patchDir, entry.Name())); err != nil {
-			return err
-		}
+	for _, match := range matches {
+	        if err := fn(match); err != nil {
+	        	return err
+	        }
 	}
 	return nil
 }

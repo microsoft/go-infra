@@ -55,10 +55,7 @@ var fp = subcommand{
 		// Delete all old patches so if any commit descriptions have been changed, we don't end up
 		// with two copies of those patch files with slightly different names.
 		if err := patch.WalkPatches(rootDir, func(s string) error {
-			if err := os.Remove(s); err != nil {
-				return err
-			}
-			return nil
+			return os.Remove(s)
 		}); err != nil {
 			return err
 		}
