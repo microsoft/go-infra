@@ -79,10 +79,6 @@ var fp = subcommand{
 		)
 		cmd.Dir = goDir
 
-		if err := executil.Run(cmd); err != nil {
-			return err
-		}
-
-		return nil
+		return executil.Run(cmd)
 	},
 }

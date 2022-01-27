@@ -57,11 +57,7 @@ var am = subcommand{
 			return err
 		}
 
-		if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
-			return err
-		}
-
-		return nil
+		return patch.Apply(rootDir, patch.ApplyModeCommits)
 	},
 }
 
@@ -78,10 +74,7 @@ func writeStatusFile(rootDir string) error {
 	if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
 		return err
 	}
-	if err := os.WriteFile(getStatusFilePath(rootDir), []byte(currentHead), os.ModePerm); err != nil {
-		return err
-	}
-	return nil
+	return os.WriteFile(getStatusFilePath(rootDir), []byte(currentHead), os.ModePerm)
 }
 
 func getCurrentCommit(rootDir string) (string, error) {

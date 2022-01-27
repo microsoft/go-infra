@@ -30,10 +30,7 @@ func Init(rootDir, origin, fetchBearerToken string, shallow bool) error {
 		command = append(command, "--depth", "1")
 	}
 
-	if err := executil.Run(dirCmd(rootDir, command...)); err != nil {
-		return err
-	}
-	return nil
+	return executil.Run(dirCmd(rootDir, command...))
 }
 
 // Reset updates the submodule (with '--init'), aborts all in-progress Git operations like rebases,
@@ -77,10 +74,7 @@ func Reset(rootDir string) error {
 	// Delete untracked files detected by Git. Deliberately leave files that are ignored in
 	// '.gitignore': these files shouldn't interfere with the build process and could be used for
 	// incremental builds.
-	if err := executil.Run(dirCmd(goDir, "git", "clean", "-df")); err != nil {
-		return err
-	}
-	return nil
+	return executil.Run(dirCmd(goDir, "git", "clean", "-df"))
 }
 
 func getToplevel(dir string) (string, error) {

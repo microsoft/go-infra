@@ -60,10 +60,7 @@ func Apply(rootDir string, mode ApplyMode) error {
 		return err
 	}
 
-	if err := executil.Run(cmd); err != nil {
-		return err
-	}
-	return nil
+	return executil.Run(cmd)
 }
 
 // WalkPatches finds patches in the given Microsoft Go repository root directory and runs fn once
