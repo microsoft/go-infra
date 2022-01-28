@@ -20,17 +20,15 @@ git go-patch -h
 
 > `git` detects binaries that start with `git-` and makes them available as `git {command}`.
 
-## `am` Workflow
-
-> ⚠️ `am` destroys work in progress in the submodule. See `git go-patch am -h`.
+## `apply` Workflow
 
 ### Make changes to a patch file
 
 1. Open a terminal anywhere within the Microsoft Go repository or its submodule.
-2. Use `git go-patch am` to apply patches onto the submodule as a series of commits.
+2. Use `git go-patch apply` to apply patches onto the submodule as a series of commits.
 3. Edit the commits as desired.
    1. If it fits your workflow, use `git commit --fixup={commit}` to create fixup commits and `git go-patch rebase` to apply them.
-4. Use `git go-patch fp` to rewrite the patch files based on the changes in the submodule.
+4. Use `git go-patch extract` to rewrite the patch files based on the changes in the submodule.
 
 ### Fix up patch files after a submodule update
 
@@ -40,7 +38,7 @@ After a submodule update, patches may fail to apply and cause an error like this
 error: patch failed: src/[...].go:329
 ```
 
-To fix this, follow the process to make changes to a patch file. After running `git go-patch am`, you will see the patch failure error appear, with extra instructions about how to use `git am` to resolve it. Then:
+To fix this, follow the process to make changes to a patch file. After running `git go-patch apply`, you will see the patch failure error appear, with extra instructions about how to use `git am` to resolve it. Then:
 
 1. Make sure your terminal is inside the submodule.
 2. Resolve the conflict. There are several ways:

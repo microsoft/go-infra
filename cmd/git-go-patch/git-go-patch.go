@@ -29,8 +29,8 @@ overridden using the "-c" argument.
 var repoRootFlag = flag.String("c", "", "Disable Go repository discovery and use this path as the target.")
 
 var subcommands = []subcommand{
-	am,
-	fp,
+	apply,
+	extract,
 	rebase,
 }
 

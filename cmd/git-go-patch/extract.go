@@ -13,26 +13,26 @@ import (
 	"github.com/microsoft/go-infra/patch"
 )
 
-const fpSummary = "Format each new commit in the submodule as a patch file."
+const extractSummary = "Format each new commit in the submodule as a patch file."
 
-const fpDescription = fpSummary + `
+const extractDescription = extractSummary + `
 
 This command figures out which commits are new by checking for commits in HEAD since the given
-commit. If no commit is given, the commit recorded by "am" is used. If the given commit is not an
-ancestor of the HEAD commit, "fp" formats patches for each commit until a common ancestor of HEAD
+commit. If no commit is given, the commit recorded by "apply" is used. If the given commit is not an
+ancestor of the HEAD commit, "extract" formats patches for each commit until a common ancestor of HEAD
 and the given commit. (See "git format-patch" documentation for "<since>".)
 
-fp is an abbreviation of "format patch". It uses "git format-patch" internally, passing additional
-arguments to reduce the amount of non-repeatable data in the resulting patch file.
+extract uses "git format-patch" internally, passing additional arguments to reduce the amount of
+non-repeatable data in the resulting patch file.
 ` + repoRootSearchDescription
 
-var fp = subcommand{
-	Name:    "fp",
-	Summary: fpSummary,
+var extract = subcommand{
+	Name:    "extract",
+	Summary: extractSummary,
 	Handle: func() error {
-		sinceFlag := flag.String("since", "", "The commit or ref to begin formatting patches at. If nothing is specified, use the last commit recorded by 'am'.")
+		sinceFlag := flag.String("since", "", "The commit or ref to begin formatting patches at. If nothing is specified, use the last commit recorded by 'apply'.")
 
-		if err := parseFlagArgs(fpDescription); err != nil {
+		if err := parseFlagArgs(extractDescription); err != nil {
 			return err
 		}
 
