@@ -40,7 +40,7 @@ var rebase = subcommand{
 
 		goDir := filepath.Join(rootDir, "go")
 
-		since, err := readStatusFile(rootDir)
+		since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
 		if err != nil {
 			return err
 		}

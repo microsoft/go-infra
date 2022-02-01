@@ -4,11 +4,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/patch"
@@ -30,6 +32,7 @@ var apply = subcommand{
 	Name:    "apply",
 	Summary: applySummary,
 	Handle: func() error {
+		force := flag.Bool("f", false, "Force reapply: throw away changes in the submodule.")
 		noRefresh := flag.Bool(
 			"no-refresh",
 			false,
@@ -45,40 +48,140 @@ var apply = subcommand{
 			return err
 		}
 
-		if !*noRefresh {
-			if err := submodule.Reset(rootDir); err != nil {
+		goDir := filepath.Join(rootDir, "go")
+
+		// If we're being careful, abort if the submodule commit isn't what we expect.
+		if !*force {
+			if err := ensureSubmoduleCommitNotDirty(rootDir, goDir); err != nil {
 				return err
 			}
 		}
 
-		if err := writeStatusFile(rootDir); err != nil {
+		if !*noRefresh {
+			if err := submodule.Reset(rootDir, *force); err != nil {
+				return err
+			}
+		}
+
+		prePatchHead, err := getCurrentCommit(goDir)
+		if err != nil {
 			return err
 		}
 
-		return patch.Apply(rootDir, patch.ApplyModeCommits)
+		if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
+			return err
+		}
+
+		postPatchHead, err := getCurrentCommit(goDir)
+		if err != nil {
+			return err
+		}
+
+		// Record the pre and post-patch commits. Start by ensuring the dir exists.
+		if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
+			return err
+		}
+		if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
+			return err
+		}
+		return writeStatusFiles(postPatchHead, getPostPatchStatusFilePath(rootDir))
 	},
 }
 
-func writeStatusFile(rootDir string) error {
-	currentHead, err := getCurrentCommit(rootDir)
+func writeStatusFiles(commit string, file string) error {
+	// Point out where the status file is located. Don't use %q because it would turn Windows "\" to
+	// "\\", making the path harder to paste and use elsewhere.
+	fmt.Printf("Writing commit to '%v' for use by 'extract' later: %v\n", file, commit)
+	return os.WriteFile(file, []byte(commit), os.ModePerm)
+}
+
+func getCurrentCommit(goDir string) (string, error) {
+	currentCmd := exec.Command("git", "rev-parse", "HEAD")
+	currentCmd.Dir = goDir
+	return executil.SpaceTrimmedCombinedOutput(currentCmd)
+}
+
+func getTargetSubmoduleCommit(rootDir string) (string, error) {
+	cmd := exec.Command("git", "ls-tree", "HEAD", "go")
+	cmd.Dir = rootDir
+	// Format, from Git docs: "<mode> SP <type> SP <object> TAB <file>"
+	lsOut, err := executil.SpaceTrimmedCombinedOutput(cmd)
+	if err != nil {
+		return "", err
+	}
+	treeData := strings.Fields(lsOut)
+	if len(treeData) <= 2 {
+		return "", fmt.Errorf("output from git ls-tree doesn't contain enough fields: %v", lsOut)
+	}
+	return treeData[2], nil
+}
+
+func ensureSubmoduleCommitNotDirty(rootDir, goDir string) error {
+	// Get the submodule commit before running any operations. If the submodule isn't
+	// initialized, Git finds the root repo and gives us its commit, instead.
+	preResetCommit, err := getCurrentCommit(goDir)
+	if err != nil {
+		return err
+	}
+	outsideCommit, err := getCurrentCommit(rootDir)
 	if err != nil {
 		return err
 	}
 
-	// Point out where the status file is located. Don't use %q because it would turn Windows "\" to
-	// "\\", making the path harder to paste and use elsewhere.
-	fmt.Printf("Writing HEAD commit to '%v' for use by 'extract' later: %v\n", getStatusFilePath(rootDir), currentHead)
+	// Submodule is not initialized: impossible to be dirty.
+	if preResetCommit == outsideCommit {
+		return nil
+	}
 
-	if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
+	lastPostPatchCommit, err := readStatusFile(getPostPatchStatusFilePath(rootDir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Either the "apply" command hasn't been run before, or it has, but the user
+			// deleted our status-tracking file. Assume the former, that this is basically a
+			// fresh repo.
+			return nil
+		}
 		return err
 	}
-	return os.WriteFile(getStatusFilePath(rootDir), []byte(currentHead), os.ModePerm)
-}
+	// Submodule has not been changed since the last time "apply" was run: there's nothing to lose.
+	if preResetCommit == lastPostPatchCommit {
+		return nil
+	}
 
-func getCurrentCommit(rootDir string) (string, error) {
-	goDir := filepath.Join(rootDir, "go")
+	// The last pre-patch commit is ok, too. This could be the case if the user ran "git submodule
+	// update" sometime after running "apply".
+	lastPrePatchCommit, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if preResetCommit == lastPrePatchCommit {
+		return nil
+	}
 
-	currentCmd := exec.Command("git", "rev-parse", "HEAD")
-	currentCmd.Dir = goDir
-	return executil.SpaceTrimmedCombinedOutput(currentCmd)
+	// Check if the submodule commit is the same as what the Git index of the outer repo expects. We
+	// need to check this because the user could have checked out a different version of the outer
+	// repo and run "git submodule update" without running "apply" again.
+	currentTargetCommit, err := getTargetSubmoduleCommit(rootDir)
+	if err != nil {
+		return err
+	}
+	if preResetCommit == currentTargetCommit {
+		return nil
+	}
+
+	// If we didn't detect a non-dirty case, the submodule is pointing at an unknown commit, and we
+	// must assume it's a change the user has made.
+	return fmt.Errorf(
+		"the current submodule commit %v is unexpected. Known commit hashes:\n"+
+			"  last post-patch commit: %v\n"+
+			"  last pre-patch commit: %v\n"+
+			"  current commit in outer repo index: %v\n"+
+			"Aborting: reapplying patches would discard changes in submodule. Use '-f' to proceed anyway",
+		preResetCommit,
+		lastPostPatchCommit,
+		lastPrePatchCommit,
+		currentTargetCommit)
 }

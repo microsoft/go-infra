@@ -100,12 +100,16 @@ func getStatusFileDir(rootDir string) string {
 	return filepath.Join(rootDir, "eng", "artifacts", "go-patch")
 }
 
-func getStatusFilePath(rootDir string) string {
-	return filepath.Join(getStatusFileDir(rootDir), "HEAD_BEFORE_AM")
+func getPrePatchStatusFilePath(rootDir string) string {
+	return filepath.Join(getStatusFileDir(rootDir), "HEAD_BEFORE_APPLY")
 }
 
-func readStatusFile(rootDir string) (string, error) {
-	content, err := os.ReadFile(getStatusFilePath(rootDir))
+func getPostPatchStatusFilePath(rootDir string) string {
+	return filepath.Join(getStatusFileDir(rootDir), "HEAD_AFTER_APPLY")
+}
+
+func readStatusFile(file string) (string, error) {
+	content, err := os.ReadFile(file)
 	if err != nil {
 		return "", err
 	}

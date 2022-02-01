@@ -46,7 +46,7 @@ var extract = subcommand{
 
 		since := *sinceFlag
 		if since == "" {
-			since, err = readStatusFile(rootDir)
+			since, err = readStatusFile(getPrePatchStatusFilePath(rootDir))
 			if err != nil {
 				return err
 			}

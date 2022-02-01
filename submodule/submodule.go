@@ -33,14 +33,24 @@ func Init(rootDir, origin, fetchBearerToken string, shallow bool) error {
 	return executil.Run(dirCmd(rootDir, command...))
 }
 
-// Reset updates the submodule (with '--init'), aborts all in-progress Git operations like rebases,
-// resets all changes, and cleans all untracked files.
-func Reset(rootDir string) error {
+// Reset updates the submodule (with '--init'). If "force", throw away changes in the submodule,
+// abort all in-progress Git operations like rebases, and clean all untracked files.
+func Reset(rootDir string, force bool) error {
 	goDir := filepath.Join(rootDir, "go")
 
 	// Update the submodule commit, and initialize if it hasn't been done already.
-	if err := executil.Run(dirCmd(rootDir, "git", "submodule", "update", "--init")); err != nil {
+	submoduleUpdateCmd := dirCmd(rootDir, "git", "submodule", "update", "--init")
+	if force {
+		// If any conflicting changes are in the stage in the submodule, throw them away.
+		submoduleUpdateCmd.Args = append(submoduleUpdateCmd.Args, "-f")
+	}
+	if err := executil.Run(submoduleUpdateCmd); err != nil {
 		return err
+	}
+
+	if !force {
+		// Skip remaining operations: all cleanup.
+		return nil
 	}
 
 	// Find toplevel directories (Git working tree roots) for the outer repo and what we expect to
