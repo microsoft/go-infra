@@ -49,6 +49,62 @@ func TestBuildResultsDirectoryInfo_CreateSummary(t *testing.T) {
 	}
 }
 
+func TestBuildAssets_parseVersion(t *testing.T) {
+	tests := []struct {
+		name                          string
+		version                       string
+		major, minor, patch, revision string
+	}{
+		{
+			"Full version",
+			"1.2.3-4",
+			"1", "2", "3", "4",
+		},
+		{
+			"Major only",
+			"1",
+			"1", "0", "0", "0",
+		},
+		{
+			"Major.minor",
+			"1.42",
+			"1", "42", "0", "0",
+		},
+		{
+			"Major.minor-revision",
+			"1.42-6",
+			"1", "42", "0", "6",
+		},
+		{
+			"Too many dotted parts",
+			"1.2.3.4.5.6",
+			"1", "2", "3", "0",
+		},
+		{
+			"Too many dashed parts",
+			"1-2-3-4",
+			"1", "0", "0", "2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMajor, gotMinor, gotPatch, gotRevision := ParseVersion(tt.version)
+			if gotMajor != tt.major {
+				t.Errorf("parseVersion() gotMajor = %v, major %v", gotMajor, tt.major)
+			}
+			if gotMinor != tt.minor {
+				t.Errorf("parseVersion() gotMinor = %v, minor %v", gotMinor, tt.minor)
+			}
+			if gotPatch != tt.patch {
+				t.Errorf("parseVersion() gotPatch = %v, patch %v", gotPatch, tt.patch)
+			}
+			if gotRevision != tt.revision {
+				t.Errorf("parseVersion() gotRevision = %v, revision %v", gotRevision, tt.revision)
+			}
+		})
+	}
+}
+
 func Test_getVersion(t *testing.T) {
 	tests := []struct {
 		name        string
