@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -78,11 +78,19 @@ type BuildResultsDirectoryInfo struct {
 // CreateSummary scans the paths/info from a BuildResultsDirectoryInfo to summarize the outputs of
 // the build in a BuildAssets struct. The result can be used later to perform an auto-update.
 func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
-	goVersion, err := getVersion(path.Join(b.SourceDir, "VERSION"), "main")
+	// Look for VERSION files in the submodule and the source repo. Prefer the source repo.
+	goVersion, err := getVersion(filepath.Join(b.SourceDir, "VERSION"), "main")
 	if err != nil {
 		return nil, err
 	}
-	goRevision, err := getVersion(path.Join(b.SourceDir, "MICROSOFT_REVISION"), "1")
+	if goVersion == "main" {
+		goVersion, err = getVersion(filepath.Join(b.SourceDir, "go", "VERSION"), "main")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	goRevision, err := getVersion(filepath.Join(b.SourceDir, "MICROSOFT_REVISION"), "1")
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +122,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 			}
 			fmt.Printf("Artifact file: %v\n", e.Name())
 
-			fullPath := path.Join(b.ArtifactsDir, e.Name())
+			fullPath := filepath.Join(b.ArtifactsDir, e.Name())
 
 			// Is it a checksum file?
 			if strings.HasSuffix(e.Name(), checksumSuffix) {
