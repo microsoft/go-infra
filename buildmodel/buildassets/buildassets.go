@@ -32,6 +32,9 @@ type BuildAssets struct {
 	// Arches is the list of artifacts that was produced for this version, typically one per target
 	// os/architecture. The name "Arches" is shared with the versions.json format.
 	Arches []*dockerversions.Arch `json:"arches"`
+
+	// GoSrcURL is a URL pointing at a tar.gz archive of the pre-patched Go source code.
+	GoSrcURL string `json:"goSrcURL"`
 }
 
 // GetDockerRepoTargetBranch returns the Go Docker images repo branch that needs to be updated based
@@ -52,6 +55,7 @@ func (b BuildAssets) GetDockerRepoTargetBranch() string {
 // less likely to unintentionally break, so some of that information is duplicated here.
 var archiveSuffixes = []string{".tar.gz", ".zip"}
 var checksumSuffix = ".sha256"
+var sourceArchiveSuffix = ".src.tar.gz"
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
 // source, and includes extra information that helps make sense of the build results.
@@ -102,6 +106,8 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 		return a
 	}
 
+	var goSrcURL string
+
 	if b.ArtifactsDir != "" {
 		entries, err := os.ReadDir(b.ArtifactsDir)
 		if err != nil {
@@ -116,6 +122,16 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 
 			fullPath := path.Join(b.ArtifactsDir, e.Name())
 
+			// Is it a source archive file?
+			if strings.HasSuffix(e.Name(), sourceArchiveSuffix) {
+				goSrcURL = b.DestinationURL + "/" + e.Name()
+				continue
+			}
+			// Is it a source archive file checksum?
+			if strings.HasSuffix(e.Name(), sourceArchiveSuffix+checksumSuffix) {
+				// The build asset JSON doesn't keep track of this info.
+				continue
+			}
 			// Is it a checksum file?
 			if strings.HasSuffix(e.Name(), checksumSuffix) {
 				// Find/create the arch that matches up with this checksum file.
@@ -134,8 +150,26 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 					// Extract OS/ARCH from the end of a filename like:
 					// "go.12.{...}.3.4.{GOOS}-{GOARCH}.tar.gz"
 					extensionless := strings.TrimSuffix(e.Name(), suffix)
-					osArch := extensionless[strings.LastIndex(extensionless, ".")+1:]
+					lastDotIndex := strings.LastIndex(extensionless, ".")
+					if lastDotIndex == -1 {
+						return nil, fmt.Errorf(
+							"expected '.' in %q after removing extension from archive %q, but found none",
+							extensionless,
+							e.Name(),
+						)
+					}
+
+					osArch := extensionless[lastDotIndex+1:]
 					osArchParts := strings.Split(osArch, "-")
+					if len(osArchParts) != 2 {
+						return nil, fmt.Errorf(
+							"expected two parts separated by '-' in last segment %q of archive %q, but found %v",
+							osArch,
+							e.Name(),
+							len(osArchParts),
+						)
+					}
+
 					goOS, goArch := osArchParts[0], osArchParts[1]
 
 					a := getOrCreateArch(e.Name())
@@ -161,10 +195,11 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 	})
 
 	return &BuildAssets{
-		Branch:  b.Branch,
-		BuildID: b.BuildID,
-		Version: goVersion + "-" + goRevision,
-		Arches:  arches,
+		Branch:   b.Branch,
+		BuildID:  b.BuildID,
+		Version:  goVersion + "-" + goRevision,
+		Arches:   arches,
+		GoSrcURL: goSrcURL,
 	}, nil
 }
 
