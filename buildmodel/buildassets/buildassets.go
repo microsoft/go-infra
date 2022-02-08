@@ -55,7 +55,7 @@ func (b BuildAssets) GetDockerRepoTargetBranch() string {
 // less likely to unintentionally break, so some of that information is duplicated here.
 var archiveSuffixes = []string{".tar.gz", ".zip"}
 var checksumSuffix = ".sha256"
-var sourceArchiveSuffix = ".tar.gz"
+var sourceArchiveSuffix = ".src.tar.gz"
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
 // source, and includes extra information that helps make sense of the build results.
