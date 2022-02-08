@@ -55,6 +55,7 @@ func (b BuildAssets) GetDockerRepoTargetBranch() string {
 // less likely to unintentionally break, so some of that information is duplicated here.
 var archiveSuffixes = []string{".tar.gz", ".zip"}
 var checksumSuffix = ".sha256"
+var sourceArchiveSuffix = ".tar.gz"
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
 // source, and includes extra information that helps make sense of the build results.
@@ -122,8 +123,13 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 			fullPath := path.Join(b.ArtifactsDir, e.Name())
 
 			// Is it a source archive file?
-			if strings.HasSuffix(e.Name(), ".src.tar.gz") {
+			if strings.HasSuffix(e.Name(), sourceArchiveSuffix) {
 				goSrcURL = b.DestinationURL + "/" + e.Name()
+				continue
+			}
+			// Is it a source archive file checksum?
+			if strings.HasSuffix(e.Name(), sourceArchiveSuffix+checksumSuffix) {
+				// The build asset JSON doesn't keep track of this info.
 				continue
 			}
 			// Is it a checksum file?
