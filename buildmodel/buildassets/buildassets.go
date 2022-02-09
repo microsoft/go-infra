@@ -42,7 +42,7 @@ type BuildAssets struct {
 // updated.
 func (b BuildAssets) GetDockerRepoTargetBranch() string {
 	if b.Branch == "main" || strings.HasPrefix(b.Branch, "release-branch.") {
-		return "microsoft/main"
+		return "microsoft/nightly"
 	}
 	if strings.HasPrefix(b.Branch, "dev/official/") {
 		return b.Branch
