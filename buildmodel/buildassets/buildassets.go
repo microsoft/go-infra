@@ -41,13 +41,28 @@ type BuildAssets struct {
 // on the branch of the Go repo that was built, or returns empty string if no branch needs to be
 // updated.
 func (b BuildAssets) GetDockerRepoTargetBranch() string {
-	if b.Branch == "main" || strings.HasPrefix(b.Branch, "release-branch.") {
+	if b.Branch == "main" ||
+		strings.HasPrefix(b.Branch, "release-branch.") ||
+		strings.HasPrefix(b.Branch, "dev.boringcrypto") {
+
 		return "microsoft/nightly"
 	}
 	if strings.HasPrefix(b.Branch, "dev/official/") {
 		return b.Branch
 	}
 	return ""
+}
+
+// GetDockerRepoVersionsKey gets the Docker Versions key that should be updated with new builds
+// listed in this BuildAssets file.
+func (b BuildAssets) GetDockerRepoVersionsKey() string {
+	major, minor, _, _ := ParseVersion(b.Version)
+
+	key := major + "." + minor
+	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
+		key = key + "-fips"
+	}
+	return key
 }
 
 // Basic information about how the build output assets are formatted by Microsoft builds of Go. The
@@ -209,6 +224,30 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 		Arches:   arches,
 		GoSrcURL: goSrcURL,
 	}, nil
+}
+
+// ParseVersion parses a "major.minor.patch-revision" version string into each part. If a part
+// doesn't exist, it defaults to "0".
+func ParseVersion(v string) (string, string, string, string) {
+	dashParts := strings.Split(v, "-")
+	majorMinorPatch := dashParts[0]
+	revision := "0"
+	if len(dashParts) > 1 {
+		revision = dashParts[1]
+	}
+
+	dotParts := strings.Split(majorMinorPatch, ".")
+	major := dotParts[0]
+	minor := "0"
+	if len(dotParts) > 1 {
+		minor = dotParts[1]
+	}
+	patch := "0"
+	if len(dotParts) > 2 {
+		patch = dotParts[2]
+	}
+
+	return major, minor, patch, revision
 }
 
 // getVersion reads the file at path, if it exists. If it doesn't exist, returns the default

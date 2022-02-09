@@ -69,11 +69,19 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 
 	var images []*dockermanifest.Image
 
-	for _, majorMinor := range sortedMajorMinorKeys {
-		v := versions[majorMinor]
+	for _, key := range sortedMajorMinorKeys {
+		v := versions[key]
+		// Remove branch suffix from the key to find the version part.
+		majorMinor := strings.TrimSuffix(key, v.BranchSuffix)
 
-		// The key is always a major.minor version. Split out the major part.
-		major, _, _, _ := parseVersion(majorMinor)
+		applyVersionAffixes := func(version string) string {
+			return v.TagPrefix + version + v.BranchSuffix
+		}
+
+		// The key always contains a major.minor version. Split out the major part.
+		major, _, _, _ := buildassets.ParseVersion(majorMinor)
+
+		majorMinorPatchRevision := v.Version + "-" + v.Revision
 
 		for _, variant := range v.Variants {
 			os := "linux"
@@ -90,42 +98,42 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 			}
 
 			// The main tag that is shared by all architectures.
-			mainSharedTagVersion := v.Version + "-" + v.Revision + "-" + osVersion
+			mainSharedTagVersion := applyVersionAffixes(majorMinorPatchRevision) + "-" + osVersion
 
 			tagVersions := []string{
 				mainSharedTagVersion,
 				// Revisionless tag.
-				v.Version + "-" + osVersion,
+				applyVersionAffixes(v.Version) + "-" + osVersion,
 				// We only maintain one patch version, so it's always preferred. Add major.minor tag.
-				majorMinor + "-" + osVersion,
+				applyVersionAffixes(majorMinor) + "-" + osVersion,
 			}
 
 			// If this is a preferred major.minor version, create major-only tag.
 			if v.PreferredMinor {
-				tagVersions = append(tagVersions, major+"-"+osVersion)
+				tagVersions = append(tagVersions, applyVersionAffixes(major)+"-"+osVersion)
 			}
 			// If this is the preferred major version, create versionless tag.
 			if v.PreferredMajor {
-				tagVersions = append(tagVersions, osVersion)
+				tagVersions = append(tagVersions, applyVersionAffixes("")+osVersion)
 			}
 
 			// If this is the preferred variant, create tags without the variant (OS) part.
 			if v.PreferredVariant == variant {
-				tagVersions = append(tagVersions, v.Version+"-"+v.Revision)
-				tagVersions = append(tagVersions, v.Version)
-				tagVersions = append(tagVersions, majorMinor)
+				tagVersions = append(tagVersions, applyVersionAffixes(majorMinorPatchRevision))
+				tagVersions = append(tagVersions, applyVersionAffixes(v.Version))
+				tagVersions = append(tagVersions, applyVersionAffixes(majorMinor))
 
 				if v.PreferredMinor {
-					tagVersions = append(tagVersions, major)
+					tagVersions = append(tagVersions, applyVersionAffixes(major))
 				}
 				if v.PreferredMajor {
-					tagVersions = append(tagVersions, "latest")
+					tagVersions = append(tagVersions, applyVersionAffixes("latest"))
 				}
 			}
 
 			sharedTags := make(map[string]dockermanifest.Tag, len(tagVersions))
 			for _, tag := range tagVersions {
-				sharedTags[v.TagPrefix+tag] = dockermanifest.Tag{}
+				sharedTags[tag] = dockermanifest.Tag{}
 			}
 
 			// Normally, no build args are necessary and this is nil in the output model.
@@ -141,7 +149,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				buildArgs = map[string]string{
 					// nanoserver doesn't have good download capability, so it copies the Go install
 					// from the windowsservercore image.
-					"DOWNLOADER_TAG": v.TagPrefix + v.Version + "-" + v.Revision + "-windowsservercore-" + windowsVersion + "-amd64",
+					"DOWNLOADER_TAG": applyVersionAffixes(majorMinorPatchRevision) + "-windowsservercore-" + windowsVersion + "-amd64",
 					// The nanoserver Dockerfile needs to know what repository we're building for so
 					// it can figure out the windowsservercore tag's full name.
 					"REPO": "$(Repo:golang)",
@@ -153,7 +161,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				SharedTags:     sharedTags,
 				Platforms: []*dockermanifest.Platform{
 					{
-						Dockerfile: "src/microsoft/" + majorMinor + "/" + variant,
+						Dockerfile: "src/microsoft/" + key + "/" + variant,
 						OS:         os,
 						OSVersion:  osVersion,
 
@@ -162,7 +170,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 						Tags: map[string]dockermanifest.Tag{
 							// We only build amd64 at the moment. The way to implement other
 							// architectures in the future is to add more Platform entries.
-							v.TagPrefix + mainSharedTagVersion + "-amd64": {},
+							mainSharedTagVersion + "-amd64": {},
 						},
 					},
 				},
@@ -200,12 +208,13 @@ var NoMajorMinorUpgradeMatchError = errors.New("no match found in existing versi
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
 // versions.json model to consume the new build.
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
-	major, minor, patch, revision := parseVersion(assets.Version)
-
-	key := major + "." + minor
+	key := assets.GetDockerRepoVersionsKey()
 	if v, ok := versions[key]; ok {
+		major, minor, patch, revision := buildassets.ParseVersion(assets.Version)
+
 		v.Version = major + "." + minor + "." + patch
 		v.Revision = revision
+
 		// Look through the asset arches, find an arch in the versions file that matches each asset,
 		// and update its info.
 		for _, arch := range assets.Arches {
@@ -230,28 +239,4 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		return fmt.Errorf("%v: %w", key, NoMajorMinorUpgradeMatchError)
 	}
 	return nil
-}
-
-// parseVersion parses a "major.minor.patch-revision" version string into each part. If a part
-// doesn't exist, it defaults to "0".
-func parseVersion(v string) (string, string, string, string) {
-	dashParts := strings.Split(v, "-")
-	majorMinorPatch := dashParts[0]
-	revision := "0"
-	if len(dashParts) > 1 {
-		revision = dashParts[1]
-	}
-
-	dotParts := strings.Split(majorMinorPatch, ".")
-	major := dotParts[0]
-	minor := "0"
-	if len(dotParts) > 1 {
-		minor = dotParts[1]
-	}
-	patch := "0"
-	if len(dotParts) > 2 {
-		patch = dotParts[2]
-	}
-
-	return major, minor, patch, revision
 }
