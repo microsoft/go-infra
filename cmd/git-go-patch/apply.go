@@ -68,6 +68,17 @@ var apply = subcommand{
 			return err
 		}
 
+		// Record the pre-patch commit. We must do this before applying the patch: if patching
+		// fails, the user needs to be able to fix up the patches inside the submodule and then run
+		// "git go-patch extract" to apply the fixes to the patch files. "extract" depends on the
+		// pre-patch status file. Start by ensuring the dir exists, then write the file.
+		if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
+			return err
+		}
+		if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
+			return err
+		}
+
 		if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
 			return err
 		}
@@ -77,13 +88,7 @@ var apply = subcommand{
 			return err
 		}
 
-		// Record the pre and post-patch commits. Start by ensuring the dir exists.
-		if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
-			return err
-		}
-		if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
-			return err
-		}
+		// Record the post-patch commit.
 		return writeStatusFiles(postPatchHead, getPostPatchStatusFilePath(rootDir))
 	},
 }
