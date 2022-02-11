@@ -17,6 +17,7 @@ resources:
             # microsoft/main because those updates will always fail to generate.
             # - microsoft/main
             - microsoft/release-branch.*
+            - microsoft/dev.boringcrypto.go*
             - dev/official/*
 
 variables:
