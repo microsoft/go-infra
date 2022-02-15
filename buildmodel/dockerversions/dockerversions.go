@@ -39,7 +39,21 @@ type MajorMinorVersion struct {
 
 	// TagPrefix extends the upstream model, specifying a prefix to include in every tag when
 	// generating the 'manifest.json' file.
+	//
+	// This field is intended to be used for dev branches. When creating a dev branch, filter the
+	// Versions entries down the ones that are necessary and add a TagPrefix to each one to
+	// distinguish them from the main branch.
 	TagPrefix string `json:"tagPrefix,omitempty"`
+
+	// BranchSuffix	extends the upstream model by indicating a suffix on the Versions key that is
+	// related to the branch this build came from, such as "-fips". This suffix must be removed
+	// before interpreting the Versions key as a Go version.
+	//
+	// This field is intended to be used for stable branches that have forked from the release
+	// branches in microsoft/go and are maintained in the main branch in microsoft/go-images. A
+	// BranchSuffix allows 1.17 and 1.17-fips to have distinct Versions objects, for example, which
+	// is necessary to have different arches and variants for each branch.
+	BranchSuffix string `json:"branchSuffix,omitempty"`
 }
 
 // Arch points at the publicly accessible artifacts for a specific OS/arch.

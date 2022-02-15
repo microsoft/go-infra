@@ -1,22 +1,17 @@
 [
   {
     "Upstream": "https://go.googlesource.com/go",
+    "UpstreamMirror": "https://github.com/golang/go",
     "Target": "https://github.com/microsoft/go",
+    "MirrorTarget": "https://dnceng@dev.azure.com/dnceng/internal/_git/microsoft-go-mirror",
     "BranchMap": {
       "master": "microsoft/main",
-      "release-branch.go1.15": "microsoft/?",
-      "release-branch.go1.16": "microsoft/?",
       "release-branch.go1.17": "microsoft/?",
-      "dev.boringcrypto.go1.17": "microsoft/?"
+      "dev.boringcrypto.go1.17": "microsoft/?",
+      "release-branch.go1.16": "microsoft/?",
+      "dev.boringcrypto.go1.16": "microsoft/?"
     },
-    "AutoResolveTarget": [
-      ".gitattributes",
-      ".github",
-      "CODE_OF_CONDUCT.md",
-      "README.md",
-      "SECURITY.md",
-      "SUPPORT.md"
-    ]
+    "SubmoduleTarget": "go"
   },
   {
     "Upstream": "https://github.com/microsoft/go",
@@ -29,7 +24,7 @@
     "Upstream": "https://github.com/docker-library/golang",
     "Target": "https://github.com/microsoft/go-images",
     "BranchMap": {
-      "master": "microsoft/main"
+      "master": "microsoft/nightly"
     },
     "AutoResolveTarget": [
       ".gitattributes",
