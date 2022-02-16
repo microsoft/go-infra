@@ -4,8 +4,10 @@
 package buildmodel
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -16,6 +18,8 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/patch"
+	"github.com/microsoft/go-infra/submodule"
 )
 
 // ParseBoundFlags parses all flags that have been registered with the flag package. This function
@@ -457,8 +461,64 @@ func EnsureDockerfileGenerationPrerequisites() error {
 // any auto-update code runs to detect problems before wasting time on an incompletable update.
 func RunDockerfileGeneration(repoRoot string) error {
 	fmt.Println("Generating Dockerfiles...")
-	var dockerfileUpdateScript = filepath.Join(repoRoot, "eng", "update-dockerfiles.sh")
-	return run(exec.Command("bash", dockerfileUpdateScript))
+
+	// Detect whether this go-images repository is based on a Git fork or a submodule. A submodule
+	// uses scripts from a slightly different location and requires patches to be applied first.
+	fork := false
+	_, err := os.Stat(filepath.Join(repoRoot, "go"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("Fork repository detected: no 'go' directory.")
+			fork = true
+		} else {
+			return err
+		}
+	}
+
+	if !fork {
+		fmt.Println("---- Resetting submodule...")
+		if err := submodule.Reset(repoRoot, false); err != nil {
+			return err
+		}
+		fmt.Println("---- Applying patches to submodule...")
+		if err := patch.Apply(repoRoot, patch.ApplyModeCommits); err != nil {
+			return err
+		}
+	}
+
+	goDir := filepath.Join(repoRoot, "go")
+	if fork {
+		goDir = repoRoot
+	}
+
+	microsoftDockerfileRoot := filepath.Join(repoRoot, "src", "microsoft")
+
+	templates, err := filepath.Glob(filepath.Join(goDir, "*.template"))
+	if err != nil {
+		return err
+	}
+
+	// Copy templates into the current directory. This puts them in the correct location for
+	// "apply-templates.sh" to see them. We don't check in a copy: we want to keep it in sync with
+	// upstream's copy and apply some small patches.
+	for _, t := range templates {
+		dst := filepath.Join(microsoftDockerfileRoot, filepath.Base(t))
+		fmt.Printf("---- Copying template %q to %q...\n", t, dst)
+		if err := copyFile(t, dst); err != nil {
+			return err
+		}
+	}
+
+	cmd := exec.Command(filepath.Join(goDir, "apply-templates.sh"))
+	// Run this script from the "src/microsoft" directory, which contains the versions.json file and
+	// the Dockerfiles. The upstream script relies on the current working directory to decide where
+	// to generate the Dockerfiles.
+	cmd.Dir = microsoftDockerfileRoot
+	// Make sure "apply-templates.sh" uses our checked-in copy of "jq-template.awk" instead of
+	// downloading it on the fly.
+	cmd.Env = append(cmd.Env, "BASHBREW_SCRIPTS=.")
+
+	return run(cmd)
 }
 
 // getwd gets the current working dir or panics, for easy use in expressions.
@@ -483,4 +543,22 @@ func run(c *exec.Cmd) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func copyFile(src, dst string) (err error) {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+	return d.Close()
 }
