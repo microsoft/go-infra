@@ -469,24 +469,20 @@ func RunDockerfileGeneration(repoRoot string) error {
 
 	// Detect whether this go-images repository is based on a Git fork or a submodule. A submodule
 	// uses scripts from a slightly different location and requires patches to be applied first.
-	fork := false
 	_, err := os.Stat(goDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			fmt.Println("Fork repository detected: no 'go' directory.")
-			fork = true
+			// We are in a Git fork (not a submodule) so we now know Go Docker source code is
+			// directly in the repo root.
+			goDir = repoRoot
 		} else {
+			// Could not determine if the repo is a fork vs. submodule for some unknown reason.
 			return err
 		}
-	}
-
-	if fork {
-		// We are in a Git fork (not a submodule) so we now know Go Docker source code is directly
-		// in the repo.
-		goDir = repoRoot
 	} else {
-		// Ensure the submodule is set up correctly and patched, so we can use the patched templates
-		// inside to generate our Dockerfiles.
+		// No err: the submodule directory exists. Now, ensure the submodule is set up correctly and
+		// patched, so we can use the patched templates inside to generate our Dockerfiles.
 		fmt.Println("---- Resetting submodule...")
 		if err := submodule.Reset(repoRoot, false); err != nil {
 			return err
