@@ -487,8 +487,11 @@ func RunDockerfileGeneration(repoRoot string) error {
 		if err := submodule.Reset(repoRoot, false); err != nil {
 			return err
 		}
-		fmt.Println("---- Applying patches to submodule...")
-		if err := patch.Apply(repoRoot, patch.ApplyModeCommits); err != nil {
+		fmt.Println("---- Applying patches to submodule index...")
+		// Apply patches to the index without changing the commit hash. This means that later, a
+		// "git add ." or "git commit -a" won't try to change the submodule hash. ApplyModeCommits
+		// creates fresh commits that aren't available anywhere and would break a fresh clone.
+		if err := patch.Apply(repoRoot, patch.ApplyModeIndex); err != nil {
 			return err
 		}
 	}
