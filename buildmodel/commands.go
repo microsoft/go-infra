@@ -4,8 +4,10 @@
 package buildmodel
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -16,6 +18,8 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/patch"
+	"github.com/microsoft/go-infra/submodule"
 )
 
 // ParseBoundFlags parses all flags that have been registered with the flag package. This function
@@ -457,8 +461,62 @@ func EnsureDockerfileGenerationPrerequisites() error {
 // any auto-update code runs to detect problems before wasting time on an incompletable update.
 func RunDockerfileGeneration(repoRoot string) error {
 	fmt.Println("Generating Dockerfiles...")
-	var dockerfileUpdateScript = filepath.Join(repoRoot, "eng", "update-dockerfiles.sh")
-	return run(exec.Command("bash", dockerfileUpdateScript))
+
+	// The location of upstream Go Docker code. We start by assuming we have a submodule at "go".
+	goDir := filepath.Join(repoRoot, "go")
+	// Location of our Dockerfiles: where the "1.16", "1.17" etc. directories are located.
+	microsoftDockerfileRoot := filepath.Join(repoRoot, "src", "microsoft")
+
+	// Detect whether this go-images repository is based on a Git fork or a submodule. A submodule
+	// uses scripts from a slightly different location and requires patches to be applied first.
+	_, err := os.Stat(goDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("Fork repository detected: no 'go' directory.")
+			// We are in a Git fork (not a submodule) so we now know Go Docker source code is
+			// directly in the repo root.
+			goDir = repoRoot
+		} else {
+			// Could not determine if the repo is a fork vs. submodule for some unknown reason.
+			return err
+		}
+	} else {
+		// No err: the submodule directory exists. Now, ensure the submodule is set up correctly and
+		// patched, so we can use the patched templates inside to generate our Dockerfiles.
+		fmt.Println("---- Resetting submodule...")
+		if err := submodule.Reset(repoRoot, false); err != nil {
+			return err
+		}
+		fmt.Println("---- Applying patches to submodule index...")
+		// Apply patches to the index without changing the commit hash. This means that later, a
+		// "git add ." or "git commit -a" won't try to change the submodule hash. ApplyModeCommits
+		// creates fresh commits that aren't available anywhere and would break a fresh clone.
+		if err := patch.Apply(repoRoot, patch.ApplyModeIndex); err != nil {
+			return err
+		}
+	}
+
+	// Copy templates into "our" directory. This puts them in the correct location for
+	// "apply-templates.sh" to see them. We don't check in a copy: we want to keep it in sync with
+	// upstream's copy and apply some small patches.
+	if err := copyDockerfileTemplates(goDir, microsoftDockerfileRoot); err != nil {
+		return err
+	}
+
+	// Run the upstream "apply-templates.sh", but in this directory. This causes the script to
+	// update our Dockerfiles using the data in our "versions.json". Keeping our own version of the
+	// checked-in evaluated templates prevents merge conflicts in generated code when we merge
+	// changes from upstream.
+	cmd := exec.Command(filepath.Join(goDir, "apply-templates.sh"))
+	// Run this script from the "src/microsoft" directory, which contains the versions.json file and
+	// the Dockerfiles. The upstream script relies on the current working directory to decide where
+	// to generate the Dockerfiles.
+	cmd.Dir = microsoftDockerfileRoot
+	// Make sure "apply-templates.sh" uses our checked-in copy of "jq-template.awk" instead of
+	// downloading it on the fly.
+	cmd.Env = append(cmd.Env, "BASHBREW_SCRIPTS=.")
+
+	return run(cmd)
 }
 
 // getwd gets the current working dir or panics, for easy use in expressions.
@@ -483,4 +541,38 @@ func run(c *exec.Cmd) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func copyDockerfileTemplates(srcDir, dstDir string) error {
+	templates, err := filepath.Glob(filepath.Join(srcDir, "*.template"))
+	if err != nil {
+		return err
+	}
+
+	for _, t := range templates {
+		dst := filepath.Join(dstDir, filepath.Base(t))
+		fmt.Printf("---- Copying template %q to %q...\n", t, dst)
+		if err := copyFile(t, dst); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) (err error) {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+	return d.Close()
 }
