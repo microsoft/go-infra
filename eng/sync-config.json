@@ -6,19 +6,12 @@
     "MirrorTarget": "https://dnceng@dev.azure.com/dnceng/internal/_git/microsoft-go-mirror",
     "BranchMap": {
       "master": "microsoft/main",
+      "release-branch.go1.18": "microsoft/?",
+      "dev.boringcrypto.go1.18": "microsoft/?",
       "release-branch.go1.17": "microsoft/?",
-      "dev.boringcrypto.go1.17": "microsoft/?",
-      "release-branch.go1.16": "microsoft/?",
-      "dev.boringcrypto.go1.16": "microsoft/?"
+      "dev.boringcrypto.go1.17": "microsoft/?"
     },
     "SubmoduleTarget": "go"
-  },
-  {
-    "Upstream": "https://github.com/microsoft/go",
-    "Target": "https://github.com/microsoft/go",
-    "BranchMap": {
-      "microsoft/release-branch.go1.17": "dev/official/go1.17-openssl-fips"
-    }
   },
   {
     "Upstream": "https://github.com/docker-library/golang",
@@ -26,14 +19,6 @@
     "BranchMap": {
       "master": "microsoft/nightly"
     },
-    "AutoResolveTarget": [
-      ".gitattributes",
-      ".github",
-      ".gitignore",
-      "CODE_OF_CONDUCT.md",
-      "README.md",
-      "SECURITY.md",
-      "SUPPORT.md"
-    ]
+    "SubmoduleTarget": "go"
   }
 ]
