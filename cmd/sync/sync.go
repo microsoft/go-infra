@@ -518,12 +518,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			body := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
 				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration.\n\n" +
 				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
-			if entry.SubmoduleTarget != "" {
-				body += fmt.Sprintf(
-					"\n\nThis PR updates the submodule at %#q to the latest version of %#q at %v.",
-					entry.SubmoduleTarget, b.Refs.UpstreamName, entry.Upstream,
-				)
-			} else {
+			if entry.SubmoduleTarget == "" {
 				body += fmt.Sprintf(
 					"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
 					b.Refs.UpstreamName, b.Refs.Name,
