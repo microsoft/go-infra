@@ -11,3 +11,8 @@ Pipeline definitions currently using each YAML file are:
       options in the "Run pipeline" dialog.
     * To see where an update came from, click the "X consumed" button:
       ![](img/consumed-artifacts.png)
+
+Release pipelines (see [release process docs](/docs/release-process)):
+
+* [`release-go.yml`](release-go.yml)
+  * [`microsoft-go-infra-release-go`](https://dev.azure.com/dnceng/internal/_build?definitionId=1123)

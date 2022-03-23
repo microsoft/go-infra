@@ -1,0 +1,13 @@
+<!-- Copyright (c) Microsoft Corporation. Use of this source code is governed by a BSD-style license that can be found in the LICENSE file. -->
+<Dependencies>
+  <ToolsetDependencies>
+    <Dependency Name="Microsoft.DotNet.Arcade.Sdk" Version="7.0.0-beta.22171.1">
+      <Uri>https://github.com/dotnet/arcade</Uri>
+      <Sha>fa981934d2c05c4ef309864f940efa3cca641183</Sha>
+    </Dependency>
+    <Dependency Name="Microsoft.DotNet.Deployment.Tasks.Links" Version="7.0.0-beta.22171.1">
+      <Uri>https://github.com/dotnet/arcade</Uri>
+      <Sha>fa981934d2c05c4ef309864f940efa3cca641183</Sha>
+    </Dependency>
+  </ToolsetDependencies>
+</Dependencies>

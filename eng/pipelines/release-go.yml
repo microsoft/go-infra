@@ -1,0 +1,72 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Use runtime parameters to define these selections in YML. This also makes them
+# show up in the "Run" popup directly. This makes them much easier to set
+# manually, vs. digging into the Variables submenu with many clicks.
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
+parameters:
+  - name: releaseVersion
+    displayName: Version being release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
+    type: string
+
+  - name: releaseGoBuildId
+    displayName: Build ID to release. Copy the ID from the build page's URL.
+    type: string
+
+  - name: vanityUrlPrefix
+    displayName: Prefix for the vanity URLs.
+    type: string
+    default: 'golang/release/latest/'
+
+trigger: none
+pr: none
+
+variables:
+  - group: go-akams-config
+  - group: go-akams-auth
+
+jobs:
+  - job: Release
+    workspace:
+      clean: all
+    pool:
+      # This is a utility job: use generic recent LTS.
+      name: NetCore1ESPool-Svc-Internal
+      demands: ImageOverride -equals Build.Ubuntu.1804.Amd64
+    variables:
+      assetsDir: $(Pipeline.Workspace)/BuildAssets
+      buildAssetJsonFile: $(assetsDir)/assets.json
+    steps:
+      - template: steps/checkout-unix-task.yml
+
+      - template: steps/init-go.yml
+      - task: UseDotNet@2
+        displayName: 'Use .NET SDK'
+        inputs:
+          version: 6.x
+
+      - task: DownloadPipelineArtifact@2
+        inputs:
+          source: specific
+          artifact: BuildAssets
+          project: internal
+          pipeline: 958
+          runVersion: specific
+          runId: ${{ parameters.releaseGoBuildId }}
+          path: $(assetsDir)
+
+      - script: |
+          # Pass owners through environment. (Contains semicolons.)
+          export AkaMSOwners="$(AkaMSOwners)"
+
+          go run ./cmd/update-aka-ms \
+            -build-asset-json "$(buildAssetJsonFile)" \
+            -version "${{ parameters.releaseVersion }}" \
+            -prefix "${{ parameters.vanityUrlPrefix }}" \
+            /p:AkaMSClientId="$(akams-client-id)" \
+            /p:AkaMSClientSecret="$(akams-client-secret)" \
+            /p:AkaMSTenant="$(AkaMSTenant)" \
+            /p:AkaMSCreatedBy="$(AkaMSCreatedBy)" \
+            /p:AkaMSGroupOwner="$(AkaMSGroupOwner)"
+        displayName: Update aka.ms links
