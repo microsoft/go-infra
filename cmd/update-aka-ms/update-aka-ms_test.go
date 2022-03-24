@@ -25,24 +25,24 @@ func Test_createLinkPairs(t *testing.T) {
 		GoSrcURL: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz",
 	}
 	want := []akaMSLinkPair{
-		{short: "testing/go1.17.linux-amd64.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
-		{short: "testing/go1.17.linux-amd64.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
-		{short: "testing/go1.17.linux-amd64.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
-		{short: "testing/go1.17.src.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
-		{short: "testing/go1.17.src.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
-		{short: "testing/go1.17.src.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
-		{short: "testing/go1.17.7.linux-amd64.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
-		{short: "testing/go1.17.7.linux-amd64.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
-		{short: "testing/go1.17.7.linux-amd64.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
-		{short: "testing/go1.17.7.src.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
-		{short: "testing/go1.17.7.src.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
-		{short: "testing/go1.17.7.src.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
-		{short: "testing/go1.17.7-1.linux-amd64.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
-		{short: "testing/go1.17.7-1.linux-amd64.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
-		{short: "testing/go1.17.7-1.linux-amd64.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
-		{short: "testing/go1.17.7-1.src.tar.gz", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
-		{short: "testing/go1.17.7-1.src.tar.gz.sha256", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
-		{short: "testing/go1.17.7-1.src.tar.gz.sig", target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
+		{Short: "testing/go1.17.linux-amd64.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
+		{Short: "testing/go1.17.linux-amd64.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
+		{Short: "testing/go1.17.linux-amd64.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
+		{Short: "testing/go1.17.src.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
+		{Short: "testing/go1.17.src.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
+		{Short: "testing/go1.17.src.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
+		{Short: "testing/go1.17.7.linux-amd64.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
+		{Short: "testing/go1.17.7.linux-amd64.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
+		{Short: "testing/go1.17.7.linux-amd64.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
+		{Short: "testing/go1.17.7.src.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
+		{Short: "testing/go1.17.7.src.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
+		{Short: "testing/go1.17.7.src.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
+		{Short: "testing/go1.17.7-1.linux-amd64.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz"},
+		{Short: "testing/go1.17.7-1.linux-amd64.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sha256"},
+		{Short: "testing/go1.17.7-1.linux-amd64.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.linux-amd64.tar.gz.sig"},
+		{Short: "testing/go1.17.7-1.src.tar.gz", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz"},
+		{Short: "testing/go1.17.7-1.src.tar.gz.sha256", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sha256"},
+		{Short: "testing/go1.17.7-1.src.tar.gz.sig", Target: "https://example.org/golang/build/1234.10/go.1234.10.src.tar.gz.sig"},
 	}
 	got, err := createLinkPairs(input)
 	if err != nil {
@@ -53,14 +53,14 @@ func Test_createLinkPairs(t *testing.T) {
 	}
 }
 
-func Test_getPropsFileContent(t *testing.T) {
+func Test_propsFileContent(t *testing.T) {
 	pairs := []akaMSLinkPair{
 		{
-			short: "from", target: "to",
+			Short: "from", Target: "to",
 		},
 		{
-			short:  "release/latest/go1.18.2-linux-amd64.tar.gz",
-			target: "https://example.org/go/go1.18.s-linux-amd64.tar.gz",
+			Short:  "release/latest/go1.18.2-linux-amd64.tar.gz",
+			Target: "https://example.org/go/go1.18.s-linux-amd64.tar.gz",
 		},
 	}
 	want := `<Project>
@@ -71,11 +71,11 @@ func Test_getPropsFileContent(t *testing.T) {
 </Project>
 `
 
-	got, err := getPropsFileContent(pairs)
+	got, err := propsFileContent(pairs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Errorf("getPropsFileContent() got %v, want %v", got, want)
+		t.Errorf("propsFileContent() got %v, want %v", got, want)
 	}
 }

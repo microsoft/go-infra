@@ -95,7 +95,7 @@ func createAkaMSLinks(assetFilePath string) error {
 	}
 
 	if *validateVersionFlag != "" {
-		assetVersion := b.GetGoVersion().Full()
+		assetVersion := b.GoVersion().Full()
 		inputVersion := goversion.New(*validateVersionFlag).Full()
 		if assetVersion != inputVersion {
 			return fmt.Errorf("build asset JSON version %q doesn't match input version %q", assetVersion, inputVersion)
@@ -107,7 +107,7 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	propsFileContent, err := getPropsFileContent(linkPairs)
+	propsFileContent, err := propsFileContent(linkPairs)
 	if err != nil {
 		return err
 	}
@@ -129,26 +129,17 @@ func createAkaMSLinks(assetFilePath string) error {
 }
 
 type akaMSLinkPair struct {
-	short, target string
+	Short  string `xml:"Include,attr"`
+	Target string `xml:"TargetUrl,attr"`
 }
 
-func (p *akaMSLinkPair) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
-	s := xml.StartElement{
-		Name: xml.Name{Local: "AkaMSLink"},
-		Attr: []xml.Attr{
-			{Name: xml.Name{Local: "Include"}, Value: p.short},
-			{Name: xml.Name{Local: "TargetUrl"}, Value: p.target},
-		},
-	}
-	err := e.EncodeToken(s)
-	if err != nil {
-		return err
-	}
-	return e.EncodeToken(s.End())
+type akaMSPropsFile struct {
+	XMLName   xml.Name        `xml:"Project"`
+	ItemGroup []akaMSLinkPair `xml:">AkaMSLink"`
 }
 
 func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
-	v := assets.GetGoVersion()
+	v := assets.GoVersion()
 	// The partial versions that we want to link to a specific build.
 	// For example, 1.18-fips -> 1.18.2-1-fips.
 	partial := []string{
@@ -190,8 +181,8 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 			}
 
 			pairs = append(pairs, akaMSLinkPair{
-				*latestShortLinkPrefix + f,
-				u,
+				Short:  *latestShortLinkPrefix + f,
+				Target: u,
 			})
 		}
 	}
@@ -215,23 +206,10 @@ func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, e
 	return f, nil
 }
 
-func getPropsFileContent(pairs []akaMSLinkPair) (string, error) {
-	var b strings.Builder
-	b.WriteString("<Project>\n")
-	b.WriteString("  <ItemGroup>\n")
-
-	marshal, err := xml.MarshalIndent(pairs, "    ", "  ")
+func propsFileContent(pairs []akaMSLinkPair) (string, error) {
+	x, err := xml.MarshalIndent(akaMSPropsFile{ItemGroup: pairs}, "", "  ")
 	if err != nil {
 		return "", err
 	}
-
-	_, err = b.Write(marshal)
-	if err != nil {
-		return "", err
-	}
-	b.WriteString("\n")
-
-	b.WriteString("  </ItemGroup>\n")
-	b.WriteString("</Project>\n")
-	return b.String(), nil
+	return string(x) + "\n", nil
 }

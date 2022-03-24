@@ -66,9 +66,9 @@ func (b BuildAssets) GetDockerRepoVersionsKey() string {
 	return key
 }
 
-// GetGoVersion parses Version in the format that Microsoft builds of Go use. The BuildAssets file
+// GoVersion parses Version in the format that Microsoft builds of Go use. The BuildAssets file
 // doesn't include the Note (-fips), so this is added based on the branch.
-func (b BuildAssets) GetGoVersion() *goversion.GoVersion {
+func (b BuildAssets) GoVersion() *goversion.GoVersion {
 	v := b.Version
 	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
 		v += "-fips"
