@@ -26,8 +26,8 @@ type URLAuther interface {
 type GitHubSSHAuther struct{}
 
 func (GitHubSSHAuther) InsertAuth(url string) string {
-	if strings.HasPrefix(url, githubPrefix) {
-		return fmt.Sprintf("git@github.com:%v", strings.TrimPrefix(url, githubPrefix))
+	if after, found := cutPrefix(url, githubPrefix); found {
+		return fmt.Sprintf("git@github.com:%v", after)
 	}
 	return url
 }
@@ -38,10 +38,11 @@ type GitHubPATAuther struct {
 }
 
 func (a GitHubPATAuther) InsertAuth(url string) string {
-	if a.User != "" && a.PAT != "" && strings.HasPrefix(url, githubPrefix) {
-		return fmt.Sprintf(
-			"https://%v:%v@github.com/%v",
-			a.User, a.PAT, strings.TrimPrefix(url, githubPrefix))
+	if a.User == "" || a.PAT == "" {
+		return url
+	}
+	if after, found := cutPrefix(url, githubPrefix); found {
+		return fmt.Sprintf("https://%v:%v@github.com/%v", a.User, a.PAT, after)
 	}
 	return url
 }
@@ -52,11 +53,14 @@ type AzDOPATAuther struct {
 }
 
 func (a AzDOPATAuther) InsertAuth(url string) string {
-	if a.PAT != "" && strings.HasPrefix(url, azdoDncengPrefix) {
+	if a.PAT == "" {
+		return url
+	}
+	if after, found := cutPrefix(url, azdoDncengPrefix); found {
 		url = fmt.Sprintf(
 			// Username doesn't matter. PAT is identity.
 			"https://arbitraryusername:%v@dev.azure.com%v",
-			a.PAT, strings.TrimPrefix(url, azdoDncengPrefix))
+			a.PAT, after)
 	}
 	return url
 }
@@ -71,7 +75,7 @@ func (NoAuther) InsertAuth(url string) string {
 // MultiAuther tries multiple authers in sequence. Stops and returns the result when any auther
 // makes a change to the URL.
 type MultiAuther struct {
-	Authers []GitURLAuther
+	Authers []URLAuther
 }
 
 func (m MultiAuther) InsertAuth(url string) string {
@@ -81,4 +85,11 @@ func (m MultiAuther) InsertAuth(url string) string {
 		}
 	}
 	return url
+}
+
+func cutPrefix(s, prefix string) (after string, found bool) {
+	if strings.HasPrefix(s, prefix) {
+		return s[len(prefix):], true
+	}
+	return s, false
 }
