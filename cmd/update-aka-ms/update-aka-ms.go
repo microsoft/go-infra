@@ -107,18 +107,18 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	propsFileContent, err := propsFileContent(linkPairs)
+	content, err := propsFileContent(linkPairs)
 	if err != nil {
 		return err
 	}
 
 	projectPath := filepath.Join(wd, "eng", "publishing", "UpdateAkaMSLinks", "UpdateAkaMSLinks.csproj")
 	propsPath := filepath.Join(akaMSDir, "AkaMSLinks.props")
-	if err := os.WriteFile(propsPath, []byte(propsFileContent), 0666); err != nil {
+	if err := os.WriteFile(propsPath, []byte(content), 0666); err != nil {
 		return err
 	}
 
-	log.Printf("---- File content for generated file %v\n%v\n", propsPath, propsFileContent)
+	log.Printf("---- File content for generated file %v\n%v\n", propsPath, content)
 
 	cmd := exec.Command(
 		"dotnet", "build", projectPath,
