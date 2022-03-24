@@ -25,7 +25,7 @@ type GitURLAuther interface {
 // GitHubSSHAuther turns an https-style GitHub URL into an SSH-style GitHub URL.
 type GitHubSSHAuther struct{}
 
-func (a GitHubSSHAuther) InsertAuth(url string) string {
+func (GitHubSSHAuther) InsertAuth(url string) string {
 	if strings.HasPrefix(url, githubPrefix) {
 		return fmt.Sprintf("git@github.com:%v", strings.TrimPrefix(url, githubPrefix))
 	}
@@ -64,7 +64,7 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 // NoAuther does nothing to URLs.
 type NoAuther struct{}
 
-func (a NoAuther) InsertAuth(url string) string {
+func (NoAuther) InsertAuth(url string) string {
 	return url
 }
 
