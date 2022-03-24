@@ -79,7 +79,7 @@ const (
 	GitAuthPAT  GitAuthOption = "pat"
 )
 
-var auther gitcmd.GitURLAuther
+var auther gitcmd.URLAuther
 
 func main() {
 	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
@@ -123,7 +123,7 @@ func main() {
 			os.Exit(1)
 		}
 		auther = gitcmd.MultiAuther{
-			Authers: []gitcmd.GitURLAuther{
+			Authers: []gitcmd.URLAuther{
 				gitcmd.GitHubPATAuther{
 					User: *githubUser,
 					PAT:  *githubPAT,

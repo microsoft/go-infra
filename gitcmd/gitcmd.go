@@ -13,10 +13,10 @@ import (
 const githubPrefix = "https://github.com/"
 const azdoDncengPrefix = "https://dnceng@dev.azure.com/"
 
-// GitURLAuther manipulates a Git repository URL (GitHub, AzDO, ...) such that Git commands taking a
+// URLAuther manipulates a Git repository URL (GitHub, AzDO, ...) such that Git commands taking a
 // remote will work with the URL. This is intentionally vague: it could add an access token into the
 // URL, or it could simply make the URL compatible with environmental auth on the machine (SSH).
-type GitURLAuther interface {
+type URLAuther interface {
 	// InsertAuth inserts authentication into the URL and returns it, or if the auther doesn't
 	// apply, returns the url without any modifications.
 	InsertAuth(url string) string
