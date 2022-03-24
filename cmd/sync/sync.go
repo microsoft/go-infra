@@ -289,7 +289,12 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			return err
 		}
 
-		c := changedBranch{Refs: b}
+		c := changedBranch{
+			Refs: b,
+			PRBody: "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
+				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
+				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).",
+		}
 		var commitMessage string
 
 		if entry.SubmoduleTarget == "" {
@@ -312,6 +317,10 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				}
 			}
 			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
+			c.PRBody += fmt.Sprintf(
+				"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
+				c.Refs.UpstreamName, c.Refs.Name,
+			)
 			commitMessage = fmt.Sprintf("Merge upstream branch %q into %v", b.UpstreamName, b.Name)
 		} else {
 			// This is a submodule update. We'll be doing more evaluation to figure out which commit
@@ -368,17 +377,6 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			snippet := createCommitMessageSnippet(upstreamCommitMessage)
 
 			c.PRTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
-			c.PRBody = "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
-				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
-				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
-
-			if entry.SubmoduleTarget == "" {
-				c.PRBody += fmt.Sprintf(
-					"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
-					c.Refs.UpstreamName, c.Refs.Name,
-				)
-			}
-
 			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 		}
 
