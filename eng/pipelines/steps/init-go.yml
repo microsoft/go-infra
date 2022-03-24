@@ -6,4 +6,4 @@
 steps:
   - task: GoTool@0
     inputs:
-      version: 1.17.2
+      version: 1.18
