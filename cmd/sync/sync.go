@@ -61,8 +61,10 @@ const maxDiffLinesToDisplay = 200
 var (
 	// maxUpstreamCommitMessageInSnippet is the maximum number of characters to include in the
 	// commit message snippet for a submodule update commit message. The snippet gives context to
-	// the current submodule pointer in a "git log" or when viewed on GitHub.
-	maxUpstreamCommitMessageInSnippet = 40
+	// the current submodule pointer in a "git log" or when viewed on GitHub. Because the commit had
+	// to be accepted into upstream to make it here, the message length is almost definitely ok to
+	// include in its entirety. This is only a safeguard, and the character count is arbitrary.
+	maxUpstreamCommitMessageInSnippet = 1000
 	// snippetCutoffIndicator is the text to put at the end of the snippet when it is cut off.
 	snippetCutoffIndicator = "[...]"
 )
