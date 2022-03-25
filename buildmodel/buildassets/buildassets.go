@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/goversion"
 )
 
 // BuildAssets is the root object of a build asset JSON file.
@@ -27,7 +28,7 @@ type BuildAssets struct {
 	// BuildID is a link to the build that produced these assets. It is not used for auto-update.
 	BuildID string `json:"buildId"`
 
-	// Version of the build, as 'major.minor.patch-revision'.
+	// Version of the build, as 'major.minor.patch-revision'. Doesn't include version note (-fips).
 	Version string `json:"version"`
 	// Arches is the list of artifacts that was produced for this version, typically one per target
 	// os/architecture. The name "Arches" is shared with the versions.json format.
@@ -56,13 +57,23 @@ func (b BuildAssets) GetDockerRepoTargetBranch() string {
 // GetDockerRepoVersionsKey gets the Docker Versions key that should be updated with new builds
 // listed in this BuildAssets file.
 func (b BuildAssets) GetDockerRepoVersionsKey() string {
-	major, minor, _, _ := ParseVersion(b.Version)
+	v := goversion.New(b.Version)
 
-	key := major + "." + minor
+	key := v.Major + "." + v.Minor
 	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
 		key = key + "-fips"
 	}
 	return key
+}
+
+// GoVersion parses Version in the format that Microsoft builds of Go use. The BuildAssets file
+// doesn't include the Note (-fips), so this is added based on the branch.
+func (b BuildAssets) GoVersion() *goversion.GoVersion {
+	v := b.Version
+	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
+		v += "-fips"
+	}
+	return goversion.New(v)
 }
 
 // Basic information about how the build output assets are formatted by Microsoft builds of Go. The
@@ -224,30 +235,6 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 		Arches:   arches,
 		GoSrcURL: goSrcURL,
 	}, nil
-}
-
-// ParseVersion parses a "major.minor.patch-revision" version string into each part. If a part
-// doesn't exist, it defaults to "0".
-func ParseVersion(v string) (string, string, string, string) {
-	dashParts := strings.Split(v, "-")
-	majorMinorPatch := dashParts[0]
-	revision := "0"
-	if len(dashParts) > 1 {
-		revision = dashParts[1]
-	}
-
-	dotParts := strings.Split(majorMinorPatch, ".")
-	major := dotParts[0]
-	minor := "0"
-	if len(dotParts) > 1 {
-		minor = dotParts[1]
-	}
-	patch := "0"
-	if len(dotParts) > 2 {
-		patch = dotParts[2]
-	}
-
-	return major, minor, patch, revision
 }
 
 // getVersion reads the file at path, if it exists. If it doesn't exist, returns the default

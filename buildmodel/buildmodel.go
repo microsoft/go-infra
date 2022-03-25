@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/goversion"
 )
 
 // ReadJSONFile reads one JSON value from the specified file.
@@ -79,7 +80,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 		}
 
 		// The key always contains a major.minor version. Split out the major part.
-		major, _, _, _ := buildassets.ParseVersion(majorMinor)
+		major := goversion.New(majorMinor).Major
 
 		majorMinorPatchRevision := v.Version + "-" + v.Revision
 
@@ -210,10 +211,10 @@ var NoMajorMinorUpgradeMatchError = errors.New("no match found in existing versi
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
 	key := assets.GetDockerRepoVersionsKey()
 	if v, ok := versions[key]; ok {
-		major, minor, patch, revision := buildassets.ParseVersion(assets.Version)
+		vNew := goversion.New(assets.Version)
 
-		v.Version = major + "." + minor + "." + patch
-		v.Revision = revision
+		v.Version = vNew.MajorMinorPatch()
+		v.Revision = vNew.Revision
 
 		// Look through the asset arches, find an arch in the versions file that matches each asset,
 		// and update its info.

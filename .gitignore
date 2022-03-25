@@ -1,3 +1,10 @@
+## microsoft/go-infra gitignore
+
+# Ignore Arcade C# project artifacts and intermediate output.
+*.binlog
+obj/
+bin/
+
 ## Go gitignore from https://raw.githubusercontent.com/github/gitignore/master/Go.gitignore
 
 # Binaries for programs and plugins
