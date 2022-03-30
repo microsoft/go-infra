@@ -193,6 +193,7 @@ type changedBranch struct {
 	Refs    *gitpr.SyncPRRefSet
 	Diff    string
 	PRTitle string
+	PRBody  string
 }
 
 func syncRepository(dir string, entry SyncConfigEntry) error {
@@ -277,7 +278,12 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			return err
 		}
 
-		c := changedBranch{Refs: b}
+		c := changedBranch{
+			Refs: b,
+			PRBody: "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
+				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
+				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).",
+		}
 		var commitMessage string
 
 		if entry.SubmoduleTarget == "" {
@@ -300,6 +306,10 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				}
 			}
 			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
+			c.PRBody += fmt.Sprintf(
+				"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
+				c.Refs.UpstreamName, c.Refs.Name,
+			)
 			commitMessage = fmt.Sprintf("Merge upstream branch %q into %v", b.UpstreamName, b.Name)
 		} else {
 			// This is a submodule update. We'll be doing more evaluation to figure out which commit
@@ -411,9 +421,15 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			}
 			c.Diff = diffLines.String()
 
-			fmt.Printf("---- Files changed from %q to %q ----\n", b.UpstreamName, b.Name)
-			fmt.Print(diff)
-			fmt.Println("--------")
+			if c.Diff != "" {
+				c.PRBody += fmt.Sprintf(
+					"\n\n"+
+						"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
+						"```\n%v\n```"+
+						"\n\n</details>",
+					c.Diff,
+				)
+			}
 		}
 
 		changedBranches = append(changedBranches, c)
@@ -471,6 +487,12 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	}
 
 	for _, b := range changedBranches {
+		prFlowDescription := fmt.Sprintf("%v -> %v", b.Refs.UpstreamName, b.Refs.PRBranch())
+
+		fmt.Printf("---- %s: Checking if PR should be submitted.\n", prFlowDescription)
+		fmt.Printf("---- PR Title: %s\n", b.PRTitle)
+		fmt.Printf("---- PR Body:\n%s\n", b.PRBody)
+
 		var skipReason string
 		switch {
 		case *dryRun:
@@ -488,8 +510,6 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			skipReason = "github-pat-reviewer not provided"
 		}
 
-		prFlowDescription := fmt.Sprintf("%v -> %v", b.Refs.UpstreamName, b.Refs.PRBranch())
-
 		if skipReason != "" {
 			fmt.Printf("---- %s: skipping submitting PR for %v\n", skipReason, prFlowDescription)
 			continue
@@ -504,26 +524,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		err := func() error {
 			fmt.Printf("---- PR for %v: Submitting...\n", prFlowDescription)
 
-			body := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
-				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration.\n\n" +
-				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
-			if entry.SubmoduleTarget == "" {
-				body += fmt.Sprintf(
-					"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
-					b.Refs.UpstreamName, b.Refs.Name,
-				)
-			}
-			if b.Diff != "" {
-				body += fmt.Sprintf(
-					"\n\n"+
-						"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
-						"```\n%v\n```"+
-						"\n\n</details>",
-					b.Diff,
-				)
-			}
-
-			request := b.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), b.PRTitle, body)
+			request := b.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), b.PRTitle, b.PRBody)
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
