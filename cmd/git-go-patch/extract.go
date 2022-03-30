@@ -5,9 +5,9 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -76,20 +76,22 @@ var extract = subcommand{
 
 		// Emit the patch files into a scratch directory for now. We will process them a bit, and
 		// later overwrite the contents of the patchDir once we know that the patch files are valid.
-		tempPatchDir, err := os.MkdirTemp("", "extracted-patches-*")
+		tmpPatchDir, err := os.MkdirTemp("", "extracted-patches-*")
 		if err != nil {
 			return err
 		}
 		if *keepTemp {
-			log.Printf("Created dir %#q to process patch files.\n", tempPatchDir)
+			log.Printf("Created dir %#q to process patch files.\n", tmpPatchDir)
 		} else {
-			log.Printf("Created temp dir %#q to process patch files. The dir will be deleted when patch processing completes.\n", tempPatchDir)
+			log.Printf("Created temp dir %#q to process patch files. The dir will be deleted when patch processing completes.\n", tmpPatchDir)
 			defer func() {
-				if err := os.RemoveAll(tempPatchDir); err != nil {
-					log.Printf("Unable to clean up temp directory %#q: %v\n", tempPatchDir, err)
+				if err := os.RemoveAll(tmpPatchDir); err != nil {
+					log.Printf("Unable to clean up temp directory %#q: %v\n", tmpPatchDir, err)
 				}
 			}()
 		}
+		tmpRawDir := filepath.Join(tmpPatchDir, "raw")
+		tmpRenameDir := filepath.Join(tmpPatchDir, "rename")
 
 		cmd := exec.Command(
 			"git",
@@ -105,7 +107,7 @@ var extract = subcommand{
 			// number of patch files so earlier patch files don't change when a new one is appended.
 			"--no-numbered",
 			// Emit the patch files in the working directory.
-			"-o", tempPatchDir,
+			"-o", tmpRawDir,
 
 			since,
 		)
@@ -119,7 +121,7 @@ var extract = subcommand{
 		n := 1
 		// Git has extracted the commits and given them sequential numbers in their filenames. Here,
 		// renumber the patch files with our own rules.
-		if err := patch.WalkPatches(tempPatchDir, func(path string) error {
+		if err := patch.WalkPatches(tmpRawDir, func(path string) error {
 			cmds, err := readPatchCommands(path)
 			if err != nil {
 				return err
@@ -144,17 +146,16 @@ var extract = subcommand{
 				return fmt.Errorf("rearranged patch number %v exceeds max 4-digit int used by patch naming convention: %#q", n, path)
 			}
 
-			oldNum, after, found := cutFilenameNumber(path)
+			// Replace patch number (0001) from patch filename (0001-Add-good-code.patch) with n.
+			_, after, found := strings.Cut(filepath.Base(path), "-")
 			if !found {
 				return fmt.Errorf("no number prefix found in %#q", path)
 			}
-
-			if n != oldNum {
-				newName := fmt.Sprintf("%04v-%v", strconv.Itoa(n), after)
-				if err := renameUnlessExists(path, filepath.Join(tempPatchDir, newName)); err != nil {
-					return fmt.Errorf("unable to rename %#q: %w", path, err)
-				}
+			newName := fmt.Sprintf("%04v-%v", strconv.Itoa(n), after)
+			if err := copyFile(filepath.Join(tmpRenameDir, newName), path); err != nil {
+				return fmt.Errorf("unable to rename %#q: %w", path, err)
 			}
+
 			n++
 			return nil
 		}); err != nil {
@@ -170,10 +171,10 @@ var extract = subcommand{
 		}
 
 		// Move all patch files from the temp dir to the final dir.
-		if err := patch.WalkPatches(tempPatchDir, func(path string) error {
+		if err := patch.WalkPatches(tmpRenameDir, func(path string) error {
 			filename := filepath.Base(path)
 			log.Printf("Moving patch to destination: %#q\n", filename)
-			return os.Rename(path, filepath.Join(patchDir, filename))
+			return copyFile(filepath.Join(patchDir, filename), path)
 		}); err != nil {
 			return err
 		}
@@ -214,29 +215,25 @@ func readPatchCommands(path string) ([]string, error) {
 	return cmds, nil
 }
 
-func renameUnlessExists(path, newPath string) error {
-	_, err := os.Stat(newPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return os.Rename(path, newPath)
-		}
-		return fmt.Errorf("unexpected os.Stat error: %w", err)
+func copyFile(dst, src string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), os.ModePerm); err != nil {
+		return err
 	}
-	return fmt.Errorf("existing patch file %#q collides with new name of patch %#q after number shift", newPath, path)
-}
 
-// cutFilenameNumber cuts the patch number (0001) from a patch filename (0001-Add-good-code.patch).
-// It returns the number and the remainder of the filename after "-" if a patch number is found. If
-// not, returns default values.
-func cutFilenameNumber(path string) (number int, after string, found bool) {
-	filename := filepath.Base(path)
-	numString, rest, found := strings.Cut(filename, "-")
-	if !found {
-		return 0, "", false
-	}
-	num, err := strconv.Atoi(numString)
+	s, err := os.Open(src)
 	if err != nil {
-		return 0, "", false
+		return err
 	}
-	return num, rest, true
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	if _, err := io.Copy(d, s); err != nil {
+		return err
+	}
+	return d.Close()
 }
