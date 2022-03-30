@@ -7,7 +7,8 @@ package gitcmd
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/microsoft/go-infra/stringutil"
 )
 
 const githubPrefix = "https://github.com/"
@@ -26,7 +27,7 @@ type URLAuther interface {
 type GitHubSSHAuther struct{}
 
 func (GitHubSSHAuther) InsertAuth(url string) string {
-	if after, found := cutPrefix(url, githubPrefix); found {
+	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
 		return fmt.Sprintf("git@github.com:%v", after)
 	}
 	return url
@@ -41,7 +42,7 @@ func (a GitHubPATAuther) InsertAuth(url string) string {
 	if a.User == "" || a.PAT == "" {
 		return url
 	}
-	if after, found := cutPrefix(url, githubPrefix); found {
+	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
 		return fmt.Sprintf("https://%v:%v@github.com/%v", a.User, a.PAT, after)
 	}
 	return url
@@ -56,7 +57,7 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 	if a.PAT == "" {
 		return url
 	}
-	if after, found := cutPrefix(url, azdoDncengPrefix); found {
+	if after, found := stringutil.CutPrefix(url, azdoDncengPrefix); found {
 		url = fmt.Sprintf(
 			// Username doesn't matter. PAT is identity.
 			"https://arbitraryusername:%v@dev.azure.com%v",
@@ -85,11 +86,4 @@ func (m MultiAuther) InsertAuth(url string) string {
 		}
 	}
 	return url
-}
-
-func cutPrefix(s, prefix string) (after string, found bool) {
-	if strings.HasPrefix(s, prefix) {
-		return s[len(prefix):], true
-	}
-	return s, false
 }
