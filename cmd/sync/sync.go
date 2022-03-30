@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/gitpr"
 )
 
@@ -80,6 +81,8 @@ const (
 	GitAuthPAT  GitAuthOption = "pat"
 )
 
+var auther gitcmd.URLAuther
+
 func main() {
 	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
 	var tempGitDir = flag.String(
@@ -91,7 +94,7 @@ func main() {
 		"git-auth",
 		string(GitAuthNone),
 		// List valid options. Indent one space, to line up with the automatic ' (default "none")'.
-		"The type of Git auth to inject into upstream and target GitHub URLs for fetch/push access. String options:\n"+
+		"The type of Git auth to inject into URLs for fetch/push access. String options:\n"+
 			" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
 			" ssh - Change the GitHub URL to SSH format.\n"+
 			" pat - Add the 'github-user' and 'github-pat' values into the URL.\n")
@@ -100,15 +103,15 @@ func main() {
 
 	gitAuth := GitAuthOption(*gitAuthString)
 	switch gitAuth {
-	case GitAuthNone, GitAuthSSH, GitAuthPAT:
+	case GitAuthNone:
+		auther = gitcmd.NoAuther{}
 		break
-	default:
-		fmt.Printf("Error: git-auth value %q is not an accepted value.\n", *gitAuthString)
-		flag.Usage()
-		os.Exit(1)
-	}
 
-	if gitAuth == GitAuthPAT {
+	case GitAuthSSH:
+		auther = gitcmd.GitHubSSHAuther{}
+		break
+
+	case GitAuthPAT:
 		missingArgs := false
 		if *githubUser == "" {
 			fmt.Printf("Error: git-auth pat is specified but github-user is not.")
@@ -121,6 +124,23 @@ func main() {
 		if missingArgs {
 			os.Exit(1)
 		}
+		auther = gitcmd.MultiAuther{
+			Authers: []gitcmd.URLAuther{
+				gitcmd.GitHubPATAuther{
+					User: *githubUser,
+					PAT:  *githubPAT,
+				},
+				gitcmd.AzDOPATAuther{
+					PAT: *azdoDncengPAT,
+				},
+			},
+		}
+		break
+
+	default:
+		fmt.Printf("Error: git-auth value %q is not an accepted value.\n", *gitAuthString)
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	var entries []SyncConfigEntry
@@ -142,12 +162,6 @@ func main() {
 	for i, entry := range entries {
 		syncNum := fmt.Sprintf("%v/%v", i+1, len(entries))
 		fmt.Printf("=== Beginning sync %v, from %v -> %v\n", syncNum, entry.Upstream, entry.Target)
-
-		// Add authentication to Target and Upstream URLs if necessary.
-		entry.Target = createAuthorizedGitUrl(entry.Target, gitAuth)
-		entry.Upstream = createAuthorizedGitUrl(entry.Upstream, gitAuth)
-		entry.UpstreamMirror = createAuthorizedGitUrl(entry.UpstreamMirror, gitAuth)
-		entry.MirrorTarget = createAuthorizedGitUrl(entry.MirrorTarget, gitAuth)
 
 		if entry.Head == "" {
 			entry.Head = entry.Target
@@ -171,33 +185,6 @@ func main() {
 	} else {
 		fmt.Println("Completed with errors.")
 	}
-}
-
-// createAuthorizedGitUrl takes a URL, auth options, and returns an authorized URL. The authorized
-// URL may be the same as the original URL, depending on the options given and the URL content.
-func createAuthorizedGitUrl(url string, gitAuth GitAuthOption) string {
-	const githubPrefix = "https://github.com"
-	if strings.HasPrefix(url, githubPrefix) {
-		targetRepoOwnerSlashName := strings.TrimPrefix(url, githubPrefix)
-
-		switch gitAuth {
-		case GitAuthSSH:
-			url = fmt.Sprintf("git@github.com:%v", targetRepoOwnerSlashName)
-			break
-		case GitAuthPAT:
-			url = fmt.Sprintf("https://%v:%v@github.com/%v", *githubUser, *githubPAT, targetRepoOwnerSlashName)
-			break
-		}
-	}
-	const azdoDncengPrefix = "https://dnceng@dev.azure.com"
-	if strings.HasPrefix(url, azdoDncengPrefix) {
-		url = fmt.Sprintf(
-			// Username doesn't matter. PAT is identity.
-			"https://arbitraryusername:%v@dev.azure.com%v",
-			*azdoDncengPAT, strings.TrimPrefix(url, azdoDncengPrefix),
-		)
-	}
-	return url
 }
 
 // changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
@@ -238,8 +225,8 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	//
 	// For an overview of the sequence of Git commands below, see the command description.
 
-	fetchUpstream := newGitCmd("fetch", "--no-tags", entry.Upstream)
-	fetchOrigin := newGitCmd("fetch", "--no-tags", entry.Target)
+	fetchUpstream := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.Upstream))
+	fetchOrigin := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.Target))
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
@@ -254,7 +241,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	// Fetch the state of the official/upstream-maintained mirror (if specified) so we can check
 	// against it later.
 	if entry.UpstreamMirror != "" {
-		fetchUpstreamMirror := newGitCmd("fetch", "--no-tags", entry.UpstreamMirror)
+		fetchUpstreamMirror := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.UpstreamMirror))
 		for _, b := range branches {
 			fetchUpstreamMirror.Args = append(fetchUpstreamMirror.Args, b.UpstreamMirrorFetchRefspec())
 		}
@@ -266,7 +253,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	// Before attempting any update, mirror everything (if specified). Only continue once this is
 	// complete, to avoid a potentially broken internal build state.
 	if entry.MirrorTarget != "" {
-		mirror := newGitCmd("push", entry.MirrorTarget)
+		mirror := newGitCmd("push", auther.InsertAuth(entry.MirrorTarget))
 		for _, b := range branches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
@@ -443,7 +430,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		if force {
 			c.Args = append(c.Args, "--force")
 		}
-		c.Args = append(c.Args, remote)
+		c.Args = append(c.Args, auther.InsertAuth(remote))
 		for _, r := range refspecs {
 			c.Args = append(c.Args, r)
 		}
