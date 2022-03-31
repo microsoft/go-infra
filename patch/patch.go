@@ -52,7 +52,7 @@ func Apply(rootDir string, mode ApplyMode) error {
 	// too late to cause noisy warnings because of them.
 	cmd.Args = append(cmd.Args, "--whitespace=nowarn")
 
-	err := WalkPatches(rootDir, func(file string) error {
+	err := WalkGoPatches(rootDir, func(file string) error {
 		cmd.Args = append(cmd.Args, file)
 		return nil
 	})
@@ -63,10 +63,16 @@ func Apply(rootDir string, mode ApplyMode) error {
 	return executil.Run(cmd)
 }
 
-// WalkPatches finds patches in the given Microsoft Go repository root directory and runs fn once
+// WalkGoPatches finds patches in the given Microsoft Go repository root directory and runs fn once
 // per patch file path. If fn returns an error, walking terminates and the error is returned.
-func WalkPatches(rootDir string, fn func(string) error) error {
-	matches, err := filepath.Glob(filepath.Join(rootDir, "patches", "*.patch"))
+func WalkGoPatches(rootDir string, fn func(string) error) error {
+	return WalkPatches(filepath.Join(rootDir, "patches"), fn)
+}
+
+// WalkPatches finds patches in the given directory and runs fn once per patch file path. If fn
+// returns an error, walking terminates and the error is returned.
+func WalkPatches(dir string, fn func(string) error) error {
+	matches, err := filepath.Glob(filepath.Join(dir, "*.patch"))
 	if err != nil {
 		return err
 	}
