@@ -91,6 +91,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				os = "windows"
 				osVersion = strings.TrimPrefix(variant, "windows/")
 			}
+			dockerfileDir := "src/microsoft/" + key + "/" + variant
 
 			// If the versions.json doesn't specify a revision, default to "1". (1 is the
 			// default/initial revision for Deb/RPM packages, and we may as well follow that.)
@@ -157,24 +158,31 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				}
 			}
 
+			// Add one Platform for each OS/ARCH this variant supports.
+			platforms := make([]*dockermanifest.Platform, 0, 3)
+			for _, arch := range v.Arches {
+				// Skip platforms that don't match the current variant. v.Arches is actually a list
+				// of OS/ARCHes, not just architectures.
+				if arch.Env.GOOS != os {
+					continue
+				}
+				p := makeOSArchPlatform(os, osVersion, &arch.Env)
+				p.BuildArgs = buildArgs
+				p.Dockerfile = dockerfileDir
+				p.Tags = map[string]dockermanifest.Tag{
+					mainSharedTagVersion + "-" + p.Architecture + p.Variant: {},
+				}
+				platforms = append(platforms, p)
+			}
+			// Sort to make the ordering consistent between runs.
+			sort.Slice(platforms, func(i, j int) bool {
+				return platforms[i].Architecture+platforms[i].Variant <
+					platforms[j].Architecture+platforms[j].Variant
+			})
 			images = append(images, &dockermanifest.Image{
 				ProductVersion: majorMinor,
 				SharedTags:     sharedTags,
-				Platforms: []*dockermanifest.Platform{
-					{
-						Dockerfile: "src/microsoft/" + key + "/" + variant,
-						OS:         os,
-						OSVersion:  osVersion,
-
-						BuildArgs: buildArgs,
-
-						Tags: map[string]dockermanifest.Tag{
-							// We only build amd64 at the moment. The way to implement other
-							// architectures in the future is to add more Platform entries.
-							mainSharedTagVersion + "-amd64": {},
-						},
-					},
-				},
+				Platforms:      platforms,
 			})
 		}
 	}
@@ -219,14 +227,7 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		// Look through the asset arches, find an arch in the versions file that matches each asset,
 		// and update its info.
 		for _, arch := range assets.Arches {
-			// The versions file has a map of "GOOS-GOARCH" keys, but the key omits "linux-" if
-			// included. This is upstream behavior we are conforming to.
-			archKey := arch.Env.GOOS + "-"
-			if archKey == "linux-" {
-				archKey = ""
-			}
-			archKey += arch.Env.GOARCH
-
+			archKey := arch.Env.GoImageOSArchKey()
 			if match, ok := v.Arches[archKey]; ok {
 				// Copy over the previous value of keys that aren't specific to an asset, but
 				// actually indicate the state of the Dockerfile. All other values come from the new
@@ -240,4 +241,25 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		return fmt.Errorf("%v: %w", key, NoMajorMinorUpgradeMatchError)
 	}
 	return nil
+}
+
+// makeOSArchPlatform creates a Docker manifest platform based on the given OS, OS version, and
+// architecture information. This func processes the info to present it in the way .NET Docker's
+// build infrastructure expects.
+func makeOSArchPlatform(os, osVersion string, env *dockerversions.ArchEnv) *dockermanifest.Platform {
+	// In .NET Docker, if GOARCH is not specific enough (like "arm" or "arm64"), we need
+	// to specify more info: a version. .NET Docker infra calls this a "variant". This
+	// is not the same as the Official Go Image "variant" (OS name/version).
+	archVariant := env.GoImageArchSuffix()
+	// CBL-Mariner 1.0 doesn't specify an ARM arch variant (version) in its Docker
+	// manifest, so we must omit it, too: .NET Docker infra checks they match.
+	if osVersion == "cbl-mariner1.0" {
+		archVariant = ""
+	}
+	return &dockermanifest.Platform{
+		Architecture: env.GOARCH,
+		Variant:      archVariant,
+		OS:           os,
+		OSVersion:    osVersion,
+	}
 }
