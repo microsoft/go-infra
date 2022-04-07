@@ -5,9 +5,11 @@ package buildmodel
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 )
 
@@ -67,4 +69,64 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 			t.Fatalf("Failed to reject the update with expected error result.")
 		}
 	})
+}
+
+func Test_makeOsArchPlatform(t *testing.T) {
+	type args struct {
+		os        string
+		osVersion string
+		goArch    string
+		goARM     string
+	}
+	type want struct {
+		os, osVersion, arch, variant string
+	}
+	tests := []struct {
+		name string
+		args args
+		want want
+	}{
+		{
+			"linux-amd64",
+			args{"linux", "", "amd64", ""},
+			want{"linux", "", "amd64", ""},
+		},
+		{
+			"linux-arm64 default v8",
+			args{"linux", "", "arm64", ""},
+			want{"linux", "", "arm64", "v8"},
+		},
+		{
+			"linux-arm v7 passthrough",
+			args{"linux", "", "arm", "v7"},
+			want{"linux", "", "arm", "v7"},
+		},
+		{
+			"linux-arm no version if Mariner",
+			args{"linux", "cbl-mariner1.0", "arm", "v7"},
+			want{"linux", "cbl-mariner1.0", "arm", ""},
+		},
+		{
+			"linux-arm64 no version if Mariner",
+			args{"linux", "cbl-mariner1.0", "arm64", ""},
+			want{"linux", "cbl-mariner1.0", "arm64", ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &dockerversions.ArchEnv{
+				GOARCH: tt.args.goArch,
+				GOARM:  tt.args.goARM,
+			}
+			w := &dockermanifest.Platform{
+				OS:           tt.want.os,
+				OSVersion:    tt.want.osVersion,
+				Architecture: tt.want.arch,
+				Variant:      tt.want.variant,
+			}
+			if got := makeOSArchPlatform(tt.args.os, tt.args.osVersion, a); !reflect.DeepEqual(got, w) {
+				t.Errorf("makeOSArchPlatform() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

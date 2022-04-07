@@ -253,7 +253,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return err
 	}
 	if !*f.skipDockerfiles {
-		if err := RunDockerfileGeneration(gitDir); err != nil {
+		if err := RunDockerfileGeneration(gitDir, *f.forcePrePatchReset); err != nil {
 			return err
 		}
 	}
@@ -361,16 +361,18 @@ func MakeWorkDir(rootDir string) (string, error) {
 
 // UpdateFlags is a list of flags used for an update command.
 type UpdateFlags struct {
-	buildAssetJSON  *string
-	skipDockerfiles *bool
+	buildAssetJSON     *string
+	skipDockerfiles    *bool
+	forcePrePatchReset *bool
 }
 
 // BindUpdateFlags creates UpdateFlags with the 'flag' package, globally registering them in
 // the flag package so ParseBoundFlags will find them.
 func BindUpdateFlags() *UpdateFlags {
 	return &UpdateFlags{
-		buildAssetJSON:  flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
-		skipDockerfiles: flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+		buildAssetJSON:     flag.String("build-asset-json", "", "The path of a build asset JSON file describing the Go build to update to."),
+		skipDockerfiles:    flag.Bool("skip-dockerfiles", false, "If set, don't touch Dockerfiles.\nUpdating Dockerfiles requires bash/awk/jq, so when developing on Windows, skipping may be useful."),
+		forcePrePatchReset: flag.Bool("f", false, "Force reset the submodule before applying patches."),
 	}
 }
 
@@ -395,7 +397,7 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 	}
 
 	if !*f.skipDockerfiles {
-		if err := RunDockerfileGeneration(repoRoot); err != nil {
+		if err := RunDockerfileGeneration(repoRoot, *f.forcePrePatchReset); err != nil {
 			return err
 		}
 	}
@@ -459,7 +461,7 @@ func EnsureDockerfileGenerationPrerequisites() error {
 // Call this after updating the versions.json file to synchronize the Dockerfiles. This function
 // doesn't check for prerequisites: EnsureDockerfileGenerationPrerequisites should be called before
 // any auto-update code runs to detect problems before wasting time on an incompletable update.
-func RunDockerfileGeneration(repoRoot string) error {
+func RunDockerfileGeneration(repoRoot string, forceSubmoduleReset bool) error {
 	fmt.Println("Generating Dockerfiles...")
 
 	// The location of upstream Go Docker code. We start by assuming we have a submodule at "go".
@@ -484,7 +486,7 @@ func RunDockerfileGeneration(repoRoot string) error {
 		// No err: the submodule directory exists. Now, ensure the submodule is set up correctly and
 		// patched, so we can use the patched templates inside to generate our Dockerfiles.
 		fmt.Println("---- Resetting submodule...")
-		if err := submodule.Reset(repoRoot, false); err != nil {
+		if err := submodule.Reset(repoRoot, forceSubmoduleReset); err != nil {
 			return err
 		}
 		fmt.Println("---- Applying patches to submodule index...")

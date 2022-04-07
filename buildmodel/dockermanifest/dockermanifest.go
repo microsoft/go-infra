@@ -38,6 +38,13 @@ type Image struct {
 type Platform struct {
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 
+	// Architecture	is the processor/os architecture the image should build for. This follows
+	// .NET Docker tooling values, which in turn follows GOARCH:
+	// https://go.dev/doc/install/source#environment
+	Architecture string `json:"architecture,omitempty"`
+	// Variant is a string used to further specify architecture. For example: "v8", for ARM.
+	Variant string `json:"variant,omitempty"`
+
 	Dockerfile string `json:"dockerfile"`
 	OS         string `json:"os"`
 	OSVersion  string `json:"osVersion"`
