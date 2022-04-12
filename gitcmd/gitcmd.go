@@ -60,7 +60,7 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 	if after, found := stringutil.CutPrefix(url, azdoDncengPrefix); found {
 		url = fmt.Sprintf(
 			// Username doesn't matter. PAT is identity.
-			"https://arbitraryusername:%v@dev.azure.com%v",
+			"https://arbitraryusername:%v@dev.azure.com/%v",
 			a.PAT, after)
 	}
 	return url
