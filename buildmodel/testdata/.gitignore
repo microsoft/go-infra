@@ -1,0 +1,4 @@
+# This test data directory contains input/output JSON files and the wanted output. Tests also
+# generate a "*-actual.json" file when they run to make it easy for a dev to rewrite the wanted file
+# when the desired behavior changes or new cases are added. Ignore this artifact in Git.
+*-actual.json

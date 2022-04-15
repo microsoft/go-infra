@@ -1,0 +1,109 @@
+{
+  "readme": "README.md",
+  "registry": "mcr.microsoft.com",
+  "variables": {},
+  "includes": [],
+  "repos": [
+    {
+      "id": "golang",
+      "name": "oss/go/microsoft/golang",
+      "images": [
+        {
+          "productVersion": "1.18",
+          "sharedTags": {
+            "1": {},
+            "1-bullseye": {},
+            "1.18": {},
+            "1.18-bullseye": {},
+            "1.18.1": {},
+            "1.18.1-1": {},
+            "1.18.1-1-bullseye": {},
+            "1.18.1-bullseye": {},
+            "bullseye": {},
+            "latest": {}
+          },
+          "platforms": [
+            {
+              "architecture": "amd64",
+              "dockerfile": "src/microsoft/1.18/bullseye",
+              "os": "linux",
+              "osVersion": "bullseye",
+              "tags": {
+                "1.18.1-1-bullseye-amd64": {}
+              }
+            },
+            {
+              "architecture": "arm64",
+              "variant": "v8",
+              "dockerfile": "src/microsoft/1.18/bullseye",
+              "os": "linux",
+              "osVersion": "bullseye",
+              "tags": {
+                "1.18.1-1-bullseye-arm64v8": {}
+              }
+            },
+            {
+              "architecture": "arm",
+              "variant": "v7",
+              "dockerfile": "src/microsoft/1.18/bullseye",
+              "os": "linux",
+              "osVersion": "bullseye",
+              "tags": {
+                "1.18.1-1-bullseye-arm32v7": {}
+              }
+            }
+          ]
+        },
+        {
+          "productVersion": "1.18",
+          "sharedTags": {
+            "1-nanoserver-1809": {},
+            "1.18-nanoserver-1809": {},
+            "1.18.1-1-nanoserver-1809": {},
+            "1.18.1-nanoserver-1809": {},
+            "nanoserver-1809": {}
+          },
+          "platforms": [
+            {
+              "buildArgs": {
+                "DOWNLOADER_TAG": "1.18.1-1-windowsservercore-1809-amd64",
+                "REPO": "$(Repo:golang)"
+              },
+              "architecture": "amd64",
+              "dockerfile": "src/microsoft/1.18/windows/nanoserver-1809",
+              "os": "windows",
+              "osVersion": "nanoserver-1809",
+              "tags": {
+                "1.18.1-1-nanoserver-1809-amd64": {}
+              }
+            }
+          ]
+        },
+        {
+          "productVersion": "1.18",
+          "sharedTags": {
+            "1-fips": {},
+            "1-fips-cbl-mariner1.0": {},
+            "1.18-fips": {},
+            "1.18-fips-cbl-mariner1.0": {},
+            "1.18.1-1-fips": {},
+            "1.18.1-1-fips-cbl-mariner1.0": {},
+            "1.18.1-fips": {},
+            "1.18.1-fips-cbl-mariner1.0": {}
+          },
+          "platforms": [
+            {
+              "architecture": "amd64",
+              "dockerfile": "src/microsoft/1.18-fips/cbl-mariner1.0",
+              "os": "linux",
+              "osVersion": "cbl-mariner1.0",
+              "tags": {
+                "1.18.1-1-fips-cbl-mariner1.0-amd64": {}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

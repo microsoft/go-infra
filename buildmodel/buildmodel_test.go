@@ -5,9 +5,10 @@ package buildmodel
 
 import (
 	"errors"
-	"reflect"
+	"path/filepath"
 	"testing"
 
+	"github.com/go-test/deep"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
@@ -98,12 +99,12 @@ func Test_makeOsArchPlatform(t *testing.T) {
 		},
 		{
 			"linux-arm v7 passthrough",
-			args{"linux", "", "arm", "v7"},
+			args{"linux", "", "arm", "7"},
 			want{"linux", "", "arm", "v7"},
 		},
 		{
 			"linux-arm no version if Mariner",
-			args{"linux", "cbl-mariner1.0", "arm", "v7"},
+			args{"linux", "cbl-mariner1.0", "arm", "7"},
 			want{"linux", "cbl-mariner1.0", "arm", ""},
 		},
 		{
@@ -124,9 +125,70 @@ func Test_makeOsArchPlatform(t *testing.T) {
 				Architecture: tt.want.arch,
 				Variant:      tt.want.variant,
 			}
-			if got := makeOSArchPlatform(tt.args.os, tt.args.osVersion, a); !reflect.DeepEqual(got, w) {
-				t.Errorf("makeOSArchPlatform() = %v, want %v", got, tt.want)
+			got := makeOSArchPlatform(tt.args.os, tt.args.osVersion, a)
+			if diff := deep.Equal(got, w); diff != nil {
+				for _, d := range diff {
+					t.Error(d)
+				}
 			}
 		})
+	}
+}
+
+func TestUpdateManifest(t *testing.T) {
+	assetDir := filepath.Join("testdata", "UpdateManifest")
+	var versions dockerversions.Versions
+	var manifest dockermanifest.Manifest
+	var manifestWant dockermanifest.Manifest
+
+	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadJSONFile(filepath.Join(assetDir, "manifest.json"), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadJSONFile(filepath.Join(assetDir, "manifest-want.json"), &manifestWant); err != nil {
+		t.Fatal(err)
+	}
+
+	UpdateManifest(&manifest, versions)
+
+	if diff := deep.Equal(manifest, manifestWant); diff != nil {
+		for _, d := range diff {
+			t.Error(d)
+		}
+		if err := WriteJSONFile(filepath.Join(assetDir, "manifest-actual.json"), &manifest); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func TestUpdateVersions(t *testing.T) {
+	assetDir := filepath.Join("testdata", "UpdateVersions")
+	var buildAssetJSON buildassets.BuildAssets
+	var versions dockerversions.Versions
+	var versionsWant dockerversions.Versions
+
+	if err := ReadJSONFile(filepath.Join(assetDir, "assets.json"), &buildAssetJSON); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadJSONFile(filepath.Join(assetDir, "versions-want.json"), &versionsWant); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UpdateVersions(&buildAssetJSON, versions); err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(versions, versionsWant); diff != nil {
+		for _, d := range diff {
+			t.Error(d)
+		}
+		if err := WriteJSONFile(filepath.Join(assetDir, "versions-actual.json"), &versions); err != nil {
+			t.Error(err)
+		}
 	}
 }

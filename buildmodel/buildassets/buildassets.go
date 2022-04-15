@@ -205,12 +205,21 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 					}
 
 					goOS, goArch := osArchParts[0], osArchParts[1]
+					var goARM string
+
+					// "armv6l" in the filename is a special case: it represents GOARCH=arm GOARM=6.
+					// There are no other active values of GOARM, so it's not worth generalizing.
+					if goArch == "armv6l" {
+						goArch = "arm"
+						goARM = "6"
+					}
 
 					a := getOrCreateArch(e.Name())
 					a.URL = b.DestinationURL + "/" + e.Name()
 					a.Env = dockerversions.ArchEnv{
 						GOOS:   goOS,
 						GOARCH: goArch,
+						GOARM:  goARM,
 					}
 					break
 				}

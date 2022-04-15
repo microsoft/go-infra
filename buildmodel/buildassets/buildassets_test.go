@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/go-test/deep"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 )
 
@@ -36,6 +36,25 @@ func TestBuildResultsDirectoryInfo_CreateSummary(t *testing.T) {
 				Supported: false,
 				URL:       fmt.Sprintf("%v/go.linux-amd64.tar.gz", b.DestinationURL),
 			},
+			{
+				Env: dockerversions.ArchEnv{
+					GOARCH: "arm64",
+					GOOS:   "linux",
+				},
+				SHA256:    strings.Repeat("0", 64),
+				Supported: false,
+				URL:       fmt.Sprintf("%v/go.linux-arm64.tar.gz", b.DestinationURL),
+			},
+			{
+				Env: dockerversions.ArchEnv{
+					GOARCH: "arm",
+					GOARM:  "6",
+					GOOS:   "linux",
+				},
+				SHA256:    strings.Repeat("0", 64),
+				Supported: false,
+				URL:       fmt.Sprintf("%v/go.linux-armv6l.tar.gz", b.DestinationURL),
+			},
 		},
 	}
 
@@ -44,8 +63,10 @@ func TestBuildResultsDirectoryInfo_CreateSummary(t *testing.T) {
 		t.Errorf("CreateSummary() error is not wanted: %v", err)
 		return
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("CreateSummary() got = %v, want %v", got, want)
+	if diff := deep.Equal(got, want); diff != nil {
+		for _, d := range diff {
+			t.Error(d)
+		}
 	}
 }
 
