@@ -72,7 +72,7 @@ type ArchEnv struct {
 
 // GoImageArchVersionSuffix is the string used in docker-library/golang and .NET Docker infrastructure to
 // specify an arch's version. Normally, empty string. For ARM, something like "v7" or "v8".
-func (a ArchEnv) GoImageArchVersionSuffix() string {
+func (a *ArchEnv) GoImageArchVersionSuffix() string {
 	// If arch is arm/arm64, need a version suffix.
 	if a.GOARCH == "arm" {
 		// arm always has a GOARM version.
@@ -88,7 +88,7 @@ func (a ArchEnv) GoImageArchVersionSuffix() string {
 // GoImageOSArchKey replicates upstream behavior, creating the string used by docker-library/golang
 // to identify this OS/arch in its versions.json file. Linux is the default OS, so if it is the
 // ArchEnv's OS, it isn't included in this string.
-func (a ArchEnv) GoImageOSArchKey() string {
+func (a *ArchEnv) GoImageOSArchKey() string {
 	var s = a.GoImageArchKey()
 	if a.GOOS != "linux" {
 		s = a.GOOS + "-" + s
@@ -99,7 +99,7 @@ func (a ArchEnv) GoImageOSArchKey() string {
 // GoImageArchKey replicates upstream behavior, creating the arch string used by
 // docker-library/golang and .NET Docker to identify this arch in the versions.json and
 // manifest.json files.
-func (a ArchEnv) GoImageArchKey() string {
+func (a *ArchEnv) GoImageArchKey() string {
 	// Non-arm64 arm needs "32" included.
 	if a.GOARCH == "arm" {
 		return a.GOARCH + "32" + a.GoImageArchVersionSuffix()
