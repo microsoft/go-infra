@@ -5,6 +5,8 @@ package buildmodel
 
 import (
 	"errors"
+	"flag"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +15,13 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 )
+
+var update = flag.Bool("update", false, "Update the golden files instead of failing.")
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	os.Exit(m.Run())
+}
 
 func TestBuildAssets_UpdateVersions(t *testing.T) {
 	newArch := &dockerversions.Arch{
@@ -139,7 +148,6 @@ func TestUpdateManifest(t *testing.T) {
 	assetDir := filepath.Join("testdata", "UpdateManifest")
 	var versions dockerversions.Versions
 	var manifest dockermanifest.Manifest
-	var manifestWant dockermanifest.Manifest
 
 	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
 		t.Fatal(err)
@@ -147,27 +155,16 @@ func TestUpdateManifest(t *testing.T) {
 	if err := ReadJSONFile(filepath.Join(assetDir, "manifest.json"), &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReadJSONFile(filepath.Join(assetDir, "manifest-want.json"), &manifestWant); err != nil {
-		t.Fatal(err)
-	}
 
 	UpdateManifest(&manifest, versions)
 
-	if diff := deep.Equal(manifest, manifestWant); diff != nil {
-		for _, d := range diff {
-			t.Error(d)
-		}
-		if err := WriteJSONFile(filepath.Join(assetDir, "manifest-actual.json"), &manifest); err != nil {
-			t.Error(err)
-		}
-	}
+	checkGoldenJSON(t, filepath.Join(assetDir, "updatedManifest.golden.json"), manifest)
 }
 
 func TestUpdateVersions(t *testing.T) {
 	assetDir := filepath.Join("testdata", "UpdateVersions")
 	var buildAssetJSON buildassets.BuildAssets
 	var versions dockerversions.Versions
-	var versionsWant dockerversions.Versions
 
 	if err := ReadJSONFile(filepath.Join(assetDir, "assets.json"), &buildAssetJSON); err != nil {
 		t.Fatal(err)
@@ -175,20 +172,33 @@ func TestUpdateVersions(t *testing.T) {
 	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReadJSONFile(filepath.Join(assetDir, "versions-want.json"), &versionsWant); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := UpdateVersions(&buildAssetJSON, versions); err != nil {
 		t.Fatal(err)
 	}
 
-	if diff := deep.Equal(versions, versionsWant); diff != nil {
+	checkGoldenJSON(t, filepath.Join(assetDir, "updatedVersions.golden.json"), versions)
+}
+
+func checkGoldenJSON[T any](t *testing.T, goldenPath string, actual T) {
+	if *update {
+		if err := WriteJSONFile(goldenPath, actual); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+
+	// encoding/json uses reflection on a pointer to determine how to deserialize the file. Use
+	// generics to create a pointer to the given T so the type matches for deep.Equal.
+	var want T
+	if err := ReadJSONFile(goldenPath, &want); err != nil {
+		t.Fatal(err)
+	}
+
+	if diff := deep.Equal(actual, want); diff != nil {
 		for _, d := range diff {
 			t.Error(d)
 		}
-		if err := WriteJSONFile(filepath.Join(assetDir, "versions-actual.json"), &versions); err != nil {
-			t.Error(err)
-		}
+		t.Error("Actual result didn't match golden file. Run 'go test ./buildmodel -update' to update golden file.")
 	}
 }
