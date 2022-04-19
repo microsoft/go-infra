@@ -184,6 +184,7 @@ func main() {
 		fmt.Println("Completed successfully.")
 	} else {
 		fmt.Println("Completed with errors.")
+		os.Exit(1)
 	}
 }
 
