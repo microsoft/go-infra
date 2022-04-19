@@ -6,7 +6,6 @@ package buildmodel
 import (
 	"errors"
 	"flag"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -17,11 +16,6 @@ import (
 )
 
 var update = flag.Bool("update", false, "Update the golden files instead of failing.")
-
-func TestMain(m *testing.M) {
-	flag.Parse()
-	os.Exit(m.Run())
-}
 
 func TestBuildAssets_UpdateVersions(t *testing.T) {
 	newArch := &dockerversions.Arch{
