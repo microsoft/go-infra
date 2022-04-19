@@ -170,7 +170,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				p.BuildArgs = buildArgs
 				p.Dockerfile = dockerfileDir
 				p.Tags = map[string]dockermanifest.Tag{
-					mainSharedTagVersion + "-" + p.Architecture + p.Variant: {},
+					mainSharedTagVersion + "-" + arch.Env.GoImageArchKey(): {},
 				}
 				platforms = append(platforms, p)
 			}
@@ -227,6 +227,14 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		// Look through the asset arches, find an arch in the versions file that matches each asset,
 		// and update its info.
 		for _, arch := range assets.Arches {
+			// Special case for arm artifacts: change it to arm32v7. We produce arm32v6 builds of Go
+			// but package them in arm/v7 (armhf) Docker images. The upstream Go official image repo
+			// does this in their versions.json file: there are v6 and v7 Dockerfile arches that
+			// both carry the v6 Go. We only care about arm/v7, so only include that one.
+			if arch.Env.GOARCH == "arm" {
+				arch.Env.GOARM = "7"
+			}
+
 			archKey := arch.Env.GoImageOSArchKey()
 			if match, ok := v.Arches[archKey]; ok {
 				// Copy over the previous value of keys that aren't specific to an asset, but
@@ -250,7 +258,7 @@ func makeOSArchPlatform(os, osVersion string, env *dockerversions.ArchEnv) *dock
 	// In .NET Docker, if GOARCH is not specific enough (like "arm" or "arm64"), we need
 	// to specify more info: a version. .NET Docker infra calls this a "variant". This
 	// is not the same as the Official Go Image "variant" (OS name/version).
-	archVariant := env.GoImageArchSuffix()
+	archVariant := env.GoImageArchVersionSuffix()
 	// CBL-Mariner 1.0 doesn't specify an ARM arch variant (version) in its Docker
 	// manifest, so we must omit it, too: .NET Docker infra checks they match.
 	if osVersion == "cbl-mariner1.0" {

@@ -1,0 +1,39 @@
+{
+  "1.18": {
+    "arches": {
+      "amd64": {
+        "env": {
+          "GOARCH": "amd64",
+          "GOOS": "linux"
+        },
+        "sha256": "0ecd8a6b43ae3e993eedddde6141a7785fc65d1cc8a322c6e67fa02420a883fd",
+        "supported": true,
+        "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.linux-amd64.tar.gz"
+      },
+      "windows-amd64": {
+        "env": {
+          "GOARCH": "amd64",
+          "GOOS": "windows"
+        },
+        "sha256": "43a319ba7aa6a015771e34f87f1aff66e2a5ce76480c2832cc930786b6939e8f",
+        "supported": true,
+        "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.windows-amd64.zip"
+      }
+    },
+    "variants": [
+      "bullseye",
+      "buster",
+      "stretch",
+      "windows/windowsservercore-ltsc2022",
+      "windows/windowsservercore-1809",
+      "windows/windowsservercore-ltsc2016",
+      "windows/nanoserver-ltsc2022",
+      "windows/nanoserver-1809"
+    ],
+    "version": "1.18.1",
+    "revision": "1",
+    "preferredMajor": true,
+    "preferredMinor": true,
+    "preferredVariant": "bullseye"
+  }
+}

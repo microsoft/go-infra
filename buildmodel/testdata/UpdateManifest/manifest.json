@@ -1,0 +1,13 @@
+{
+  "readme": "README.md",
+  "registry": "mcr.microsoft.com",
+  "variables": {},
+  "includes": [],
+  "repos": [
+    {
+      "id": "golang",
+      "name": "oss/go/microsoft/golang",
+      "images": []
+    }
+  ]
+}

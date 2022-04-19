@@ -1,0 +1,41 @@
+{
+  "branch": "release-branch.go1.18",
+  "buildId": "1713118",
+  "version": "1.18.1-1",
+  "arches": [
+    {
+      "env": {
+        "GOARCH": "amd64",
+        "GOOS": "linux"
+      },
+      "sha256": "0ecd8a6b43ae3e993eedddde6141a7785fc65d1cc8a322c6e67fa02420a883fd",
+      "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.linux-amd64.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "arm64",
+        "GOOS": "linux"
+      },
+      "sha256": "7965396729a9efb2d166e9b33eb142629f9c505240c4e373bbd783cf5f8af61a",
+      "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.linux-arm64.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "arm",
+        "GOARM": "6",
+        "GOOS": "linux"
+      },
+      "sha256": "7965396729a9efb2d166e9b33eb142629f9c505240c4e373bbd783cf5f8af61a",
+      "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.linux-armv6l.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "amd64",
+        "GOOS": "windows"
+      },
+      "sha256": "43a319ba7aa6a015771e34f87f1aff66e2a5ce76480c2832cc930786b6939e8f",
+      "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.windows-amd64.zip"
+    }
+  ],
+  "goSrcURL": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/release-branch.go1.18/20220412.1/go.20220412.1.src.tar.gz"
+}
