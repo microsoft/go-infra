@@ -59,6 +59,15 @@
         "sha256": "7b28ca61502d7034c32e0a03ecde15847db4ad323c2be88a14f3f6ffc065bff7",
         "supported": true,
         "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/dev.boringcrypto.go1.18/20220414.3/go.20220414.3.linux-amd64.tar.gz"
+      },
+      "arm32v7": {
+        "env": {
+          "GOARCH": "arm",
+          "GOARM": "7",
+          "GOOS": "linux"
+        },
+        "sha256": "5e4387af9f38e1092abcdefghijklmnop9922bd3d7ade60560884e0dd75ba50e",
+        "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/dev.boringcrypto.go1.18/20220414.3/go.20220414.3.linux-armv6l.tar.gz"
       }
     },
     "variants": [
