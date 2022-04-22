@@ -161,6 +161,10 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 			// Add one Platform for each OS/ARCH this variant supports.
 			platforms := make([]*dockermanifest.Platform, 0, 3)
 			for _, arch := range v.Arches {
+				// Skip unsupported arches/platforms.
+				if !arch.Supported {
+					continue
+				}
 				// Skip platforms that don't match the current variant. v.Arches is actually a list
 				// of OS/ARCHes, not just architectures.
 				if arch.Env.GOOS != os {
