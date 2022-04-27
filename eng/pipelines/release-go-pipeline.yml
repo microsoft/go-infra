@@ -34,6 +34,12 @@ parameters:
     type: boolean
     default: true
 
+  # It seems like 'go-release-config' would be a good default value for this param. Instead, the
+  # param has no default. This forces the queuer to explicitly pass a value, ensuring that if some
+  # automation queues this pipeline but fails to set this param, this pipeline fails. If there were
+  # a default, the pipeline would run a real release even if it should have been a mock release.
+  # This also helps devs double-check intent if they manually queue this pipeline, but that's not
+  # the main benefit of having no default.
   - name: goReleaseConfigVariableGroup
     displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
     type: string
