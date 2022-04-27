@@ -16,18 +16,34 @@ import (
 	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/executil"
-	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/subcmd"
 )
 
-const description = `
-update-aka-ms creates aka.ms links based on a given build asset JSON file. This command uses an
-MSBuild task supplied by .NET Arcade to carry out the communication with aka.ms services. Therefore,
-it must be executed within the go-infra repository, where it can use the eng directory that sets up
-the Arcade task. The .NET SDK must also be installed on the machine, and 'dotnet' on PATH.
+func init() {
+	subcommands = append(subcommands, new(akamsCmd))
+}
+
+type akamsCmd struct{}
+
+func (a akamsCmd) Name() string {
+	return "akams"
+}
+
+func (a akamsCmd) Summary() string {
+	return "Create aka.ms links based on a given build asset JSON file."
+}
+
+func (a akamsCmd) Description() string {
+	return `
+
+This command uses an MSBuild task supplied by .NET Arcade to carry out the communication with aka.ms
+services. Therefore, it must be executed within the go-infra repository, where it can use the eng
+directory that sets up the Arcade task. The .NET SDK must also be installed on the machine, and
+'dotnet' on PATH.
 
 Example:
 
-  go run ./cmd/update-aka-ms -build-asset-json /downloads/assets.json -version 1.17.8-1
+  go run ./cmd/releasego akams -build-asset-json /downloads/assets.json -version 1.17.8-1
 
 All non-flag args are passed through to the MSBuild project. Use this to configure the link
 ownership information and to add authentication. Keep in mind that because this command uses the
@@ -35,48 +51,36 @@ standard flag library, all flag args must be passed before the first non-flag ar
 
 See UpdateAkaMSLinks.csproj for information about the MSBuild properties that must be set.
 `
+}
 
-var latestShortLinkPrefix = flag.String(
-	"prefix", "golang/release/dev/latest/",
-	"The shortened URL prefix to use, including '/'. The default value includes 'dev' and is not intended for production use.")
-
-var validateVersionFlag = flag.String(
-	"version", "",
-	"A Microsoft-built Go version, in 1.2.3-1[-fips] format.\n"+
-		"If specified, must match the build asset JSON's version or this command will fail.\n"+
-		"The string 'nil' is treated as the same as not setting the value, for use in CI.\n"+
-		"Optionally use this to validate expectations.")
-
-func main() {
-	help := flag.Bool("h", false, "Print this help message.")
+func (a akamsCmd) Handle(p subcmd.ParseFunc) error {
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
 
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(flag.CommandLine.Output(), "%s\n\n", description)
-	}
-	flag.Parse()
+	flag.StringVar(
+		&latestShortLinkPrefix,
+		"prefix", "golang/release/dev/latest/",
+		"The shortened URL prefix to use, including '/'. The default value includes 'dev' and is not intended for production use.")
 
-	if *help {
-		flag.Usage()
-		os.Exit(0)
+	if err := p(); err != nil {
+		return err
 	}
 
 	if *buildAssetJSON == "" {
 		flag.Usage()
 		log.Fatal("No build asset JSON specified.\n")
 	}
-	if *validateVersionFlag == "nil" {
-		*validateVersionFlag = ""
-	}
 
 	if err := createAkaMSLinks(*buildAssetJSON); err != nil {
 		log.Fatalf("error: %v\n", err)
 	}
-
-	log.Println("\nSuccess.")
+	return nil
 }
+
+func (a akamsCmd) ArgsSummary() string {
+	return "More args to pass through to the MSBuild project."
+}
+
+var latestShortLinkPrefix string
 
 func createAkaMSLinks(assetFilePath string) error {
 	wd, err := os.Getwd()
@@ -92,14 +96,6 @@ func createAkaMSLinks(assetFilePath string) error {
 	var b buildassets.BuildAssets
 	if err := buildmodel.ReadJSONFile(assetFilePath, &b); err != nil {
 		return err
-	}
-
-	if *validateVersionFlag != "" {
-		assetVersion := b.GoVersion().Full()
-		inputVersion := goversion.New(*validateVersionFlag).Full()
-		if assetVersion != inputVersion {
-			return fmt.Errorf("build asset JSON version %q doesn't match input version %q", assetVersion, inputVersion)
-		}
 	}
 
 	linkPairs, err := createLinkPairs(b)
@@ -158,9 +154,9 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 
 	urls := make([]string, 0, 3*(len(assets.Arches)+1))
 	for _, a := range assets.Arches {
-		urls = appendURLAndVerificationURLs(urls, a.URL)
+		urls = appendPathAndVerificationFilePaths(urls, a.URL)
 	}
-	urls = appendURLAndVerificationURLs(urls, assets.GoSrcURL)
+	urls = appendPathAndVerificationFilePaths(urls, assets.GoSrcURL)
 
 	pairs := make([]akaMSLinkPair, 0, len(urls)*len(partial))
 
@@ -181,21 +177,13 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 			}
 
 			pairs = append(pairs, akaMSLinkPair{
-				Short:  *latestShortLinkPrefix + f,
+				Short:  latestShortLinkPrefix + f,
 				Target: u,
 			})
 		}
 	}
 
 	return pairs, nil
-}
-
-func appendURLAndVerificationURLs(u []string, url string) []string {
-	u = append(u, url, url+".sha256")
-	if strings.HasSuffix(url, ".tar.gz") {
-		u = append(u, url+".sig")
-	}
-	return u
 }
 
 func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, error) {

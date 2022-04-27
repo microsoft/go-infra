@@ -7,17 +7,36 @@
 # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
 parameters:
   - name: releaseVersion
-    displayName: Version being release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
+    displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
     type: string
 
   - name: releaseGoBuildId
     displayName: Build ID to release. Copy the ID from the build page's URL.
     type: string
 
-  - name: vanityUrlPrefix
-    displayName: Prefix for the vanity URLs.
+  - name: releaseIssue
+    displayName: microsoft/go issue number to comment on once complete, or nil.
     type: string
-    default: 'golang/release/latest/'
+    default: 'nil'
+
+  # Allow disabling specific parts. These can be used to re-run specific parts
+  # of a release if necessary.
+  - name: runTag
+    displayName: Tag the release.
+    type: boolean
+    default: true
+  - name: runGitHubRelease
+    displayName: Create the GitHub Release.
+    type: boolean
+    default: true
+  - name: runAkaMSUpdate
+    displayName: Update the aka.ms URLs.
+    type: boolean
+    default: true
+
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
 
 trigger: none
 pr: none
@@ -25,6 +44,9 @@ pr: none
 variables:
   - group: go-akams-config
   - group: go-akams-auth
+  - group: Microsoft-GoLang-bot
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
 
 jobs:
   - job: Release
@@ -37,6 +59,8 @@ jobs:
     variables:
       assetsDir: $(Pipeline.Workspace)/BuildAssets
       buildAssetJsonFile: $(assetsDir)/assets.json
+      artifactsDir: $(Pipeline.Workspace)/Artifacts
+      microsoftGoInternalPipeline: 958
     steps:
       - template: steps/checkout-unix-task.yml
 
@@ -46,27 +70,105 @@ jobs:
         inputs:
           version: 6.x
 
+      # Download build asset JSON
       - task: DownloadPipelineArtifact@2
+        displayName: Download Build Asset JSON
         inputs:
           source: specific
           artifact: BuildAssets
           project: internal
-          pipeline: 958
+          pipeline: $(microsoftGoInternalPipeline)
           runVersion: specific
           runId: ${{ parameters.releaseGoBuildId }}
           path: $(assetsDir)
+      # Download built and signed binaries.
+      - task: DownloadPipelineArtifact@2
+        displayName: Download Binaries Signed
+        inputs:
+          source: specific
+          artifact: Binaries Signed
+          project: internal
+          pipeline: $(microsoftGoInternalPipeline)
+          runVersion: specific
+          runId: ${{ parameters.releaseGoBuildId }}
+          path: $(artifactsDir)
+      
+      - script: |
+          go install ./cmd/releasego
+          echo "##vso[task.prependpath]$(go env GOPATH)/bin"
+        displayName: Install releasego
+
+      - script: releasego check-limits -pat '$(GitHubPAT)'
+        displayName: Check rate limit
 
       - script: |
-          # Pass owners through environment. (Contains semicolons.)
-          export AkaMSOwners="$(AkaMSOwners)"
+          releasego get-asset-version \
+            -build-asset-json '$(buildAssetJsonFile)' \
+            -version '${{ parameters.releaseVersion }}' \
+            -set 'buildAssetVersion'
+        displayName: Get and verify build asset version
+      
+      - script: |
+          releasego get-build-info \
+            -id '${{ parameters.releaseGoBuildId }}' \
+            -org 'https://dev.azure.com/dnceng/' \
+            -proj 'internal' \
+            -prefix 'BuildInfo' \
+            -azdopat '$(System.AccessToken)'
+        displayName: Get build info
 
-          go run ./cmd/update-aka-ms \
-            -build-asset-json "$(buildAssetJsonFile)" \
-            -version "${{ parameters.releaseVersion }}" \
-            -prefix "${{ parameters.vanityUrlPrefix }}" \
-            /p:AkaMSClientId="$(akams-client-id)" \
-            /p:AkaMSClientSecret="$(akams-client-secret)" \
-            /p:AkaMSTenant="$(AkaMSTenant)" \
-            /p:AkaMSCreatedBy="$(AkaMSCreatedBy)" \
-            /p:AkaMSGroupOwner="$(AkaMSGroupOwner)"
-        displayName: Update aka.ms links
+      - ${{ if eq(parameters.runTag, true) }}:
+        - script: |
+            releasego tag \
+              -tag 'v$(buildAssetVersion)' \
+              -commit '$(BuildInfoSourceVersion)' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)'
+          displayName: Create tag
+
+      - ${{ if eq(parameters.runGitHubRelease, true) }}:
+        - script: |
+            releasego repo-release \
+              -tag 'v$(buildAssetVersion)' \
+              -repo '$(TargetGitHubRepo)' \
+              -build-asset-json '$(buildAssetJsonFile)' \
+              -build-dir '$(artifactsDir)' \
+              -pat '$(GitHubPAT)'
+          displayName: Create release
+
+      - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
+        - script: |
+            # Pass owners through environment. (Contains semicolons.)
+            export AkaMSOwners="$(AkaMSOwners)"
+
+            go run ./cmd/releasego akams \
+              -build-asset-json '$(buildAssetJsonFile)' \
+              -prefix '$(VanityUrlPrefix)' \
+              /p:AkaMSClientId='$(akams-client-id)' \
+              /p:AkaMSClientSecret='$(akams-client-secret)' \
+              /p:AkaMSTenant='$(AkaMSTenant)' \
+              /p:AkaMSCreatedBy='$(AkaMSCreatedBy)' \
+              /p:AkaMSGroupOwner='$(AkaMSGroupOwner)'
+          displayName: Update aka.ms links
+
+      - script: releasego check-limits -pat $(GitHubPAT)
+        displayName: Check rate limit
+
+      - ${{ if ne(parameters.releaseIssue, 'nil') }}:
+        - script: |
+            releasego report \
+              -i '${{ parameters.releaseIssue }}' \
+              -m ':white_check_mark: Successfully ran microsoft/go release steps for $(buildAssetVersion).' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)'
+          displayName: Report Success
+          condition: succeeded()
+        - script: |
+            releasego report \
+              -i '${{ parameters.releaseIssue }}' \
+              -m ':rotating_light: Failed to run microsoft/go release steps for $(buildAssetVersion).' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)'
+          displayName: Report Failure
+          condition: failed()
+
