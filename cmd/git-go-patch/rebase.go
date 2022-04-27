@@ -9,11 +9,21 @@ import (
 	"path/filepath"
 
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/subcmd"
 )
 
-const rebaseSummary = "Run 'git rebase -i' on the commits created by 'apply'."
+type rebaseCmd struct{}
 
-const rebaseDescription = rebaseSummary + `
+func (r rebaseCmd) Name() string {
+	return "rebase"
+}
+
+func (r rebaseCmd) Summary() string {
+	return "Run 'git rebase -i' on the commits created by 'apply'."
+}
+
+func (r rebaseCmd) Description() string {
+	return `
 
 This command rebases the commits applied to the submodule based on patch files. It uses the HEAD
 commit recorded by "apply" as the base commit.
@@ -24,31 +34,28 @@ before running this command.
 
 Be aware that editing earlier patch files may cause conflicts with later patch files.
 ` + repoRootSearchDescription
+}
 
-var rebase = subcommand{
-	Name:    "rebase",
-	Summary: rebaseSummary,
-	Handle: func() error {
-		if err := parseFlagArgs(rebaseDescription); err != nil {
-			return err
-		}
+func (r rebaseCmd) Handle(p subcmd.ParseFunc) error {
+	if err := p(); err != nil {
+		return err
+	}
 
-		rootDir, err := findOuterRepoRoot()
-		if err != nil {
-			return err
-		}
+	rootDir, err := findOuterRepoRoot()
+	if err != nil {
+		return err
+	}
 
-		goDir := filepath.Join(rootDir, "go")
+	goDir := filepath.Join(rootDir, "go")
 
-		since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
-		if err != nil {
-			return err
-		}
+	since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
+	if err != nil {
+		return err
+	}
 
-		cmd := exec.Command("git", "rebase", "-i", since)
-		cmd.Stdin = os.Stdin
-		cmd.Dir = goDir
+	cmd := exec.Command("git", "rebase", "-i", since)
+	cmd.Stdin = os.Stdin
+	cmd.Dir = goDir
 
-		return executil.Run(cmd)
-	},
+	return executil.Run(cmd)
 }

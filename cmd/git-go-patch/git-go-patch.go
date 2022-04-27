@@ -7,9 +7,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/microsoft/go-infra/subcmd"
 )
 
 const description = `
@@ -28,72 +31,16 @@ overridden using the "-c" argument.
 // directory.
 var repoRootFlag = flag.String("c", "", "Disable Go repository discovery and use this path as the target.")
 
-var subcommands = []subcommand{
-	apply,
-	extract,
-	rebase,
-}
-
-type subcommand struct {
-	// The name of the subcommand.
-	Name string
-	// Summary is a description of the subcommand. Short, so it fits in a list of all subcommands in
-	// help text.
-	Summary string
-	// Handle is called when the subcommand is the one picked by the user. It must set up additional
-	// flags on its own, run flag parsing by calling parseFlagArgs, then carry out the subcommand.
-	Handle func() error
+var subcommands = []subcmd.Option{
+	new(applyCmd),
+	new(extractCmd),
+	new(rebaseCmd),
 }
 
 func main() {
-	if len(os.Args) < 2 || os.Args[1] == "-h" {
-		printMainUsage()
-		return
+	if err := subcmd.Run("git go-patch", description, subcommands); err != nil {
+		log.Fatal(err)
 	}
-
-	for _, subCmd := range subcommands {
-		if subCmd.Name == os.Args[1] {
-			err := subCmd.Handle()
-			if err != nil {
-				fmt.Printf("\n%v\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Println("\nSuccess.")
-			return
-		}
-	}
-	fmt.Fprintf(flag.CommandLine.Output(), "Error: Not a valid subcommand: %v\n\n", os.Args[1])
-	printMainUsage()
-	os.Exit(1)
-}
-
-func printMainUsage() {
-	fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
-	for _, c := range subcommands {
-		fmt.Fprintf(flag.CommandLine.Output(), "  git go-patch %v [-h] [...]\n", c.Name)
-		fmt.Fprintf(flag.CommandLine.Output(), "    %v\n", c.Summary)
-	}
-	fmt.Fprintf(flag.CommandLine.Output(), "%v", description)
-}
-
-func parseFlagArgs(helpDescription string) error {
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(flag.CommandLine.Output(), "\n%s", helpDescription)
-	}
-
-	// Ignore arg 1: subcommand name.
-	if err := flag.CommandLine.Parse(os.Args[2:]); err != nil {
-		return err
-	}
-
-	if len(flag.Args()) > 0 {
-		flag.Usage()
-		return fmt.Errorf("non-flag argument(s) provided but not accepted: %v", flag.Args())
-	}
-	return nil
 }
 
 func getStatusFileDir(rootDir string) string {

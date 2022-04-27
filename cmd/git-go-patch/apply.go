@@ -14,12 +14,22 @@ import (
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/patch"
+	"github.com/microsoft/go-infra/subcmd"
 	"github.com/microsoft/go-infra/submodule"
 )
 
-const applySummary = "Apply patch files as one commit each using 'git apply' on top of HEAD."
+type applyCmd struct{}
 
-const applyDescription = applySummary + `
+func (a applyCmd) Name() string {
+	return "apply"
+}
+
+func (a applyCmd) Summary() string {
+	return "Apply patch files as one commit each using 'git apply' on top of HEAD."
+}
+
+func (a applyCmd) Description() string {
+	return `
 
 This command also records the state of the repository before applying patches, so "extract" can be used
 later to create patch files after adding more commits, or altering the patch commits.
@@ -27,70 +37,67 @@ later to create patch files after adding more commits, or altering the patch com
 apply uses "git am", internally. If patches fail to apply, use "git am" inside the submodule to
 resolve and continue the patch application process.
 ` + repoRootSearchDescription
+}
 
-var apply = subcommand{
-	Name:    "apply",
-	Summary: applySummary,
-	Handle: func() error {
-		force := flag.Bool("f", false, "Force reapply: throw away changes in the submodule.")
-		noRefresh := flag.Bool(
-			"no-refresh",
-			false,
-			"Skip the submodule refresh (reset, clean, checkout) that happens before applying patches.\n"+
-				"This may be useful for advanced workflows.")
+func (a applyCmd) Handle(p subcmd.ParseFunc) error {
+	force := flag.Bool("f", false, "Force reapply: throw away changes in the submodule.")
+	noRefresh := flag.Bool(
+		"no-refresh",
+		false,
+		"Skip the submodule refresh (reset, clean, checkout) that happens before applying patches.\n"+
+			"This may be useful for advanced workflows.")
 
-		if err := parseFlagArgs(applyDescription); err != nil {
+	if err := p(); err != nil {
+		return err
+	}
+
+	rootDir, err := findOuterRepoRoot()
+	if err != nil {
+		return err
+	}
+
+	goDir := filepath.Join(rootDir, "go")
+
+	// If we're being careful, abort if the submodule commit isn't what we expect.
+	if !*force {
+		if err := ensureSubmoduleCommitNotDirty(rootDir, goDir); err != nil {
 			return err
 		}
+	}
 
-		rootDir, err := findOuterRepoRoot()
-		if err != nil {
+	if !*noRefresh {
+		if err := submodule.Reset(rootDir, *force); err != nil {
 			return err
 		}
+	}
 
-		goDir := filepath.Join(rootDir, "go")
+	prePatchHead, err := getCurrentCommit(goDir)
+	if err != nil {
+		return err
+	}
 
-		// If we're being careful, abort if the submodule commit isn't what we expect.
-		if !*force {
-			if err := ensureSubmoduleCommitNotDirty(rootDir, goDir); err != nil {
-				return err
-			}
-		}
+	// Record the pre-patch commit. We must do this before applying the patch: if patching
+	// fails, the user needs to be able to fix up the patches inside the submodule and then run
+	// "git go-patch extract" to apply the fixes to the patch files. "extract" depends on the
+	// pre-patch status file. Start by ensuring the dir exists, then write the file.
+	if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
+		return err
+	}
+	if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
+		return err
+	}
 
-		if !*noRefresh {
-			if err := submodule.Reset(rootDir, *force); err != nil {
-				return err
-			}
-		}
+	if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
+		return err
+	}
 
-		prePatchHead, err := getCurrentCommit(goDir)
-		if err != nil {
-			return err
-		}
+	postPatchHead, err := getCurrentCommit(goDir)
+	if err != nil {
+		return err
+	}
 
-		// Record the pre-patch commit. We must do this before applying the patch: if patching
-		// fails, the user needs to be able to fix up the patches inside the submodule and then run
-		// "git go-patch extract" to apply the fixes to the patch files. "extract" depends on the
-		// pre-patch status file. Start by ensuring the dir exists, then write the file.
-		if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
-			return err
-		}
-		if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
-			return err
-		}
-
-		if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
-			return err
-		}
-
-		postPatchHead, err := getCurrentCommit(goDir)
-		if err != nil {
-			return err
-		}
-
-		// Record the post-patch commit.
-		return writeStatusFiles(postPatchHead, getPostPatchStatusFilePath(rootDir))
-	},
+	// Record the post-patch commit.
+	return writeStatusFiles(postPatchHead, getPostPatchStatusFilePath(rootDir))
 }
 
 func writeStatusFiles(commit string, file string) error {
