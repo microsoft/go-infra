@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/microsoft/go-infra/executil"
@@ -46,12 +45,10 @@ func handleApply(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, err := findOuterRepoRoot()
+	rootDir, goDir, err := findProjectRoots()
 	if err != nil {
 		return err
 	}
-
-	goDir := filepath.Join(rootDir, "go")
 
 	// If we're being careful, abort if the submodule commit isn't what we expect.
 	if !*force {

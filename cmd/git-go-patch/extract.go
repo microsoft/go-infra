@@ -61,12 +61,11 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, err := findOuterRepoRoot()
+	rootDir, goDir, err := findProjectRoots()
 	if err != nil {
 		return err
 	}
 
-	goDir := filepath.Join(rootDir, "go")
 	patchDir := filepath.Join(rootDir, "patches")
 
 	since := *sinceFlag

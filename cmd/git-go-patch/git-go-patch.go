@@ -101,3 +101,14 @@ func findOuterRepoRoot() (string, error) {
 		dir = parent
 	}
 }
+
+// findProjectRoots finds the project and submodule dir based on the current working directory or
+// the repoRootFlag value, using findOuterRepoRoot.
+func findProjectRoots() (projectDir, submoduleDir string, err error) {
+	projectDir, err = findOuterRepoRoot()
+	if err != nil {
+		return
+	}
+	submoduleDir = filepath.Join(projectDir, "go")
+	return
+}

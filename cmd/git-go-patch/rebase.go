@@ -6,7 +6,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -36,12 +35,10 @@ func handleRebase(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, err := findOuterRepoRoot()
+	rootDir, goDir, err := findProjectRoots()
 	if err != nil {
 		return err
 	}
-
-	goDir := filepath.Join(rootDir, "go")
 
 	since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
 	if err != nil {
