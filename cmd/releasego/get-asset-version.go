@@ -41,7 +41,7 @@ func handleAssetVersion(p subcmd.ParseFunc) error {
 			"The string 'nil' is treated as the same as not setting the value, for use in CI where empty string can't be used.\n"+
 			"Optionally use this to validate expectations.")
 
-	setVariable := flag.String("set", "", "An AzDO variable name to set.")
+	setVariable := flag.String("set-azdo-variable", "", "An AzDO variable name to set.")
 
 	if err := p(); err != nil {
 		return err

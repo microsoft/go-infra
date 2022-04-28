@@ -111,7 +111,7 @@ jobs:
           releasego get-asset-version \
             -build-asset-json '$(buildAssetJsonFile)' \
             -version '${{ parameters.releaseVersion }}' \
-            -set 'buildAssetVersion'
+            -set-azdo-variable 'buildAssetVersion'
         displayName: Get and verify build asset version
       
       - script: |
