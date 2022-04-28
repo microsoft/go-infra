@@ -83,6 +83,7 @@ func (a applyCmd) Handle(p subcmd.ParseFunc) error {
 	if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
 		return err
 	}
+
 	if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
 		return err
 	}
