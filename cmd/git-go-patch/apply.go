@@ -18,28 +18,23 @@ import (
 	"github.com/microsoft/go-infra/submodule"
 )
 
-type applyCmd struct{}
-
-func (a applyCmd) Name() string {
-	return "apply"
-}
-
-func (a applyCmd) Summary() string {
-	return "Apply patch files as one commit each using 'git apply' on top of HEAD."
-}
-
-func (a applyCmd) Description() string {
-	return `
+func init() {
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "apply",
+		Summary: "Apply patch files as one commit each using 'git apply' on top of HEAD.",
+		Description: `
 
 This command also records the state of the repository before applying patches, so "extract" can be used
 later to create patch files after adding more commits, or altering the patch commits.
 
 apply uses "git am", internally. If patches fail to apply, use "git am" inside the submodule to
 resolve and continue the patch application process.
-` + repoRootSearchDescription
+` + repoRootSearchDescription,
+		Handle: handleApply,
+	})
 }
 
-func (a applyCmd) Handle(p subcmd.ParseFunc) error {
+func handleApply(p subcmd.ParseFunc) error {
 	force := flag.Bool("f", false, "Force reapply: throw away changes in the submodule.")
 	noRefresh := flag.Bool(
 		"no-refresh",

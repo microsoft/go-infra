@@ -15,30 +15,21 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(reportCmd))
-}
-
-type reportCmd struct{}
-
-func (r reportCmd) Name() string {
-	return "report"
-}
-
-func (r reportCmd) Summary() string {
-	return "Add a comment to a GitHub issue to report status"
-}
-
-func (r reportCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "report",
+		Summary: "Add a comment to a GitHub issue to report status",
+		Description: `
 
 Creates a comment on the given GitHub issue. This should be used to report on release status.
 
 If AzDO env variables SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT, and BUILD_BUILDID are set, includes
 a link to the build as markdown before the message.
-`
+`,
+		Handle: handleReport,
+	})
 }
 
-func (r reportCmd) Handle(p subcmd.ParseFunc) error {
+func handleReport(p subcmd.ParseFunc) error {
 	repo := repoFlag()
 	pat := githubPATFlag()
 	issue := flag.Int("i", 0, "[Required] The issue number to add the comment to.")

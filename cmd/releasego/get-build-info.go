@@ -15,30 +15,21 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(getBuildInfoCmd))
-}
-
-type getBuildInfoCmd struct{}
-
-func (g getBuildInfoCmd) Name() string {
-	return "get-build-info"
-}
-
-func (g getBuildInfoCmd) Summary() string {
-	return "Get info about an AzDO build by ID."
-}
-
-func (g getBuildInfoCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "get-build-info",
+		Summary: "Get info about an AzDO build by ID.",
+		Description: `
 
 Get info about the given AzDO build and set pipeline variables to transfer the data to future steps
 in the release pipeline.
 
 Sets variables with the given prefix for BuildNumber, SourceVersion, and SourceBranch.
-`
+`,
+		Handle: handleGetBuildInfo,
+	})
 }
 
-func (g getBuildInfoCmd) Handle(p subcmd.ParseFunc) error {
+func handleGetBuildInfo(p subcmd.ParseFunc) error {
 	id := flag.Int("id", 0, "[Required] The AzDO build ID (not build number) to query.")
 	org := flag.String("org", "", "[Required] The AzDO organization URL.")
 	proj := flag.String("proj", "", "[Required] The AzDO project URL.")

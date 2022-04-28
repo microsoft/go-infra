@@ -14,30 +14,28 @@ import (
 // detailed output, invalid args, and error conditions.
 type ParseFunc func() error
 
-// Option implements one subcommand option that the user may pick.
-type Option interface {
+type Option struct {
 	// Name of the option. This must match what the user types for this option to be selected.
-	Name() string
+	Name string
+
 	// Summary is a brief description of the option. Short: needs to fit in a list of all
 	// subcommands in the help text that summarizes all subcommand options.
-	Summary() string
+	Summary string
+
 	// Description is a description of the option that will be printed directly appended to Summary
 	// to optionally add more detail to the option-specific help message.
-	Description() string
+	Description string
+
+	// TakeArgsReason is a brief description of why this option takes non-flag args and what it will
+	// do with them, or empty string (default) if the option doesn't accept non-flag args. If empty
+	// string, the Run function enforces that only flag args are passed to this option.
+	TakeArgsReason string
+
 	// Handle is called when this option is the one picked by the user. Handle must set up any
 	// additional flags on its own, run flag parsing by invoking p, then carry out the cmd. Handle
 	// is a single function rather than split into individual "Flags" and "Run" funcs so the flags
 	// can be declared succinctly as local variables.
-	Handle(p ParseFunc) error
-}
-
-// OptionArgTaker is an Option that takes args. The Run function checks for this interface to
-// provide more detailed help and to only allows non-flag args if the type matches.
-type OptionArgTaker interface {
-	Option
-	// ArgsSummary returns a string to use in help text to briefly describe the purpose of the extra
-	// args that can be given to the command.
-	ArgsSummary() string
+	Handle func(p ParseFunc) error
 }
 
 // Run runs a subcommand specified by args, or a help request.
@@ -45,8 +43,8 @@ func Run(cmdBaseDoc, description string, options []Option) error {
 	printMainUsage := func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
 		for _, c := range options {
-			fmt.Fprintf(flag.CommandLine.Output(), "  %v %v [-h] [...]\n", cmdBaseDoc, c.Name())
-			fmt.Fprintf(flag.CommandLine.Output(), "    %v\n", c.Summary())
+			fmt.Fprintf(flag.CommandLine.Output(), "  %v %v [-h] [...]\n", cmdBaseDoc, c.Name)
+			fmt.Fprintf(flag.CommandLine.Output(), "    %v\n", c.Summary)
 		}
 		fmt.Fprintf(flag.CommandLine.Output(), "%v", description)
 	}
@@ -57,14 +55,14 @@ func Run(cmdBaseDoc, description string, options []Option) error {
 	}
 
 	for _, subCmd := range options {
-		if subCmd.Name() == os.Args[1] {
+		if subCmd.Name == os.Args[1] {
 			flag.Usage = func() {
 				fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
 				flag.PrintDefaults()
-				if t, ok := subCmd.(OptionArgTaker); ok {
-					fmt.Fprintf(flag.CommandLine.Output(), "  [args] ...string\n    \t%v\n", t.ArgsSummary())
+				if subCmd.TakeArgsReason != "" {
+					fmt.Fprintf(flag.CommandLine.Output(), "  [args] ...string\n    \t%v\n", subCmd.TakeArgsReason)
 				}
-				fmt.Fprintf(flag.CommandLine.Output(), "\n%s", subCmd.Summary()+subCmd.Description())
+				fmt.Fprintf(flag.CommandLine.Output(), "\n%s", subCmd.Summary+subCmd.Description)
 			}
 
 			p := func() error {
@@ -73,7 +71,7 @@ func Run(cmdBaseDoc, description string, options []Option) error {
 					return err
 				}
 
-				if _, ok := subCmd.(OptionArgTaker); !ok {
+				if subCmd.TakeArgsReason == "" {
 					if len(flag.Args()) > 0 {
 						flag.Usage()
 						return fmt.Errorf("non-flag argument(s) provided but not accepted: %v", flag.Args())

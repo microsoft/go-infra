@@ -14,28 +14,19 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(tagCmd))
-}
-
-type tagCmd struct{}
-
-func (t tagCmd) Name() string {
-	return "tag"
-}
-
-func (t tagCmd) Summary() string {
-	return "Create a tag on a GitHub repository."
-}
-
-func (t tagCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "tag",
+		Summary: "Create a tag on a GitHub repository.",
+		Description: `
 
 Using the GitHub API, create a tag on the GitHub repository on a given commit. If the tag already
 exists, exit with code 1.
-`
+`,
+		Handle: handleTag,
+	})
 }
 
-func (t tagCmd) Handle(p subcmd.ParseFunc) error {
+func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := repoFlag()
 	pat := githubPATFlag()

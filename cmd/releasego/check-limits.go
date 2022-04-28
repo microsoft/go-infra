@@ -11,24 +11,15 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(checkLimitsCmd))
+	subcommands = append(subcommands, subcmd.Option{
+		Name:        "check-limits",
+		Summary:     "Check the GitHub API rate limit status.",
+		Description: "",
+		Handle:      handleCheckLimits,
+	})
 }
 
-type checkLimitsCmd struct{}
-
-func (c checkLimitsCmd) Name() string {
-	return "check-limits"
-}
-
-func (c checkLimitsCmd) Summary() string {
-	return "Check the GitHub API rate limit status."
-}
-
-func (c checkLimitsCmd) Description() string {
-	return ""
-}
-
-func (c checkLimitsCmd) Handle(p subcmd.ParseFunc) error {
+func handleCheckLimits(p subcmd.ParseFunc) error {
 	pat := githubPATFlag()
 
 	if err := p(); err != nil {

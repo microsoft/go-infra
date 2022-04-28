@@ -21,21 +21,11 @@ import (
 	"github.com/microsoft/go-infra/subcmd"
 )
 
-const commandPrefix = "github.com/microsoft/go-infra/cmd/git-go-patch command: "
-const patchNumberCommand = "patch number "
-
-type extractCmd struct{}
-
-func (e extractCmd) Name() string {
-	return "extract"
-}
-
-func (e extractCmd) Summary() string {
-	return "Format each new commit in the submodule as a patch file."
-}
-
-func (e extractCmd) Description() string {
-	return `
+func init() {
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "extract",
+		Summary: "Format each new commit in the submodule as a patch file.",
+		Description: `
 
 This command figures out which commits are new by checking for commits in HEAD since the given
 commit. If no commit is given, the commit recorded by "apply" is used. If the given commit is not an
@@ -55,9 +45,15 @@ Each command starts with "` + commandPrefix + `", then:
   Consider using this if you are maintaining the same patches on multiple branches and there are
   distinct groups of patches. Making the first patch in each group start at a consistent number can
   help to avoid unnecessary filename conflicts when porting changes between branches.
-` + repoRootSearchDescription
+` + repoRootSearchDescription,
+		Handle: handleExtract,
+	})
 }
-func (e extractCmd) Handle(p subcmd.ParseFunc) error {
+
+const commandPrefix = "github.com/microsoft/go-infra/cmd/git-go-patch command: "
+const patchNumberCommand = "patch number "
+
+func handleExtract(p subcmd.ParseFunc) error {
 	sinceFlag := flag.String("since", "", "The commit or ref to begin formatting patches at. If nothing is specified, use the last commit recorded by 'apply'.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary working directory used by the patch rewrite process, rather than cleaning it up.")
 

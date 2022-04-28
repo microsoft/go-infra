@@ -20,21 +20,10 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(akamsCmd))
-}
-
-type akamsCmd struct{}
-
-func (a akamsCmd) Name() string {
-	return "akams"
-}
-
-func (a akamsCmd) Summary() string {
-	return "Create aka.ms links based on a given build asset JSON file."
-}
-
-func (a akamsCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "akams",
+		Summary: "Create aka.ms links based on a given build asset JSON file.",
+		Description: `
 
 This command uses an MSBuild task supplied by .NET Arcade to carry out the communication with aka.ms
 services. Therefore, it must be executed within the go-infra repository, where it can use the eng
@@ -50,10 +39,13 @@ ownership information and to add authentication. Keep in mind that because this 
 standard flag library, all flag args must be passed before the first non-flag arg.
 
 See UpdateAkaMSLinks.csproj for information about the MSBuild properties that must be set.
-`
+`,
+		TakeArgsReason: "More args to pass through to the MSBuild project.",
+		Handle:         handleAKAMS,
+	})
 }
 
-func (a akamsCmd) Handle(p subcmd.ParseFunc) error {
+func handleAKAMS(p subcmd.ParseFunc) error {
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
 
 	flag.StringVar(
@@ -74,10 +66,6 @@ func (a akamsCmd) Handle(p subcmd.ParseFunc) error {
 		log.Fatalf("error: %v\n", err)
 	}
 	return nil
-}
-
-func (a akamsCmd) ArgsSummary() string {
-	return "More args to pass through to the MSBuild project."
 }
 
 var latestShortLinkPrefix string

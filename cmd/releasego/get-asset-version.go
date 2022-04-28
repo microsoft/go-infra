@@ -15,21 +15,10 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(getAssetVersionCmd))
-}
-
-type getAssetVersionCmd struct{}
-
-func (g getAssetVersionCmd) Name() string {
-	return "get-asset-version"
-}
-
-func (g getAssetVersionCmd) Summary() string {
-	return "Gets the asset version out of a build asset JSON file."
-}
-
-func (g getAssetVersionCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "get-asset-version",
+		Summary: "Gets the asset version out of a build asset JSON file.",
+		Description: `
 
 Log the asset version found in the given build asset JSON file. Optionally print an AzDO logging
 command to set a variable that later release automation steps can use.
@@ -37,10 +26,12 @@ command to set a variable that later release automation steps can use.
 This command can also validate that the build asset JSON version matches an expected string version.
 Exits 0 if the given version number matches the content of the build asset JSON file, or 1 if it
 doesn't. This is used in release automation as a safety check.
-`
+`,
+		Handle: handleAssetVersion,
+	})
 }
 
-func (g getAssetVersionCmd) Handle(p subcmd.ParseFunc) error {
+func handleAssetVersion(p subcmd.ParseFunc) error {
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The path of a build asset JSON file to read.")
 
 	validateVersionFlag := flag.String(

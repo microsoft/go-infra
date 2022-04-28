@@ -31,11 +31,7 @@ overridden using the "-c" argument.
 // directory.
 var repoRootFlag = flag.String("c", "", "Disable Go repository discovery and use this path as the target.")
 
-var subcommands = []subcmd.Option{
-	new(applyCmd),
-	new(extractCmd),
-	new(rebaseCmd),
-}
+var subcommands []subcmd.Option
 
 func main() {
 	if err := subcmd.Run("git go-patch", description, subcommands); err != nil {

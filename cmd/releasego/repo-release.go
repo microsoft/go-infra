@@ -20,28 +20,19 @@ import (
 )
 
 func init() {
-	subcommands = append(subcommands, new(repoReleaseCmd))
-}
-
-type repoReleaseCmd struct{}
-
-func (r repoReleaseCmd) Name() string {
-	return "repo-release"
-}
-
-func (r repoReleaseCmd) Summary() string {
-	return "Create a release on a GitHub repository."
-}
-
-func (r repoReleaseCmd) Description() string {
-	return `
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "repo-release",
+		Summary: "Create a release on a GitHub repository.",
+		Description: `
 
 Using the GitHub API, create a release on the GitHub repository using a given tag name. Attach the
 given build asset JSON file and the artifacts it lists that are found in the specified directory.
-`
+`,
+		Handle: handleRepoRelease,
+	})
 }
 
-func (r repoReleaseCmd) Handle(p subcmd.ParseFunc) error {
+func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := repoFlag()
 	pat := githubPATFlag()
