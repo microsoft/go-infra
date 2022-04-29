@@ -12,7 +12,7 @@ import (
 )
 
 func Test_createLinkPairs(t *testing.T) {
-	*latestShortLinkPrefix = "testing/"
+	latestShortLinkPrefix = "testing/"
 	input := buildassets.BuildAssets{
 		Branch:  "release-branch.go1.18",
 		BuildID: "123456",

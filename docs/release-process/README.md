@@ -14,6 +14,8 @@ The overall effort is tracked by <https://github.com/microsoft/go/issues/423>.
 
 * (3) release-go
     * ✅ aka.ms link generation <https://github.com/microsoft/go/issues/453>
+    * ✅ GitHub release generation
+    * ✅ Tag generation
 
 # Pipelines
 
