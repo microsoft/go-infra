@@ -90,6 +90,19 @@ func (v *GoVersion) Full() string {
 	return v.MajorMinorPatchRevision() + v.NoteWithPrefix()
 }
 
+// UpstreamFormatGitTag returns the version in the format upstream uses for Git tags. Specifically,
+// revision, note, and trailing ".0" strings are omitted, and the prefix is "go".
+func (v *GoVersion) UpstreamFormatGitTag() string {
+	n := v.Major
+	if v.Patch != "0" || v.Minor != "0" {
+		n += "." + v.Minor
+	}
+	if v.Patch != "0" {
+		n += "." + v.Patch
+	}
+	return "go" + n
+}
+
 // NoteWithPrefix is a utility to help with version string construction. Returns Note with a "-"
 // prefix, or empty string if Note isn't specified.
 func (v *GoVersion) NoteWithPrefix() string {

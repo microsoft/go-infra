@@ -118,3 +118,9 @@ func appendPathAndVerificationFilePaths(p []string, path string) []string {
 	}
 	return p
 }
+
+// setAzDOPipelineVariable uses an AzDO logging command to set a variable in the pipeline.
+// https://github.com/Microsoft/azure-pipelines-tasks/blob/master/docs/authoring/commands.md
+func setAzDOPipelineVariable(name, value string) {
+	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+}

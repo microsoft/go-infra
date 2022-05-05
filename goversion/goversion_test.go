@@ -78,3 +78,25 @@ func TestVersion_parseVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestGoVersion_UpstreamFormatGitTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		want    string
+	}{
+		{"drop all zeros", "1.0.0", "go1"},
+		{"do not drop middle zero", "1.0.1", "go1.0.1"},
+		{"drop ending zero", "1.1.0", "go1.1"},
+		{"never drop ones", "1.1.1", "go1.1.1"},
+		{"drop zeroes for v2", "2.0.0", "go2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := New(tt.version)
+			if got := v.UpstreamFormatGitTag(); got != tt.want {
+				t.Errorf("UpstreamFormatGitTag() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
