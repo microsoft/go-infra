@@ -108,6 +108,12 @@ func newEmptyGitRepo(t *testing.T) *gitRepo {
 
 func newUpstreamGitRepo(t *testing.T) *gitRepo {
 	upstream := newEmptyGitRepo(t)
+	if err := upstream.runGitCmd("config", "--local", "user.name", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := upstream.runGitCmd("config", "--local", "user.email", "test@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	if err := upstream.runGitCmd("commit", "--allow-empty", "-m", "Initial commit"); err != nil {
 		t.Fatal(err)
 	}
