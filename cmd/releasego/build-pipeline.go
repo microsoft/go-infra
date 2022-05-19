@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -12,7 +13,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
 	"github.com/microsoft/go-infra/azdo"
@@ -113,7 +113,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(string(bodyJSON)))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-        defer resp.Body.Close()
+	defer resp.Body.Close()
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
