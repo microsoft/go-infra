@@ -129,6 +129,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
+        defer resp.Body.Close()
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
