@@ -6,6 +6,8 @@ The goal is to have this system handle the easy stuff that's easy to mistype or 
 
 All steps written below are performed by the release pipeline (not by the dev) unless stated otherwise.
 
+See [instructions.md](instructions.md) for more info about how to use this infrastructure.
+
 ## Status
 
 This doc describes the plan to create Azure Pipelines that run the release steps for the Microsoft build of Go. The doc and the plan are works in progress. The doc is written so that it describes the final state of the pipelines, and this status section can simply be removed once the entire doc is implemented.
