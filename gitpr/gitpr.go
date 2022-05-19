@@ -63,12 +63,24 @@ func (b PRRefSet) CreateGitHubPR(headOwner, title, body string) *GitHubRequest {
 type SyncPRRefSet struct {
 	// UpstreamName is the name of the upstream branch being synced from.
 	UpstreamName string
+	// Commit is either the specific commit hash to sync to, or empty string to sync from the latest
+	// commit in the branch. Commit is expected to already be contained in the upstream branch.
+	Commit string
 	PRRefSet
 }
 
 // UpstreamLocalBranch is the name of the upstream ref after it has been fetched locally.
 func (b SyncPRRefSet) UpstreamLocalBranch() string {
 	return "fetched-upstream/" + b.UpstreamName
+}
+
+// UpstreamLocalSyncTarget is the commit (or branch) that should be synced to. Normally, it is the
+// tip of the upstream ref, but it may be a specific commit if the config struct specified one.
+func (b SyncPRRefSet) UpstreamLocalSyncTarget() string {
+	if b.Commit == "" {
+		return b.UpstreamLocalBranch()
+	}
+	return b.Commit
 }
 
 // UpstreamMirrorLocalBranch is the name of the upstream ref after it has been fetched locally from
@@ -209,6 +221,7 @@ type GitHubResponse struct {
 	// GitHub success response:
 	HTMLURL string `json:"html_url"`
 	NodeID  string `json:"node_id"`
+	Number  int    `json:"number"`
 
 	// GitHub failure response:
 	Message string               `json:"message"`
@@ -304,16 +317,23 @@ func MutateGraphQL(pat string, query string, variables map[string]interface{}) e
 	return QueryGraphQL(pat, query, variables, &struct{}{})
 }
 
+type ExistingPR struct {
+	Title  string
+	ID     string
+	Number int
+}
+
 // FindExistingPR looks for a PR submitted to a target branch with a set of filters. Returns the
 // result's graphql identity if one match is found, empty string if no matches are found, and an
 // error if more than one match was found.
-func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser, githubPAT string) (string, error) {
+func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser, githubPAT string) (*ExistingPR, error) {
 	prQuery := `query ($githubUser: String!, $headRefName: String!, $baseRefName: String!) {
 		user(login: $githubUser) {
 			pullRequests(states: OPEN, headRefName: $headRefName, baseRefName: $baseRefName, first: 5) {
 				nodes {
 					title
 					id
+					number
 					headRepositoryOwner {
 						login
 					}
@@ -344,8 +364,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 			User struct {
 				PullRequests struct {
 					Nodes []struct {
-						Title               string
-						ID                  string
+						ExistingPR
 						HeadRepositoryOwner struct {
 							Login string
 						}
@@ -364,7 +383,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	}{}
 
 	if err := QueryGraphQL(githubPAT, prQuery, variables, result); err != nil {
-		return "", err
+		return nil, err
 	}
 	fmt.Printf("%+v\n", result)
 
@@ -372,24 +391,24 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	// to detect an unknown state early so we don't end up doing something strange.
 
 	if prNodes := len(result.Data.User.PullRequests.Nodes); prNodes > 1 {
-		return "", fmt.Errorf("expected 0/1 PR search result, found %v", prNodes)
+		return nil, fmt.Errorf("expected 0/1 PR search result, found %v", prNodes)
 	}
 	if result.Data.User.PullRequests.PageInfo.HasNextPage {
-		return "", fmt.Errorf("expected 0/1 PR search result, but the results say there's another page")
+		return nil, fmt.Errorf("expected 0/1 PR search result, but the results say there's another page")
 	}
 
 	if len(result.Data.User.PullRequests.Nodes) == 0 {
-		return "", nil
+		return nil, nil
 	}
 
 	n := result.Data.User.PullRequests.Nodes[0]
 	if foundHeadOwner := n.HeadRepositoryOwner.Login; foundHeadOwner != head.GetOwner() {
-		return "", fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, head.GetOwner())
+		return nil, fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, head.GetOwner())
 	}
 	if foundBaseOwner := n.BaseRepository.Owner.Login; foundBaseOwner != target.GetOwner() {
-		return "", fmt.Errorf("pull request base owner is %v, expected %v", foundBaseOwner, target.GetOwner())
+		return nil, fmt.Errorf("pull request base owner is %v, expected %v", foundBaseOwner, target.GetOwner())
 	}
-	return n.ID, nil
+	return &n.ExistingPR, nil
 }
 
 // ApprovePR adds an approving review on the target GraphQL PR node ID. The review author is the user

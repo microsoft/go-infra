@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package main
+package sync
 
-// SyncConfigEntry is one entry in a sync config file. The file contains a JSON list of objects that
+// ConfigEntry is one entry in a sync config file. The file contains a JSON list of objects that
 // match this struct.
-type SyncConfigEntry struct {
+type ConfigEntry struct {
 	// Upstream is the upstream Git repository to take updates from.
 	Upstream string
 	// UpstreamMirror is an optional upstream-maintained mirror of the Upstream repository.
@@ -42,6 +42,12 @@ type SyncConfigEntry struct {
 	// replaced with the upstream branch name.
 	BranchMap map[string]string
 
+	// SourceBranchLatestCommit is a map of source branch names in Upstream (keys) and a full commit
+	// hash to treat as the latest commit for that source branch, no matter what the upstream
+	// repository says at the time of merge. This map can be used to avoid a race between the sync
+	// infrastructure and upstream merge flow.
+	SourceBranchLatestCommit map[string]string
+
 	// AutoResolveTarget lists files and dirs that Upstream may have modified, but we want to keep
 	// the contents as they are in Target. Normally files that are modified in our fork repos are
 	// all in the 'eng/' directory to avoid merge conflicts (and keep the repository tidy), but in
@@ -53,4 +59,12 @@ type SyncConfigEntry struct {
 	// (default), that indicates the entire Upstream repository should be merged into the Target
 	// repository.
 	SubmoduleTarget string
+}
+
+// PRBranchStorageRepo returns the repo to store the PR branch on.
+func (c *ConfigEntry) PRBranchStorageRepo() string {
+	if c.Head != "" {
+		return c.Head
+	}
+	return c.Target
 }
