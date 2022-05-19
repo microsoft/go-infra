@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -20,19 +21,19 @@ func init() {
 }
 
 func handleCheckLimits(p subcmd.ParseFunc) error {
-	pat := githubPATFlag()
+	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
 		return err
 	}
 
 	ctx := context.Background()
-	client, err := githubClient(ctx, *pat)
+	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
 		return err
 	}
 
-	return retry(func() error {
+	return githubutil.Retry(func() error {
 		limits, _, err := client.RateLimits(ctx)
 		if err != nil {
 			return err

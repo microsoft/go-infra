@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/microsoft/azure-devops-go-api/azuredevops"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
+	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -31,10 +31,8 @@ Sets variables with the given prefix for BuildNumber, SourceVersion, and SourceB
 
 func handleGetBuildInfo(p subcmd.ParseFunc) error {
 	id := flag.Int("id", 0, "[Required] The AzDO build ID (not build number) to query.")
-	org := flag.String("org", "", "[Required] The AzDO organization URL.")
-	proj := flag.String("proj", "", "[Required] The AzDO project URL.")
-	azdoPAT := azdoPATFlag()
 	prefix := flag.String("prefix", "", "The prefix to use before all env vars set by this command.")
+	azdoFlags := azdo.BindClientFlags()
 
 	if err := p(); err != nil {
 		return err
@@ -44,25 +42,18 @@ func handleGetBuildInfo(p subcmd.ParseFunc) error {
 		flag.Usage()
 		log.Fatalln("No build ID specified.")
 	}
-	if *org == "" {
-		log.Fatalln("No AzDO org specified.")
+	if err := azdoFlags.EnsureAssigned(); err != nil {
+		flag.Usage()
+		return err
 	}
-	if *proj == "" {
-		log.Fatalln("No AzDO project URL specified.")
-	}
-	if *azdoPAT == "" {
-		log.Fatalln("No AzDO PAT specified.")
-	}
-
-	connection := azuredevops.NewPatConnection(*org, *azdoPAT)
 
 	ctx := context.Background()
-	c, err := build.NewClient(ctx, connection)
+	c, err := build.NewClient(ctx, azdoFlags.NewConnection())
 	if err != nil {
 		return err
 	}
 	b, err := c.GetBuild(ctx, build.GetBuildArgs{
-		Project:         proj,
+		Project:         azdoFlags.Proj,
 		BuildId:         id,
 		PropertyFilters: nil,
 	})

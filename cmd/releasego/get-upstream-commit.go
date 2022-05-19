@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
@@ -95,7 +96,7 @@ func handleWaitUpstream(p subcmd.ParseFunc) error {
 
 	result := poll(checker, pollDelay)
 	if *azdoVarName != "" {
-		setAzDOPipelineVariable(*azdoVarName, result)
+		azdo.SetPipelineVariable(*azdoVarName, result)
 	}
 	return nil
 }

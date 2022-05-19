@@ -54,7 +54,7 @@ func handleSync(p subcmd.ParseFunc) error {
 		"An AzDO variable name to set to the sync PR number, or nil if no sync PR is created.")
 	setVariableUpToDateCommit := flag.String(
 		"set-azdo-variable-up-to-date-commit", "",
-		"An AzDO variable name to set to the sync PR number, or nil if no sync PR is created.")
+		"An AzDO variable name to set to nil if a sync PR is created, otherwise the full commit hash that was found to be already up to date.")
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -160,13 +160,4 @@ func findTarget(entries []sync.ConfigEntry, repo string, upstream string) (*sync
 		}
 	}
 	return foundEntry, foundTarget, nil
-}
-
-// versionBranch determines the upstream branch that a given release version belongs to.
-func versionBranch(v *goversion.GoVersion) string {
-	branchBase := "release-branch.go"
-	if v.Note == "fips" {
-		branchBase = "dev.boringcrypto.go"
-	}
-	return branchBase + v.MajorMinor()
 }
