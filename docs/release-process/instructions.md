@@ -10,9 +10,16 @@ If dealing with multiple releases at the same time (for example, 1.17 and 1.18 s
 
 ## Upstream release
 
-After an upstream release, or in anticipation of an upstream release, go to the [`microsoft-go-infra-release-build`](https://dev.azure.com/dnceng/internal/_build/results?buildId=1780270&view=results) pipeline. Press "Run new" and fill in the blanks. For example, a 1.42.3-1 patch release would look like this:
+After an upstream release, or in anticipation of an upstream release, go to the [`microsoft-go-infra-release-build`](https://dev.azure.com/dnceng/internal/_build/results?buildId=1780270&view=results) pipeline. Press "Run new" and fill in the blanks in the popup.
+
+For example, if upstream is releasing 1.42.3, the parameters might look like this:
 
 > ![](images/run-upstream-release.png)
+
+* **Version to release** is the Microsoft build version associated with this release. The Microsoft build includes one more version segment, the revision. When upstream releases a new patch, it's always "-1".
+* **microsoft/go issue number** should be the number of the issue created in the previous step.
+* The steps labeled **1:** thorough **4:** are used for retries, and will be explained later. For now, leave the default value, `nil`.
+* The variable group should be filled in with `go-release-config`.
 
 > Even though AzDO doesn't show the text selection cursor, you can actually click and drag to select `go-release-config` and copy-paste it into the text box.
 >
