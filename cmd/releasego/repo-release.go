@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -34,8 +35,8 @@ given build asset JSON file and the artifacts it lists that are found in the spe
 
 func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
-	repo := repoFlag()
-	pat := githubPATFlag()
+	repo := githubutil.BindRepoFlag()
+	pat := githubutil.BindPATFlag()
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
 	buildDir := flag.String("build-dir", "", "[Required] The directory containing build artifacts to attach.")
 
@@ -46,7 +47,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	if *tag == "" {
 		return fmt.Errorf("no tag specified")
 	}
-	owner, name, err := parseRepoFlag(*repo)
+	owner, name, err := githubutil.ParseRepoFlag(repo)
 	if err != nil {
 		return err
 	}
@@ -69,7 +70,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubClient(ctx, *pat)
+	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
 		return err
 	}
@@ -77,7 +78,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	log.Printf("Creating draft release %v...\n", *tag)
 
 	var release *github.RepositoryRelease
-	if err := retry(func() error {
+	if err := githubutil.Retry(func() error {
 		release, _, err = client.Repositories.CreateRelease(ctx, owner, name, draftRelease(tag))
 		return err
 	}); err != nil {
@@ -88,7 +89,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	defer func() {
 		if release != nil {
 			log.Println("Cleaning up draft release.")
-			if err := retry(func() error {
+			if err := githubutil.Retry(func() error {
 				_, err = client.Repositories.DeleteRelease(ctx, owner, name, *release.ID)
 				return err
 			}); err != nil {
@@ -101,7 +102,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	for _, p := range uploadPaths {
 		filename := filepath.Base(p)
 		log.Printf("Attaching (uploading) %#q\n", filename)
-		if err := retry(func() error {
+		if err := githubutil.Retry(func() error {
 			file, err := os.Open(p)
 			if err != nil {
 				return err
@@ -121,7 +122,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	log.Println("Marking release as ready (non-draft)...")
-	if err := retry(func() error {
+	if err := githubutil.Retry(func() error {
 		r, _, err := client.Repositories.EditRelease(ctx, owner, name, *release.ID, undraftEditRelease())
 		if err != nil {
 			return err

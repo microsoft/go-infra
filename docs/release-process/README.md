@@ -12,6 +12,9 @@ This doc describes the plan to create Azure Pipelines that run the release steps
 
 The overall effort is tracked by <https://github.com/microsoft/go/issues/423>.
 
+* (2) release-build
+    * ✅ microsoft/go upstream sync, build, and release-go trigger
+    * ⌚ go-images Docker update
 * (3) release-go
     * ✅ aka.ms link generation <https://github.com/microsoft/go/issues/453>
     * ✅ GitHub release generation

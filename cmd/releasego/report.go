@@ -8,9 +8,9 @@ import (
 	"errors"
 	"flag"
 	"log"
-	"os"
 
 	"github.com/google/go-github/github"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -30,8 +30,8 @@ a link to the build as markdown before the message.
 }
 
 func handleReport(p subcmd.ParseFunc) error {
-	repo := repoFlag()
-	pat := githubPATFlag()
+	repo := githubutil.BindRepoFlag()
+	pat := githubutil.BindPATFlag()
 	issue := flag.Int("i", 0, "[Required] The issue number to add the comment to.")
 	message := flag.String("m", "", "[Required] The message to post in the comment.")
 
@@ -45,21 +45,24 @@ func handleReport(p subcmd.ParseFunc) error {
 	if *message == "" {
 		return errors.New("no message specified")
 	}
-	owner, name, err := parseRepoFlag(*repo)
+	owner, name, err := githubutil.ParseRepoFlag(repo)
 	if err != nil {
 		return err
 	}
 
 	ctx := context.Background()
-	client, err := githubClient(ctx, *pat)
+	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
 		return err
 	}
 
-	*message = buildURLPrefix() + *message
+	if url := getEnvBuildURL(); url != "" {
+		*message = "[" + getEnvBuildID() + "](" + url + "): " + *message
+	}
+
 	log.Printf("Creating comment on #%v with content:\n%v\n", *issue, *message)
 
-	return retry(func() error {
+	return githubutil.Retry(func() error {
 		c, _, err := client.Issues.CreateComment(
 			ctx, owner, name, *issue, &github.IssueComment{Body: message})
 		if err != nil {
@@ -68,22 +71,4 @@ func handleReport(p subcmd.ParseFunc) error {
 		log.Printf("Comment: %v\n", *c.HTMLURL)
 		return nil
 	})
-}
-
-func buildURLPrefix() string {
-	collection := getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
-	project := getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
-	id := getEnvNotifyIfEmpty("BUILD_BUILDID")
-	if collection == "" || project == "" || id == "" {
-		return ""
-	}
-	return "[" + id + "](" + collection + project + "/_build/results?buildId=" + id + "): "
-}
-
-func getEnvNotifyIfEmpty(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Printf("Env var not found: %v", key)
-	}
-	return v
 }

@@ -1,0 +1,249 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Use runtime parameters to define these selections in YML. This also makes them
+# show up in the "Run" popup directly. This makes them much easier to set
+# manually, vs. digging into the Variables submenu with many clicks.
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
+parameters:
+  - name: releaseVersion
+    displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
+    type: string
+
+  - name: releaseIssue
+    displayName: microsoft/go issue number to comment on once complete, or nil.
+    type: string
+    default: 'nil'
+
+  # Allow retrying a build starting at any of these points.
+  - name: poll1MicrosoftGoPRNumber
+    displayName: '1: microsoft/go PR number to poll for merge.'
+    type: string
+    default: nil
+  - name: poll2MicrosoftGoCommitHash
+    displayName: '2: microsoft/go commit hash to poll for build.'
+    type: string
+    default: nil
+  - name: poll3MicrosoftGoBuildID
+    displayName: '3: internal build ID to poll for completion.'
+    type: string
+    default: nil
+  - name: poll4MicrosoftGoImagesPRNumber
+    displayName: '4: microsoft/go-images PR number to poll for merge.'
+    type: string
+    default: nil
+
+  # This parameter intentionally has no default: see release-go-pipeline.yml
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
+
+trigger: none
+pr: none
+
+variables:
+  - group: go-akams-config
+  - group: go-akams-auth
+  - group: Microsoft-GoLang-bot
+  - group: DotNet-VSTS-Infra-Access
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
+
+jobs:
+  - job: Release
+    # Let the job overall continue 9 hours before failing. The job time has to account for upstream
+    # availability, sync PR validation jobs, mirroring time, and internal build time. Each waiting
+    # step should specify its own timeout that's just long enough for that particular step, so we
+    # don't need to wait 8 hours to get notified about any particular step taking too long.
+    timeoutInMinutes: 540
+    workspace:
+      clean: all
+    pool:
+      # This is a utility job: use generic recent LTS.
+      name: NetCore1ESPool-Svc-Internal
+      demands: ImageOverride -equals Build.Ubuntu.1804.Amd64
+    variables:
+      assetsDir: $(Pipeline.Workspace)/BuildAssets
+      buildAssetJsonFile: $(assetsDir)/assets.json
+      artifactsDir: $(Pipeline.Workspace)/Artifacts
+      microsoftGoInternalPipeline: 958
+      # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
+      # overridden with a logging command as the pipeline moves on.
+      MicrosoftGoPRNumber: ${{ parameters.poll1MicrosoftGoPRNumber }}
+      MicrosoftGoCommitHash: ${{ parameters.poll2MicrosoftGoCommitHash }}
+      MicrosoftGoBuildID: ${{ parameters.poll3MicrosoftGoBuildID }}
+      MicrosoftGoImagesPRNumber: ${{ parameters.poll4MicrosoftGoImagesPRNumber }}
+    steps:
+      - script: |
+          # Catch and prevent whole-job retries. Retrying the whole job after a
+          # failure would repeat steps that are already completed.
+          echo 'The "retry" button on this pipeline is forbidden.'
+          echo 'Instead, follow the instructions printed by the "Print Retry Instructions" step in the first attempt of this job.'
+          exit 1
+        displayName: Forbid Retry
+        condition: ne(variables['System.JobAttempt'], 1)
+
+      - template: steps/checkout-unix-task.yml
+
+      - template: steps/init-pwsh-task.yml
+      - template: steps/init-go.yml
+      - template: steps/set-bot-git-author.yml
+
+      - script: |
+          go install ./cmd/releasego
+          echo "##vso[task.prependpath]$(go env GOPATH)/bin"
+        displayName: Install releasego
+
+      - script: releasego check-limits -pat '$(GitHubPAT)'
+        displayName: Check GitHub rate limit
+
+      # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
+      # retry build will have a non-nil value in one of these parameters. Only the value of the last
+      # step's parameter matters.
+      - ${{ if eq(parameters.poll4MicrosoftGoImagesPRNumber, 'nil') }}:
+        - ${{ if eq(parameters.poll3MicrosoftGoBuildID, 'nil') }}:
+          - ${{ if eq(parameters.poll2MicrosoftGoCommitHash, 'nil') }}:
+            - ${{ if eq(parameters.poll1MicrosoftGoPRNumber, 'nil') }}:
+              # Poll for the right commit to use for this release.
+              - script: |
+                  releasego get-upstream-commit \
+                    -version '${{ parameters.releaseVersion }}' \
+                    -set-azdo-variable upstreamReleasedCommit
+                displayName: ⌚ Get upstream commit for release
+                # 6 hours. This step may take an arbitrarily long time while if we ran the release
+                # job preemptively. But at some point, a dev needs to check that the tool is working
+                # properly and the upstream release is progressing as expected.
+                timeoutInMinutes: 360
+              # Either make sure the microsoft/go branch has the correct commit as its submodule, or
+              # submit a PR that sets the submodule commit.
+              - script: |
+                  releasego sync \
+                    -c '$(ReleaseSyncConfigPath)' \
+                    -commit '$(upstreamReleasedCommit)' \
+                    -version '${{ parameters.releaseVersion }}' \
+                    -git-auth pat \
+                    -github-user '$(GitHubUser)' \
+                    -github-pat '$(GitHubPAT)' \
+                    -github-pat-reviewer '$(GitHubPATReviewer)' \
+                    -azdo-dnceng-pat '$(AzDODncengPAT)' \
+                    -set-azdo-variable-pr-number MicrosoftGoPRNumber \
+                    -set-azdo-variable-up-to-date-commit MicrosoftGoCommitHash
+                displayName: Sync to upstream commit
+
+            # Now we have MicrosoftGoPRNumber
+            - script: |
+                releasego get-merged-pr-commit \
+                  -repo '$(TargetGitHubRepo)' \
+                  -pr '$(MicrosoftGoPRNumber)' \
+                  -pat '$(GitHubPAT)' \
+                  -set-azdo-variable MicrosoftGoCommitHash
+              displayName: ⌚ Get sync PR merged commit hash
+              timeoutInMinutes: 60
+              condition: and(succeeded(), ne(variables.MicrosoftGoPRNumber, 'nil'))
+
+          # Now we have MicrosoftGoCommitHash
+          - script: |
+              releasego wait-azdo-commit \
+                -commit '$(MicrosoftGoCommitHash)' \
+                -name '$(TargetAzDORepo)' \
+                -org 'https://dev.azure.com/dnceng/' \
+                -proj 'internal' \
+                -azdopat '$(System.AccessToken)'
+            displayName: ⌚ Wait for internal mirror
+            timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+          # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
+          # default Branch is "microsoft/main". So, we need to figure out the release branch name
+          # and save it as a variable to pass it to AzDO.
+          #
+          # Testing adds a complication: testing commits won't be found in the actual release
+          # branches, so we need a way to override. This is done using BuildPipelineFullBranchName
+          # from the variable group. For actual releases, it should have the value
+          # "refs/heads/microsoft/$(UpstreamTargetBranchName)". But in a testing variable group, it
+          # can point at any ordinary dev branch that has the sync commit.
+          - script: |
+              releasego get-target-branch \
+                -version '${{ parameters.releaseVersion }}' \
+                -set-azdo-variable-branch-name UpstreamTargetBranchName
+            displayName: Get target branch containing commit
+          - script: |
+              releasego build-pipeline \
+                -commit '$(MicrosoftGoCommitHash)' \
+                -branch '$(BuildPipelineFullBranchName)' \
+                -id '$(GoPipelineID)' \
+                -org 'https://dev.azure.com/dnceng/' \
+                -proj 'internal' \
+                -azdopat '$(System.AccessToken)' \
+                -set-azdo-variable MicrosoftGoBuildID
+            displayName: Run microsoft/go internal build
+
+        # Now we have MicrosoftGoBuildID
+        - script: |
+            releasego wait-build \
+              -id '$(MicrosoftGoBuildID)' \
+              -org 'https://dev.azure.com/dnceng/' \
+              -proj 'internal' \
+              -azdopat '$(System.AccessToken)'
+          displayName: ⌚ Wait for internal build
+          timeoutInMinutes: 120
+        - script: |
+            releasego build-pipeline \
+              -id '$(GoReleasePipelineID)' \
+              -org 'https://dev.azure.com/dnceng/' \
+              -proj 'internal' \
+              -azdopat '$(System.AccessToken)' \
+              p releaseVersion '${{ parameters.releaseVersion }}' \
+              p releaseGoBuildId '$(MicrosoftGoBuildID)' \
+              p releaseIssue '${{ parameters.releaseIssue }}' \
+              p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+          displayName: Run microsoft/go release pipeline
+
+        # Planned work: after microsoft-go is built (without waiting for the  microsoft/go release
+        # pipeline to complete), start running Docker update (microsoft/go-images) and wait for the
+        # Docker update PR to be merged. This may be done by sharing a AzDO YAML template with
+        # update-images-pipeline.yml but pull the build asset JSON file from MicrosoftGoBuildID.
+        #
+        # Until this is done, MicrosoftGoImagesPRNumber will always be 'nil' so the next step will
+        # be skipped.
+        #
+        # docs\release-process\README.md
+
+      # Now we have MicrosoftGoImagesPRNumber if a Docker release is associated with this version.
+      - script: |
+          releasego get-merged-pr-commit \
+            -repo '$(TargetGoImagesGitHubRepo)' \
+            -pr '$(MicrosoftGoImagesPRNumber)' \
+            -pat '$(GitHubPAT)'
+        displayName: ⌚ Wait for go-images update PR merge
+        timeoutInMinutes: 120
+        condition: and(succeeded(), ne(variables.MicrosoftGoImagesPRNumber, 'nil'))
+
+      - script: releasego check-limits -pat $(GitHubPAT)
+        displayName: Check GitHub rate limit
+
+      - ${{ if ne(parameters.releaseIssue, 'nil') }}:
+        - script: |
+            releasego report \
+              -i '${{ parameters.releaseIssue }}' \
+              -m ':white_check_mark: Successfully ran microsoft/go build prep steps for ${{ parameters.releaseVersion }}.' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)'
+          displayName: Report Success
+          condition: succeeded()
+        - script: |
+            releasego report \
+              -i '${{ parameters.releaseIssue }}' \
+              -m ':rotating_light: Failed to run microsoft/go build prep steps for ${{ parameters.releaseVersion }}.' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)'
+          displayName: Report Failure
+          condition: failed()
+
+      - script: |
+          echo 'To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:'
+          echo ''
+          echo '1: $(MicrosoftGoPRNumber)'
+          echo '2: $(MicrosoftGoCommitHash)'
+          echo '3: $(MicrosoftGoBuildID)'
+          echo '4: $(MicrosoftGoImagesPRNumber)'
+        displayName: 🔁 Print Retry Instructions
+        condition: failed()

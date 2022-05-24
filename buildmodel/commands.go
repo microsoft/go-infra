@@ -211,7 +211,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 		if parsedOrigin != nil {
 			fmt.Println("---- Checking for an existing PR for this base branch and origin...")
-			existingPR, err = gitpr.FindExistingPR(
+			pr, err := gitpr.FindExistingPR(
 				request,
 				parsedPRHeadRemote,
 				parsedOrigin,
@@ -221,6 +221,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 			if err != nil {
 				return err
 			}
+			existingPR = pr.ID
 			if existingPR != "" {
 				fmt.Printf("---- Found PR ID: %v\n", existingPR)
 			} else {

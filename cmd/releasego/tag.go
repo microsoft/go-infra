@@ -10,6 +10,7 @@ import (
 	"log"
 
 	"github.com/google/go-github/github"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -28,8 +29,8 @@ exists, exit with code 1.
 
 func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
-	repo := repoFlag()
-	pat := githubPATFlag()
+	repo := githubutil.BindRepoFlag()
+	pat := githubutil.BindPATFlag()
 	commit := flag.String("commit", "", "The commit hash to tag.")
 
 	if err := p(); err != nil {
@@ -42,13 +43,13 @@ func handleTag(p subcmd.ParseFunc) error {
 	if *commit == "" {
 		return fmt.Errorf("no commit specified")
 	}
-	owner, name, err := parseRepoFlag(*repo)
+	owner, name, err := githubutil.ParseRepoFlag(repo)
 	if err != nil {
 		return err
 	}
 
 	ctx := context.Background()
-	client, err := githubClient(ctx, *pat)
+	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
 		return err
 	}
@@ -56,7 +57,7 @@ func handleTag(p subcmd.ParseFunc) error {
 	ref := "refs/tags/" + *tag
 	log.Printf("Creating %q pointing at %q\n", ref, *commit)
 
-	return retry(func() error {
+	return githubutil.Retry(func() error {
 		// The GitHub API returns an error code if the tag already exists. We don't need to
 		// check it ourselves.
 		_, _, err := client.Git.CreateRef(ctx, owner, name, &github.Reference{

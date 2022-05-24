@@ -1,13 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package main
+package sync
 
 import (
 	"bufio"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -20,36 +19,97 @@ import (
 	"github.com/microsoft/go-infra/gitpr"
 )
 
-const description = `
-Example: A sync operation dry run:
+type Flags struct {
+	DryRun *bool
 
-  go run ./cmd/sync -n
+	GitHubUser        *string
+	GitHubPAT         *string
+	GitHubPATReviewer *string
 
-Sync runs a "merge from upstream" and submits it as a PR. This means fetching commits from an
-upstream repo and merging them into corresponding branches in a target repo. This is configured in a
-config file, by default 'eng/sync-config.json'. For each entry in the configuration:
+	AzDODncengPAT *string
 
-1. Fetch each SourceBranch 'branch' from 'Upstream' to a local temp repository.
-2. Fetch each 'microsoft/{branch}' from 'Target'.
-3. Merge each upstream branch 'b' into corresponding 'microsoft/b'.
-4. Push each merge commit to 'Head' (or 'Target' if 'Head' isn't specified) with a name that follows
-   the pattern 'dev/auto-merge/microsoft/{branch}'.
-5. Create a PR in 'Target' that merges the auto-merge branch. If the PR already exists, overwrite.
-   (Force push.)
+	SyncConfig *string
+	TempGitDir *string
 
-This script creates the temporary repository in 'eng/artifacts/' by default.
+	GitAuthString *string
+}
 
-To run a subset of the syncs specified in the config file, or to swap out URLs for development
-purposes, create a copy of the configuration file and point at it using a '-c' argument.
-`
+func BindFlags(workingDirectory string) *Flags {
+	return &Flags{
+		DryRun: flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
 
-var dryRun = flag.Bool("n", false, "Enable dry run: do not push, do not submit PR.")
+		GitHubUser:        flag.String("github-user", "", "Use this github user to submit pull requests."),
+		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
+		GitHubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-var githubUser = flag.String("github-user", "", "Use this github user to submit pull requests.")
-var githubPAT = flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified.")
-var githubPATReviewer = flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified.")
+		AzDODncengPAT: flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs."),
 
-var azdoDncengPAT = flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs.")
+		SyncConfig: flag.String("c", "eng/sync-config.json", "The sync configuration file to run."),
+		TempGitDir: flag.String(
+			"temp-git-dir",
+			filepath.Join(workingDirectory, "eng", "artifacts", "sync-upstream-temp-repo"),
+			"Location to create the temporary Git repo. A timestamped subdirectory is created to reduce chance of collision."),
+
+		GitAuthString: flag.String(
+			"git-auth",
+			string(GitAuthNone),
+			// List valid options. Indent one space, to line up with the automatic ' (default "none")'.
+			"The type of Git auth to inject into URLs for fetch/push access. String options:\n"+
+				" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
+				" ssh - Change the GitHub URL to SSH format.\n"+
+				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"),
+	}
+}
+
+func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
+	switch GitAuthOption(*f.GitAuthString) {
+	case GitAuthNone:
+		return gitcmd.NoAuther{}, nil
+
+	case GitAuthSSH:
+		return gitcmd.GitHubSSHAuther{}, nil
+
+	case GitAuthPAT:
+		var missingArgs string
+		if *f.GitHubUser == "" {
+			missingArgs += " git-auth pat is specified but github-user is not."
+		}
+		if *f.GitHubPAT == "" {
+			missingArgs += " git-auth pat is specified but github-pat is not."
+		}
+		if missingArgs != "" {
+			return nil, fmt.Errorf("missing command-line args:%v", missingArgs)
+		}
+		return gitcmd.MultiAuther{
+			Authers: []gitcmd.URLAuther{
+				gitcmd.GitHubPATAuther{
+					User: *f.GitHubUser,
+					PAT:  *f.GitHubPAT,
+				},
+				gitcmd.AzDOPATAuther{
+					PAT: *f.AzDODncengPAT,
+				},
+			},
+		}, nil
+	}
+	return nil, fmt.Errorf("git-auth value %q is not an accepted value.\n", *f.GitAuthString)
+}
+
+func (f *Flags) MakeGitWorkDir() (string, error) {
+	d, err := buildmodel.MakeWorkDir(*f.TempGitDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to make working directory for sync: %w", err)
+	}
+	return d, nil
+}
+
+func (f *Flags) ReadConfig() ([]ConfigEntry, error) {
+	var entries []ConfigEntry
+	if err := buildmodel.ReadJSONFile(*f.SyncConfig, &entries); err != nil {
+		return nil, fmt.Errorf("failed to read sync config file: %w", err)
+	}
+	return entries, nil
+}
 
 // maxDiffLinesToDisplay is the number of lines of the file diff to show in the console log and
 // include in the PR description before truncating the remaining lines. A dev branch may have a
@@ -81,80 +141,24 @@ const (
 	GitAuthPAT  GitAuthOption = "pat"
 )
 
-var auther gitcmd.URLAuther
-
-func main() {
-	var syncConfig = flag.String("c", "eng/sync-config.json", "The sync configuration file to run.")
-	var tempGitDir = flag.String(
-		"temp-git-dir",
-		filepath.Join(getwdOrPanic(), "eng", "artifacts", "sync-upstream-temp-repo"),
-		"Location to create the temporary Git repo. A timestamped subdirectory is created to reduce chance of collision.")
-
-	var gitAuthString = flag.String(
-		"git-auth",
-		string(GitAuthNone),
-		// List valid options. Indent one space, to line up with the automatic ' (default "none")'.
-		"The type of Git auth to inject into URLs for fetch/push access. String options:\n"+
-			" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
-			" ssh - Change the GitHub URL to SSH format.\n"+
-			" pat - Add the 'github-user' and 'github-pat' values into the URL.\n")
-
-	buildmodel.ParseBoundFlags(description)
-
-	gitAuth := GitAuthOption(*gitAuthString)
-	switch gitAuth {
-	case GitAuthNone:
-		auther = gitcmd.NoAuther{}
-		break
-
-	case GitAuthSSH:
-		auther = gitcmd.GitHubSSHAuther{}
-		break
-
-	case GitAuthPAT:
-		missingArgs := false
-		if *githubUser == "" {
-			fmt.Printf("Error: git-auth pat is specified but github-user is not.")
-			missingArgs = true
-		}
-		if *githubPAT == "" {
-			fmt.Printf("Error: git-auth pat is specified but github-pat is not.")
-			missingArgs = true
-		}
-		if missingArgs {
-			os.Exit(1)
-		}
-		auther = gitcmd.MultiAuther{
-			Authers: []gitcmd.URLAuther{
-				gitcmd.GitHubPATAuther{
-					User: *githubUser,
-					PAT:  *githubPAT,
-				},
-				gitcmd.AzDOPATAuther{
-					PAT: *azdoDncengPAT,
-				},
-			},
-		}
-		break
-
-	default:
-		fmt.Printf("Error: git-auth value %q is not an accepted value.\n", *gitAuthString)
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	var entries []SyncConfigEntry
-	if err := buildmodel.ReadJSONFile(*syncConfig, &entries); err != nil {
-		log.Panic(err)
+func MakePRs(f *Flags) error {
+	entries, err := f.ReadConfig()
+	if err != nil {
+		return err
 	}
 
 	if len(entries) == 0 {
-		fmt.Printf("No entries found in config file: %v\n", *syncConfig)
+		fmt.Printf("No entries found in config file: %v\n", *f.SyncConfig)
 	}
 
-	currentRunGitDir, err := buildmodel.MakeWorkDir(*tempGitDir)
+	currentRunGitDir, err := f.MakeGitWorkDir()
 	if err != nil {
-		log.Panic(err)
+		return err
+	}
+
+	// If there's an auth error, catch it here rather than repeatedly printing it for each sync entry.
+	if _, err := f.ParseAuth(); err != nil {
+		return err
 	}
 
 	success := true
@@ -163,15 +167,12 @@ func main() {
 		syncNum := fmt.Sprintf("%v/%v", i+1, len(entries))
 		fmt.Printf("=== Beginning sync %v, from %v -> %v\n", syncNum, entry.Upstream, entry.Target)
 
-		if entry.Head == "" {
-			entry.Head = entry.Target
-		}
-		fmt.Printf("--- Head repository for PR: %v\n", entry.Head)
+		fmt.Printf("--- Repository for PR branch: %v\n", entry.PRBranchStorageRepo())
 
 		// Give each entry a unique dir to avoid interfering with others upon failure.
 		repositoryDir := path.Join(currentRunGitDir, strconv.Itoa(i))
 
-		if err := syncRepository(repositoryDir, entry); err != nil {
+		if _, err := MakeBranchPRs(f, repositoryDir, &entry); err != nil {
 			// Let sync process continue if an error happens with the current entry.
 			fmt.Println(err)
 			fmt.Printf("=== Failed sync %v\n", syncNum)
@@ -179,13 +180,10 @@ func main() {
 		}
 	}
 
-	fmt.Println()
-	if success {
-		fmt.Println("Completed successfully.")
-	} else {
-		fmt.Println("Completed with errors.")
-		os.Exit(1)
+	if !success {
+		return fmt.Errorf("completed sync with errors")
 	}
+	return nil
 }
 
 // changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
@@ -195,11 +193,35 @@ type changedBranch struct {
 	Diff    string
 	PRTitle string
 	PRBody  string
+
+	// Result is a pointer to the SyncResult to update with PR info once a PR is submitted for this
+	// changed branch.
+	Result *SyncResult
 }
 
-func syncRepository(dir string, entry SyncConfigEntry) error {
+// SyncResult is the result of a sync call.
+type SyncResult struct {
+	// PR is the GitHub PR creation response if a PR is necessary. If the target repo is already up
+	// to date, this is nil. If this is the result of a dry run, PR may be nil even if a PR is
+	// necessary, because a PR wasn't created.
+	PR *gitpr.GitHubResponse
+	// Commit is the commit hash that contains the updated result. This is either the commit that
+	// was pushed for the PR, or a commit that already exists in the target repo.
+	Commit string
+}
+
+// MakeBranchPRs creates sync changes for each branch in the given entry and submits them as PRs.
+// Multiple branches are processed at the same time in order to efficiently use Git: it is better to
+// tell Git to fetch/push multiple branches at the same time than run the operations individually.
+// Returns an error, or the sync results of each branch.
+func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
+	auther, err := f.ParseAuth()
+	if err != nil {
+		return nil, err
+	}
+
 	if err := run(exec.Command("git", "init", dir)); err != nil {
-		return err
+		return nil, err
 	}
 
 	// newGitCmd creates a "git {args}" command that runs in the temp fetch repo Git dir.
@@ -218,6 +240,9 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				Purpose: "auto-sync",
 			},
 		}
+		if commit, ok := entry.SourceBranchLatestCommit[upstream]; ok {
+			nb.Commit = commit
+		}
 		branches = append(branches, nb)
 	}
 
@@ -234,10 +259,10 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
 	}
 	if err := run(fetchUpstream); err != nil {
-		return err
+		return nil, err
 	}
 	if err := run(fetchOrigin); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Fetch the state of the official/upstream-maintained mirror (if specified) so we can check
@@ -248,7 +273,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			fetchUpstreamMirror.Args = append(fetchUpstreamMirror.Args, b.UpstreamMirrorFetchRefspec())
 		}
 		if err := run(fetchUpstreamMirror); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -259,24 +284,29 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		for _, b := range branches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
-		if *dryRun {
+		if *f.DryRun {
 			mirror.Args = append(mirror.Args, "-n")
 		}
 
 		if err := run(mirror); err != nil {
-			return err
+			return nil, err
 		}
 	}
+
+	// Track the sync results. In this first section, we figure out the result's Commit value. In
+	// the second section, a PR is created if the Commit doesn't exist in the target, and we update
+	// the result struct to include that info.
+	results := make([]SyncResult, len(branches))
 
 	// While looping through the branches and trying to sync, use this slice to keep track of which
 	// branches have changes, so we can push changes and submit PRs later.
 	changedBranches := make([]changedBranch, 0, len(branches))
 
-	for _, b := range branches {
+	for i, b := range branches {
 		fmt.Printf("---- Processing branch %q for entry targeting %v\n", b.Name, entry.Target)
 
 		if err := run(newGitCmd("checkout", b.PRBranch())); err != nil {
-			return err
+			return nil, err
 		}
 
 		c := changedBranch{
@@ -284,17 +314,18 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			PRBody: "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
 				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
 				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).",
+			Result: &results[i],
 		}
 		var commitMessage string
 
 		if entry.SubmoduleTarget == "" {
 			// This is not a submodule update, so merge with the upstream repository.
-			if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalBranch())); err != nil {
+			if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalSyncTarget())); err != nil {
 				if exitError, ok := err.(*exec.ExitError); ok {
 					fmt.Printf("---- Merge hit an ExitError: %q. A non-zero exit code is expected if there were conflicts. The script will try to resolve them, next.\n", exitError)
 				} else {
 					// Make sure we don't ignore more than we intended.
-					return err
+					return nil, err
 				}
 			}
 
@@ -303,7 +334,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				// sure we delete new files in e.g. '.github' that are in upstream but don't exist locally.
 				// '--ours' auto-deletes if upstream modifies a file that we deleted in our branch.
 				if err := run(newGitCmd(append([]string{"checkout", "--no-overlay", "--ours", "HEAD", "--"}, entry.AutoResolveTarget...)...)); err != nil {
-					return err
+					return nil, err
 				}
 			}
 			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
@@ -323,30 +354,31 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				return strings.TrimSpace(out), nil
 			}
 
-			// This update uses a submodule, so find the latest version of upstream and update the
+			// This update uses a submodule, so find the target version of upstream and update the
 			// submodule to point at it.
-			newCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamLocalBranch())
+			newCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamLocalSyncTarget())
 			if err != nil {
-				return err
+				return nil, err
 			}
 
-			// Get the latest commit available in every known official location.
+			// Limit the commit to one that's available in every known official repository.
 			if entry.UpstreamMirror != "" {
 				upstreamMirrorCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamMirrorLocalBranch())
 				if err != nil {
-					return err
+					return nil, err
 				}
 				if newCommit != upstreamMirrorCommit {
 					// Point out mismatches, so we can keep track of them later by searching logs.
 					// This happening normally isn't a concern: our sync schedule most likely
 					// coincided with the potential time window where a commit has been pushed to
-					// Upstream before being pushed to UpstreamMirror.
+					// Upstream before being pushed to UpstreamMirror. Or, the user gave a specific
+					// commit to use which is intentionally not the latest one in the branch.
 					fmt.Printf("--- Upstream and upstream mirror commits do not match: %v != %v\n", newCommit, upstreamMirrorCommit)
 				}
 
 				commonCommit, err := getTrimmedCmdOutput("merge-base", newCommit, upstreamMirrorCommit)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				fmt.Printf("---- Common commit of upstream and upstream mirror: %v\n", commonCommit)
 				newCommit = commonCommit
@@ -357,12 +389,12 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			// entry is a submodule.
 			cacheInfo := fmt.Sprintf("160000,%v,%v", newCommit, entry.SubmoduleTarget)
 			if err := run(newGitCmd("update-index", "--cacheinfo", cacheInfo)); err != nil {
-				return err
+				return nil, err
 			}
 
 			upstreamCommitMessage, err := getTrimmedCmdOutput("log", "--format=%B", "-n", "1", newCommit)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			snippet := createCommitMessageSnippet(upstreamCommitMessage)
 
@@ -377,19 +409,36 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				fmt.Printf("---- Detected changes in Git stage. Continuing to commit and submit PR.\n")
 			} else {
 				// Make sure we don't ignore more than we intended.
-				return err
+				return nil, err
 			}
 		} else {
 			// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
 			fmt.Printf("---- No changes to sync for %v. Skipping.\n", b.Name)
+
+			// Save the current commit in the result struct. This lets the caller know exactly what
+			// commit was found to be up to date, to avoid racing with other changes being merged
+			// into the target repo.
+			commit, err := combinedOutput(newGitCmd("rev-parse", "HEAD"))
+			if err != nil {
+				return nil, err
+			}
+			c.Result.Commit = commit
+
 			continue
 		}
 
 		// If we still have unmerged files, 'git commit' will exit non-zero, causing the script to
 		// exit. This prevents the script from pushing a bad merge.
 		if err := run(newGitCmd("commit", "-m", commitMessage)); err != nil {
-			return err
+			return nil, err
 		}
+
+		// Save the created commit in the result struct.
+		commit, err := combinedOutput(newGitCmd("rev-parse", "HEAD"))
+		if err != nil {
+			return nil, err
+		}
+		c.Result.Commit = commit
 
 		if entry.SubmoduleTarget == "" {
 			// Show a summary of which files are in our fork branch vs. upstream. This is just
@@ -402,7 +451,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 				b.PRBranch(),
 			))
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			// The diff may be large. Truncate it if it seems unreasonable to show on the console, or to
@@ -411,7 +460,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 			diffLineScanner := bufio.NewScanner(strings.NewReader(diff))
 			for lineNumber := 0; diffLineScanner.Scan(); lineNumber++ {
 				if err := diffLineScanner.Err(); err != nil {
-					return err
+					return nil, err
 				}
 				if lineNumber == maxDiffLinesToDisplay {
 					diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
@@ -439,7 +488,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	if len(changedBranches) == 0 {
 		fmt.Println("Checked branches for changes to sync: none found.")
 		fmt.Println("Success.")
-		return nil
+		return results, nil
 	}
 
 	newGitPushCommand := func(remote string, force bool, refspecs []string) *exec.Cmd {
@@ -451,7 +500,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 		for _, r := range refspecs {
 			c.Args = append(c.Args, r)
 		}
-		if *dryRun {
+		if *f.DryRun {
 			c.Args = append(c.Args, "-n")
 		}
 		return c
@@ -467,8 +516,8 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	for _, b := range changedBranches {
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
 	}
-	if err := run(newGitPushCommand(entry.Head, true, mergePushRefspecs)); err != nil {
-		return err
+	if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), true, mergePushRefspecs)); err != nil {
+		return nil, err
 	}
 
 	// All Git operations are complete! Next, ensure there's a GitHub PR for each auto-merge branch.
@@ -480,11 +529,11 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 	// Parse the URLs involved in the PR to get segment information.
 	parsedPRTargetRemote, err := gitpr.ParseRemoteURL(entry.Target)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	parsedPRHeadRemote, err := gitpr.ParseRemoteURL(entry.Head)
+	parsedPRHeadRemote, err := gitpr.ParseRemoteURL(entry.PRBranchStorageRepo())
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, b := range changedBranches {
@@ -496,15 +545,15 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 
 		var skipReason string
 		switch {
-		case *dryRun:
+		case *f.DryRun:
 			skipReason = "Dry run"
 
-		case *githubUser == "":
+		case *f.GitHubUser == "":
 			skipReason = "github-user not provided"
-		case *githubPAT == "":
+		case *f.GitHubPAT == "":
 			skipReason = "github-pat not provided"
 
-		case *githubPATReviewer == "":
+		case *f.GitHubPATReviewer == "":
 			// In theory, if we have githubPAT but no reviewer, we can submit the PR but skip
 			// reviewing it/enabling auto-merge. However, this doesn't seem very useful, so it isn't
 			// implemented.
@@ -529,7 +578,7 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
-			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), request, *githubPAT)
+			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), request, *f.GitHubPAT)
 			fmt.Printf("%+v\n", pr)
 			if err != nil {
 				return err
@@ -537,34 +586,37 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 
 			if pr.AlreadyExists {
 				fmt.Println("---- A PR already exists. Attempting to find it...")
-				pr.NodeID, err = gitpr.FindExistingPR(
+				existingPR, err := gitpr.FindExistingPR(
 					request,
 					parsedPRHeadRemote,
 					parsedPRTargetRemote,
 					b.Refs.PRBranch(),
-					*githubUser,
-					*githubPAT)
+					*f.GitHubUser,
+					*f.GitHubPAT)
 				if err != nil {
 					return err
 				}
-				if pr.NodeID == "" {
+				if pr == nil {
 					return fmt.Errorf("no PR found")
 				}
+				pr.NodeID = existingPR.ID
+				pr.Number = existingPR.Number
 			} else {
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 
 				fmt.Printf("---- Approving with reviewer account...\n")
-				if err = gitpr.ApprovePR(pr.NodeID, *githubPATReviewer); err != nil {
+				if err = gitpr.ApprovePR(pr.NodeID, *f.GitHubPATReviewer); err != nil {
 					return err
 				}
 			}
 
 			fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-			if err = gitpr.EnablePRAutoMerge(pr.NodeID, *githubPATReviewer); err != nil {
+			if err = gitpr.EnablePRAutoMerge(pr.NodeID, *f.GitHubPATReviewer); err != nil {
 				return err
 			}
 
 			fmt.Printf("---- PR for %v: Done.\n", prFlowDescription)
+			b.Result.PR = pr
 			return nil
 		}()
 
@@ -586,19 +638,10 @@ func syncRepository(dir string, entry SyncConfigEntry) error {
 
 	// If PR submission failed for any branch, exit the overall script with NZEC.
 	if prFailed {
-		return fmt.Errorf("failed to submit one or more PRs")
+		return nil, fmt.Errorf("failed to submit one or more PRs")
 	}
 
-	return nil
-}
-
-// getwdOrPanic gets the current working dir or panics, for easy use in expressions.
-func getwdOrPanic() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		log.Panic(err)
-	}
-	return wd
+	return results, nil
 }
 
 // run sets up the command so it logs directly to our stdout/stderr streams, then runs it.

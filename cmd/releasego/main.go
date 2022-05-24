@@ -4,17 +4,13 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"flag"
-	"fmt"
 	"log"
+	"os"
 	"strings"
-	"time"
 
-	"github.com/google/go-github/github"
+	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
-	"golang.org/x/oauth2"
 )
 
 const description = `
@@ -30,82 +26,17 @@ func main() {
 	}
 }
 
-func githubClient(ctx context.Context, pat string) (*github.Client, error) {
-	if pat == "" {
-		return nil, errors.New("no GitHub PAT specified")
-	}
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: pat})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
-	return github.NewClient(tokenClient), nil
-}
-
 func tagFlag() *string {
 	return flag.String("tag", "", "[Required] The tag name.")
 }
 
-func githubPATFlag() *string {
-	return flag.String("pat", "", "[Required] The GitHub PAT to use.")
-}
-
-func azdoPATFlag() *string {
-	return flag.String("azdopat", "", "[Required] The Azure DevOps PAT to use.")
-}
-
-func repoFlag() *string {
-	return flag.String("repo", "", "[Required] The repo to tag, in '{owner}/{repo}' form.")
-}
-
-func parseRepoFlag(repo string) (owner, name string, err error) {
-	if repo == "" {
-		return "", "", errors.New("repo not specified")
+// versionBranch determines the upstream branch that a given release version belongs to.
+func versionBranch(v *goversion.GoVersion) string {
+	branchBase := "release-branch.go"
+	if v.Note == "fips" {
+		branchBase = "dev.boringcrypto.go"
 	}
-	var found bool
-	owner, name, found = strings.Cut(repo, "/")
-	if !found {
-		return "", "", fmt.Errorf("unable to split repo into owner and name: %v", repo)
-	}
-	return
-}
-
-// retryAttempts is the number of times 'retry' will attempt the call.
-const retryAttempts = 5
-const maxRateLimitResetWait = time.Minute * 15
-const rateLimitResetWaitSlack = time.Second * 5
-
-// retry runs f up to 'attempts' times, printing the error if one is encountered. Handles GitHub
-// rate limit exceeded errors by waiting, if the reset will happen reasonably soon.
-func retry(f func() error) error {
-	var i = 0
-	for ; i < retryAttempts; i++ {
-		log.Printf("   attempt %v/%v...\n", i+1, retryAttempts)
-		err := f()
-		if err != nil {
-			log.Printf("...attempt %v/%v failed with error: %v\n", i+1, retryAttempts, err)
-			if i+1 < retryAttempts {
-				var rateErr *github.RateLimitError
-				if errors.As(err, &rateErr) {
-					resetDuration := rateErr.Rate.Reset.Sub(time.Now())
-
-					log.Printf("...rate limit exceeded. Reset at %v, %v from now.\n", rateErr.Rate.Reset, resetDuration)
-					if resetDuration > maxRateLimitResetWait {
-						log.Printf("...rate limit reset is too far away to reasonably wait. Aborting.")
-						return err
-					}
-
-					// Sleep until the reset, plus some extra in case our clocks aren't synchronized.
-					wait := resetDuration + rateLimitResetWaitSlack
-					log.Printf("...waiting %v before next retry.\n", wait)
-					time.Sleep(wait)
-				}
-				continue
-			}
-			log.Printf("...no retries remaining.\n")
-			return err
-		}
-		break
-	}
-	log.Printf("...attempt %v/%v successful.\n", i+1, retryAttempts)
-	return nil
+	return branchBase + v.MajorMinor()
 }
 
 // appendPathAndVerificationFilePaths appends to p the path and the verification file (hash,
@@ -119,8 +50,24 @@ func appendPathAndVerificationFilePaths(p []string, path string) []string {
 	return p
 }
 
-// setAzDOPipelineVariable uses an AzDO logging command to set a variable in the pipeline.
-// https://github.com/Microsoft/azure-pipelines-tasks/blob/master/docs/authoring/commands.md
-func setAzDOPipelineVariable(name, value string) {
-	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+func getEnvBuildURL() string {
+	collection := getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
+	project := getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
+	id := getEnvBuildID()
+	if collection == "" || project == "" || id == "" {
+		return ""
+	}
+	return collection + project + "/_build/results?buildId=" + id
+}
+
+func getEnvBuildID() string {
+	return getEnvNotifyIfEmpty("BUILD_BUILDID")
+}
+
+func getEnvNotifyIfEmpty(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Printf("Env var not found: %v", key)
+	}
+	return v
 }
