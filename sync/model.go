@@ -59,6 +59,17 @@ type ConfigEntry struct {
 	// (default), that indicates the entire Upstream repository should be merged into the Target
 	// repository.
 	SubmoduleTarget string
+
+	// GoVersionFileContent	is empty, or the Go version that the microsoft/go build should use
+	// after the sync. Should be in the upstream format, e.g. go1.17.10 and go1.18. Sync examines
+	// VERSION in the submodule, and if it doesn't match the expected value, creates/updates VERSION
+	// in the outer repo (microsoft/go) to specify it. Otherwise, cleans up the outer VERSION file.
+	GoVersionFileContent string
+
+	// GoMicrosoftRevisionFileContent is empty, or the Microsoft revision (1, 2, ...) that the
+	// microsoft/go build should use after the sync. If 1, removes the MICROSOFT_REVISION file if
+	// one exists. If 2 or more, creates a MICROSOFT_REVISION file to specify it.
+	GoMicrosoftRevisionFileContent string
 }
 
 // PRBranchStorageRepo returns the repo to store the PR branch on.

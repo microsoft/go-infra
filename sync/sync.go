@@ -354,6 +354,26 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				return strings.TrimSpace(out), nil
 			}
 
+			// Set the content of the file at the path, creating the file if necessary, and add the
+			// file to the Git index for committing later. If the content is empty, delete the file
+			// if it exists.
+			updateFile := func(path, content string) error {
+				fmt.Printf("---- Setting %#q content: %q\n", path, content)
+				if content == "" {
+					if err := run(newGitCmd("rm", "--ignore-unmatch", "--", path)); err != nil {
+						return err
+					}
+				} else {
+					if err := os.WriteFile(path, []byte(content), 0666); err != nil {
+						return err
+					}
+					if err := run(newGitCmd("add", "--", path)); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+
 			// This update uses a submodule, so find the target version of upstream and update the
 			// submodule to point at it.
 			newCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamLocalSyncTarget())
@@ -382,6 +402,48 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 				fmt.Printf("---- Common commit of upstream and upstream mirror: %v\n", commonCommit)
 				newCommit = commonCommit
+			}
+
+			// Ensure either the VERSION file in the submodule is what we expect it to be, or the
+			// Microsoft Go repo contains a VERSION file specifying that version. This fixes boring
+			// branches, where upstream has no VERSION file and we need to make it ourselves.
+			//
+			// If there is no expected version, (e.g. the sync entry simply wants to sync to
+			// latest), don't even check.
+			if entry.GoVersionFileContent != "" {
+				upstreamVersion, err := getTrimmedCmdOutput("show", newCommit+":VERSION")
+				if err != nil {
+					if _, ok := err.(*exec.ExitError); ok {
+						fmt.Printf("---- VERSION file doesn't exist in submodule.\n")
+					} else {
+						return nil, err
+					}
+				}
+
+				var content string
+				// We only need an outer repo VERSION file if the expected version mismatches the
+				// submodule's VERSION file.
+				if entry.GoVersionFileContent != upstreamVersion {
+					content = entry.GoVersionFileContent
+				}
+
+				if err := updateFile(filepath.Join(dir, "VERSION"), content); err != nil {
+					return nil, err
+				}
+			}
+
+			// Ensure the Microsoft revision file is what we expect it to be. If there is no
+			// expected revision, leave it alone.
+			if entry.GoMicrosoftRevisionFileContent != "" {
+				var content string
+				// We only need a MICROSOFT_REVISION file for revisions > 1 (the default/minimum).
+				if entry.GoMicrosoftRevisionFileContent != "1" {
+					content = entry.GoMicrosoftRevisionFileContent
+				}
+
+				if err := updateFile(filepath.Join(dir, "MICROSOFT_REVISION"), content); err != nil {
+					return nil, err
+				}
 			}
 
 			// Set the submodule commit directly in the Git index. This avoids the need to
