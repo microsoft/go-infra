@@ -109,3 +109,24 @@ This plan has a lot of polling, and that's bad! It keeps an agent busy while it 
 We should consider where release notes should go that are specific to the Microsoft build of Go. In particular, FIPS-related changes.
 
 It would be reasonable to have a place where release notes can be checked in: doc/go1.18-fips.html? Inside patch file descriptions with conventions to extract relevant info? Then the release-go pipeline can detect the notes, format them, and put them into e.g. the GitHub release.
+
+## Use more AzDO features: stage/job retries, release pipelines
+
+These pipelines don't take advantage of the "retry failed jobs" or stage retry features of AzDO. Instead, we queue a new build with configuration to make it avoid re-running any steps that were already completed. There are a few reasons the AzDO retry logic doesn't seem suitable for these pipelines:
+
+* AzDO retry granularity is at the job or stage level, not step level. Our steps are not idempotent: running them a second time would fail.
+    * We could make each step idempotent, but it would be considerably more complex.
+    * We could split up steps into multiple jobs or stages, but acquiring an agent can take a while, and we would be multiplying that time.
+        * Running parallel jobs/stages could mitigate this, but a significant amount of the release pipeline must be sequential. (In particular **(2) release-build**.)
+* There is no way to change variables/parameters for an AzDO retry.
+    * The microsoft/go-infra commit the pipeline uses for the YAML pipeline cannot be changed. There is also no opportunity to change the input parameters and variables.
+    * Example modifications that will sometimes be necessary:
+        * A pipeline YAML fix.
+        * go-infra tooling fix.
+        * Polling a fixed PR number submitted by a dev rather than a broken PR that will never merge.
+
+Instead, the pipelines are written to be as easy to re-run with modified parameters as possible. Usually a retry involves copy-pasting a single number into the "run new build" dialog. See [instructions.md#retrying](instructions.md#retrying)
+
+Another AzDO feature we aren't using are [Release Pipelines](https://docs.microsoft.com/en-us/azure/devops/pipelines/release/?view=azure-devops). These have more flexiblity to modify and retry in the middle of a release that's running. However, there is no YAML (source-controlled) workflow, and they are called "classic" now, so we don't want to add new dependencies on them.
+
+If more AzDO features are added in the future that overcome these limitations, we should use them.
