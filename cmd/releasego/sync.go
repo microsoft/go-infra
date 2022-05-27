@@ -93,6 +93,10 @@ func handleSync(p subcmd.ParseFunc) error {
 		foundEntry.SourceBranchLatestCommit = map[string]string{versionUpstream: *commit}
 	}
 
+	// Configure the sync to update the VERSION and MICROSOFT_REVISION files.
+	foundEntry.GoVersionFileContent = v.UpstreamFormatGitTag()
+	foundEntry.GoMicrosoftRevisionFileContent = v.Revision
+
 	dir, err := syncFlags.MakeGitWorkDir()
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ jobs:
     steps:
       - template: steps/checkout-unix-task.yml
       - template: steps/init-go.yml
+      - template: steps/set-bot-git-author.yml
 
       # Install the version of gotestsum specified in the ci-tools module.
       - script: |
