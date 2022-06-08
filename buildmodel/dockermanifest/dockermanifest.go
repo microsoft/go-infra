@@ -12,7 +12,10 @@ package dockermanifest
 
 // Manifest is the root object of a 'manifest.json' file.
 type Manifest struct {
-	Readme    string                 `json:"readme"`
+	// Readme can be an object with more details, or a string path. This was recently changed from a
+	// string to an object in the .NET Docker infra's model. For now, be flexible in the go-images
+	// model: we only need to persist the value, not manipulate it.
+	Readme    interface{}            `json:"readme"`
 	Registry  string                 `json:"registry"`
 	Variables map[string]interface{} `json:"variables"`
 	Includes  []string               `json:"includes"`
