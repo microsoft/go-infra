@@ -115,6 +115,11 @@ func Test_makeOsArchPlatform(t *testing.T) {
 			args{"linux", "cbl-mariner1.0", "arm64", ""},
 			want{"linux", "cbl-mariner1.0", "arm64", ""},
 		},
+		{
+			"linux-arm64 no version if Mariner 2.0",
+			args{"linux", "cbl-mariner2.0", "arm64", ""},
+			want{"linux", "cbl-mariner2.0", "arm64", ""},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
