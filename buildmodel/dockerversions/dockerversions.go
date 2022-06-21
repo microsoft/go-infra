@@ -23,7 +23,7 @@ type MajorMinorVersion struct {
 
 	// Revision extends the upstream model by adding the Microsoft revision of the Go version. The
 	// Microsoft build might get new versions that aren't associated with an upstream version bump.
-	Revision string `json:"revision"`
+	Revision string `json:"revision,omitempty"`
 
 	// PreferredMajor extends the upstream model by marking this major version as "preferred" over
 	// other major versions. This is used when generating the manifest to create the "latest" tags.

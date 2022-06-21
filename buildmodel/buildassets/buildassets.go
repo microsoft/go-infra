@@ -60,6 +60,10 @@ func (b BuildAssets) GetDockerRepoVersionsKey() string {
 	v := goversion.New(b.Version)
 
 	key := v.Major + "." + v.Minor
+	if v.Major == "main" {
+		// Call this "main", not "main.0", for cleaner directory names.
+		key = v.Major
+	}
 	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
 		key = key + "-fips"
 	}

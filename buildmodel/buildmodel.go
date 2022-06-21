@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/stringutil"
 )
 
 // ReadJSONFile reads one JSON value from the specified file.
@@ -75,48 +76,60 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 		// Remove branch suffix from the key to find the version part.
 		majorMinor := strings.TrimSuffix(key, v.BranchSuffix)
 
-		applyVersionAffixes := func(version string) string {
-			return v.TagPrefix + version + v.BranchSuffix
-		}
-
 		// The key always contains a major.minor version. Split out the major part.
 		major := goversion.New(majorMinor).Major
 
-		majorMinorPatchRevision := v.Version + "-" + v.Revision
+		majorMinorPatchRevision := joinTag(v.Version, v.Revision)
 
 		for _, variant := range v.Variants {
+			// Create applyVersionAffixes func. This may be overwritten for some variants (FIPS), so
+			// recreate it each iteration.
+			applyVersionAffixes := func(version string) string {
+				return v.TagPrefix + version + v.BranchSuffix
+			}
+
 			os := "linux"
 			osVersion := variant
-			if strings.HasPrefix(variant, "windows/") {
+			if after, ok := stringutil.CutPrefix(variant, "windows/"); ok {
 				os = "windows"
-				osVersion = strings.TrimPrefix(variant, "windows/")
+				osVersion = after
 			}
+
+			// The non-FIPS Docker tag that this FIPS image wraps, or empty string if not.
+			var fipsWrapTag string
+			if after, ok := stringutil.CutPrefix(variant, "fips-linux/"); ok {
+				osVersion = after
+
+				// Figure out the non-FIPS tag name so that we can wrap it.
+				fipsWrapTag = joinTag(applyVersionAffixes(majorMinorPatchRevision), osVersion)
+				// Replace applyVersionAffixes with a new func that preserves the existing behavior,
+				// but also adds "-fips" to the end.
+				oldApply := applyVersionAffixes
+				applyVersionAffixes = func(version string) string {
+					return joinTag(oldApply(version), "fips")
+				}
+			}
+
 			dockerfileDir := "src/microsoft/" + key + "/" + variant
 
-			// If the versions.json doesn't specify a revision, default to "1". (1 is the
-			// default/initial revision for Deb/RPM packages, and we may as well follow that.)
-			if v.Revision == "" {
-				v.Revision = "1"
-			}
-
 			// The main tag that is shared by all architectures.
-			mainSharedTagVersion := applyVersionAffixes(majorMinorPatchRevision) + "-" + osVersion
+			mainSharedTagVersion := joinTag(applyVersionAffixes(majorMinorPatchRevision), osVersion)
 
 			tagVersions := []string{
 				mainSharedTagVersion,
 				// Revisionless tag.
-				applyVersionAffixes(v.Version) + "-" + osVersion,
+				joinTag(applyVersionAffixes(v.Version), osVersion),
 				// We only maintain one patch version, so it's always preferred. Add major.minor tag.
-				applyVersionAffixes(majorMinor) + "-" + osVersion,
+				joinTag(applyVersionAffixes(majorMinor), osVersion),
 			}
 
 			// If this is a preferred major.minor version, create major-only tag.
 			if v.PreferredMinor {
-				tagVersions = append(tagVersions, applyVersionAffixes(major)+"-"+osVersion)
+				tagVersions = append(tagVersions, joinTag(applyVersionAffixes(major), osVersion))
 			}
 			// If this is the preferred major version, create versionless tag.
 			if v.PreferredMajor {
-				tagVersions = append(tagVersions, applyVersionAffixes("")+osVersion)
+				tagVersions = append(tagVersions, joinTag(applyVersionAffixes(""), osVersion))
 			}
 
 			// If this is the preferred variant, create tags without the variant (OS) part.
@@ -140,6 +153,9 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 
 			// Normally, no build args are necessary and this is nil in the output model.
 			var buildArgs map[string]string
+			// If buildArgs is specified to point at another image, it will also need this repo
+			// variable (passed by .NET Docker) to figure out the other tag's full name.
+			const repoVariable = "$(Repo:golang)"
 
 			// The nanoserver Dockerfile requires a build arg to connect it properly to its
 			// dependency, windowsservercore. The version (1809, ltsc2022, ...) needs to match,
@@ -151,10 +167,8 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				buildArgs = map[string]string{
 					// nanoserver doesn't have good download capability, so it copies the Go install
 					// from the windowsservercore image.
-					"DOWNLOADER_TAG": applyVersionAffixes(majorMinorPatchRevision) + "-windowsservercore-" + windowsVersion + "-amd64",
-					// The nanoserver Dockerfile needs to know what repository we're building for so
-					// it can figure out the windowsservercore tag's full name.
-					"REPO": "$(Repo:golang)",
+					"DOWNLOADER_TAG": joinTag(applyVersionAffixes(majorMinorPatchRevision), "windowsservercore", windowsVersion, "amd64"),
+					"REPO":           repoVariable,
 				}
 			}
 
@@ -170,11 +184,26 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				if arch.Env.GOOS != os {
 					continue
 				}
+				// Skip arm (arm32) on CBL-Mariner 1.0. The base image doesn't exist. Excluding it
+				// here is better than excluding the platform from the versions.json file:
+				// specializing versions.json for CBL-Mariner requires a lot of duplication and the
+				// templates would generate Dockerfiles in a different, less clear folder structure.
+				if osVersion == "cbl-mariner1.0" && arch.Env.GOARCH == "arm" {
+					continue
+				}
+
+				if fipsWrapTag != "" {
+					buildArgs = map[string]string{
+						"FROM_TAG": joinTag(fipsWrapTag, arch.Env.GoImageArchKey()),
+						"REPO":     repoVariable,
+					}
+				}
+
 				p := makeOSArchPlatform(os, osVersion, &arch.Env)
 				p.BuildArgs = buildArgs
 				p.Dockerfile = dockerfileDir
 				p.Tags = map[string]dockermanifest.Tag{
-					mainSharedTagVersion + "-" + arch.Env.GoImageArchKey(): {},
+					joinTag(mainSharedTagVersion, arch.Env.GoImageArchKey()): {},
 				}
 				platforms = append(platforms, p)
 			}
@@ -183,8 +212,18 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				return platforms[i].Architecture+platforms[i].Variant <
 					platforms[j].Architecture+platforms[j].Variant
 			})
+
+			productVersion := majorMinor
+			// .NET Docker infra parses ProductVersion with .NET System.Version. If the image is for
+			// a main branch build, provide a parseable but never-expected-to-be-seen version. We
+			// could calculate "last release branch version"++, but we don't have good reason to do
+			// this, it's not necessarily true, and it could be misleading.
+			if productVersion == "main" {
+				productVersion = "42.42"
+			}
+
 			images = append(images, &dockermanifest.Image{
-				ProductVersion: majorMinor,
+				ProductVersion: productVersion,
 				SharedTags:     sharedTags,
 				Platforms:      platforms,
 			})
@@ -225,8 +264,15 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 	if v, ok := versions[key]; ok {
 		vNew := goversion.New(assets.Version)
 
-		v.Version = vNew.MajorMinorPatch()
-		v.Revision = vNew.Revision
+		if key == "main" {
+			// We could call this "main.0.0-0", but that makes the Docker tag names complicated.
+			// Stick with simple "main".
+			v.Version = key
+			v.Revision = ""
+		} else {
+			v.Version = vNew.MajorMinorPatch()
+			v.Revision = vNew.Revision
+		}
 
 		// Look through the asset arches, find an arch in the versions file that matches each asset,
 		// and update its info.
@@ -274,4 +320,26 @@ func makeOSArchPlatform(os, osVersion string, env *dockerversions.ArchEnv) *dock
 		OS:           os,
 		OSVersion:    osVersion,
 	}
+}
+
+// joinTag joins the given strings with "-" to form a Docker tag (or partial tag). Empty strings are
+// ignored and do not result in extra "-" characters. This is especially useful when it would be
+// inconvenient for the caller to keep track of which elements might be an empty string.
+func joinTag(s ...string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	first := true
+	for i := 0; i < len(s); i++ {
+		if s[i] == "" {
+			continue
+		}
+		if !first {
+			b.WriteRune('-')
+		}
+		b.WriteString(s[i])
+		first = false
+	}
+	return b.String()
 }

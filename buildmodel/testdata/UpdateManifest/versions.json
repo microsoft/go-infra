@@ -41,7 +41,9 @@
     },
     "variants": [
       "bullseye",
-      "windows/nanoserver-1809"
+      "windows/nanoserver-1809",
+      "fips-linux/bullseye",
+      "fips-linux/cbl-mariner1.0"
     ],
     "version": "1.18.1",
     "revision": "1",
@@ -78,5 +80,24 @@
     "preferredMinor": true,
     "preferredVariant": "cbl-mariner1.0",
     "branchSuffix": "-fips"
+  },
+  "main": {
+    "arches": {
+      "amd64": {
+        "env": {
+          "GOARCH": "amd64",
+          "GOOS": "linux"
+        },
+        "sha256": "d68e37da673d708bf4ebd73b8a176c7fda6056780fda8d841e02679b9a165bf3",
+        "supported": true,
+        "url": "https://dotnetbuildoutput.blob.core.windows.net/golang/microsoft/dev/dagood/cross-arm/20220411.4/go.20220411.4.linux-amd64.tar.gz"
+      }
+    },
+    "variants": [
+      "bullseye",
+      "fips-linux/bullseye"
+    ],
+    "version": "main",
+    "preferredVariant": "bullseye"
   }
 }
