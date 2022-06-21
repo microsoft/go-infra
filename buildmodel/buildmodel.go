@@ -329,7 +329,7 @@ func joinTag(s ...string) string {
 	if len(s) == 0 {
 		return ""
 	}
-	b := strings.Builder{}
+	var b strings.Builder
 	first := true
 	for i := 0; i < len(s); i++ {
 		if s[i] == "" {
