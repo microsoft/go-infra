@@ -99,6 +99,9 @@ func handleExtract(p subcmd.ParseFunc) error {
 		"git",
 		"format-patch",
 
+		// Set the minimum abbreviation level to a certain value to avoid user-specific defaults,
+		// which may change due to Git version or user configuration.
+		"--abbrev=14",
 		// Remove default signature, which includes the Git version.
 		"--signature=",
 		// Use "From 0000000" instead of "From abc123f" in the patch file. A new commit hash is
