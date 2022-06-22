@@ -7,6 +7,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
+	"os"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
@@ -75,4 +77,40 @@ func GetBuildWebURL(b *build.Build) (string, bool) {
 // https://github.com/Microsoft/azure-pipelines-tasks/blob/master/docs/authoring/commands.md
 func SetPipelineVariable(name, value string) {
 	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+}
+
+// AzDOBuildDetectionDoc describes how AzDO build detection works, listing the env vars used. Use
+// this in the command description when using GetEnvBuildID or GetEnvBuildURL.
+const AzDOBuildDetectionDoc = "If AzDO env variables SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT, and BUILD_BUILDID are set, includes a link to the build.\n"
+
+// GetEnvBuildURL probes the environment to figure out the build URL, if this is running in an AzDO
+// pipeline build.
+func GetEnvBuildURL() string {
+	collection := getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
+	project := getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
+	id := GetEnvBuildID()
+	if collection == "" || project == "" || id == "" {
+		return ""
+	}
+	return collection + project + "/_build/results?buildId=" + id
+}
+
+// GetEnvBuildID probes the environment to figure out the build ID, if this is running in an AzDO
+// pipeline build.
+func GetEnvBuildID() string {
+	return getEnvNotifyIfEmpty("BUILD_BUILDID")
+}
+
+// getEnvNotifyIfEmpty finds the given environment variable and returns it. If the variable is not
+// defined, logs a brief message so the user can diagnose the situation and returns empty string. If
+// the variable is empty string, logs a message so the user can diagnose this situation, too.
+func getEnvNotifyIfEmpty(key string) string {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		log.Printf("Env var not defined: %v", key)
+	}
+	if v == "" {
+		log.Printf("Env var defined as empty string: %v", key)
+	}
+	return v
 }

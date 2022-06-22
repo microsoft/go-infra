@@ -10,22 +10,17 @@ import (
 	"log"
 
 	"github.com/google/go-github/github"
+	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
-		Name:    "report",
-		Summary: "Add a comment to a GitHub issue to report status",
-		Description: `
-
-Creates a comment on the given GitHub issue. This should be used to report on release status.
-
-If AzDO env variables SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT, and BUILD_BUILDID are set, includes
-a link to the build as markdown before the message.
-`,
-		Handle: handleReport,
+		Name:        "report",
+		Summary:     "Add a comment to a GitHub issue to report status",
+		Description: "\n\n" + azdo.AzDOBuildDetectionDoc,
+		Handle:      handleReport,
 	})
 }
 
@@ -56,8 +51,8 @@ func handleReport(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if url := getEnvBuildURL(); url != "" {
-		*message = "[" + getEnvBuildID() + "](" + url + "): " + *message
+	if url := azdo.GetEnvBuildURL(); url != "" {
+		*message = "[" + azdo.GetEnvBuildID() + "](" + url + "): " + *message
 	}
 
 	log.Printf("Creating comment on #%v with content:\n%v\n", *issue, *message)

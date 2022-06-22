@@ -6,7 +6,6 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
 	"strings"
 
 	"github.com/microsoft/go-infra/goversion"
@@ -48,26 +47,4 @@ func appendPathAndVerificationFilePaths(p []string, path string) []string {
 		p = append(p, path+".sig")
 	}
 	return p
-}
-
-func getEnvBuildURL() string {
-	collection := getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
-	project := getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
-	id := getEnvBuildID()
-	if collection == "" || project == "" || id == "" {
-		return ""
-	}
-	return collection + project + "/_build/results?buildId=" + id
-}
-
-func getEnvBuildID() string {
-	return getEnvNotifyIfEmpty("BUILD_BUILDID")
-}
-
-func getEnvNotifyIfEmpty(key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Printf("Env var not found: %v", key)
-	}
-	return v
 }
