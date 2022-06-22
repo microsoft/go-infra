@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/stringutil"
 )
 
 var update = flag.Bool("update", false, "Update the golden files instead of failing.")
@@ -143,10 +144,10 @@ func TestUpdateManifest(t *testing.T) {
 	var versions dockerversions.Versions
 	var manifest dockermanifest.Manifest
 
-	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
+	if err := stringutil.ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReadJSONFile(filepath.Join(assetDir, "manifest.json"), &manifest); err != nil {
+	if err := stringutil.ReadJSONFile(filepath.Join(assetDir, "manifest.json"), &manifest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,10 +161,10 @@ func TestUpdateVersions(t *testing.T) {
 	var buildAssetJSON buildassets.BuildAssets
 	var versions dockerversions.Versions
 
-	if err := ReadJSONFile(filepath.Join(assetDir, "assets.json"), &buildAssetJSON); err != nil {
+	if err := stringutil.ReadJSONFile(filepath.Join(assetDir, "assets.json"), &buildAssetJSON); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
+	if err := stringutil.ReadJSONFile(filepath.Join(assetDir, "versions.json"), &versions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,7 +177,7 @@ func TestUpdateVersions(t *testing.T) {
 
 func checkGoldenJSON[T any](t *testing.T, goldenPath string, actual T) {
 	if *update {
-		if err := WriteJSONFile(goldenPath, actual); err != nil {
+		if err := stringutil.WriteJSONFile(goldenPath, actual); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -185,7 +186,7 @@ func checkGoldenJSON[T any](t *testing.T, goldenPath string, actual T) {
 	// encoding/json uses reflection on a pointer to determine how to deserialize the file. Use
 	// generics to create a pointer to the given T so the type matches for deep.Equal.
 	var want T
-	if err := ReadJSONFile(goldenPath, &want); err != nil {
+	if err := stringutil.ReadJSONFile(goldenPath, &want); err != nil {
 		t.Fatal(err)
 	}
 

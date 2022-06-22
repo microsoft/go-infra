@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/stringutil"
 )
 
 type Flags struct {
@@ -105,7 +106,7 @@ func (f *Flags) MakeGitWorkDir() (string, error) {
 
 func (f *Flags) ReadConfig() ([]ConfigEntry, error) {
 	var entries []ConfigEntry
-	if err := buildmodel.ReadJSONFile(*f.SyncConfig, &entries); err != nil {
+	if err := stringutil.ReadJSONFile(*f.SyncConfig, &entries); err != nil {
 		return nil, fmt.Errorf("failed to read sync config file: %w", err)
 	}
 	return entries, nil

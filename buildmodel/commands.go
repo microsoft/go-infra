@@ -19,6 +19,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/patch"
+	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/submodule"
 )
 
@@ -95,7 +96,7 @@ func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 	}
 
 	fmt.Printf("Generated build asset summary:\n%+v\n", m)
-	if err := WriteJSONFile(*f.output, m); err != nil {
+	if err := stringutil.WriteJSONFile(*f.output, m); err != nil {
 		return err
 	}
 	return nil
@@ -160,8 +161,8 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	var assets *buildassets.BuildAssets
 	if *f.buildAssetJSON != "" {
-		assets = &buildassets.BuildAssets{}
-		if err := ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
+		assets = new(buildassets.BuildAssets)
+		if err := stringutil.ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
 			return err
 		}
 	}
@@ -387,8 +388,8 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 
 	var assets *buildassets.BuildAssets
 	if *f.buildAssetJSON != "" {
-		assets = &buildassets.BuildAssets{}
-		if err := ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
+		assets = new(buildassets.BuildAssets)
+		if err := stringutil.ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
 			return err
 		}
 	}
@@ -412,13 +413,13 @@ func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
 	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
 	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
 
-	versions := dockerversions.Versions{}
-	if err := ReadJSONFile(versionsJSONPath, &versions); err != nil {
+	var versions dockerversions.Versions
+	if err := stringutil.ReadJSONFile(versionsJSONPath, &versions); err != nil {
 		return err
 	}
 
-	manifest := dockermanifest.Manifest{}
-	if err := ReadJSONFile(manifestJSONPath, &manifest); err != nil {
+	var manifest dockermanifest.Manifest
+	if err := stringutil.ReadJSONFile(manifestJSONPath, &manifest); err != nil {
 		return err
 	}
 
@@ -426,7 +427,7 @@ func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
 		if err := UpdateVersions(b, versions); err != nil {
 			return err
 		}
-		if err := WriteJSONFile(versionsJSONPath, &versions); err != nil {
+		if err := stringutil.WriteJSONFile(versionsJSONPath, &versions); err != nil {
 			return err
 		}
 	}
@@ -434,7 +435,7 @@ func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
 	fmt.Printf("Generating '%v' based on '%v'...\n", manifestJSONPath, versionsJSONPath)
 
 	UpdateManifest(&manifest, versions)
-	if err := WriteJSONFile(manifestJSONPath, &manifest); err != nil {
+	if err := stringutil.WriteJSONFile(manifestJSONPath, &manifest); err != nil {
 		return err
 	}
 
