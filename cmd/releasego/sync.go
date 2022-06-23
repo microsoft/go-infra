@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
@@ -42,19 +41,13 @@ Git clone of the go-infra repository. The default directory is stored in 'eng/ar
 
 func handleSync(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
+	azdoVarFlags := sync.BindAzDOVariableFlags()
 	version := flag.String(
 		"version", "",
 		"[Required] A full microsoft/goversion number (major.minor.patch-revision[-suffix]).\n"+
 			"The configuration file is filtered to a single entry and branch using this info.")
 
 	commit := flag.String("commit", "", "The upstream commit to update to.")
-
-	setVariablePRNumber := flag.String(
-		"set-azdo-variable-pr-number", "",
-		"An AzDO variable name to set to the sync PR number, or nil if no sync PR is created.")
-	setVariableUpToDateCommit := flag.String(
-		"set-azdo-variable-up-to-date-commit", "",
-		"An AzDO variable name to set to nil if a sync PR is created, otherwise the full commit hash that was found to be already up to date.")
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -119,20 +112,10 @@ func handleSync(p subcmd.ParseFunc) error {
 
 	if r.PR == nil {
 		log.Printf("No PR created for commit: %v\n", r.Commit)
-		if *setVariablePRNumber != "" {
-			azdo.SetPipelineVariable(*setVariablePRNumber, "nil")
-		}
-		if *setVariableUpToDateCommit != "" {
-			azdo.SetPipelineVariable(*setVariableUpToDateCommit, r.Commit)
-		}
+		azdoVarFlags.SetAzDOVariables("nil", r.Commit)
 	} else {
 		log.Printf("Created PR: %v\n", r.PR.Number)
-		if *setVariablePRNumber != "" {
-			azdo.SetPipelineVariable(*setVariablePRNumber, strconv.Itoa(r.PR.Number))
-		}
-		if *setVariableUpToDateCommit != "" {
-			azdo.SetPipelineVariable(*setVariableUpToDateCommit, "nil")
-		}
+		azdoVarFlags.SetAzDOVariables(strconv.Itoa(r.PR.Number), "nil")
 	}
 
 	return nil

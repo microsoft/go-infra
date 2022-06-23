@@ -22,6 +22,7 @@ import (
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/submodule"
+	"github.com/microsoft/go-infra/sync"
 )
 
 // ParseBoundFlags parses all flags that have been registered with the flag package. This function
@@ -116,6 +117,7 @@ type PRFlags struct {
 	githubPATReviewer *string
 
 	UpdateFlags
+	sync.AzDOVariableFlags
 }
 
 // BindPRFlags creates PRFlags with the 'flag' package, globally registering them in the flag
@@ -133,7 +135,8 @@ func BindPRFlags() *PRFlags {
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-		UpdateFlags: *BindUpdateFlags(),
+		UpdateFlags:       *BindUpdateFlags(),
+		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
 	}
 }
 
