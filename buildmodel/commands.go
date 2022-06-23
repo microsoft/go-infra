@@ -12,12 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
+	"strconv"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
@@ -208,7 +209,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// updating from many branches -> one branch, and force pushing each time would drop updates.
 	// Note that we do assume our calculated head branch is the same as what the PR uses: it would
 	// be strange for this to not be the case and the assumption simplifies the code for now.
-	var existingPR string
+	var existingPR *gitpr.ExistingPR
 
 	if *f.githubPAT != "" {
 		githubUser := gitpr.GetUsername(*f.githubPAT)
@@ -226,9 +227,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 			if err != nil {
 				return err
 			}
-			existingPR = pr.ID
-			if existingPR != "" {
-				fmt.Printf("---- Found PR ID: %v\n", existingPR)
+			if pr != nil {
+				existingPR = pr
+				fmt.Printf("---- Found PR ID: %v\n", existingPR.ID)
 			} else {
 				fmt.Printf("---- No PR found.\n")
 			}
@@ -245,7 +246,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return c
 	}
 
-	if existingPR != "" {
+	if existingPR != nil {
 		// Fetch the existing PR head branch to add onto.
 		runOrPanic(newGitCmd("fetch", "--no-tags", *f.to, b.PRBranchRefspec()))
 	} else {
@@ -264,9 +265,16 @@ func SubmitUpdatePR(f *PRFlags) error {
 		}
 	}
 
+	// Add changes to stage. If the submodule has changes (due to "git apply" during the Dockerfile
+	// generation process), these changes will be ignored. This lets us use "git diff --cached" to
+	// determine if there are changes to the stage, while ignoring the patch changes.
+	if err := run(newGitCmd("add", ".")); err != nil {
+		return err
+	}
+
 	// Check if there are any files in the stage. If not, we don't need to process this branch
 	// anymore, because the merge + autoresolve didn't change anything.
-	if err := run(newGitCmd("diff", "--quiet")); err != nil {
+	if err := run(newGitCmd("diff", "--cached", "--quiet")); err != nil {
 		if _, ok := err.(*exec.ExitError); ok {
 			fmt.Printf("---- Detected changes in Git stage. Continuing to commit and submit PR.\n")
 		} else {
@@ -274,6 +282,26 @@ func SubmitUpdatePR(f *PRFlags) error {
 			log.Panic(err)
 		}
 	} else {
+		// This commit is already up to date. Find the full commit hash to set the AzDO var.
+		commit, err := gitcmd.RevParse(gitDir, "HEAD")
+		if err != nil {
+			return err
+		}
+		var prNumber string
+		if existingPR == nil {
+			// We checked the origin branch, and it didn't need any updates. Output "nil" so future
+			// pipeline steps can tell that there's no need to wait for any PRs to get merged.
+			prNumber = "nil"
+		} else {
+			// We fetched an existing PR and found that the PR didn't need any changes. Future
+			// pipeline steps in the release process need to monitor the updated-but-not-merged-yet
+			// PR for completion, so this command must output the existing PR's number.
+			fmt.Printf("---- PR %v doesn't need any changes to be up to date.\n", existingPR.Number)
+			prNumber = strconv.Itoa(existingPR.Number)
+		}
+
+		f.SetAzDOVariables(prNumber, commit)
+
 		// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
 		fmt.Printf("---- No updates to %v. Skipping.\n", b.Name)
 		return nil
@@ -284,7 +312,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		commitMessage += " to " + assets.Version
 	}
 
-	runOrPanic(newGitCmd("commit", "-a", "-m", commitMessage))
+	runOrPanic(newGitCmd("commit", "-m", commitMessage))
 
 	// Push the commit.
 	args := []string{"push", *f.origin, b.PRBranchRefspec()}
@@ -295,7 +323,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// If we didn't find an existing PR, the branch might still exist but contain some bad changes.
 	// We need to force push to overwrite it with the new, fresh branch. This situation would happen
 	// if someone manually closes a PR.
-	if existingPR == "" {
+	if existingPR == nil {
 		args = append(args, "-f")
 	}
 	runOrPanic(newGitCmd(args...))
@@ -321,7 +349,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	fmt.Printf("---- PR for %v: Submitting...\n", b.Name)
 
-	if existingPR == "" {
+	if existingPR == nil {
 		// POST the PR. The call returns success if the PR is created or if we receive a specific error
 		// message back from GitHub saying the PR is already created.
 		p, err := gitpr.PostGitHub(
@@ -334,19 +362,24 @@ func SubmitUpdatePR(f *PRFlags) error {
 		}
 
 		// For the rest of the method, the PR now exists.
-		existingPR = p.NodeID
+		existingPR = &gitpr.ExistingPR{
+			ID:     p.NodeID,
+			Number: p.Number,
+		}
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
 
 		fmt.Printf("---- Approving with reviewer account...\n")
-		if err = gitpr.ApprovePR(existingPR, *f.githubPATReviewer); err != nil {
+		if err = gitpr.ApprovePR(existingPR.ID, *f.githubPATReviewer); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-	if err = gitpr.EnablePRAutoMerge(existingPR, *f.githubPATReviewer); err != nil {
+	if err = gitpr.EnablePRAutoMerge(existingPR.ID, *f.githubPATReviewer); err != nil {
 		return err
 	}
+
+	f.SetAzDOVariables(strconv.Itoa(existingPR.Number), "nil")
 
 	fmt.Printf("---- PR for %v: Done.\n", b.Name)
 
