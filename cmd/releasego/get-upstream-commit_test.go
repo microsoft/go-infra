@@ -5,6 +5,8 @@ package main
 
 import (
 	"testing"
+
+	"github.com/microsoft/go-infra/gitcmd"
 )
 
 var testTag = "go1.2.3"
@@ -14,8 +16,9 @@ func Test_tagChecker_Check_existingTag(t *testing.T) {
 	commit := addTag(t, upstream)
 
 	c := &tagChecker{
-		gitRepo: *local,
-		Tag:     testTag,
+		GitDir:   local,
+		Upstream: upstream,
+		Tag:      testTag,
 	}
 
 	got, err := c.Check()
@@ -31,8 +34,9 @@ func Test_tagChecker_Check_tagOnSecondCall(t *testing.T) {
 	local, upstream := newFixture(t)
 
 	c := &tagChecker{
-		gitRepo: *local,
-		Tag:     testTag,
+		GitDir:   local,
+		Upstream: upstream,
+		Tag:      testTag,
 	}
 
 	if _, err := c.Check(); err == nil {
@@ -91,40 +95,39 @@ go1.17.9b7 ed86dfc4e441 src https://go-boringcrypto.storage.googleapis.com/go1.1
 	}
 }
 
-func newFixture(t *testing.T) (local, upstream *gitRepo) {
+func newFixture(t *testing.T) (local, upstream string) {
 	local = newEmptyGitRepo(t)
 	upstream = newUpstreamGitRepo(t)
-	local.Upstream = upstream.GitDir
 	return
 }
 
-func newEmptyGitRepo(t *testing.T) *gitRepo {
-	c := &gitRepo{GitDir: t.TempDir()}
-	if err := c.runGitCmd("init"); err != nil {
+func newEmptyGitRepo(t *testing.T) string {
+	c := t.TempDir()
+	if err := gitcmd.Run(c, "init"); err != nil {
 		t.Fatal(err)
 	}
 	return c
 }
 
-func newUpstreamGitRepo(t *testing.T) *gitRepo {
+func newUpstreamGitRepo(t *testing.T) string {
 	upstream := newEmptyGitRepo(t)
-	if err := upstream.runGitCmd("config", "--local", "user.name", "test"); err != nil {
+	if err := gitcmd.Run(upstream, "config", "--local", "user.name", "test"); err != nil {
 		t.Fatal(err)
 	}
-	if err := upstream.runGitCmd("config", "--local", "user.email", "test@example.com"); err != nil {
+	if err := gitcmd.Run(upstream, "config", "--local", "user.email", "test@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := upstream.runGitCmd("commit", "--allow-empty", "-m", "Initial commit"); err != nil {
+	if err := gitcmd.Run(upstream, "commit", "--allow-empty", "-m", "Initial commit"); err != nil {
 		t.Fatal(err)
 	}
 	return upstream
 }
 
-func addTag(t *testing.T, upstream *gitRepo) string {
-	if err := upstream.runGitCmd("tag", testTag); err != nil {
+func addTag(t *testing.T, upstream string) string {
+	if err := gitcmd.Run(upstream, "tag", testTag); err != nil {
 		t.Fatal(err)
 	}
-	commit, err := upstream.revParse(testTag)
+	commit, err := gitcmd.RevParse(upstream, testTag)
 	if err != nil {
 		t.Fatal(err)
 	}
