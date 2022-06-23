@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/microsoft/go-infra/buildmodel"
+	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/stringutil"
@@ -97,7 +97,7 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 }
 
 func (f *Flags) MakeGitWorkDir() (string, error) {
-	d, err := buildmodel.MakeWorkDir(*f.TempGitDir)
+	d, err := executil.MakeWorkDir(*f.TempGitDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to make working directory for sync: %w", err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
@@ -146,7 +147,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		}
 	}
 
-	gitDir, err := MakeWorkDir(*f.tempGitDir)
+	gitDir, err := executil.MakeWorkDir(*f.tempGitDir)
 	if err != nil {
 		return err
 	}
@@ -347,18 +348,6 @@ func SubmitUpdatePR(f *PRFlags) error {
 	fmt.Printf("---- PR for %v: Done.\n", b.Name)
 
 	return nil
-}
-
-// MakeWorkDir creates a unique path inside the given root dir to use as a workspace. The name
-// starts with the local time in a sortable format to help with browsing multiple workspaces. This
-// function allows a command to run multiple times in sequence without overwriting or deleting the
-// old data, for diagnostic purposes. This function uses os.MkdirAll to ensure the root dir exists.
-func MakeWorkDir(rootDir string) (string, error) {
-	pathDate := time.Now().Format("2006-01-02_15-04-05")
-	if err := os.MkdirAll(rootDir, os.ModePerm); err != nil {
-		return "", err
-	}
-	return os.MkdirTemp(rootDir, fmt.Sprintf("%s_*", pathDate))
 }
 
 // UpdateFlags is a list of flags used for an update command.
