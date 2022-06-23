@@ -1,0 +1,13 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Catch and prevent whole-job retries. Retrying the whole job after a failure
+# would repeat steps that are already completed.
+
+steps:
+  - script: |
+      echo 'The "retry" button on this pipeline is forbidden.'
+      echo 'Instead, follow the instructions printed by the "Print Retry Instructions" step in the first attempt of this job.'
+      exit 1
+    displayName: Forbid Retry
+    condition: ne(variables['System.JobAttempt'], 1)

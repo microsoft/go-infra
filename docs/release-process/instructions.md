@@ -1,24 +1,15 @@
 # How to use the release tooling
 
-## Creating the tracking issue
+Open the [microsoft-go-infra-release-start](https://dev.azure.com/dnceng/internal/_build?definitionId=1153) pipeline definition. It will kick off the release day.
 
-First, create an issue on the microsoft/go repository for release progress updates. When you pass the issue number to the release automation pipeline, that makes the pipeline post a comment on that issue to notify you when a step completes or fails.
+Click "Run pipeline" and fill the fields. For example, a security patch release for 1.17 and 1.18 may look like this:
 
-If dealing with multiple releases at the same time (for example, 1.17 and 1.18 security patches released on the same day), create one issue per version number. This makes it easier to keep track of each release's progress as an outside observer.
+> ![](images/run-release-start.png)
 
-> The "release-start" pipeline is planned to create these issues automatically for common servicing events. (See [README.md](README.md).)
-
-## Upstream release
-
-After an upstream release, or in anticipation of an upstream release, go to the [`microsoft-go-infra-release-build`](https://dev.azure.com/dnceng/internal/_build/results?buildId=1780270&view=results) pipeline. Press "Run new" and fill in the blanks in the popup.
-
-For example, if upstream is releasing 1.42.3, the parameters might look like this:
-
-> ![](images/run-upstream-release.png)
-
-* **Version to release** is the Microsoft build version associated with this release. The Microsoft build includes one more version segment, the revision. When upstream releases a new patch, it's always "-1".
-* **microsoft/go issue number** should be the number of the issue created in the previous step.
-* The steps labeled **1:** thorough **4:** are used for retries, and will be explained later. For now, leave the default value, `nil`.
+* **List of versions to release** is a YAML list. If there's a `dev.boringcrypto.go*` branch associated with the version being released, both the non-FIPS and FIPS versions must be filled in.
+    * Versions <= 1.18 have boring branches and need both `-FIPS` and non-FIPS versions listed.
+    * Versions >= 1.19 do not need `-FIPS` versions listed.
+    * Sometimes, we have to release when upstream hasn't made any changes. For example, to fix an issue with the FIPS implementation, or Go being built incorrectly by our infrastructure. In this case, increment the revision number from what it was for the latest release. If 1.18.3-1 was the latest, use 1.18.3-2 as the version.
 * The variable group should be filled in with `go-release-config`.
 
 > Even though AzDO doesn't show the text selection cursor, you can actually click and drag to select `go-release-config` and copy-paste it into the text box.
@@ -28,21 +19,43 @@ For example, if upstream is releasing 1.42.3, the parameters might look like thi
 > * For testing, you can pass in a different variable group. Requiring this field to be filled in each time makes sure you intend to run a real release.
 > * This makes infrastructure safer: if the build gets triggered and the set of parameters isn't passed correctly by tooling, the build fails safe by refusing to start.
 
-Once the values are filled in, press Run.
+1. Once the values are set, run the build.
+    * It will take some time to reserve a build agent. Then, it creates one issue to track the release day progress and one issue per version in the list.
+    * You should make sure you're subscribed to each issue. The builds will post comments on these issues to alert you to successful jobs and failures. If you don't see the issues in the microsoft/go repository, look in the job logs. The "Create tracking issue" steps contain links.
 
-You can close the tab as soon as the build starts looking for an agent. If nothing goes *terribly* wrong, the build will notify you if it needs intervention by commenting on the release issue.
+1. Open the job logs, click on the "🚀 Start microsoft/go-images build" step, and click on the `Web build URL:` link.
 
-## microsoft/go revision
+1. Wait for notification about the "microsoft/go build prep steps" completing for each version.
+    * If an error occurs, refer to the rest of this doc for diagnosis and retry guidance.
 
-Sometimes, we have to release when upstream hasn't made any changes. For example, to fix an issue with the FIPS implementation, or Go being built incorrectly by our infrastructure.
+1. In the microsoft/go-images build, approve the build to let it continue.
+    * It is ok to do this early. The approval gate only exists to prevent excessive polling.
 
-In this case, run release-build, and increment the revision number from what it was for the latest release. If 1.18.3-1 was the latest, use 1.18.3-2 as the version.
+1. Send a message to the internal announcement distribution group about the new version!
+    * Check this internal page for more details: [Internal announcement email and DG](https://microsoft.sharepoint.com/teams/managedlanguages/_layouts/OneNote.aspx?id=%2Fteams%2Fmanagedlanguages%2Ffiles%2FTeam%20Notebook%2FGoLang%20Team&wd=target%28Main.one%7C62B655D4-14E7-41D6-A063-0869C28D63FC%2FInternal%20announcement%20email%20and%20DG%7C23BE5288-5430-4B45-A81B-9AE79776743C%2F%29)
 
-The infrastructure will make sure the submodule still points at `go1.18.3`, then run the remaining release steps.
+## Error in microsoft-go-infra-release-build
+
+If an error occurs in the release-build pipeline, first read the logs. In some cases all you need to do is retry:
+
+* The sync PR validation jobs are taking longer than expected and the polling failed due to a timeout.
+* The GitHub rate limit expired and the pipeline wasn't able to wait for a refresh.
+* The internal build failed due to flakiness or an infrastructural reason.
+* The GitHub -> AzDO mirror is not working.
+    * Look for an outage already reported in the [First Responder Teams channel](https://teams.microsoft.com/l/channel/19%3aafba3d1545dd45d7b79f34c1821f6055%40thread.skype/First%2520Responders?groupId=4d73664c-9f2f-450d-82a5-c2f02756606d&tenantId=72f988bf-86f1-41af-91ab-2d7cd011db47), or post about the issue there. Once the issue is resolved, retry the build.
+
+**Don't use the "Rerun failed jobs" button. See [Retrying](#retrying).**
+
+There are other kinds of issues that need thoughtful fixes. For example:
+
+* The sync to upstream PR conflicted with a patch file and sync PR CI is failing.
+* The go-images update PR couldn't be generated properly.
+
+In those cases, you may need to retry from an earlier step. Or, you may need to make a fixup PR in the microsoft/go repo and then retry the build using a different value (e.g. your own PR's merged hash) rather than the original value.
 
 # Retrying
 
-If a step fails or a timeout is exceeded, the build needs to be retried. To do this, look in the job logs for the retry instructions step:
+To retry a release job, continuing from the last-running polling step, look for the "🔁 Print Retry Instructions" step:
 
 > ![](images/print-retry-instructions.png)
 
@@ -67,23 +80,7 @@ Then, press "Run new" in the top right. Paste the string into the box with the m
 
 > The "Rerun failed jobs" button at the top right *does not work* for release-build. This AzDO feature is not flexible enough to handle fixups. Don't worry: if you press it, the build will detect it and fail itself early.
 
-## Fixup
-
-Sometimes a step fails and a simple retry won't help. In this case, fix up what needs to be fixed, then use "Run new" to let the infrastructure monitor the situation and keep moving.
-
-For example, if the sync PR fails because of a patch conflict, go to the sync PR, push the resolution, and start the release job back up with field (1) filled in with the PR number.
-
-If the fix is complex, you can skip (1). You can merge your PR(s), find the final merge commit hash, and pass that in field (2). Use your best judgment.
-
-This approach works for other steps, too. If the internal build failed, but another internal build of the same commit worked, you can pass the successful build's ID.
-
-If the GitHub -> AzDO mirror is not working, contact dnceng. [First Responder Teams channel.](https://teams.microsoft.com/l/channel/19%3aafba3d1545dd45d7b79f34c1821f6055%40thread.skype/First%2520Responders?groupId=4d73664c-9f2f-450d-82a5-c2f02756606d&tenantId=72f988bf-86f1-41af-91ab-2d7cd011db47)
-
-# Docker images (go-images)
-
-The pipeline and steps to release Docker images aren't implemented yet. This must be done manually using `dockerupdate` and the build + publish steps of the [.NET image release process steps](https://github.com/dotnet/dotnet-docker/blob/main/.github/ISSUE_TEMPLATE/releases/dotnet-release.md) using [the microsoft-go-images pipeline](https://dev.azure.com/dnceng/internal/_build?definitionId=1023).
-
-# `release-build` vs. `release-go`
+## Retrying `release-go`
 
 As described in [README.md](README.md), `release-build` orchestrates the sync and internal build process (this doc), then triggers `release-go` on the final produced build to create the Git tag, GitHub release, and aka.ms links. `release-build` doesn't wait for `release-go` to finish before completing successfully.
 

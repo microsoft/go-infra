@@ -1,0 +1,74 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Use runtime parameters to define these selections in YML. This also makes them
+# show up in the "Run" popup directly. This makes them much easier to set
+# manually, vs. digging into the Variables submenu with many clicks.
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
+parameters:
+  - name: releaseVersions
+    displayName: >
+      List of versions to release. Include Microsoft revision suffix (-1) and boring/FIPS suffix
+      (-fips) if they apply. Write in YAML format: write one version number per line with '-' and a
+      space at the beginning of each line.
+    type: object
+
+  # This parameter intentionally has no default: see release-go-pipeline.yml
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
+
+trigger: none
+pr: none
+
+variables:
+  - group: Microsoft-GoLang-bot
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
+
+jobs:
+  - template: jobs/releasego.yml
+    parameters:
+      steps:
+        - ${{ each version in parameters.releaseVersions }}:
+          - script: |
+              releasego create-release-issue \
+                -release '${{ version }}' \
+                -repo '$(TargetGitHubRepo)' \
+                -pat '$(GitHubPAT)' \
+                -append-azdo-variable-name GO_RELEASE_ALL_ISSUE_NUMBERS \
+                -set-azdo-variable-name GO_RELEASE_ISSUE_NUMBER
+            displayName: (${{ version}}) Create tracking issue
+          - script: |
+              releasego build-pipeline \
+                -id '$(GoReleaseBuildPipelineID)' \
+                -org 'https://dev.azure.com/dnceng/' \
+                -proj 'internal' \
+                -branch '$(Build.SourceBranch)' \
+                -commit '$(Build.SourceVersion)' \
+                -azdopat '$(System.AccessToken)' \
+                p releaseVersion '${{ version }}' \
+                p releaseIssue '$(GO_RELEASE_ISSUE_NUMBER)' \
+                p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+            displayName: (${{ version }}) 🚀 Start microsoft/go build preparation
+
+        - script: |
+            releasego create-release-day-issue \
+              -issue-numbers '$(GO_RELEASE_ALL_ISSUE_NUMBERS)' \
+              -repo '$(TargetGitHubRepo)' \
+              -pat '$(GitHubPAT)' \
+              -set-azdo-variable-name GO_RELEASE_DAY_ISSUE_NUMBER
+          displayName: Create release day tracking issue
+
+        - script: |
+            releasego build-pipeline \
+              -id '$(GoReleaseImagesPipelineID)' \
+              -org 'https://dev.azure.com/dnceng/' \
+              -proj 'internal' \
+              -branch '$(Build.SourceBranch)' \
+              -commit '$(Build.SourceVersion)' \
+              -azdopat '$(System.AccessToken)' \
+              p releaseVersions '${{ convertToJson(parameters.releaseVersions) }}' \
+              p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
+              p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+          displayName: 🚀 Start microsoft/go-images build
