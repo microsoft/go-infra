@@ -7,7 +7,12 @@ package gitcmd
 
 import (
 	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"time"
 
+	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
@@ -86,4 +91,67 @@ func (m MultiAuther) InsertAuth(url string) string {
 		}
 	}
 	return url
+}
+
+// Poll repeatedly checks using the given checker until it returns a successful result.
+func Poll(checker PollChecker, delay time.Duration) string {
+	for {
+		result, err := checker.Check()
+		if err == nil {
+			log.Printf("Check suceeded, result: %q.\n", result)
+			return result
+		}
+		log.Printf("Failed check: %v, next poll in %v...", err, delay)
+		time.Sleep(delay)
+	}
+}
+
+// PollChecker runs a check that returns a result. This is normally used to check an upstream
+// repository for a release, or for go-images dependency flow status.
+type PollChecker interface {
+	// Check finds the string result associated with the check, or returns an error describing why
+	// the result couldn't be found yet.
+	Check() (string, error)
+}
+
+// CombinedOutput runs "git <args...>" in the given directory and returns the result.
+func CombinedOutput(dir string, args ...string) (string, error) {
+	return executil.CombinedOutput(executil.Dir(dir, "git", args...))
+}
+
+// RevParse runs "git rev-parse <rev>" and returns the result.
+func RevParse(dir, rev string) (string, error) {
+	return CombinedOutput(dir, "rev-parse", rev)
+}
+
+// Show runs "git show <spec>" and returns the content.
+func Show(dir, rev string) (string, error) {
+	return CombinedOutput(dir, "show", rev)
+}
+
+// Run runs "git <args>" in the given directory, showing the command to the user in logs for
+// diagnosability. Using this func helps make one-line Git commands readable.
+func Run(dir string, args ...string) error {
+	return executil.Run(executil.Dir(dir, "git", args...))
+}
+
+// NewTempGitRepo creates a gitRepo in temp storage. If desired, clean it up with AttemptDelete.
+func NewTempGitRepo() (string, error) {
+	gitDir, err := os.MkdirTemp("", "releasego-temp-git-*")
+	if err != nil {
+		return "", err
+	}
+	if err := executil.Run(exec.Command("git", "init", gitDir)); err != nil {
+		return "", err
+	}
+	log.Printf("Created dir %#q to store temp Git repo.\n", gitDir)
+	return gitDir, nil
+}
+
+// AttemptDelete tries to delete the git dir. If an error occurs, log it, but this is not fatal.
+// gitDir is expected to be in a temp dir, so it will be cleaned up later by the OS anyway.
+func AttemptDelete(gitDir string) {
+	if err := os.RemoveAll(gitDir); err != nil {
+		log.Printf("Unable to clean up git repository directory %#q: %v\n", gitDir, err)
+	}
 }

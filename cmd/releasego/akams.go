@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -82,7 +82,7 @@ func createAkaMSLinks(assetFilePath string) error {
 	}
 
 	var b buildassets.BuildAssets
-	if err := buildmodel.ReadJSONFile(assetFilePath, &b); err != nil {
+	if err := stringutil.ReadJSONFile(assetFilePath, &b); err != nil {
 		return err
 	}
 

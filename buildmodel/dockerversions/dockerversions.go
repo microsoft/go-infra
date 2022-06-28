@@ -5,6 +5,8 @@
 // to the details of that version.
 package dockerversions
 
+import "github.com/microsoft/go-infra/goversion"
+
 // Versions is the root of a 'versions.json' file.
 //
 // Note: this type is an alias of a map, so it's essentially a pointer. Use dockerversions.Versions,
@@ -54,6 +56,11 @@ type MajorMinorVersion struct {
 	// BranchSuffix allows 1.17 and 1.17-fips to have distinct Versions objects, for example, which
 	// is necessary to have different arches and variants for each branch.
 	BranchSuffix string `json:"branchSuffix,omitempty"`
+}
+
+// GoVersion returns the parsed Go version this MajorMinorVersion will build.
+func (m *MajorMinorVersion) GoVersion() *goversion.GoVersion {
+	return goversion.New(m.Version + "-" + m.Revision + m.BranchSuffix)
 }
 
 // Arch points at the publicly accessible artifacts for a specific OS/arch.

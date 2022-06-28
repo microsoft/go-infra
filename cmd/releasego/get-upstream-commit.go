@@ -9,13 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/azdo"
-	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -56,122 +54,70 @@ func handleWaitUpstream(p subcmd.ParseFunc) error {
 	}
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second
 
-	gitDir, err := os.MkdirTemp("", "releasego-get-upstream-commit-*")
+	repo, err := gitcmd.NewTempGitRepo()
 	if err != nil {
 		return err
 	}
+	if !*keepTemp {
+		defer gitcmd.AttemptDelete(repo)
+	}
 
-	repo := gitRepo{gitDir, *upstream}
 	v := goversion.New(*version)
-	var checker upstreamChecker
+	var checker gitcmd.PollChecker
 	switch v.Note {
 	case "":
 		checker = &tagChecker{
-			gitRepo: repo,
-			Tag:     v.UpstreamFormatGitTag(),
+			GitDir:   repo,
+			Upstream: *upstream,
+			Tag:      v.UpstreamFormatGitTag(),
 		}
 	case "fips":
 		checker = &boringChecker{
-			gitRepo: repo,
-			Version: v.MajorMinorPatch(),
+			GitDir:   repo,
+			Upstream: *upstream,
+			Version:  v.MajorMinorPatch(),
 		}
 	default:
 		return fmt.Errorf("unable to check for version with note %q", v.Note)
 	}
 
-	if *keepTemp {
-		log.Printf("Created dir %#q to store polling Git repo.\n", gitDir)
-	} else {
-		log.Printf("Created temp dir %#q to store polling Git repo. The dir will be deleted when the command completes.\n", gitDir)
-		defer func() {
-			if err := os.RemoveAll(gitDir); err != nil {
-				log.Printf("Unable to clean up temp directory %#q: %v\n", gitDir, err)
-			}
-		}()
-	}
-
-	if err := executil.Run(exec.Command("git", "init", gitDir)); err != nil {
-		return err
-	}
-
-	result := poll(checker, pollDelay)
+	result := gitcmd.Poll(checker, pollDelay)
 	if *azdoVarName != "" {
 		azdo.SetPipelineVariable(*azdoVarName, result)
 	}
 	return nil
 }
 
-func poll(checker upstreamChecker, delay time.Duration) string {
-	for {
-		result, err := checker.Check()
-		if err == nil {
-			log.Printf("Check suceeded, result: %q.\n", result)
-			return result
-		}
-		log.Printf("Failed check: %v, next poll in %v...", err, delay)
-		time.Sleep(delay)
-	}
-}
-
-// gitRepo wraps a Git repository directory and provides a few utility methods. By embedding this
-// struct, a checker is able to use Git.
-type gitRepo struct {
-	GitDir   string
-	Upstream string
-}
-
-func (g *gitRepo) gitCmd(args ...string) *exec.Cmd {
-	c := exec.Command("git", args...)
-	c.Dir = g.GitDir
-	return c
-}
-
-func (g *gitRepo) runGitCmd(args ...string) error {
-	return executil.Run(g.gitCmd(args...))
-}
-
-func (g *gitRepo) revParse(rev string) (string, error) {
-	commit, err := executil.CombinedOutput(g.gitCmd("rev-parse", rev))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(commit), nil
-}
-
-// upstreamChecker checks an upstream repository for a release.
-type upstreamChecker interface {
-	// Check finds the commit associated with a release, or returns an error.
-	Check() (string, error)
-}
-
 // tagChecker checks for an upstream release by looking for a Git tag.
 type tagChecker struct {
-	gitRepo
-	Tag string
+	GitDir   string
+	Upstream string
+	Tag      string
 }
 
 func (c *tagChecker) Check() (string, error) {
-	if err := c.runGitCmd("fetch", "--depth", "1", c.Upstream, "refs/tags/"+c.Tag+":refs/tags/"+c.Tag); err != nil {
+	if err := gitcmd.Run(c.GitDir, "fetch", "--depth", "1", c.Upstream, "refs/tags/"+c.Tag+":refs/tags/"+c.Tag); err != nil {
 		return "", err
 	}
-	return c.revParse(c.Tag)
+	return gitcmd.RevParse(c.GitDir, c.Tag)
 }
 
 // boringChecker checks for an upstream release by reading the boring releases file and looking for
 // a line that matches the given version.
 type boringChecker struct {
-	gitRepo
-	Version string
+	GitDir   string
+	Upstream string
+	Version  string
 }
 
 func (c *boringChecker) Check() (string, error) {
 	// Fetch the tip commit of the boring branch to check the RELEASES file.
-	if err := c.runGitCmd("fetch", "--depth", "1", c.Upstream, "+dev.boringcrypto:boring"); err != nil {
+	if err := gitcmd.Run(c.GitDir, "fetch", "--depth", "1", c.Upstream, "+dev.boringcrypto:boring"); err != nil {
 		return "", err
 	}
 
 	// Find the boring release file content and find a matching release.
-	releases, err := executil.CombinedOutput(c.gitCmd("show", "boring:misc/boring/RELEASES"))
+	releases, err := gitcmd.Show(c.GitDir, "boring:misc/boring/RELEASES")
 	if err != nil {
 		return "", err
 	}
@@ -181,10 +127,10 @@ func (c *boringChecker) Check() (string, error) {
 	}
 
 	// Fill in history to find the full commit hash.
-	if err := c.runGitCmd("fetch", c.Upstream, "+refs/heads/dev.boringcrypto*:refs/heads/boring*"); err != nil {
+	if err := gitcmd.Run(c.GitDir, "fetch", c.Upstream, "+refs/heads/dev.boringcrypto*:refs/heads/boring*"); err != nil {
 		return "", err
 	}
-	return c.revParse(shortCommit)
+	return gitcmd.RevParse(c.GitDir, shortCommit)
 }
 
 // findBoringReleaseCommit finds a line in the RELEASES file that matches our tag, or returns an

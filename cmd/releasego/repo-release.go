@@ -14,9 +14,9 @@ import (
 	"path/filepath"
 
 	"github.com/google/go-github/github"
-	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
+	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -59,7 +59,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	var assets buildassets.BuildAssets
-	if err := buildmodel.ReadJSONFile(*buildAssetJSON, &assets); err != nil {
+	if err := stringutil.ReadJSONFile(*buildAssetJSON, &assets); err != nil {
 		return err
 	}
 	uploadPaths := assetPaths(*buildDir, assets.GoSrcURL)

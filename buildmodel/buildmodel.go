@@ -6,10 +6,8 @@
 package buildmodel
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
@@ -19,45 +17,6 @@ import (
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
 )
-
-// ReadJSONFile reads one JSON value from the specified file.
-func ReadJSONFile(path string, i interface{}) (err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("unable to open JSON file %v for reading: %w", path, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-
-	d := json.NewDecoder(f)
-	if err := d.Decode(i); err != nil {
-		return fmt.Errorf("unable to decode JSON file %v: %w", path, err)
-	}
-	return nil
-}
-
-// WriteJSONFile writes one specified value to a file as indented JSON with a trailing newline.
-func WriteJSONFile(path string, i interface{}) (err error) {
-	f, err := os.Create(path)
-	if err != nil {
-		return fmt.Errorf("unable to open JSON file %v for writing: %w", path, err)
-	}
-	defer func() {
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-
-	d := json.NewEncoder(f)
-	d.SetIndent("", "  ")
-	if err := d.Encode(i); err != nil {
-		return fmt.Errorf("unable to encode model into JSON file %v: %w", path, err)
-	}
-	return nil
-}
 
 // UpdateManifest takes a 'versions.json' model and updates a build manifest to make it build and
 // tag all versions specified. Slices in the generated model are sorted, for diff stability. Map

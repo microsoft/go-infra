@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -56,7 +56,7 @@ func handleAssetVersion(p subcmd.ParseFunc) error {
 	}
 
 	var b buildassets.BuildAssets
-	if err := buildmodel.ReadJSONFile(*buildAssetJSON, &b); err != nil {
+	if err := stringutil.ReadJSONFile(*buildAssetJSON, &b); err != nil {
 		return err
 	}
 

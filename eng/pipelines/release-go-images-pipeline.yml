@@ -1,0 +1,132 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Use runtime parameters to define these selections in YML. This also makes them
+# show up in the "Run" popup directly. This makes them much easier to set
+# manually, vs. digging into the Variables submenu with many clicks.
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
+parameters:
+  - name: releaseVersions
+    displayName: >
+      List of versions to release. Include Microsoft revision suffix (-1) and boring/FIPS suffix
+      (-fips) if they apply. Write in YAML format: write one version number per line with '-' and a
+      space at the beginning of each line.
+    type: object
+
+  - name: releaseIssue
+    displayName: microsoft/go issue number to comment on once complete, or nil.
+    type: string
+    default: nil
+
+  # If someone's manually queueing this build, let them skip the approval stage. It takes time to
+  # acquire a serverless agent to present the approval step, so the dev has to pay attention and
+  # catch it. Instead, let them approve it ahead of time by skipping it. The default is always used
+  # by automation, so this is only used for dev builds and retries.
+  - name: approveAheadOfTime
+    displayName: Approve right now, skipping the approval stage.
+    type: boolean
+    default: false
+
+  # Allow retrying a build starting at any of these points.
+  - name: poll1MicrosoftGoImagesCommitHash
+    displayName: '1: microsoft/go-images commit hash to poll for build.'
+    type: string
+    default: nil
+  - name: poll2MicrosoftGoImagesBuildID
+    displayName: '2: Go image build ID to poll for completion.'
+    type: string
+    default: nil
+
+  # This parameter intentionally has no default: see release-go-pipeline.yml
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
+
+trigger: none
+pr: none
+
+variables:
+  - group: Microsoft-GoLang-bot
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
+
+stages:
+  - ${{ if eq(parameters.approveAheadOfTime, false) }}:
+    - stage: WaitForApproval
+      jobs:
+        - job: Approve
+          pool: server
+          timeoutInMinutes: 1440 # 1 day
+          steps:
+            - task: ManualValidation@0
+              inputs:
+                instructions: >
+                  Once the microsoft/go build is complete, approve this step to start polling for
+                  dependency flow completion in microsoft/go-images.
+                onTimeout: 'reject'
+
+  - stage: Release
+    jobs:
+      - template: jobs/releasego.yml
+        parameters:
+          releaseIssue: ${{ parameters.releaseIssue }}
+          reportDescription: image build/publish steps for ${{ join(', ', parameters.releaseVersions) }}.
+          variables:
+            poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
+            poll2MicrosoftGoImagesBuildID: ${{ parameters.poll2MicrosoftGoImagesBuildID }}
+          steps:
+            # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
+            # retry build will have a non-nil value in one of these parameters. Only the value of the last
+            # step's parameter matters.
+            - ${{ if eq(parameters.poll2MicrosoftGoImagesBuildID, 'nil') }}:
+              - ${{ if eq(parameters.poll1MicrosoftGoImagesCommitHash, 'nil') }}:
+                # First, poll for a commit that includes all the versions we want to build/release.
+                - script: |
+                    releasego get-images-commit \
+                      -versions '${{ join(',', parameters.releaseVersions) }}' \
+                      -branch 'refs/heads/$(TargetGoImagesBranch)' \
+                      -repo 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
+                      -set-azdo-variable poll1MicrosoftGoImagesCommitHash
+                  displayName: ⌚ Wait for go-images dependency flow
+
+              # Now we have MicrosoftGoImagesCommitHash
+              - script: |
+                  releasego wait-azdo-commit \
+                    -commit '$(poll1MicrosoftGoImagesCommitHash)' \
+                    -name '$(TargetAzDOImagesRepo)' \
+                    -org 'https://dev.azure.com/dnceng/' \
+                    -proj 'internal' \
+                    -azdopat '$(System.AccessToken)'
+                displayName: ⌚ Wait for internal mirror
+                timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+              - script: |
+                  releasego build-pipeline \
+                    -commit '$(poll1MicrosoftGoImagesCommitHash)' \
+                    -branch 'refs/heads/$(TargetGoImagesBranch)' \
+                    -id '$(GoImagesPipelineID)' \
+                    -org 'https://dev.azure.com/dnceng/' \
+                    -proj 'internal' \
+                    -azdopat '$(System.AccessToken)' \
+                    -set-azdo-variable poll2MicrosoftGoImagesBuildID \
+                displayName: 🚀 Start go-images build/publish
+
+            # Now we have poll2MicrosoftGoImagesBuildID
+            - script: |
+                releasego wait-build \
+                  -id '$(poll2MicrosoftGoImagesBuildID)' \
+                  -org 'https://dev.azure.com/dnceng/' \
+                  -proj 'internal' \
+                  -azdopat '$(System.AccessToken)'
+              displayName: ⌚ Wait for go-images build
+              timeoutInMinutes: 120
+
+            - script: |
+                echo 'To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:'
+                echo ''
+                echo '1: $(poll1MicrosoftGoImagesCommitHash)'
+                echo '2: $(poll2MicrosoftGoImagesBuildID)'
+                echo ''
+                echo 'Also consider checking the "Approve right now" checkbox to streamline the re-run.'
+              displayName: 🔁 Print Retry Instructions
+              condition: always()
+

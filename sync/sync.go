@@ -14,9 +14,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/microsoft/go-infra/buildmodel"
+	"github.com/microsoft/go-infra/azdo"
+	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/stringutil"
 )
 
 type Flags struct {
@@ -61,6 +63,37 @@ func BindFlags(workingDirectory string) *Flags {
 	}
 }
 
+// AzDOVariableFlags is a set of flags that a sync command runner can set to make sync emit AzDO
+// Pipeline log commands to return the results of a sync operation into a form that can be used in
+// later steps in the pipeline. See BindAzDOVariableFlags for flag descriptions.
+type AzDOVariableFlags struct {
+	SetVariablePRNumber       *string
+	SetVariableUpToDateCommit *string
+}
+
+// BindAzDOVariableFlags creates a flags struct that contains initialized flags.
+func BindAzDOVariableFlags() *AzDOVariableFlags {
+	return &AzDOVariableFlags{
+		SetVariablePRNumber: flag.String(
+			"set-azdo-variable-pr-number", "",
+			"An AzDO variable name to set to the sync PR number, or nil if no sync PR is created."),
+		SetVariableUpToDateCommit: flag.String(
+			"set-azdo-variable-up-to-date-commit", "",
+			"An AzDO variable name to set to nil if a sync PR is created, otherwise the full commit hash that was found to be already up to date."),
+	}
+}
+
+// SetAzDOVariables prints logging commands to stdout to assign the output variables if the variable
+// name flags have been set, otherwise does nothing.
+func (a *AzDOVariableFlags) SetAzDOVariables(prNumber, upToDateCommit string) {
+	if *a.SetVariablePRNumber != "" {
+		azdo.SetPipelineVariable(*a.SetVariablePRNumber, prNumber)
+	}
+	if *a.SetVariableUpToDateCommit != "" {
+		azdo.SetPipelineVariable(*a.SetVariableUpToDateCommit, upToDateCommit)
+	}
+}
+
 func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 	switch GitAuthOption(*f.GitAuthString) {
 	case GitAuthNone:
@@ -96,7 +129,7 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 }
 
 func (f *Flags) MakeGitWorkDir() (string, error) {
-	d, err := buildmodel.MakeWorkDir(*f.TempGitDir)
+	d, err := executil.MakeWorkDir(*f.TempGitDir)
 	if err != nil {
 		return "", fmt.Errorf("failed to make working directory for sync: %w", err)
 	}
@@ -105,7 +138,7 @@ func (f *Flags) MakeGitWorkDir() (string, error) {
 
 func (f *Flags) ReadConfig() ([]ConfigEntry, error) {
 	var entries []ConfigEntry
-	if err := buildmodel.ReadJSONFile(*f.SyncConfig, &entries); err != nil {
+	if err := stringutil.ReadJSONFile(*f.SyncConfig, &entries); err != nil {
 		return nil, fmt.Errorf("failed to read sync config file: %w", err)
 	}
 	return entries, nil
