@@ -33,6 +33,25 @@ parameters:
     type: string
     default: nil
 
+  # Allow disabling specific parts of the internal build release. These can be used to re-run
+  # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runTag
+    displayName: Tag the release.
+    type: boolean
+    default: true
+  - name: runGitHubRelease
+    displayName: Create the GitHub Release.
+    type: boolean
+    default: true
+  - name: runAkaMSUpdate
+    displayName: Update the aka.ms URLs.
+    type: boolean
+    default: true
+  - name: runGoImagesUpdate
+    displayName: Update the microsoft/go-images main branch and wait for PR completion.
+    type: boolean
+    default: true
+
   # This parameter intentionally has no default: see release-go-pipeline.yml
   - name: goReleaseConfigVariableGroup
     displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
@@ -42,6 +61,8 @@ trigger: none
 pr: none
 
 variables:
+  - group: go-akams-config
+  - group: go-akams-auth
   - group: Microsoft-GoLang-bot
   - group: DotNet-VSTS-Infra-Access
   # Import config group. This may direct the build to use secrets from the other groups.
@@ -52,6 +73,7 @@ jobs:
     parameters:
       releaseIssue: ${{ parameters.releaseIssue }}
       reportDescription: microsoft/go build prep steps for ${{ parameters.releaseVersion }}.
+      useDotNet: ${{ parameters.runAkaMSUpdate }}
       variables:
         # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
         # overridden with a logging command as the pipeline moves on.
@@ -148,17 +170,6 @@ jobs:
                 -azdopat '$(System.AccessToken)'
             displayName: ⌚ Wait for internal build
             timeoutInMinutes: 120
-          - script: |
-              releasego build-pipeline \
-                -id '$(GoReleasePipelineID)' \
-                -org 'https://dev.azure.com/dnceng/' \
-                -proj 'internal' \
-                -azdopat '$(System.AccessToken)' \
-                p releaseVersion '${{ parameters.releaseVersion }}' \
-                p releaseGoBuildId '$(poll3MicrosoftGoBuildID)' \
-                p releaseIssue '${{ parameters.releaseIssue }}' \
-                p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
-            displayName: 🚀 Run microsoft/go release pipeline
 
           # Download build asset JSON from completed internal build to update go-images with.
           - task: DownloadPipelineArtifact@2
@@ -171,35 +182,100 @@ jobs:
               runVersion: specific
               runId: $(poll3MicrosoftGoBuildID)
               path: $(assetsDir)
-          # Update the target Docker repo. The origin is defined with "_" as the username because
-          # the username doesn't matter, only the PAT. $(GitHubPAT) may be some other user's: it is
-          # provided by the variable group.
+          # Download built and signed binaries. These are already on blob storage, but steps in this
+          # pipeline will publish a subset of these as GitHub Release attachments.
+          - task: DownloadPipelineArtifact@2
+            displayName: Download binaries
+            inputs:
+              source: specific
+              artifact: Binaries Signed
+              project: internal
+              pipeline: $(GoPipelineID)
+              runVersion: specific
+              runId: $(poll3MicrosoftGoBuildID)
+              path: $(artifactsDir)
+
           - script: |
-              set -euxo pipefail
-              # Install jq, used to evaluate Dockerfile templates.
-              sudo apt update && sudo apt install -y jq
-
-              go run ./cmd/dockerupdatepr \
-                -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
-                -github-pat '$(GitHubPAT)' \
-                -github-pat-reviewer '$(GitHubPATReviewer)' \
+              releasego get-asset-version \
                 -build-asset-json '$(buildAssetJsonFile)' \
-                -manual-branch '$(TargetGoImagesBranch)' \
-                -set-azdo-variable-pr-number poll4MicrosoftGoImagesPRNumber
-            displayName: Update go-images
+                -version '${{ parameters.releaseVersion }}' \
+                -set-azdo-variable 'buildAssetVersion'
+            displayName: Read and verify build asset version
 
-        # Now we have poll4MicrosoftGoImagesPRNumber, which may be nil if no PR is required
-        - script: |
-            releasego get-merged-pr-commit \
-              -repo '$(TargetGoImagesGitHubRepo)' \
-              -pr '$(poll4MicrosoftGoImagesPRNumber)' \
-              -pat '$(GitHubPAT)'
-          displayName: ⌚ Wait for go-images update PR merge
-          timeoutInMinutes: 120
-          # Skip this task if the PR number isn't set. This might intentionally happen if we have to
-          # release a new binary/source revision of an out-of-support version of Go, and we don't
-          # still support Docker images for that version.
-          condition: and(succeeded(), ne(variables.poll4MicrosoftGoImagesPRNumber, 'nil'))
+          - script: |
+              releasego get-build-info \
+                -id '${{ parameters.poll3MicrosoftGoBuildID }}' \
+                -org 'https://dev.azure.com/dnceng/' \
+                -proj 'internal' \
+                -prefix 'BuildInfo' \
+                -azdopat '$(System.AccessToken)'
+            displayName: Get build info
+
+          - ${{ if eq(parameters.runTag, true) }}:
+            - script: |
+                releasego tag \
+                  -tag 'v$(buildAssetVersion)' \
+                  -commit '$(BuildInfoSourceVersion)' \
+                  -repo '$(TargetGitHubRepo)' \
+                  -pat '$(GitHubPAT)'
+              displayName: 🎓 Create GitHub tag
+
+          - ${{ if eq(parameters.runGitHubRelease, true) }}:
+            - script: |
+                releasego repo-release \
+                  -tag 'v$(buildAssetVersion)' \
+                  -repo '$(TargetGitHubRepo)' \
+                  -build-asset-json '$(buildAssetJsonFile)' \
+                  -build-dir '$(artifactsDir)' \
+                  -pat '$(GitHubPAT)'
+              displayName: 🎓 Create GitHub release
+
+          - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
+            - script: |
+                # Pass owners through environment. (Contains semicolons.)
+                export AkaMSOwners="$(AkaMSOwners)"
+
+                releasego akams \
+                  -build-asset-json '$(buildAssetJsonFile)' \
+                  -prefix '$(VanityUrlPrefix)' \
+                  /p:AkaMSClientId='$(akams-client-id)' \
+                  /p:AkaMSClientSecret='$(akams-client-secret)' \
+                  /p:AkaMSTenant='$(AkaMSTenant)' \
+                  /p:AkaMSCreatedBy='$(AkaMSCreatedBy)' \
+                  /p:AkaMSGroupOwner='$(AkaMSGroupOwner)'
+              displayName: 🎓 Update aka.ms links
+
+          - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
+            # Update the target Docker repo. The origin is defined with "_" as the username because
+            # the username doesn't matter, only the PAT. $(GitHubPAT) may be some other user's: it is
+            # provided by the variable group.
+            - script: |
+                set -euxo pipefail
+                # Install jq, used to evaluate Dockerfile templates.
+                sudo apt update && sudo apt install -y jq
+
+                go run ./cmd/dockerupdatepr \
+                  -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
+                  -github-pat '$(GitHubPAT)' \
+                  -github-pat-reviewer '$(GitHubPATReviewer)' \
+                  -build-asset-json '$(buildAssetJsonFile)' \
+                  -manual-branch '$(TargetGoImagesBranch)' \
+                  -set-azdo-variable-pr-number poll4MicrosoftGoImagesPRNumber
+              displayName: Update go-images
+
+        - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
+          # Now we have poll4MicrosoftGoImagesPRNumber, which may be nil if no PR is required
+          - script: |
+              releasego get-merged-pr-commit \
+                -repo '$(TargetGoImagesGitHubRepo)' \
+                -pr '$(poll4MicrosoftGoImagesPRNumber)' \
+                -pat '$(GitHubPAT)'
+            displayName: ⌚ Wait for go-images update PR merge
+            timeoutInMinutes: 120
+            # Skip this task if the PR number isn't set. This might intentionally happen if we have to
+            # release a new binary/source revision of an out-of-support version of Go, and we don't
+            # still support Docker images for that version.
+            condition: and(succeeded(), ne(variables.poll4MicrosoftGoImagesPRNumber, 'nil'))
 
         - script: |
             echo 'To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:'

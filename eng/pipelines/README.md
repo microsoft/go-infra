@@ -23,7 +23,5 @@ Internal release pipelines (see [release process docs](/docs/release-process)):
   * [`microsoft-go-infra-release-start`](https://dev.azure.com/dnceng/internal/_build?definitionId=1153)
 * (2) [`release-build-pipeline.yml`](release-build-pipeline.yml)
   * [`microsoft-go-infra-release-build`](https://dev.azure.com/dnceng/internal/_build?definitionId=1142)
-* (3) [`release-go-pipeline.yml`](release-go-pipeline.yml)
-  * [`microsoft-go-infra-release-go`](https://dev.azure.com/dnceng/internal/_build?definitionId=1123)
-* (4) [`release-go-images-pipeline.yml`](release-go-images-pipeline.yml)
+* (3) [`release-go-images-pipeline.yml`](release-go-images-pipeline.yml)
   * [`microsoft-go-infra-release-go-images`](https://dev.azure.com/dnceng/internal/_build?definitionId=1151)

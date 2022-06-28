@@ -13,8 +13,8 @@ See [instructions.md](instructions.md) for more info about how to use this infra
 The pipeline flow is arranged like this, with an example 1.17 patch release shown:
 
 > ![](images/release-pipeline-dependencies.png)
->
-> (Not pictured: polling dependencies and PR submissions to microsoft/go and microsoft/go-images.)
+
+The next sections of the doc describe each of the numbered release automation pipelines.
 
 ## (1) release-start
 
@@ -56,29 +56,17 @@ Steps:
 1. Poll the internal repository until the merged commit is mirrored.
 1. Launch an internal build on the merged commit.
 1. Poll the build for successful completion.
-1. Launch "(3) release-go" on the result.
+1. Download the build results onto the agent.
+1. Check the build results match the expected Go version.
+1. Tag the commit on GitHub.
+1. Add a GitHub release on the tag. Attach the source archive files and assets json.
+1. Update aka.ms links.
 1. Create an auto-update PR for go-images that updates it to the internal build.
 1. Poll auto-update PR CI and merge status for a green merge.
 
 If any polling steps fail (or time out), the pipeline notifies the dev handling the release by commenting on the release issue on GitHub.
 
-## (3) release-go
-
-Inputs:
-* microsoft/go release issue number.
-* A single `major.minor.patch-revision[-note]` release number.
-* AzDO build ID: the microsoft/go build to release.
-    * If running this job manually, note: this is the id in the URL, not the build number.
-
-Steps:
-1. Check that results match the expected Go version.
-    * VERSION file, commit hashes. Goal: prevent the wrong build from being passed into this pipeline.
-1. Tag the commit on GitHub.
-1. Add a GitHub release on the tag. Attach the source archive files and assets json.
-1. Update aka.ms links.
-1. Add a comment to the release issue alerting the dev that the process has completed.
-
-## (4) release-go-images
+## (3) release-go-images
 
 Inputs:
 * A list of major.minor.patch release numbers.

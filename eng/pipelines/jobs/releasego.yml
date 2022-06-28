@@ -17,6 +17,10 @@ parameters:
   # A brief description of this job to include in the comment posted on GitHub (if enabled).
   reportDescription: release job.
 
+  # Enables the UseDotNet task during the initialization steps. Used for release steps in the Arcade
+  # toolset, which runs on .NET.
+  useDotNet: false
+
   # Additional variables to include.
   variables: {}
   # The release steps to run.
@@ -48,6 +52,12 @@ jobs:
 
       - template: ../steps/init-pwsh-task.yml
       - template: ../steps/init-go.yml
+      - ${{ if eq(parameters.useDotNet, true) }}:
+        - task: UseDotNet@2
+          displayName: 'Use .NET SDK'
+          inputs:
+            version: 6.x
+
       - template: ../steps/set-bot-git-author.yml
 
       - script: |
