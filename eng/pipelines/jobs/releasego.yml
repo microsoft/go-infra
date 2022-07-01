@@ -21,6 +21,16 @@ parameters:
   # toolset, which runs on .NET.
   useDotNet: false
 
+  # Build pool to use. Defaults to an agent that can be used to handle our artifacts. Switch to a
+  # hosted agent if queue time is a concern and no artifact handling is necessary.
+  pool:
+    # This is a utility job: use generic recent LTS.
+    name: NetCore1ESPool-Svc-Internal
+    demands: ImageOverride -equals Build.Ubuntu.1804.Amd64
+
+  condition: succeeded()
+  dependsOn: []
+
   # Additional variables to include.
   variables: {}
   # The release steps to run.
@@ -31,10 +41,8 @@ jobs:
     timeoutInMinutes: ${{ parameters.timeoutInMinutes }}
     workspace:
       clean: all
-    pool:
-      # This is a utility job: use generic recent LTS.
-      name: NetCore1ESPool-Svc-Internal
-      demands: ImageOverride -equals Build.Ubuntu.1804.Amd64
+    pool: ${{ parameters.pool }}
+    dependsOn: ${{ parameters.dependsOn }}
     variables:
       # Release steps may need to download build asset JSONs. Set up variables.
       assetsDir: $(Pipeline.Workspace)/BuildAssets
