@@ -79,6 +79,13 @@ func SetPipelineVariable(name, value string) {
 	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
 }
 
+// UploadBuildSummary uses an AzDO logging command to upload a build summary. When used on a
+// markdown file, the rendered document shows up on the build page in an "Extensions" tab. The path
+// must be a full path.
+func UploadBuildSummary(path string) {
+	fmt.Printf("##vso[task.uploadsummary]%v\n", path)
+}
+
 // AzDOBuildDetectionDoc describes how AzDO build detection works, listing the env vars used. Use
 // this in the command description when using GetEnvBuildID or GetEnvBuildURL.
 const AzDOBuildDetectionDoc = "If AzDO env variables SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT, and BUILD_BUILDID are set, includes a link to the build.\n"

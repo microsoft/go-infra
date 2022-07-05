@@ -16,6 +16,8 @@ parameters:
   releaseIssue: nil
   # A brief description of this job to include in the comment posted on GitHub (if enabled).
   reportDescription: release job.
+  # A string of flags to pass "add-retry-instructions" for this job, or empty string to skip.
+  retryInstructionsFlags: ''
 
   # Enables the UseDotNet task during the initialization steps. Used for release steps in the Arcade
   # toolset, which runs on .NET.
@@ -43,6 +45,12 @@ jobs:
 
       # ID of the internal build pipeline. May need to be queued.
       microsoftGoInternalPipeline: 958
+
+      # If we're going to add a retry instructions doc, include a direct link in the GitHub comment.
+      ${{ if eq(parameters.retryInstructionsFlags, '') }}:
+        instructionsLinkArg: ''
+      ${{ if ne(parameters.retryInstructionsFlags, '') }}:
+        instructionsLinkArg: '-instructions-link'
 
       ${{ insert }}: ${{ parameters.variables }}
     steps:
@@ -74,9 +82,16 @@ jobs:
       - script: releasego check-limits -pat '$(GitHubPAT)'
         displayName: Check GitHub rate limit
 
+      - ${{ if ne(parameters.retryInstructionsFlags, '') }}:
+        - script: |
+            releasego add-retry-instructions ${{ parameters.retryInstructionsFlags }}
+          displayName: 🔁 Add "Extensions" tab retry instructions
+          condition: always()
+
       - ${{ if ne(parameters.releaseIssue, 'nil') }}:
         - script: |
             releasego report \
+              $(instructionsLinkArg) \
               -i '${{ parameters.releaseIssue }}' \
               -m ':white_check_mark: Successfully ran ${{ parameters.reportDescription }}' \
               -repo '$(TargetGitHubRepo)' \
@@ -85,8 +100,9 @@ jobs:
           condition: succeeded()
         - script: |
             releasego report \
+              $(instructionsLinkArg) \
               -i '${{ parameters.releaseIssue }}' \
-              -m ':rotating_light: Failed to run ${{ parameters.reportDescription }}.' \
+              -m ':rotating_light: Failed to run ${{ parameters.reportDescription }}' \
               -repo '$(TargetGitHubRepo)' \
               -pat '$(GitHubPAT)'
           displayName: Report Failure

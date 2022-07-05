@@ -71,6 +71,7 @@ stages:
         parameters:
           releaseIssue: ${{ parameters.releaseIssue }}
           reportDescription: image build/publish steps for ${{ join(', ', parameters.releaseVersions) }}.
+          retryInstructionsFlags: '-preapproval'
           variables:
             poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
             poll2MicrosoftGoImagesBuildID: ${{ parameters.poll2MicrosoftGoImagesBuildID }}
@@ -119,14 +120,3 @@ stages:
                   -azdopat '$(System.AccessToken)'
               displayName: ⌚ Wait for go-images build
               timeoutInMinutes: 120
-
-            - script: |
-                echo 'To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:'
-                echo ''
-                echo '1: $(poll1MicrosoftGoImagesCommitHash)'
-                echo '2: $(poll2MicrosoftGoImagesBuildID)'
-                echo ''
-                echo 'Also consider checking the "Approve right now" checkbox to streamline the re-run.'
-              displayName: 🔁 Print Retry Instructions
-              condition: always()
-
