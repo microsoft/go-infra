@@ -87,10 +87,10 @@ func BindAzDOVariableFlags() *AzDOVariableFlags {
 // name flags have been set, otherwise does nothing.
 func (a *AzDOVariableFlags) SetAzDOVariables(prNumber, upToDateCommit string) {
 	if *a.SetVariablePRNumber != "" {
-		azdo.SetPipelineVariable(*a.SetVariablePRNumber, prNumber)
+		azdo.LogCmdSetVariable(*a.SetVariablePRNumber, prNumber)
 	}
 	if *a.SetVariableUpToDateCommit != "" {
-		azdo.SetPipelineVariable(*a.SetVariableUpToDateCommit, upToDateCommit)
+		azdo.LogCmdSetVariable(*a.SetVariableUpToDateCommit, upToDateCommit)
 	}
 }
 

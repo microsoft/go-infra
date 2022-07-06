@@ -67,7 +67,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	}
 
 	if *setVariableName != "" {
-		azdo.SetPipelineVariable(*setVariableName, strconv.Itoa(releaseDayIssueNumber))
+		azdo.LogCmdSetVariable(*setVariableName, strconv.Itoa(releaseDayIssueNumber))
 	}
 	return nil
 }

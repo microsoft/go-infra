@@ -127,7 +127,7 @@ func handleAddRetryInstructions(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	azdo.UploadBuildSummary(tempPath)
+	azdo.LogCmdUploadSummary(tempPath)
 
 	return nil
 }

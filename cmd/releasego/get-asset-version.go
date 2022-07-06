@@ -64,7 +64,7 @@ func handleAssetVersion(p subcmd.ParseFunc) error {
 	assetVersion := b.GoVersion().Full()
 	log.Printf("Found version: %v\n", assetVersion)
 	if *setVariable != "" {
-		azdo.SetPipelineVariable(*setVariable, assetVersion)
+		azdo.LogCmdSetVariable(*setVariable, assetVersion)
 	}
 
 	if *validateVersionFlag != "" {

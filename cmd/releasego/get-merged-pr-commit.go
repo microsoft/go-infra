@@ -113,7 +113,7 @@ func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 	}
 
 	if *setVariable != "" {
-		azdo.SetPipelineVariable(*setVariable, commit)
+		azdo.LogCmdSetVariable(*setVariable, commit)
 	}
 	log.Printf("Found merged commit hash: %v\n", commit)
 	return nil

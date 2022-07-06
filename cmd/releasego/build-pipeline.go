@@ -145,7 +145,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 
 	log.Printf("Queued build id %v\n", *b.Id)
 	if *setVariable != "" {
-		azdo.SetPipelineVariable(*setVariable, strconv.Itoa(*b.Id))
+		azdo.LogCmdSetVariable(*setVariable, strconv.Itoa(*b.Id))
 	}
 
 	if url, ok := azdo.GetBuildWebURL(&b); ok {
