@@ -73,6 +73,7 @@ jobs:
     parameters:
       releaseIssue: ${{ parameters.releaseIssue }}
       reportDescription: microsoft/go build prep steps for ${{ parameters.releaseVersion }}.
+      retryInstructionsFlags: '-checkboxes'
       useDotNet: ${{ parameters.runAkaMSUpdate }}
       variables:
         # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
@@ -276,13 +277,3 @@ jobs:
             # release a new binary/source revision of an out-of-support version of Go, and we don't
             # still support Docker images for that version.
             condition: and(succeeded(), ne(variables.poll4MicrosoftGoImagesPRNumber, 'nil'))
-
-        - script: |
-            echo 'To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:'
-            echo ''
-            echo '1: $(poll1MicrosoftGoPRNumber)'
-            echo '2: $(poll2MicrosoftGoCommitHash)'
-            echo '3: $(poll3MicrosoftGoBuildID)'
-            echo '4: $(poll4MicrosoftGoImagesPRNumber)'
-          displayName: 🔁 Print Retry Instructions
-          condition: always()

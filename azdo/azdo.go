@@ -73,10 +73,18 @@ func GetBuildWebURL(b *build.Build) (string, bool) {
 	return s, true
 }
 
-// SetPipelineVariable uses an AzDO logging command to set a variable in the pipeline.
-// https://github.com/Microsoft/azure-pipelines-tasks/blob/master/docs/authoring/commands.md
-func SetPipelineVariable(name, value string) {
+// LogCmdSetVariable uses an AzDO logging command to set a variable in the current (build) context.
+// https://docs.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#setvariable-initialize-or-modify-the-value-of-a-variable
+func LogCmdSetVariable(name, value string) {
 	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+}
+
+// LogCmdUploadSummary uses an AzDO logging command to upload a summary file. The file is shown on
+// the build page in an "Extensions" tab. If it is a Markdown file, it is rendered with a subset of
+// Markdown features. The path must be a full path.
+// https://docs.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#uploadsummary-add-some-markdown-content-to-the-build-summary
+func LogCmdUploadSummary(path string) {
+	fmt.Printf("##vso[task.uploadsummary]%v\n", path)
 }
 
 // AzDOBuildDetectionDoc describes how AzDO build detection works, listing the env vars used. Use

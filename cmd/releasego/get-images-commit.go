@@ -71,7 +71,7 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 
 	result := gitcmd.Poll(checker, pollDelay)
 	if *azdoVarName != "" {
-		azdo.SetPipelineVariable(*azdoVarName, result)
+		azdo.LogCmdSetVariable(*azdoVarName, result)
 	}
 	return nil
 }

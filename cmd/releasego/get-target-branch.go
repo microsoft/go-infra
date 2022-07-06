@@ -44,7 +44,7 @@ func handleGetTargetBranch(p subcmd.ParseFunc) error {
 
 	log.Printf("Target branch name: %v\n", versionUpstream)
 	if *setVariableBranchName != "" {
-		azdo.SetPipelineVariable(*setVariableBranchName, versionUpstream)
+		azdo.LogCmdSetVariable(*setVariableBranchName, versionUpstream)
 	}
 
 	return nil

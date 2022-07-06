@@ -56,10 +56,10 @@ func handleCreateReleaseIssue(p subcmd.ParseFunc) error {
 		if issues, ok := os.LookupEnv(*appendVariableName); ok {
 			v = issues + "," + v
 		}
-		azdo.SetPipelineVariable(*appendVariableName, v)
+		azdo.LogCmdSetVariable(*appendVariableName, v)
 	}
 	if *setVariableName != "" {
-		azdo.SetPipelineVariable(*setVariableName, strconv.Itoa(issueNumber))
+		azdo.LogCmdSetVariable(*setVariableName, strconv.Itoa(issueNumber))
 	}
 	return nil
 }

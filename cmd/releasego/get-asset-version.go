@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
@@ -63,7 +64,7 @@ func handleAssetVersion(p subcmd.ParseFunc) error {
 	assetVersion := b.GoVersion().Full()
 	log.Printf("Found version: %v\n", assetVersion)
 	if *setVariable != "" {
-		log.Printf("##vso[task.setvariable variable=%v]%v", *setVariable, assetVersion)
+		azdo.LogCmdSetVariable(*setVariable, assetVersion)
 	}
 
 	if *validateVersionFlag != "" {

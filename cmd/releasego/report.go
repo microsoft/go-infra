@@ -29,6 +29,7 @@ func handleReport(p subcmd.ParseFunc) error {
 	pat := githubutil.BindPATFlag()
 	issue := flag.Int("i", 0, "[Required] The issue number to add the comment to.")
 	message := flag.String("m", "", "[Required] The message to post in the comment.")
+	instructionsLink := flag.Bool("instructions-link", false, "Include a direct link to the retry instructions along with the top-level build link.")
 
 	if err := p(); err != nil {
 		return err
@@ -53,6 +54,13 @@ func handleReport(p subcmd.ParseFunc) error {
 
 	if url := azdo.GetEnvBuildURL(); url != "" {
 		*message = "[" + azdo.GetEnvBuildID() + "](" + url + "): " + *message
+
+		if *instructionsLink {
+			*message = *message + "\n" +
+				"[Click here to see " + azdo.GetEnvBuildID() + " retry instructions.](" +
+				azdo.GetEnvBuildURL() + "&view=ms.vss-build-web.run-extensions-tab" +
+				")"
+		}
 	}
 
 	log.Printf("Creating comment on #%v with content:\n%v\n", *issue, *message)
