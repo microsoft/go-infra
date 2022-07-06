@@ -55,35 +55,31 @@ In those cases, you may need to retry from an earlier step. Or, you may need to 
 
 # Retrying
 
-To retry a release job, continuing from the last-running polling step, look for the "🔁 Print Retry Instructions" step:
+1. To retry a release job, continuing from the last-running polling step, find the **🔁 Print Retry Instructions** step:
 
-> ![](images/print-retry-instructions.png)
+    > ![](images/print-retry-instructions.png)
 
-Click it, and scroll to the end of the log to find the retry parameters:
+1. Click it, and scroll to the end of the log to find the retry parameters:
 
-> ```
-> To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:
->
-> 1: nil
-> 2: b2815b0d4b694ab2ed293a8f8a42ee84cab662d4
-> 3: nil
-> 4: nil
-> ```
+    > ```
+    > To retry, press "Run new" from the build main page and copy the last defined value below into the matching parameter input:
+    >
+    > 1: nil
+    > 2: b2815b0d4b694ab2ed293a8f8a42ee84cab662d4
+    > 3: nil
+    > 4: nil
+    > ```
 
-Copy the last value in the list (`b2815b0d4b694ab2ed293a8f8a42ee84cab662d4`) and click the back arrow at the top of the build page to go back to the build's main page:
+1. Copy the last value in the list (`b2815b0d4b694ab2ed293a8f8a42ee84cab662d4`) and click the back arrow at the top of the build page to go back to the build's main page:
 
-> ![](images/job-back-arrow.png)
+    > ![](images/job-back-arrow.png)
 
-Then, press "Run new" in the top right. Paste the string into the box with the matching number, then press Run.
+1. Then, press **Run new** in the top right.
+1. Paste the string into the box with the matching number.
+1. Did a failure occur with Git tag publishing, GitHub Release publishing, or aka.ms URL updating?
+    * If any of these steps succeeded, uncheck the checkbox in the retry dialogue.
+1. Finally, press **Run**.
 
 > When you press "Run new" from a failed build, parameters are filled in with the current build's values. For example, you don't need to fill in the `go-release-config` variable group name again when you run a retry.
 
 > The "Rerun failed jobs" button at the top right *does not work* for release-build. This AzDO feature is not flexible enough to handle fixups. Don't worry: if you press it, the build will detect it and fail itself early.
-
-## Retrying `release-go`
-
-As described in [README.md](README.md), `release-build` orchestrates the sync and internal build process (this doc), then triggers `release-go` on the final produced build to create the Git tag, GitHub release, and aka.ms links. `release-build` doesn't wait for `release-go` to finish before completing successfully.
-
-If `release-go` fails, it posts a comment on the release issue. Like `release-build`, it can be retried with "Run new", however in this case there are checkboxes to click to make sure the build only reruns the steps that haven't succeeded already.
-
-The `release-go` pipeline doesn't do anything long-lived or complex (no PRs or polling), so it isn't expected to fail as often as `release-build` is. This is why the workflow to retry `release-go` isn't as detailed.
