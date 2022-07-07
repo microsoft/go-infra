@@ -28,6 +28,11 @@ type GoVersion struct {
 	// Note is a non-integer string after a '-' separator, or not included. Common use is to
 	// specify 'fips'. Default: empty string, indicating not provided.
 	Note string
+	// Prerelease is a beta or rc version string, for example "rc1" in "1.18rc1" or "beta1" in
+	// "2beta1". After normal parsing, the major, minor, and patch version strings are scanned for a
+	// non-numeric section. If one is found, it is removed from that part of the version and stored
+	// in Prerelease.
+	Prerelease string
 }
 
 // New parses a version string. Any parts left blank are filled in with default values.
@@ -61,11 +66,17 @@ func New(v string) *GoVersion {
 		patch = dotParts[2]
 	}
 
+	var prerelease string
+	extractPrerelease(&major, &prerelease)
+	extractPrerelease(&minor, &prerelease)
+	extractPrerelease(&patch, &prerelease)
+
 	return &GoVersion{
 		v,
 		major, minor, patch,
 		revision,
 		note,
+		prerelease,
 	}
 }
 
@@ -100,7 +111,7 @@ func (v *GoVersion) UpstreamFormatGitTag() string {
 	if v.Patch != "0" {
 		n += "." + v.Patch
 	}
-	return "go" + n
+	return "go" + n + v.Prerelease
 }
 
 // NoteWithPrefix is a utility to help with version string construction. Returns Note with a "-"
@@ -115,4 +126,14 @@ func (v *GoVersion) NoteWithPrefix() string {
 func isInt(s string) bool {
 	_, err := strconv.Atoi(s)
 	return err == nil
+}
+
+// extractPrerelease searches "part" for a prerelease identifier, and if one is found, removes it,
+// and sets "prerelease" to what it found.
+func extractPrerelease(part, prerelease *string) {
+	i := strings.IndexFunc(*part, func(r rune) bool { return !isInt(string(r)) })
+	if i != -1 {
+		*prerelease = (*part)[i:]
+		*part = (*part)[:i]
+	}
 }
