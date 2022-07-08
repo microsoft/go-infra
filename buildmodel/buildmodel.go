@@ -220,8 +220,6 @@ var NoMajorMinorUpgradeMatchError = errors.New("no match found in existing versi
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
 // versions.json model to consume the new build.
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
-	var v *dockerversions.MajorMinorVersion
-
 	// First, try to update an existing major.minor version in the Docker versions file. If it
 	// doesn't exist, try to find the previous version and create a new Docker versions file entry
 	// based on that. If that doesn't exist either, fail.
