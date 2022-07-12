@@ -5,6 +5,7 @@ package sync
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -22,7 +23,8 @@ import (
 )
 
 type Flags struct {
-	DryRun *bool
+	DryRun          *bool
+	InitialCloneDir *string
 
 	GitHubUser        *string
 	GitHubPAT         *string
@@ -33,12 +35,18 @@ type Flags struct {
 	SyncConfig *string
 	TempGitDir *string
 
+	CreateBranches *bool
+
 	GitAuthString *string
 }
 
 func BindFlags(workingDirectory string) *Flags {
 	return &Flags{
 		DryRun: flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
+		InitialCloneDir: flag.String(
+			"initial-clone-dir", "",
+			"When creating a repo, clone this repo/directory rather than starting from scratch.\n"+
+				"This may be used in dev/test to reduce network usage if fetching the official source from scratch is slow."),
 
 		GitHubUser:        flag.String("github-user", "", "Use this github user to submit pull requests."),
 		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
@@ -51,6 +59,11 @@ func BindFlags(workingDirectory string) *Flags {
 			"temp-git-dir",
 			filepath.Join(workingDirectory, "eng", "artifacts", "sync-upstream-temp-repo"),
 			"Location to create the temporary Git repo. A timestamped subdirectory is created to reduce chance of collision."),
+
+		CreateBranches: flag.Bool(
+			"create-branches", false,
+			"Before running sync, check that each target branch exists in the target repo.\n"+
+				"If not, push it to the target repo as a fork from the configured MainBranch."),
 
 		GitAuthString: flag.String(
 			"git-auth",
@@ -174,6 +187,8 @@ const (
 	GitAuthPAT  GitAuthOption = "pat"
 )
 
+var errWouldCreateBranchButCurrentlyDryRun = errors.New("would have pushed a new branch to the target repository to kick off a new version, but this is a dry run. Cannot continue")
+
 func MakePRs(f *Flags) error {
 	entries, err := f.ReadConfig()
 	if err != nil {
@@ -253,8 +268,14 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		return nil, err
 	}
 
-	if err := run(exec.Command("git", "init", dir)); err != nil {
-		return nil, err
+	if *f.InitialCloneDir == "" {
+		if err := run(exec.Command("git", "init", dir)); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := run(exec.Command("git", "clone", *f.InitialCloneDir, dir)); err != nil {
+			return nil, err
+		}
 	}
 
 	// newGitCmd creates a "git {args}" command that runs in the temp fetch repo Git dir.
@@ -264,12 +285,19 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		return c
 	}
 
-	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.BranchMap))
-	for upstream, target := range entry.BranchMap {
+	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.AutoSyncBranches))
+	for _, upstream := range entry.AutoSyncBranches {
+		target, err := entry.TargetBranch(upstream)
+		if err != nil {
+			return nil, err
+		}
+		if target == "" {
+			return nil, fmt.Errorf("no target match found for auto sync branch %q", upstream)
+		}
 		nb := &gitpr.SyncPRRefSet{
 			UpstreamName: upstream,
 			PRRefSet: gitpr.PRRefSet{
-				Name:    strings.ReplaceAll(target, "?", upstream),
+				Name:    target,
 				Purpose: "auto-sync",
 			},
 		}
@@ -277,6 +305,54 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			nb.Commit = commit
 		}
 		branches = append(branches, nb)
+	}
+
+	if *f.CreateBranches {
+		if entry.MainBranch == "" {
+			return nil, errors.New("the create-branches flag requires MainBranch to be configured, but it is not")
+		}
+
+		for _, b := range branches {
+			check := newGitCmd("ls-remote", "--exit-code", "--heads", entry.Target, "refs/heads/"+b.Name)
+			if err := run(check); err != nil {
+				exitErr, ok := err.(*exec.ExitError)
+				if !ok {
+					return nil, err
+				}
+				if exitErr.ExitCode() != 2 {
+					return nil, err
+				}
+
+				// Get a reference to the main branch to fork from.
+				mainRef := gitpr.PRRefSet{
+					Name:    entry.MainBranch,
+					Purpose: "auto-sync-new-branch",
+				}
+				fetchMain := newGitCmd(
+					"fetch", "--no-tags",
+					auther.InsertAuth(entry.Target),
+					mainRef.BaseBranchFetchRefspec())
+				if err := run(fetchMain); err != nil {
+					return nil, err
+				}
+
+				// Push the new branch: fork from the main commit we just fetched to a local branch.
+				fork := newGitCmd(
+					"push", "--no-tags",
+					auther.InsertAuth(entry.Target),
+					b.ForkFromMainRefspec(mainRef.PRBranch()))
+				if *f.DryRun {
+					fork.Args = append(fork.Args, "-n")
+				}
+				if err := run(fork); err != nil {
+					return nil, err
+				}
+
+				if *f.DryRun {
+					return nil, errWouldCreateBranchButCurrentlyDryRun
+				}
+			}
+		}
 	}
 
 	// Fetch latest from remotes. We fetch with one big Git command with many refspecs, instead of

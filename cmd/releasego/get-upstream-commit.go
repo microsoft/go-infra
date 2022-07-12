@@ -72,6 +72,11 @@ func handleWaitUpstream(p subcmd.ParseFunc) error {
 			Tag:      v.UpstreamFormatGitTag(),
 		}
 	case "fips":
+		// Don't handle prerelease "-fips" version. In 1.19+, the boring branch is no longer
+		// separate so this should never happen.
+		if v.Prerelease != "" {
+			return fmt.Errorf("prerelease FIPS version %q not supported", v.Original)
+		}
 		checker = &boringChecker{
 			GitDir:   repo,
 			Upstream: *upstream,

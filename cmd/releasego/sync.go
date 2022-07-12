@@ -70,7 +70,7 @@ func handleSync(p subcmd.ParseFunc) error {
 	v := goversion.New(*version)
 	versionUpstream := versionBranch(v)
 
-	foundEntry, foundTarget, err := findTarget(entries, *repo, versionUpstream)
+	foundEntry, err := findTarget(entries, *repo, versionUpstream)
 	if err != nil {
 		return err
 	}
@@ -79,8 +79,8 @@ func handleSync(p subcmd.ParseFunc) error {
 		return fmt.Errorf("unable to find config entry matching %q for version %q", versionUpstream, v.Full())
 	}
 
-	// Remove all branch mappings other than the one we want to sync.
-	foundEntry.BranchMap = map[string]string{versionUpstream: foundTarget}
+	// Only sync the single branch we intend to.
+	foundEntry.AutoSyncBranches = []string{versionUpstream}
 	if *commit != "" {
 		// Use the target commit, not just what happens to be the latest.
 		foundEntry.SourceBranchLatestCommit = map[string]string{versionUpstream: *commit}
@@ -121,30 +121,23 @@ func handleSync(p subcmd.ParseFunc) error {
 	return nil
 }
 
-// findTarget searches through entries to find a config entry matching the given repo and upstream
-// branch. Returns the found config entry and the target branch, nil if none is found, or an error
-// if multiple matches are found.
-func findTarget(entries []sync.ConfigEntry, repo string, upstream string) (*sync.ConfigEntry, string, error) {
-	var foundEntry *sync.ConfigEntry
-	var foundTarget string
+// findTarget searches through entries to find a config entry matching the given repo and with a
+// valid mapping for the given upstream branch. Returns the first found config entry, or nil if none
+// is found.
+func findTarget(entries []sync.ConfigEntry, repo string, upstream string) (*sync.ConfigEntry, error) {
 	for i := range entries {
 		entry := &entries[i]
 		if !strings.HasSuffix(entry.Target, repo) {
 			continue
 		}
-		for u, target := range entry.BranchMap {
-			if u != upstream {
-				continue
-			}
-			if foundEntry != nil {
-				return nil, "", fmt.Errorf(
-					"found entry matching target repo and upstream branch %q %q targeting %q, but already found %q targeting %q",
-					entry.Target, u, target,
-					foundEntry.Target, foundTarget)
-			}
-			foundEntry = entry
-			foundTarget = target
+		target, err := entry.TargetBranch(upstream)
+		if err != nil {
+			return nil, err
 		}
+		if target == "" {
+			continue
+		}
+		return entry, nil
 	}
-	return foundEntry, foundTarget, nil
+	return nil, nil
 }

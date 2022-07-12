@@ -112,6 +112,7 @@ jobs:
                       -github-pat '$(GitHubPAT)' \
                       -github-pat-reviewer '$(GitHubPATReviewer)' \
                       -azdo-dnceng-pat '$(AzDODncengPAT)' \
+                      -create-branches \
                       -set-azdo-variable-pr-number poll1MicrosoftGoPRNumber \
                       -set-azdo-variable-up-to-date-commit poll2MicrosoftGoCommitHash
                   displayName: Sync to upstream commit

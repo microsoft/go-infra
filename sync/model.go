@@ -3,6 +3,12 @@
 
 package sync
 
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
+
 // ConfigEntry is one entry in a sync config file. The file contains a JSON list of objects that
 // match this struct.
 type ConfigEntry struct {
@@ -38,9 +44,19 @@ type ConfigEntry struct {
 
 	// BranchMap is a map of source branch names in Upstream (keys) to use to update a corresponding
 	// branch in Target (values), where Target is either a fork repo of Upstream or contains a
-	// submodule of Upstream. If the value contains "?" (not a valid branch character), "?" is
-	// replaced with the upstream branch name.
+	// submodule of Upstream. The key is glob matched. If the value contains "?" (not a valid branch
+	// character), "?" is replaced with the upstream branch name.
 	BranchMap map[string]string
+
+	// AutoSyncBranches is the list of branches that a call to "./cmd/sync" should bring up to date.
+	// It should be a list of keys that match up with BranchMap entries. The "./cmd/releasego sync"
+	// command ignores this list, syncing a user-specified branch instead that may not even be in
+	// the AutoSyncBranches list.
+	AutoSyncBranches []string
+
+	// MainBranch is the main/master branch of the target repository. When creating a new release
+	// branch, it is forked from the tip of this branch.
+	MainBranch string
 
 	// SourceBranchLatestCommit is a map of source branch names in Upstream (keys) and a full commit
 	// hash to treat as the latest commit for that source branch, no matter what the upstream
@@ -78,4 +94,25 @@ func (c *ConfigEntry) PRBranchStorageRepo() string {
 		return c.Head
 	}
 	return c.Target
+}
+
+// TargetBranch takes an upstream branch and returns the corresponding target branch. Returns an
+// error if multiple target branches are found. Returns an empty string if no matches found.
+func (c *ConfigEntry) TargetBranch(upstream string) (string, error) {
+	matchedPatterns := make([]string, 0, 1)
+	var foundTarget string
+	for pattern, target := range c.BranchMap {
+		found, err := filepath.Match(pattern, upstream)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			matchedPatterns = append(matchedPatterns, pattern)
+			foundTarget = strings.ReplaceAll(target, "?", upstream)
+		}
+	}
+	if len(matchedPatterns) > 1 {
+		return "", fmt.Errorf("found more than one target branch match: %v", matchedPatterns)
+	}
+	return foundTarget, nil
 }
