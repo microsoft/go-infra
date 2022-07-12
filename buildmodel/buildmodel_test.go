@@ -74,6 +74,36 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 			t.Fatalf("Failed to reject the update with expected error result.")
 		}
 	})
+
+	t.Run("Generate new entry for minor+1", func(t *testing.T) {
+		v := dockerversions.Versions{
+			// This is one under 1.42, so updating to include 1.42 should detect 1.41 and copy some
+			// data over.
+			"1.41": {
+				Version:          "1.41.15",
+				Revision:         "5",
+				Arches:           nil,
+				PreferredVariant: "buster",
+				Variants:         []string{"buster", "bullseye"},
+			},
+		}
+		if err := UpdateVersions(a, v); err != nil {
+			t.Fatal(err)
+		}
+		original := v["1.41"]
+		got := v["1.42"]
+		// Check that copies happened.
+		if original.PreferredVariant != got.PreferredVariant {
+			t.Errorf("Got variant %v, not the same as the copy source %v", got.PreferredVariant, original.PreferredVariant)
+		}
+		if diff := deep.Equal(got.Variants, original.Variants); diff != nil {
+			t.Error(diff)
+		}
+		// Check that version comes from the build asset file and was not copied.
+		if original.Version == got.Version {
+			t.Errorf("Version: want != %v, got %v", original.Version, got.Version)
+		}
+	})
 }
 
 func Test_makeOsArchPlatform(t *testing.T) {

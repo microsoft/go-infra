@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
@@ -57,15 +58,41 @@ func (b BuildAssets) GetDockerRepoTargetBranch() string {
 // GetDockerRepoVersionsKey gets the Docker Versions key that should be updated with new builds
 // listed in this BuildAssets file.
 func (b BuildAssets) GetDockerRepoVersionsKey() string {
+	return dockerRepoVersionsKey(goversion.New(b.Version), b.Branch)
+}
+
+// GetPreviousMinorDockerRepoVersionsKey gets the Docker Versions key of the minor Go release before
+// the one in b. This can be used to find the previous release's information when setting up Docker
+// images for the next one.
+func (b BuildAssets) GetPreviousMinorDockerRepoVersionsKey() (string, error) {
 	v := goversion.New(b.Version)
 
+	// If we're looking for the previous version for e.g. 1.18rc1, we want to find 1.17, not 1.17-rc.
+	v.Prerelease = ""
+
+	minor, err := strconv.Atoi(v.Minor)
+	if err != nil {
+		return "", fmt.Errorf("unable to find previous minor version for %q: minor version not an int: %w", v, err)
+	}
+	v.Minor = strconv.Itoa(minor - 1)
+	return dockerRepoVersionsKey(v, b.Branch), nil
+}
+
+func dockerRepoVersionsKey(v *goversion.GoVersion, branch string) string {
 	key := v.Major + "." + v.Minor
 	if v.Major == "main" {
 		// Call this "main", not "main.0", for cleaner directory names.
 		key = v.Major
 	}
-	if strings.HasPrefix(b.Branch, "dev.boringcrypto") {
-		key = key + "-fips"
+
+	// If there is any prerelease specified (beta or rc), call it "-rc". This matches upstream, e.g.
+	// releasing 1.19beta1 and 1.19rc1 Go builds with Dockerfiles in a "1.19-rc" directory.
+	if v.Prerelease != "" {
+		key += "-rc"
+	}
+
+	if strings.HasPrefix(branch, "dev.boringcrypto") {
+		key += "-fips"
 	}
 	return key
 }

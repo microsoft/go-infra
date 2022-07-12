@@ -6,6 +6,7 @@
 package buildmodel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -219,43 +220,82 @@ var NoMajorMinorUpgradeMatchError = errors.New("no match found in existing versi
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
 // versions.json model to consume the new build.
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
+	// First, try to update an existing major.minor version in the Docker versions file. If it
+	// doesn't exist, try to find the previous version and create a new Docker versions file entry
+	// based on that. If that doesn't exist either, fail.
 	key := assets.GetDockerRepoVersionsKey()
-	if v, ok := versions[key]; ok {
-		vNew := goversion.New(assets.Version)
-
-		if key == "main" {
-			// We could call this "main.0.0-0", but that makes the Docker tag names complicated.
-			// Stick with simple "main".
-			v.Version = key
-			v.Revision = ""
-		} else {
-			v.Version = vNew.MajorMinorPatch()
-			v.Revision = vNew.Revision
+	v, ok := versions[key]
+	if !ok {
+		// Make a copy of BuildAssets and decrement the minor version to find the previous key.
+		prevKey, err := assets.GetPreviousMinorDockerRepoVersionsKey()
+		if err != nil {
+			return fmt.Errorf("unable to calculate previous version key to use as a basis for the new version: %w", err)
 		}
-
-		// Look through the asset arches, find an arch in the versions file that matches each asset,
-		// and update its info.
-		for _, arch := range assets.Arches {
-			// Special case for arm artifacts: change it to arm32v7. We produce arm32v6 builds of Go
-			// but package them in arm/v7 (armhf) Docker images. The upstream Go official image repo
-			// does this in their versions.json file: there are v6 and v7 Dockerfile arches that
-			// both carry the v6 Go. We only care about arm/v7, so only include that one.
-			if arch.Env.GOARCH == "arm" {
-				arch.Env.GOARM = "7"
-			}
-
-			archKey := arch.Env.GoImageOSArchKey()
-			if match, ok := v.Arches[archKey]; ok {
-				// Copy over the previous value of keys that aren't specific to an asset, but
-				// actually indicate the state of the Dockerfile. All other values come from the new
-				// asset's data.
-				arch.Supported = match.Supported
-			}
-			// Copy the asset data into the versions file whether it's a new arch or not.
-			v.Arches[archKey] = arch
+		v, ok = versions[prevKey]
+		if !ok {
+			return fmt.Errorf(
+				"checked current version %v and previous version %v, however: %w",
+				key, prevKey, NoMajorMinorUpgradeMatchError)
 		}
+		// Create a new Docker versions file entry for the new branch/major.minor version. Copy the
+		// data (such as the list of variants) from the previous version. Use JSON serialization to
+		// do a deep copy and prevent accidentally modifying shared old data in the following code.
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Errorf("unable to clone/marshal previous Docker versions file entry: %w", err)
+		}
+		// Create fresh struct so json.Unmarshal doesn't reuse the slices/maps.
+		v = new(dockerversions.MajorMinorVersion)
+		if err := json.Unmarshal(b, v); err != nil {
+			return fmt.Errorf("unable to clone/unmarshal previous Docker versions file entry: %w", err)
+		}
+		versions[key] = v
+		// Never prefer the freshly generated new version. If we let these remain 'true', the Docker
+		// tags would overlap with the previous version's tags, where it was also 'true'.
+		v.PreferredMinor = false
+		v.PreferredMajor = false
+		// Clear out the arches. These are always version-specific.
+		v.Arches = nil
+	}
+
+	vNew := goversion.New(assets.Version)
+
+	if key == "main" {
+		// We could call this "main.0.0-0", but that makes the Docker tag names complicated.
+		// Stick with simple "main".
+		v.Version = key
+		v.Revision = ""
 	} else {
-		return fmt.Errorf("%v: %w", key, NoMajorMinorUpgradeMatchError)
+		v.Version = vNew.MajorMinorPatch() + vNew.Prerelease
+		v.Revision = vNew.Revision
+	}
+
+	// Look through the asset arches, find an arch in the versions file that matches each asset,
+	// and update its info.
+	for _, arch := range assets.Arches {
+		// Special case for arm artifacts: change it to arm32v7. We produce arm32v6 builds of Go
+		// but package them in arm/v7 (armhf) Docker images. The upstream Go official image repo
+		// does this in their versions.json file: there are v6 and v7 Dockerfile arches that
+		// both carry the v6 Go. We only care about arm/v7, so only include that one.
+		if arch.Env.GOARCH == "arm" {
+			arch.Env.GOARM = "7"
+		}
+
+		archKey := arch.Env.GoImageOSArchKey()
+		if match, ok := v.Arches[archKey]; ok {
+			// Copy over the previous value of keys that aren't specific to an asset, but
+			// actually indicate the state of the Dockerfile. All other values come from the new
+			// asset's data.
+			arch.Supported = match.Supported
+		} else {
+			// By default, enable builds for new architectures that show up.
+			arch.Supported = true
+		}
+		if v.Arches == nil {
+			v.Arches = make(map[string]*dockerversions.Arch, 1)
+		}
+		// Copy the asset data into the versions file whether it's a new arch or not.
+		v.Arches[archKey] = arch
 	}
 	return nil
 }
