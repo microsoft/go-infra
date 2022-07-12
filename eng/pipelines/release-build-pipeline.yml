@@ -205,7 +205,7 @@ jobs:
 
           - script: |
               releasego get-build-info \
-                -id '${{ parameters.poll3MicrosoftGoBuildID }}' \
+                -id '$(poll3MicrosoftGoBuildID)' \
                 -org 'https://dev.azure.com/dnceng/' \
                 -proj 'internal' \
                 -prefix 'BuildInfo' \
