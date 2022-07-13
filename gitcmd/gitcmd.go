@@ -119,9 +119,9 @@ func CombinedOutput(dir string, args ...string) (string, error) {
 	return executil.CombinedOutput(executil.Dir(dir, "git", args...))
 }
 
-// RevParse runs "git rev-parse <rev>" and returns the result.
+// RevParse runs "git rev-parse <rev>" and returns the result with whitespace trimmed.
 func RevParse(dir, rev string) (string, error) {
-	return CombinedOutput(dir, "rev-parse", rev)
+	return executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "rev-parse", rev))
 }
 
 // Show runs "git show <spec>" and returns the content.
