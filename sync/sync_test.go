@@ -54,46 +54,80 @@ func Test_createCommitMessageSnippet(t *testing.T) {
 }
 
 func Test_MakeBranchPRs_VersionUpdate(t *testing.T) {
-	trueBool := true
-	none := "none"
-	f := &Flags{
-		DryRun:        &trueBool,
-		GitAuthString: &none,
+	makeFlags := func(createBranches bool) *Flags {
+		trueBool := true
+		none := "none"
+		var emptyString string
+		return &Flags{
+			DryRun:          &trueBool,
+			GitAuthString:   &none,
+			InitialCloneDir: &emptyString,
+			CreateBranches:  &createBranches,
+		}
 	}
 
 	tests := []struct {
 		name                                               string
 		initialVersion, initialRevision, initialSubVersion string
+		targetBranchExists                                 bool
+		flags                                              *Flags
 		version, revision                                  string
 		wantVersionContent, wantRevisionContent            string
 	}{
 		{
 			"matching version",
 			"", "", "go1.18",
+			true,
+			makeFlags(false),
 			"go1.18", "",
 			"", "",
 		},
 		{
 			"create rev2 version (boring branch)",
 			"", "", "",
+			true,
+			makeFlags(false),
 			"go1.18", "2",
 			"go1.18", "2",
 		},
 		{
 			"update rev1 version (boring branch)",
 			"go1.18", "2", "",
+			true,
+			makeFlags(false),
+			"go1.18.2", "1",
+			"go1.18.2", "",
+		},
+		{
+			"update rev1 version (boring branch) with create-branches enabled",
+			"go1.18", "2", "",
+			true,
+			// This test case should not create any branches, but it confirms that enabling this
+			// flag doesn't cause errors in ordinary cases.
+			makeFlags(true),
 			"go1.18.2", "1",
 			"go1.18.2", "",
 		},
 		{
 			"remove version",
 			"go1.18.2", "", "go1.18.3",
+			true,
+			makeFlags(false),
 			"go1.18.3", "",
 			"", "",
+		},
+		{
+			"no target branch",
+			"go1.18", "2", "",
+			false,
+			makeFlags(true),
+			"go1.18.2", "1",
+			"go1.18.2", "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			d := t.TempDir()
 			// Make sure the path ends in "/<owner>/<repo>" so this part of our mock repository
 			// paths can be parsed as if they're GitHub repository URLs.
@@ -135,20 +169,38 @@ func Test_MakeBranchPRs_VersionUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			syncBranch := "main"
+			if !tt.targetBranchExists {
+				syncBranch = "release-branch.go1.18"
+			}
 			c := &ConfigEntry{
 				Upstream: upstream,
 				Target:   target,
 				BranchMap: map[string]string{
-					"main": "microsoft/main",
+					"main":            "microsoft/main",
+					"release-branch*": "microsoft/release-branch?",
 				},
+				AutoSyncBranches: []string{
+					syncBranch,
+				},
+				MainBranch:                     "microsoft/main",
 				SubmoduleTarget:                "go",
 				GoVersionFileContent:           tt.version,
 				GoMicrosoftRevisionFileContent: tt.revision,
 			}
 
-			_, err := MakeBranchPRs(f, workDir, c)
+			_, err := MakeBranchPRs(tt.flags, workDir, c)
 			if err != nil {
+				if errors.Is(err, errWouldCreateBranchButCurrentlyDryRun) {
+					if !tt.targetBranchExists {
+						// The test runs in dry run mode, so this error should happen.
+						return
+					}
+				}
 				t.Fatal(err)
+			}
+			if !tt.targetBranchExists {
+				t.Fatal("MakeBranchPRs is expected to create a new branch, but didn't.")
 			}
 
 			wVersion := filepath.Join(workDir, "VERSION")
