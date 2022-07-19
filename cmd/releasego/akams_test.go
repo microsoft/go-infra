@@ -4,9 +4,9 @@
 package main
 
 import (
-	"reflect"
 	"testing"
 
+	"github.com/go-test/deep"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 )
@@ -48,8 +48,10 @@ func Test_createLinkPairs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("createLinkPairs() got %#v, want %#v", got, want)
+	if diff := deep.Equal(got, want); diff != nil {
+		for _, d := range diff {
+			t.Error(d)
+		}
 	}
 }
 
