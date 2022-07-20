@@ -484,14 +484,20 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			}
 
 			// This update uses a submodule, so find the target version of upstream and update the
-			// submodule to point at it.
+			// submodule to point at it. UpstreamLocalSyncTarget might be a commit hash, and if so,
+			// this rev-parse is simply checking that the commit actually exists.
 			newCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamLocalSyncTarget())
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to find upstream sync target in local repo after fetching: %w", err)
 			}
 
-			// Limit the commit to one that's available in every known official repository.
-			if entry.UpstreamMirror != "" {
+			// If we're updating to the latest upstream commit, not a specific upstream commit, find
+			// the latest commit available in both upstream and the upstream mirror.
+			//
+			// If we're updating to a specific commit, the caller of the sync command should have
+			// already validated that it's available in both places. At worst, a missing commit will
+			// cause a failure in the PR validation check.
+			if entry.UpstreamMirror != "" && b.Commit == "" {
 				upstreamMirrorCommit, err := getTrimmedCmdOutput("rev-parse", b.UpstreamMirrorLocalBranch())
 				if err != nil {
 					return nil, err
