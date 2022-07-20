@@ -144,11 +144,11 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				if arch.Env.GOOS != os {
 					continue
 				}
-				// Skip arm (arm32) on CBL-Mariner 1.0. The base image doesn't exist. Excluding it
+				// Skip arm (arm32) on CBL-Mariner. The base image doesn't exist. Excluding it
 				// here is better than excluding the platform from the versions.json file:
 				// specializing versions.json for CBL-Mariner requires a lot of duplication and the
 				// templates would generate Dockerfiles in a different, less clear folder structure.
-				if osVersion == "cbl-mariner1.0" && arch.Env.GOARCH == "arm" {
+				if strings.HasPrefix(osVersion, "cbl-mariner") && arch.Env.GOARCH == "arm" {
 					continue
 				}
 
