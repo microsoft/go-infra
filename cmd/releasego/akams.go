@@ -127,8 +127,8 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 	// The partial versions that we want to link to a specific build.
 	// For example, 1.18-fips -> 1.18.2-1-fips.
 	partial := []string{
-		v.MajorMinor() + v.NoteWithPrefix(),
-		v.MajorMinorPatch() + v.NoteWithPrefix(),
+		v.MajorMinorPrerelease() + v.NoteWithPrefix(),
+		v.MajorMinorPatchPrerelease() + v.NoteWithPrefix(),
 		// Also include the fully specified version. This lets people use a pretty link even if they
 		// do need to pin to a specific version.
 		v.Full(),

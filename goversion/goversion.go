@@ -88,17 +88,25 @@ func (v *GoVersion) MajorMinor() string {
 	return v.Major + "." + v.Minor
 }
 
+func (v *GoVersion) MajorMinorPrerelease() string {
+	return v.MajorMinor() + v.Prerelease
+}
+
 func (v *GoVersion) MajorMinorPatch() string {
 	return v.MajorMinor() + "." + v.Patch
 }
 
-func (v *GoVersion) MajorMinorPatchRevision() string {
-	return v.MajorMinorPatch() + "-" + v.Revision
+func (v *GoVersion) MajorMinorPatchPrerelease() string {
+	return v.MajorMinorPatch() + v.Prerelease
+}
+
+func (v *GoVersion) MajorMinorPatchPrereleaseRevision() string {
+	return v.MajorMinorPatchPrerelease() + "-" + v.Revision
 }
 
 // Full returns the full normalized version string, including Note if specified.
 func (v *GoVersion) Full() string {
-	return v.MajorMinorPatchRevision() + v.NoteWithPrefix()
+	return v.MajorMinorPatchPrereleaseRevision() + v.NoteWithPrefix()
 }
 
 // UpstreamFormatGitTag returns the version in the format upstream uses for Git tags. Specifically,
