@@ -91,7 +91,6 @@ jobs:
       - ${{ if ne(parameters.releaseIssue, 'nil') }}:
         - script: |
             releasego report \
-              $(instructionsLinkArg) \
               -i '${{ parameters.releaseIssue }}' \
               -m ':white_check_mark: Successfully ran ${{ parameters.reportDescription }}' \
               -repo '$(TargetGitHubRepo)' \
