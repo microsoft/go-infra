@@ -10,6 +10,9 @@ To build Go from source or download a binary release, visit
 https://golang.org/dl/. This repository is not involved in the official Go
 distribution.
 
+Visit the [docs](docs) directory for more information about the infrastructure
+implemented in this repository.
+
 ## Contributing
 
 This project welcomes contributions and suggestions. Most contributions require you to agree to a

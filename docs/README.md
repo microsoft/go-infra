@@ -1,7 +1,8 @@
 # Microsoft Go Infrastructure
 
 This repository is used by Microsoft to build Go. See the root
-[README.md](../README.md) for the project overview.
+[README.md](../README.md) for the project overview, and the subdirectories here
+for more info about parts of the infra.
 
 ## Branches
 
