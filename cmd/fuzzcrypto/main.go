@@ -32,6 +32,7 @@ nor the fuzz seeding time.
 `
 
 func main() {
+	var verbose = flag.Bool("v", false, "verbose logging")
 	var fuzztime = flag.Duration("fuzztime", 5*time.Minute, "total fuzzing time")
 	var run = flagRegex("run", "regex matching a set of fuzz targets")
 	flag.Usage = func() {
@@ -48,14 +49,25 @@ func main() {
 		sumweights += t.weight
 	}
 
+	var errs []string
 	for i, t := range targets {
 		d := time.Duration((t.weight / sumweights) * float64(*fuzztime))
 		log.Printf("Running fuzz target %s for %v. %d/%d completed\n", t.name, d, i, len(targets))
 
-		err := fuzz(t.name, d)
+		err := fuzz(t.name, d, *verbose)
 		if err != nil {
-			log.Printf("Railed to run fuzz target %s: %v\n", t.name, err)
+			if _, ok := err.(*exec.ExitError); !ok {
+				errs = append(errs, fmt.Sprintf("fuzz target %q can't be executed: %v", t.name, err))
+			} else {
+				errs = append(errs, fmt.Sprintf("fuzz target %q failed: %v", t.name, err))
+			}
 		}
+	}
+	if len(errs) > 0 {
+		for _, err := range errs {
+			fmt.Println(err)
+		}
+		os.Exit(1)
 	}
 }
 
@@ -70,7 +82,7 @@ func flagRegex(name, usage string) **regexp.Regexp {
 
 // fuzz executes the named fuzz test.
 // It only returns an error if the test binary could not be executed.
-func fuzz(name string, d time.Duration) error {
+func fuzz(name string, d time.Duration, verbose bool) error {
 	dir, fuzzname := path.Split(name)
 	cmd := exec.Command("go", "test",
 		"-run", "-", // don't run any normal test
@@ -78,15 +90,11 @@ func fuzz(name string, d time.Duration) error {
 		"-fuzz", "^"+fuzzname+"$", // ensure we are strictly matching name
 	)
 	cmd.Dir = filepath.Join(".", dir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	if err != nil {
-		if _, ok := err.(*exec.ExitError); !ok {
-			return err
-		}
+	if verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 	}
-	return nil
+	return cmd.Run()
 }
 
 // filterTargets returns the list of fuzz targets to execute,
