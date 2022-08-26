@@ -112,10 +112,10 @@ func FuzzRSAPKCS1(f *testing.F) {
 
 func FuzzRSASignPSS(f *testing.F) {
 	for _, s := range rsaKeySeeds {
-		f.Add(s.e, s.n, s.d, s.p, s.q, s.r, []byte("testing"))
+		f.Add(uint8(1), s.e, s.n, s.d, s.p, s.q, s.r, []byte("testing"))
 	}
 	opts := rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash}
-	f.Fuzz(func(t *testing.T, e int, bN, bD, bP, bQ, bR string, msg []byte) {
+	f.Fuzz(func(t *testing.T, x uint8, e int, bN, bD, bP, bQ, bR string, msg []byte) {
 		key := newRSAKey(e, bN, bD, bP, bQ, bR)
 		if key.Validate() != nil {
 			return
@@ -129,7 +129,7 @@ func FuzzRSASignPSS(f *testing.F) {
 		if err != nil {
 			t.Error(err)
 		}
-		hashed[0] ^= 0xff
+		hashed = xor(x, hashed)
 		err = rsa.VerifyPSS(&key.PublicKey, crypto.SHA256, hashed[:], sig, &opts)
 		if err == nil {
 			t.Errorf("Verify succeeded despite intentionally invalid hash!")
@@ -139,9 +139,9 @@ func FuzzRSASignPSS(f *testing.F) {
 
 func FuzzRSASignPKCS1v15(f *testing.F) {
 	for _, s := range rsaKeySeeds {
-		f.Add(s.e, s.n, s.d, s.p, s.q, s.r, []byte("testing"))
+		f.Add(uint8(1), s.e, s.n, s.d, s.p, s.q, s.r, []byte("testing"))
 	}
-	f.Fuzz(func(t *testing.T, e int, bN, bD, bP, bQ, bR string, msg []byte) {
+	f.Fuzz(func(t *testing.T, x uint8, e int, bN, bD, bP, bQ, bR string, msg []byte) {
 		key := newRSAKey(e, bN, bD, bP, bQ, bR)
 		if key.Validate() != nil {
 			return
@@ -155,10 +155,24 @@ func FuzzRSASignPKCS1v15(f *testing.F) {
 		if err != nil {
 			t.Error(err)
 		}
-		hashed[0] ^= 0xff
+		hashed = xor(x, hashed)
 		err = rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, hashed[:], sig)
 		if err == nil {
 			t.Errorf("Verify succeeded despite intentionally invalid hash!")
 		}
 	})
+}
+
+// xor returns b with one byte xored with x.
+// The xored byte depends on x.
+func xor(x uint8, b [sha256.Size]byte) [sha256.Size]byte {
+	// x can be in the [0,255) range,
+	// but idx must be in the [0,sha256.Size] range.
+	idx := int(x) % len(b)
+	if x == 0 {
+		// a 0 xor doesn't modify the byte value.
+		x = 1
+	}
+	b[idx] ^= x
+	return b
 }
