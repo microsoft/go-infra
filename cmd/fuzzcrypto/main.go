@@ -30,14 +30,21 @@ Example that runs only the go-cose subset for 1 minute:
 
 The total fuzzing time, set by -fuzztime, is distributed among the executed fuzz tests.
 fuzzcrypto might run longer than -fuzztime as it does not take into account build time
-nor the fuzz seeding time.
-`
+nor the fuzz seeding time.`
+
+const helpFuzztime = `Run enough iterations of all the fuzz targets during fuzzing to take t,
+specified as a time.Duration (for example, -fuzztime 1h30s).
+	The default is 5m.
+The special syntax Nx means to run each fuzz target N times
+(for example, -fuzztime 1000x).`
+
+const helpRun = `Run only those fuzz targets matching the regular expression.`
 
 func main() {
-	var verbose = flag.Bool("v", false, "verbose logging")
+	var verbose = flag.Bool("v", false, "Verbose output.")
 	var fuzzDuration durationOrCountFlag
-	flag.Var(&fuzzDuration, "fuzztime", "total time to spend fuzzing or number of iterations that the fuzz target will be executed before exiting; default is to run for 5min")
-	var run = flagRegex("run", "regex matching a set of fuzz targets")
+	flag.Var(&fuzzDuration, "fuzztime", helpFuzztime)
+	var run = flagRegex("run", helpRun)
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
 		flag.PrintDefaults()
