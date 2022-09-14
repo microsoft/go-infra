@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Run fuzz tests using cmd/fuzzcrypto on the specified platform and pool.
+
+parameters:
+  name: ''
+  pool: null
+  platform: ''
+  useMicrosoftGo: true
+  fuzztime: 60m
+  # Fuzz step timeout in minutes. Set this a little lower than job timeout but a little higher than
+  # fuzztime to make sure we get a chance to upload testdata even if the fuzz command doesn't stop
+  # when it should.
+  fuzzTimeoutMinutes: 100
+  jobTimeoutMinutes: 120
+
+jobs:
+  - job: ${{ parameters.name }}
+    pool: ${{ parameters.pool }}
+    timeoutInMinutes: ${{ parameters.jobTimeoutMinutes }}
+    workspace:
+      clean: all
+    steps:
+      - checkout: self
+        submodules: true
+        fetchDepth: 1
+
+      - ${{ if eq(parameters.useMicrosoftGo, true) }}:
+        - template: ../steps/init-microsoft-go.yml
+          parameters:
+            platform: ${{ parameters.platform }}
+
+        - ${{ if contains(parameters.platform, 'windows') }}:
+          - script: |
+              cd cmd\fuzzcrypto
+              set GOEXPERIMENT=cngcrypto
+              go run . -v -fuzztime ${{ parameters.fuzztime }}
+            displayName: Fuzz
+            timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
+        - ${{ else }}:
+          - script: |
+              cd cmd/fuzzcrypto
+              GOEXPERIMENT=opensslcrypto go run . -v -fuzztime ${{ parameters.fuzztime }}
+            displayName: Fuzz
+            timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
+
+        - publish: $(Build.SourcesDirectory)/cmd/fuzzcrypto
+          artifact: ${{ parameters.name }} testdata
+          displayName: Upload testdata on failure
+          condition: failed()
+
+      - ${{ else }}:
+        # Test with ordinary Go.
+        - template: ../steps/init-go.yml
+        - script: |
+            cd cmd/fuzzcrypto
+            go run . -v -fuzztime ${{ parameters.fuzztime }}
+          displayName: Fuzz

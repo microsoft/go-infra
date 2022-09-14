@@ -36,3 +36,12 @@ jobs:
           testResultsFormat: JUnit
           testResultsFiles: $(Build.StagingDirectory)/TestResults.xml
           publishRunAttachments: true
+
+  - template: jobs/fuzz.yml
+    parameters:
+      name: TestFuzz1x
+      pool:
+        vmImage: ubuntu-20.04
+      platform: linux-amd64
+      useMicrosoftGo: false
+      fuzztime: 1x

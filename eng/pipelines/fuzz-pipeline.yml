@@ -1,0 +1,38 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+trigger: none
+pr: none
+schedules:
+  # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/scheduled-triggers?view=azure-devops&tabs=yaml#cron-syntax
+  - cron: '0 8 * * 1-5'
+    displayName: Run fuzz tests once a day
+    branches:
+      include:
+        - main
+    always: true
+
+resources:
+  pipelines:
+    - pipeline: build
+      source: microsoft-go
+      branch: microsoft/main
+
+stages:
+  - stage: Fuzz
+    jobs:
+      - template: jobs/fuzz.yml
+        parameters:
+          name: Linux
+          platform: linux-amd64
+          pool:
+            name: NetCore1ESPool-Internal
+            demands: ImageOverride -equals 1es-ubuntu-2004
+
+      - template: jobs/fuzz.yml
+        parameters:
+          name: Windows
+          platform: windows-amd64
+          pool:
+            name: NetCore1ESPool-Internal
+            demands: ImageOverride -equals 1es-windows-2019
