@@ -6,14 +6,18 @@
 parameters:
   name: ''
   pool: null
+  # Platform, as it appears in the Microsoft Go pipeline artifact name: OS-Arch.
   platform: ''
+  # Use the Microsoft Go toolset from a pipeline resource called "build", rather than official Go.
   useMicrosoftGo: true
-  fuzztime: 60m
-  # Fuzz step timeout in minutes. Set this a little lower than job timeout but a little higher than
-  # fuzztime to make sure we get a chance to upload testdata even if the fuzz command doesn't stop
-  # when it should.
-  fuzzTimeoutMinutes: 100
-  jobTimeoutMinutes: 120
+  # Fuzz time per job. The default is specified in minutes so it's easy to compare against the other
+  # times, which AzDO only accepts as minutes.
+  fuzztime: 180m
+  # Fuzz pipeline step timeout in minutes. Set this a little higher than fuzztime but a little lower
+  # than job timeout to make sure we get a chance to upload testdata even if the fuzz command
+  # doesn't stop when it should.
+  fuzzTimeoutMinutes: 200
+  jobTimeoutMinutes: 220
 
 jobs:
   - job: ${{ parameters.name }}
