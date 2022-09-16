@@ -10,13 +10,28 @@ Useful AzDO Pipeline YAML docs:
 * [Template types & usage](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops)
 * [Build and release tasks](https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/?view=azure-devops)
 
-## One stage per job
+## Faster retry: one stage per job
 
-If a job fails in a running AzDO build with only one stage, you must wait for every single job to fail before you can retry the failed job. This is a problem: if a long job fails early but other long jobs are still running, we waste time waiting for the whole stage to finish.
+A typical way to arrange an AzDO pipeline is to add a job for each platform into a single stage:
 
-Alternatively, you can cancel the whole build and start it again, but this wastes the time already spent making progress on the other jobs, which is particularly bad if those jobs are even longer than the one that failed.
+> ![](images/many-jobs-one-stage.png)
 
-The workaround is to use one stage per job, so any stage/job can be retried as soon as it fails.
+The "Rerun failed jobs" button is useful to rerun flaky jobs while leaving the successful status intact on the other jobs.
+
+However, this button only works when all jobs in the stage have completed (succeeded or failed). This is a problem: if a job fails quickly and other jobs are still running, you have to wait for all jobs to finish before you can retry the failed job. This wastes time in a few ways:
+
+* You need to keep an eye on the pipeline to trigger the retry as soon as the other jobs are complete.
+* Assuming the jobs take roughly the same time to complete, the total time to finish CI is now at least double the usual time because the retry doesn't run in parallel with the other jobs.
+
+Instead of waiting, you could cancel the whole build to make all the jobs fail quickly and then retry all jobs. This wastes the time already spent making progress on the in-progress jobs, which is particularly bad if the canceled jobs are even longer than the one that failed.
+
+The workaround we use in microsoft/go CI to avoid wasting time is to use one stage per job, so any stage/job can be retried as soon as it fails:
+
+> ![](images/one-stage-per-job.png)
+
+> Related feedback item: [Allow failed Jobs to be retried as soon as they have finished running - Visual Studio Feedback](https://developercommunity.visualstudio.com/t/Allow-failed-Jobs-to-be-retried-as-soon/10130213)
+
+> Also requested internally (2018): https://dev.azure.com/dnceng/internal/_queries/edit/110
 
 ## Dynamic vs. typed template parameter declarations
 
