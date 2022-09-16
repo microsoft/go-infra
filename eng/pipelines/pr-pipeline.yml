@@ -36,3 +36,17 @@ jobs:
           testResultsFormat: JUnit
           testResultsFiles: $(Build.StagingDirectory)/TestResults.xml
           publishRunAttachments: true
+
+  - template: jobs/fuzz.yml
+    parameters:
+      name: TestFuzz1x
+      pool:
+        vmImage: ubuntu-20.04
+      platform: linux-amd64
+      useMicrosoftGo: false
+      # 1x runs the tests only once. It uses the first entry in the corpus so won't generate any
+      # interesting results, only helps prevent regression for the actual fuzz runs.
+      fuzztime: 1x
+      # If 1x takes longer than a minute, it is probably frozen. Give some leeway, but terminate
+      # much sooner than the actual fuzz tests would (an hour or more).
+      jobTimeoutMinutes: 20

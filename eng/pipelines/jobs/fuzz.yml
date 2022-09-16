@@ -1,0 +1,63 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Run fuzz tests using cmd/fuzzcrypto on the specified platform and pool.
+
+parameters:
+  name: ''
+  pool: null
+  # Platform, as it appears in the Microsoft Go pipeline artifact name: OS-Arch.
+  platform: ''
+  # Use the Microsoft Go toolset from a pipeline resource called "build", rather than official Go.
+  useMicrosoftGo: true
+  # Fuzz time per job. The default is specified in minutes so it's easy to compare against the other
+  # times, which AzDO only accepts as minutes.
+  fuzztime: 180m
+  # Fuzz pipeline step timeout in minutes. Set this a little higher than fuzztime but a little lower
+  # than job timeout to make sure we get a chance to upload testdata even if the fuzz command
+  # doesn't stop when it should.
+  fuzzTimeoutMinutes: 200
+  jobTimeoutMinutes: 220
+
+jobs:
+  - job: ${{ parameters.name }}
+    pool: ${{ parameters.pool }}
+    timeoutInMinutes: ${{ parameters.jobTimeoutMinutes }}
+    workspace:
+      clean: all
+    steps:
+      - checkout: self
+        submodules: true
+        fetchDepth: 1
+
+      - ${{ if eq(parameters.useMicrosoftGo, true) }}:
+        - template: ../steps/init-microsoft-go.yml
+          parameters:
+            platform: ${{ parameters.platform }}
+
+        - ${{ if contains(parameters.platform, 'windows') }}:
+          - script: |
+              cd cmd\fuzzcrypto
+              set GOEXPERIMENT=cngcrypto
+              go run . -v -fuzztime ${{ parameters.fuzztime }}
+            displayName: Fuzz
+            timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
+        - ${{ else }}:
+          - script: |
+              cd cmd/fuzzcrypto
+              GOEXPERIMENT=opensslcrypto go run . -v -fuzztime ${{ parameters.fuzztime }}
+            displayName: Fuzz
+            timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
+
+        - publish: $(Build.SourcesDirectory)/cmd/fuzzcrypto
+          artifact: ${{ parameters.name }} testdata
+          displayName: Upload testdata on failure
+          condition: failed()
+
+      - ${{ else }}:
+        # Test with ordinary Go.
+        - template: ../steps/init-go.yml
+        - script: |
+            cd cmd/fuzzcrypto
+            go run . -v -fuzztime ${{ parameters.fuzztime }}
+          displayName: Fuzz

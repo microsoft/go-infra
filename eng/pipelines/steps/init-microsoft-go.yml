@@ -1,0 +1,32 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Set up a microsoft/go toolset on the build machine. Requires a pipeline
+# resource called "build" that will be used as the source for the Go toolset.
+
+parameters:
+  platform: ''
+
+steps:
+  - download: build
+    artifact: Binaries Signed
+    patterns: go*${{ parameters.platform }}*.*
+
+  - task: ExtractFiles@1
+    inputs:
+      archiveFilePatterns: |
+        $(Pipeline.Workspace)/build/Binaries Signed/*.tar.gz
+        $(Pipeline.Workspace)/build/Binaries Signed/*.zip
+      cleanDestinationFolder: true
+      overwriteExistingFiles: false
+      destinationFolder: $(Pipeline.Workspace)/build/go
+
+  - ${{ if contains(parameters.platform, 'windows') }}:
+    - script: 'echo ##vso[task.prependpath]$(Pipeline.Workspace)\build\go\go\bin'
+      displayName: 'Add Go to PATH (Windows)'
+  - ${{ else }}:
+    - script: echo '##vso[task.prependpath]$(Pipeline.Workspace)/build/go/go/bin'
+      displayName: 'Add Go to PATH (non-Windows)'
+
+  - script: go env
+    displayName: 'Print Go env'
