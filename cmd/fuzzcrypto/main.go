@@ -4,6 +4,7 @@
 package main
 
 import (
+	"container/heap"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,13 +32,24 @@ Example that runs only the go-cose subset for 1 minute:
 
 The total fuzzing time, set by -fuzztime, is distributed among the executed fuzz tests.
 fuzzcrypto might run longer than -fuzztime as it does not take into account build time
-nor the fuzz seeding time.`
+nor the fuzz seeding time.
+
+The bucket arg, if passed, discretely divides the set of targets into buckets. Because each target
+is put into only one bucket, time may not be distributed perfectly evenly. Target weight is taken
+into account with a simple greedy algorithm: the highest weight is repeatedly taken out of the full
+set of targets and added to the bucket with the lowest sum of weights until the working set is
+empty. If -run and -bucket are both specified, -run is applied first.
+
+The targets are specified in 'targets.go'. The order of targets in that file is respected by the
+-run and -bucket behavior.`
 
 const helpFuzztime = `Run enough iterations of all the fuzz targets during fuzzing to take t,
 specified as a time.Duration (for example, -fuzztime 1h30s).
 	The default is 5m.
 The special syntax Nx means to run each fuzz target N times
 (for example, -fuzztime 1000x).`
+
+const helpBucket = "The 1-indexed bucket B out of total buckets N, passed as a string 'B/N'."
 
 const helpRun = `Run only those fuzz targets matching the regular expression.`
 
@@ -45,6 +58,7 @@ func main() {
 	var fuzzDuration durationOrCountFlag
 	flag.Var(&fuzzDuration, "fuzztime", helpFuzztime)
 	var run = flagRegex("run", helpRun)
+	var bucket, bucketCount = flagBucket("bucket", helpBucket)
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
 		flag.PrintDefaults()
@@ -53,6 +67,14 @@ func main() {
 	flag.Parse()
 
 	targets := filterTargets(*run)
+	if *bucketCount > 1 {
+		targets = bucketTargets(targets, *bucket, *bucketCount)
+		if len(targets) == 0 {
+			log.Printf("Warning: No work to do in this bucket. Bucket count may be too high.")
+		}
+	}
+
+	log.Printf("Running targets: %v\n", targetNames(targets))
 
 	var sumweights float64
 	for _, t := range targets {
@@ -95,6 +117,32 @@ func flagRegex(name, usage string) **regexp.Regexp {
 	return &reg
 }
 
+func flagBucket(name, usage string) (bucket, bucketCount *int) {
+	var b, c int
+	flag.Func(name, usage, func(s string) error {
+		before, after, found := strings.Cut(s, "/")
+		if !found {
+			return fmt.Errorf("no '/' found in %q", s)
+		}
+
+		var err error
+		b, err = strconv.Atoi(before)
+		if err != nil {
+			return fmt.Errorf("string before '/' is not a number: %v", err)
+		}
+		c, err = strconv.Atoi(after)
+		if err != nil {
+			return fmt.Errorf("string after '/' is not a number: %v", err)
+		}
+
+		if b < 1 || b > c {
+			return fmt.Errorf("bucket %v is not in range 1 - %v", b, c)
+		}
+		return nil
+	})
+	return &b, &c
+}
+
 // fuzz executes the named fuzz test.
 // It only returns an error if the test binary could not be executed.
 func fuzz(name string, d durationOrCountFlag, verbose bool) error {
@@ -125,6 +173,57 @@ func filterTargets(run *regexp.Regexp) []target {
 		}
 	}
 	return targets
+}
+
+// bucketTargets puts each target into bucketCount buckets and returns the targets in the 1-indexed
+// bucket specified by "bucket". The order of targets in each bucket is the same as the order of
+// those targets in the all slice.
+func bucketTargets(all []target, bucket, bucketCount int) []target {
+	// Copy all slice so we can sort it without affecting the original order.
+	targets := append([]target(nil), all...)
+
+	// Repeatedly add the largest target to the emptiest bucket. This somewhat evens out the buckets
+	// in a way that respects the weight.
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].weight > targets[j].weight
+	})
+	buckets := make(targetBucketHeap, bucketCount)
+	heap.Init(&buckets)
+	for _, t := range targets {
+		b := &buckets[0]
+		heap.Fix(&buckets, 0)
+		b.totalWeight += t.weight
+		b.targets = append(b.targets, t)
+	}
+	targets = buckets[bucket-1].targets
+
+	// For diag: print all buckets.
+	for i, b := range buckets {
+		log.Printf("Bucket %d (%f): %v\n", i+1, b.totalWeight, targetNames(b.targets))
+	}
+
+	// Now we know which targets will be run in this bucket, but they are scrambled. Put them back.
+	targetNameMap := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		targetNameMap[t.name] = struct{}{}
+	}
+	// Iterate through the ordered list of all targets and filter by existence in the bucket.
+	targets = targets[:0]
+	for _, t := range all {
+		if _, ok := targetNameMap[t.name]; ok {
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// targetNames returns each target's name in a slice. Useful for debug/print purposes.
+func targetNames(targets []target) []string {
+	var targetNames []string
+	for _, t := range targets {
+		targetNames = append(targetNames, t.name)
+	}
+	return targetNames
 }
 
 // durationOrCountFlag can either contain a

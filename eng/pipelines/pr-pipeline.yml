@@ -50,3 +50,4 @@ jobs:
       # If 1x takes longer than a minute, it is probably frozen. Give some leeway, but terminate
       # much sooner than the actual fuzz tests would (an hour or more).
       jobTimeoutMinutes: 20
+      runnerIDs: [1]
