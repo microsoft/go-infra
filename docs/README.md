@@ -4,6 +4,9 @@ This repository is used by Microsoft to build Go. See the root
 [README.md](../README.md) for the project overview, and the subdirectories here
 for more info about parts of the infra.
 
+* [pipeline-yml-style.md](pipeline-yml-style.md) - Style principles and quirk
+  notes for our YAML pipelines here and in microsoft/go.
+
 ## Branches
 
 This repository has only one maintained branch, `main`. This branch contains the
