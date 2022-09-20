@@ -81,7 +81,7 @@ We edit the YAML files with generic YAML tools.
 
 ## Indentation style
 
-The YAML files in this repository indent when starting a list, which isn't typical for pipeline YAML. This isn't specific to AzDO, but 
+We indent when starting a new list in the YAML files in this repository. This isn't typical for pipeline YAML: in AzDO docs, a list's `-` is on the same column as the element containing the list. Both styles are commonly found in general YAML files. For example, we use:
 
 ```yml
 stages:
