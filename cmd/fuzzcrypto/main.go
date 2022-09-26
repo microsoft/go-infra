@@ -136,7 +136,7 @@ func flagBucket(name, usage string) (bucket, bucketCount *int) {
 		}
 
 		if b < 1 || b > c {
-			return fmt.Errorf("bucket %v is not in range 1 - %v", b, c)
+			return fmt.Errorf("bucket %v is not in range [1, %v]", b, c)
 		}
 		return nil
 	})
