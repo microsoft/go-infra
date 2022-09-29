@@ -10,6 +10,8 @@ parameters:
   platform: ''
   # Use the Microsoft Go toolset from a pipeline resource called "build", rather than official Go.
   useMicrosoftGo: true
+  # The value of GOEXPERIMENT to use, or empty string.
+  goExperiment: ''
   # Fuzz time per job. The default is specified in minutes so it's easy to compare against the other
   # times, which AzDO only accepts as minutes.
   fuzztime: 180m
@@ -18,46 +20,51 @@ parameters:
   # doesn't stop when it should.
   fuzzTimeoutMinutes: 200
   jobTimeoutMinutes: 220
+  # The list of runner IDs: sequential numbers starting from 0. The number of elements determines
+  # the number of runner jobs to start in parallel. We would use "range" here if it existed.
+  runnerIDs: [1, 2, 3]
 
 jobs:
-  - job: ${{ parameters.name }}
-    pool: ${{ parameters.pool }}
-    timeoutInMinutes: ${{ parameters.jobTimeoutMinutes }}
-    workspace:
-      clean: all
-    steps:
-      - checkout: self
-        submodules: true
-        fetchDepth: 1
+  - ${{ each id in parameters.runnerIDs }}:
+    - job: ${{ parameters.name }}_${{ id }}
+      displayName: ${{ parameters.name }} ${{ id }}
+      pool: ${{ parameters.pool }}
+      timeoutInMinutes: ${{ parameters.jobTimeoutMinutes }}
 
-      - ${{ if eq(parameters.useMicrosoftGo, true) }}:
-        - template: ../steps/init-microsoft-go.yml
-          parameters:
-            platform: ${{ parameters.platform }}
+      workspace:
+        clean: all
 
-        - ${{ if contains(parameters.platform, 'windows') }}:
+      variables:
+        bucketArgs: -bucket ${{ id }}/${{ length(parameters.runnerIDs) }}
+
+      steps:
+        - checkout: self
+          submodules: true
+          fetchDepth: 1
+
+        - ${{ if eq(parameters.useMicrosoftGo, true) }}:
+          - template: ../steps/init-microsoft-go.yml
+            parameters:
+              platform: ${{ parameters.platform }}
+
           - script: |
-              cd cmd\fuzzcrypto
-              set GOEXPERIMENT=cngcrypto
-              go run . -v -fuzztime ${{ parameters.fuzztime }}
+              go env
+              go run . -v -fuzztime ${{ parameters.fuzztime }} $(bucketArgs)
             displayName: Fuzz
+            workingDirectory: $(Build.SourcesDirectory)/cmd/fuzzcrypto
+            env:
+              GOEXPERIMENT: ${{ parameters.goExperiment }}
             timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
+
+          - publish: $(Build.SourcesDirectory)/cmd/fuzzcrypto
+            artifact: ${{ parameters.name }} ${{ id }} testdata
+            displayName: Upload testdata on failure
+            condition: failed()
+
         - ${{ else }}:
+          # Test with ordinary Go.
+          - template: ../steps/init-go.yml
           - script: |
               cd cmd/fuzzcrypto
-              GOEXPERIMENT=opensslcrypto go run . -v -fuzztime ${{ parameters.fuzztime }}
+              go run . -v -fuzztime ${{ parameters.fuzztime }}
             displayName: Fuzz
-            timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
-
-        - publish: $(Build.SourcesDirectory)/cmd/fuzzcrypto
-          artifact: ${{ parameters.name }} testdata
-          displayName: Upload testdata on failure
-          condition: failed()
-
-      - ${{ else }}:
-        # Test with ordinary Go.
-        - template: ../steps/init-go.yml
-        - script: |
-            cd cmd/fuzzcrypto
-            go run . -v -fuzztime ${{ parameters.fuzztime }}
-          displayName: Fuzz
