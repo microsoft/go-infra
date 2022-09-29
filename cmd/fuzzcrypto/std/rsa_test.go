@@ -123,6 +123,11 @@ func FuzzRSASignPSS(f *testing.F) {
 		hashed := sha256.Sum256(msg)
 		sig, err := rsa.SignPSS(rand.Reader, key, crypto.SHA256, hashed[:], &opts)
 		if err != nil {
+			switch err.Error() {
+			// Key size being too small is an invalid input, not a problem.
+			case "crypto/rsa: key size too small for PSS signature", "crypto/rsa: invalid key size":
+				return
+			}
 			t.Fatal(err)
 		}
 		err = rsa.VerifyPSS(&key.PublicKey, crypto.SHA256, hashed[:], sig, &opts)
