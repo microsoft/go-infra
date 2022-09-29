@@ -40,6 +40,8 @@ The special syntax Nx means to run each fuzz target N times
 
 const helpRun = `Run only those fuzz targets matching the regular expression.`
 
+const defaultFuzzTime = 5 * time.Minute
+
 func main() {
 	var verbose = flag.Bool("v", false, "Verbose output.")
 	var fuzzDuration durationOrCountFlag
@@ -51,6 +53,9 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), "%s\n\n", description)
 	}
 	flag.Parse()
+	if fuzzDuration.d == 0 && fuzzDuration.n == 0 {
+		fuzzDuration.d = defaultFuzzTime
+	}
 
 	targets := filterTargets(*run)
 
