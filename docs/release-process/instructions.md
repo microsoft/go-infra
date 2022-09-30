@@ -31,8 +31,9 @@ For example, a security patch release for 1.17 and 1.18 may look like this:
 > ![](images/run-release-start.png)
 
 1. Now that the values are set, press Run.
-    * It will take some time to reserve a build agent. Expect up to ten minutes. Then, the job creates one issue to track the release day progress and one issue per version in the list.
-    * You should make sure you're subscribed to each issue. The builds will post comments on these issues to alert you to successful jobs and failures. If you don't see the issues in the microsoft/go repository, look in the job logs. The "Create tracking issue" steps contain links.
+    * It will take some time to reserve a build agent. Expect up to ten minutes.
+    * The job creates one issue to track the release day progress and one issue per version in the list. Make sure you're subscribed, because the builds will comment on these issues to notify you of build failures.
+        * Find the issues in the issue tracker: https://github.com/microsoft/go/issues, or look in the job logs, where the "Create tracking issue" steps contain links.
 
 1. Open the job logs, click on the "🚀 Start microsoft/go-images build" step, and click on the `Web build URL:` link.
 
@@ -41,6 +42,7 @@ For example, a security patch release for 1.17 and 1.18 may look like this:
 
 1. In the microsoft/go-images build, approve the build to let it continue.
     * It is ok to do this early. The approval gate only exists to prevent excessive polling.
+    * Wait for this build to complete: it will build and publish Docker images to MAR (Microsoft Artifact Registry).
 
 1. Send a message to the internal announcement distribution group about the new version!
     * Check this internal page for more details: [Internal announcement email and DG](https://microsoft.sharepoint.com/teams/managedlanguages/_layouts/OneNote.aspx?id=%2Fteams%2Fmanagedlanguages%2Ffiles%2FTeam%20Notebook%2FGoLang%20Team&wd=target%28Main.one%7C62B655D4-14E7-41D6-A063-0869C28D63FC%2FInternal%20announcement%20email%20and%20DG%7C23BE5288-5430-4B45-A81B-9AE79776743C%2F%29)
