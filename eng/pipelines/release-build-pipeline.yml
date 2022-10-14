@@ -71,8 +71,8 @@ variables:
 jobs:
   - template: jobs/releasego.yml
     parameters:
+      releaseVersion: ${{ parameters.releaseVersion }}
       releaseIssue: ${{ parameters.releaseIssue }}
-      reportDescription: microsoft/go build prep steps for ${{ parameters.releaseVersion }}.
       retryInstructionsFlags: '-checkboxes'
       useDotNet: ${{ parameters.runAkaMSUpdate }}
       variables:
@@ -162,6 +162,16 @@ jobs:
                   -azdopat '$(System.AccessToken)' \
                   -set-azdo-variable poll3MicrosoftGoBuildID
               displayName: 🚀 Run microsoft/go internal build
+            - template: ../steps/report.yml
+              parameters:
+                releaseIssue: ${{ parameters.releaseIssue }}
+                version: ${{ parameters.releaseVersion }}
+                condition: succeeded()
+                buildPipeline: microsoft-go
+                buildID: $(poll3MicrosoftGoBuildID)
+                buildStatus: '?'
+                start: true
+                reason: queued build
 
           # Now we have poll3MicrosoftGoBuildID
           - script: |
@@ -172,6 +182,15 @@ jobs:
                 -azdopat '$(System.AccessToken)'
             displayName: ⌚ Wait for internal build
             timeoutInMinutes: 120
+          - template: ../steps/report.yml
+            parameters:
+              releaseIssue: ${{ parameters.releaseIssue }}
+              version: ${{ parameters.releaseVersion }}
+              condition: succeeded()
+              buildPipeline: microsoft-go
+              buildID: $(poll3MicrosoftGoBuildID)
+              buildStatus: Succeeded
+              reason: completed internal build
 
           # Download build asset JSON from completed internal build to update go-images with.
           - task: DownloadPipelineArtifact@2

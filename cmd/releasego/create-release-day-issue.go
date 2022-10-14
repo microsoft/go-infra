@@ -4,13 +4,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -25,49 +28,79 @@ func init() {
 	})
 }
 
+// docPointerMarkdown is a pointer to the release process docs with some context, as markdown text.
+const docPointerMarkdown = "For more information about the microsoft/go release process, see " +
+	"[docs/release-process in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/release-process)."
+
+var releaseIssueLabels = []string{"Area-Release"}
+
 func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
-	issueNumbersFlag := flag.String("issue-numbers", "", "[Required] The issue numbers that track the day's releases, separated by ','.")
+	releasesFlag := flag.String(
+		"releases", "",
+		"[Required] The release numbers to track releasing during this day, separated by ','.")
 	setVariableName := flag.String(
 		"set-azdo-variable-name", "",
 		"An AzDO variable name to set to the created issue number.")
+	notify := flag.String(
+		"notify", "",
+		"A GitHub user to tag in the issue body so they are notified of future updates.")
 
 	if err := p(); err != nil {
 		return err
 	}
 
-	if *issueNumbersFlag == "" {
-		return errors.New("no issue numbers specified")
+	if *releasesFlag == "" {
+		return errors.New("no releases specified")
 	}
-
-	issues := strings.Split(*issueNumbersFlag, ",")
-	sort.Strings(issues)
 
 	owner, name, err := githubutil.ParseRepoFlag(repo)
 	if err != nil {
 		return err
 	}
 
-	desc := "This issue tracks the status of multiple ongoing microsoft/go releases.\n"
+	releases := strings.Split(*releasesFlag, ",")
+	sort.Strings(releases)
 
-	for _, issueNumber := range issues {
-		desc += "\n* [ ] " + owner + "/" + name + "#" + issueNumber
+	title := time.Now().UTC().Format("2006-01-02") + " releases: " + strings.Join(releases, ", ")
+	desc := "This issue tracks the status of ongoing microsoft/go releases and the image release " +
+		"from [microsoft/go-images](https://github.com/microsoft/go-images). " +
+		"I am a bot, and I'll keep the issue up to date and add a comment when I notice " +
+		"something happen that likely requires the release runner to take some manual action." +
+		"\n\n" + docPointerMarkdown
+
+	if *notify != "" {
+		desc += "\n\n/cc @" + *notify
 	}
 
-	desc += "\n\nThis issue also tracks producing Docker tags in [microsoft/go-images](https://github.com/microsoft/go-images)." +
-		" I'll post a comment here when Docker automation succeeds or fails."
-
-	releaseDayIssueNumber, err := createReleaseIssue(
-		*pat, *repo,
-		"Releases for "+time.Now().UTC().Format("2006-01-02"),
-		desc)
+	ctx := context.Background()
+	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
 		return err
 	}
 
+	log.Printf("Creating comment on %v/%v with title %#q and content:\n%v\n", owner, name, title, desc)
+
+	var c *github.Issue
+	if err = githubutil.Retry(func() error {
+		var err error
+		c, _, err = client.Issues.Create(ctx, owner, name, &github.IssueRequest{
+			Title:  &title,
+			Body:   &desc,
+			Labels: &releaseIssueLabels,
+		})
+		if err != nil {
+			return err
+		}
+		log.Printf("Link to issue: %v\n", *c.HTMLURL)
+		return nil
+	}); err != nil {
+		return err
+	}
+
 	if *setVariableName != "" {
-		azdo.LogCmdSetVariable(*setVariableName, strconv.Itoa(releaseDayIssueNumber))
+		azdo.LogCmdSetVariable(*setVariableName, strconv.Itoa(c.GetNumber()))
 	}
 	return nil
 }

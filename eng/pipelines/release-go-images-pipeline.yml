@@ -70,7 +70,6 @@ stages:
       - template: jobs/releasego.yml
         parameters:
           releaseIssue: ${{ parameters.releaseIssue }}
-          reportDescription: image build/publish steps for ${{ join(', ', parameters.releaseVersions) }}.
           retryInstructionsFlags: '-preapproval'
           variables:
             poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
@@ -110,6 +109,15 @@ stages:
                     -azdopat '$(System.AccessToken)' \
                     -set-azdo-variable poll2MicrosoftGoImagesBuildID \
                 displayName: 🚀 Start go-images build/publish
+              - template: ../steps/report.yml
+                parameters:
+                  releaseIssue: ${{ parameters.releaseIssue }}
+                  condition: succeeded()
+                  buildPipeline: microsoft-go-images
+                  buildID: $(poll2MicrosoftGoImagesBuildID)
+                  buildStatus: '?'
+                  start: true
+                  reason: queued build
 
             # Now we have poll2MicrosoftGoImagesBuildID
             - script: |
@@ -120,3 +128,11 @@ stages:
                   -azdopat '$(System.AccessToken)'
               displayName: ⌚ Wait for go-images build
               timeoutInMinutes: 120
+            - template: ../steps/report.yml
+              parameters:
+                releaseIssue: ${{ parameters.releaseIssue }}
+                condition: succeeded()
+                buildPipeline: microsoft-go-images
+                buildID: $(poll2MicrosoftGoImagesBuildID)
+                buildStatus: Succeeded
+                reason: completed internal build

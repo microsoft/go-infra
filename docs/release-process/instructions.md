@@ -17,6 +17,8 @@ First, determine the **list of versions to release**. Type them in as a YAML lis
         * Find the latest-released version at https://github.com/microsoft/go/releases that matches the major version of Go to find the latest release. Using the search feature may help filter the results to the relevant major.minor version.
         * Alternatively, look at the `VERSION` and `MICROSOFT_REVISION` files in the microsoft/go repo and Go submodule in the tip of the target release branch. The last-released Microsoft revision is `1` unless the `MICROSOFT_REVISION` file exists and says otherwise, and if `VERSION` is present in both the submodule and the microsoft/go repository, the microsoft/go copy wins.
 
+Put your GitHub username in the **GitHub username to @mention** field. This will automatically subscribe you to any automatically detected action items that are posted as comments.
+
 The **variable group** field should be filled in with `go-release-config` to let the build access the secrets necessary to perform a real release.
 
 > Even though AzDO doesn't show the text selection cursor when you hover over the **variable group** description text, you can actually click and drag to select `go-release-config` and copy-paste it into the text box.
@@ -26,26 +28,28 @@ The **variable group** field should be filled in with `go-release-config` to let
 > * For testing, you can pass in a different variable group. Requiring this field to be filled in each time makes sure you intend to run a real release.
 > * This makes infrastructure safer: if the build gets triggered and the set of parameters isn't passed correctly by tooling, the build fails safe by refusing to start.
 
-For example, a security patch release for 1.17 and 1.18 may look like this:
+For example, a security patch release for 1.18 and 1.19 may look like this:
 
 > ![](images/run-release-start.png)
 
 1. Now that the values are set, press Run.
     * It will take some time to reserve a build agent. Expect up to ten minutes.
-    * The job creates one issue to track the release day progress and one issue per version in the list. Make sure you're subscribed, because the builds will comment on these issues to notify you of build failures.
-        * Find the issues in the issue tracker: https://github.com/microsoft/go/issues, or look in the job logs, where the "Create tracking issue" steps contain links.
 
-1. Open the job logs, click on the "🚀 Start microsoft/go-images build" step, and click on the `Web build URL:` link.
-
-1. Wait for notification about the "microsoft/go build prep steps" completing for each version.
+1. Wait for notifications on the release tracking issue.
+    * When the "microsoft-go-infra-release-build" build is complete and successful for every version in the release, continue to the next step.
     * If an error occurs, refer to the rest of this doc for diagnosis and retry guidance.
 
-1. In the microsoft/go-images build, approve the build to let it continue.
-    * It is ok to do this early. The approval gate only exists to prevent excessive polling.
-    * Wait for this build to complete: it will build and publish Docker images to MAR (Microsoft Artifact Registry).
+1. Click on the "microsoft-go-infra-release-go-images" build and approve it to let it continue.
+    * It is ok to do this a little early if you expect the builds to be done soon. The approval gate only exists to prevent excessive polling.
 
-1. Send a message to the internal announcement distribution group about the new version!
-    * Check this internal page for more details: [Internal announcement email and DG](https://microsoft.sharepoint.com/teams/managedlanguages/_layouts/OneNote.aspx?id=%2Fteams%2Fmanagedlanguages%2Ffiles%2FTeam%20Notebook%2FGoLang%20Team&wd=target%28Main.one%7C62B655D4-14E7-41D6-A063-0869C28D63FC%2FInternal%20announcement%20email%20and%20DG%7C23BE5288-5430-4B45-A81B-9AE79776743C%2F%29)
+1. Wait for a notification on the release tracking issue.
+    * Continue if the images build is successful.
+
+1. Send a message to the internal announcement distribution group about the new version!  
+
+## Making the internal announcement
+
+Check this internal OneNote page for more details: [Internal announcement email and DG](https://microsoft.sharepoint.com/teams/managedlanguages/_layouts/OneNote.aspx?id=%2Fteams%2Fmanagedlanguages%2Ffiles%2FTeam%20Notebook%2FGoLang%20Team&wd=target%28Main.one%7C62B655D4-14E7-41D6-A063-0869C28D63FC%2FInternal%20announcement%20email%20and%20DG%7C23BE5288-5430-4B45-A81B-9AE79776743C%2F%29).
 
 ## Diagnosing and fixing build errors
 
