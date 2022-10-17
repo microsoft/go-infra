@@ -8,3 +8,4 @@ These documents describe the reasons for this approach:
 
 * [**Patch files** vs. in-place modifications](patch-vs-in-place.md)
 * [**Submodule** vs. fork](submodule-vs-fork.md)
+* [**Branches**](branches.md)
