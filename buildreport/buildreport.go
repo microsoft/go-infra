@@ -274,10 +274,10 @@ func (s *State) updateFrom(source State) {
 	if source.Status != "" {
 		s.Status = source.Status
 	}
-	if source.LastUpdate != (time.Time{}) {
+	if !source.LastUpdate.IsZero() {
 		s.LastUpdate = source.LastUpdate
 	}
-	if source.StartTime != (time.Time{}) {
+	if !source.StartTime.IsZero() {
 		s.StartTime = source.StartTime
 	}
 }
@@ -407,11 +407,11 @@ func (c *commentBody) body() (string, error) {
 		b.WriteString(" | ")
 		b.WriteString(r.Status)
 		b.WriteString(" | ")
-		if r.StartTime != (time.Time{}) {
+		if !r.StartTime.IsZero() {
 			b.WriteString(r.StartTime.Format("2006-01-02 15:04 MST"))
 		}
 		b.WriteString(" | ")
-		if r.LastUpdate != (time.Time{}) {
+		if !r.LastUpdate.IsZero() {
 			b.WriteString(r.LastUpdate.Format("2006-01-02 15:04 MST"))
 		}
 		b.WriteString(" |")
