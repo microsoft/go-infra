@@ -213,36 +213,35 @@ func Notify(ctx context.Context, owner string, repoName string, pat string, issu
 		}
 	}
 
-	if notification != "" {
-		client, err := githubutil.NewClient(ctx, pat)
+	if notification == "" {
+		return nil
+	}
+
+	client, err := githubutil.NewClient(ctx, pat)
+	if err != nil {
+		return err
+	}
+
+	return githubutil.Retry(func() error {
+		c := commentBody{reports: []State{*&s}}
+		body, err := c.body()
 		if err != nil {
 			return err
 		}
 
-		if err := githubutil.Retry(func() error {
-			c := commentBody{reports: []State{*&s}}
-			body, err := c.body()
-			if err != nil {
-				return err
-			}
+		notification += body +
+			"\n<sub>See the [issue description](" +
+			"https://github.com/" + owner + "/" + repoName + "/issues/" + strconv.Itoa(issue) +
+			") for the latest build status.</sub>"
 
-			notification += body +
-				"\n<sub>See the [issue description](" +
-				"https://github.com/" + owner + "/" + repoName + "/issues/" + strconv.Itoa(issue) +
-				") for the latest build status.</sub>"
-
-			notificationComment, _, err := client.Issues.CreateComment(
-				ctx, owner, repoName, issue, &github.IssueComment{Body: &notification})
-			if err != nil {
-				return err
-			}
-			log.Printf("Notification comment: %v\n", *notificationComment.HTMLURL)
-			return nil
-		}); err != nil {
+		notificationComment, _, err := client.Issues.CreateComment(
+			ctx, owner, repoName, issue, &github.IssueComment{Body: &notification})
+		if err != nil {
 			return err
 		}
-	}
-	return nil
+		log.Printf("Notification comment: %v\n", *notificationComment.HTMLURL)
+		return nil
+	})
 }
 
 // State is the status of one entry in the report.
