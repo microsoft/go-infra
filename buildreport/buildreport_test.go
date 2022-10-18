@@ -54,7 +54,7 @@ func Test_commentBody_body(t *testing.T) {
 	}
 
 	newState := func(version, id, pipeline string, status string) State {
-		b := State{
+		return State{
 			Version:    version,
 			ID:         id,
 			Name:       pipeline,
@@ -63,7 +63,6 @@ func Test_commentBody_body(t *testing.T) {
 			StartTime:  exampleTime,
 			LastUpdate: exampleTime.Add(time.Minute * 5),
 		}
-		return b
 	}
 
 	tests := []struct {
