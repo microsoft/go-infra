@@ -53,7 +53,7 @@ func Test_commentBody_body(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := func(version, id, pipeline string, status string) State {
+	newState := func(version, id, pipeline string, status string) State {
 		b := State{
 			Version:    version,
 			ID:         id,
@@ -73,20 +73,20 @@ func Test_commentBody_body(t *testing.T) {
 		{
 			"realistic",
 			[]State{
-				r("1.18.2-1", "1234", "microsoft-go-infra-release-build", SymbolSucceeded),
-				r("1.18.2-1", "1238", "microsoft-go-infra-release-build", SymbolInProgress),
-				r("1.18.2-1", "1500", "microsoft-go-infra-release-go-images", SymbolInProgress),
-				r("1.19.1-1", "1900", "microsoft-go-infra-release-build", SymbolNotStarted),
-				r("1.18.2-1-fips", "1239", "microsoft-go-infra-release-build", SymbolFailed),
-				r("1.18.2-1", "1233", "microsoft-go-infra-release-build", SymbolFailed),
-				r("1.18.2-1", "1300", "microsoft-go-infra-release-build", SymbolNotStarted),
-				r("1.18.2-1", "12345", "microsoft-go", SymbolFailed),
+				newState("1.18.2-1", "1234", "microsoft-go-infra-release-build", SymbolSucceeded),
+				newState("1.18.2-1", "1238", "microsoft-go-infra-release-build", SymbolInProgress),
+				newState("1.18.2-1", "1500", "microsoft-go-infra-release-go-images", SymbolInProgress),
+				newState("1.19.1-1", "1900", "microsoft-go-infra-release-build", SymbolNotStarted),
+				newState("1.18.2-1-fips", "1239", "microsoft-go-infra-release-build", SymbolFailed),
+				newState("1.18.2-1", "1233", "microsoft-go-infra-release-build", SymbolFailed),
+				newState("1.18.2-1", "1300", "microsoft-go-infra-release-build", SymbolNotStarted),
+				newState("1.18.2-1", "12345", "microsoft-go", SymbolFailed),
 			},
 		},
 		{"none", nil},
 		{
 			"no-version",
-			[]State{r("", "1234", "microsoft-go-infra-start", SymbolInProgress)},
+			[]State{newState("", "1234", "microsoft-go-infra-start", SymbolInProgress)},
 		},
 	}
 	for _, tt := range tests {
