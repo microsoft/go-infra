@@ -61,16 +61,17 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, goDir, err := findProjectRoots()
+	config, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	rootDir, goDir := config.FullProjectRoots()
 
 	patchDir := filepath.Join(rootDir, "patches")
 
 	since := *sinceFlag
 	if since == "" {
-		since, err = readStatusFile(getPrePatchStatusFilePath(rootDir))
+		since, err = readStatusFile(config.FullPrePatchStatusFilePath())
 		if err != nil {
 			return err
 		}
@@ -169,7 +170,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 
 	// Delete all old patches so if any commit descriptions have been changed, we don't end up
 	// with two copies of those patch files with slightly different names.
-	if err := patch.WalkGoPatches(rootDir, func(path string) error {
+	if err := patch.WalkGoPatches(config, func(path string) error {
 		return os.Remove(path)
 	}); err != nil {
 		return err

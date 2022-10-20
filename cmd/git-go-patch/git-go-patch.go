@@ -4,16 +4,24 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/mod/semver"
 )
+
+// version is the semver of this tool. Compared against the value in the config file (if any) to
+// ensure that all users of the tool contributing to a given repo have a new enough version of the
+// tool to support all patching features used in that repo.
+//
+// When adding a new feature to the git-go-patch tool, make sure it is backward compatible and
+// increment the patch number here.
+const version = "v1.0.0"
 
 const description = `
 git-go-patch is a tool that helps work with the submodule and Git patch files used by the Microsoft
@@ -39,18 +47,6 @@ func main() {
 	}
 }
 
-func getStatusFileDir(rootDir string) string {
-	return filepath.Join(rootDir, "eng", "artifacts", "go-patch")
-}
-
-func getPrePatchStatusFilePath(rootDir string) string {
-	return filepath.Join(getStatusFileDir(rootDir), "HEAD_BEFORE_APPLY")
-}
-
-func getPostPatchStatusFilePath(rootDir string) string {
-	return filepath.Join(getStatusFileDir(rootDir), "HEAD_AFTER_APPLY")
-}
-
 func readStatusFile(file string) (string, error) {
 	content, err := os.ReadFile(file)
 	if err != nil {
@@ -59,56 +55,30 @@ func readStatusFile(file string) (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
-// findOuterRepoRoot returns the repoRootFlag value, if defined. Otherwise, searches the current
-// working directory and its ancestors for a directory that appears to be a Microsoft Go repository:
-// one that contains directories "patches" and "go". This function should only be called after flags
-// have been parsed.
-func findOuterRepoRoot() (string, error) {
+// loadConfig returns the config file governing the repoRootFlag dir, if the flag is defined.
+// Otherwise, attempts to find the configuration that applies to the current working directory. This
+// function should only be called after flags have been parsed.
+func loadConfig() (*patch.FoundConfig, error) {
+	var dir string
 	if *repoRootFlag != "" {
-		return *repoRootFlag, nil
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-
-	var dir = cwd
-	for {
-		goInfo, err := os.Stat(filepath.Join(dir, "go"))
+		dir = *repoRootFlag
+	} else {
+		var err error
+		dir, err = os.Getwd()
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", err
-			}
+			return nil, err
 		}
-		patchesInfo, err := os.Stat(filepath.Join(dir, "patches"))
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", err
-			}
-		}
-
-		if goInfo != nil && goInfo.IsDir() && patchesInfo != nil && patchesInfo.IsDir() {
-			fmt.Printf("Found Microsoft Go directory at %v\n", dir)
-			return dir, nil
-		}
-
-		parent := filepath.Dir(dir)
-		// When we've hit the filesystem root, Dir goes no further.
-		if dir == parent {
-			return "", fmt.Errorf("no Microsoft Go root found in any ancestor of %v", cwd)
-		}
-		dir = parent
 	}
-}
-
-// findProjectRoots finds the project and submodule dir based on the current working directory or
-// the repoRootFlag value, using findOuterRepoRoot.
-func findProjectRoots() (projectDir, submoduleDir string, err error) {
-	projectDir, err = findOuterRepoRoot()
+	config, err := patch.FindAncestorConfig(dir)
 	if err != nil {
-		return
+		return nil, err
 	}
-	submoduleDir = filepath.Join(projectDir, "go")
-	return
+	if config.MinimumToolVersion != "" {
+		if semver.Compare(version, config.MinimumToolVersion) < 0 {
+			fmt.Printf("Your copy of git-go-patch is too old for this repository. Use this command to upgrade:\n\n" +
+				"  go install github.com/microsoft/go-infra/cmd/git-go-patch@latest\n")
+			return nil, fmt.Errorf("tool version is lower than config file minimum version: %v < %v", version, config.MinimumToolVersion)
+		}
+	}
+	return config, nil
 }

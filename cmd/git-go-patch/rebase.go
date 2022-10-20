@@ -35,12 +35,13 @@ func handleRebase(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, goDir, err := findProjectRoots()
+	config, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	_, goDir := config.FullProjectRoots()
 
-	since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
+	since, err := readStatusFile(config.FullPrePatchStatusFilePath())
 	if err != nil {
 		return err
 	}
