@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/microsoft/go-infra/patch"
@@ -60,14 +61,14 @@ func readStatusFile(file string) (string, error) {
 // function should only be called after flags have been parsed.
 func loadConfig() (*patch.FoundConfig, error) {
 	var dir string
+	var err error
 	if *repoRootFlag != "" {
-		dir = *repoRootFlag
+		dir, err = filepath.Abs(*repoRootFlag)
 	} else {
-		var err error
 		dir, err = os.Getwd()
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	config, err := patch.FindAncestorConfig(dir)
 	if err != nil {

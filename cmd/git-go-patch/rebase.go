@@ -4,8 +4,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -50,5 +53,39 @@ func handleRebase(p subcmd.ParseFunc) error {
 	cmd.Stdin = os.Stdin
 	cmd.Dir = goDir
 
-	return executil.Run(cmd)
+	if err := executil.Run(cmd); err != nil {
+		return err
+	}
+
+	if err := warnIfOutsideSubmodule(goDir); err != nil {
+		// Just log for diagnosis, this warning isn't critical.
+		fmt.Printf("Unexpected error while checking wd: %v\n", err)
+	}
+	return nil
+}
+
+func warnIfOutsideSubmodule(submoduleDir string) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("unable to get working dir: %v", wd)
+	}
+
+	rel, err := filepath.Rel(submoduleDir, wd)
+	if err != nil {
+		return fmt.Errorf("unable to calculate relative path from %v to %v: %v", submoduleDir, wd, err)
+	}
+	invRel, err := filepath.Rel(wd, submoduleDir)
+	if err != nil {
+		return fmt.Errorf("unable to calculate inverse relative path from %v to %v: %v", wd, submoduleDir, err)
+	}
+
+	// Handle ".." and "../foo" separately to properly handle "..foo" special case.
+	if rel == ".." || strings.HasPrefix(rel, filepath.FromSlash("../")) {
+		fmt.Printf("\nWARNING: The current working directory is not inside the submodule!\n"+
+			"  Working dir %#q relative to %#q is %#q.\n"+
+			"  To continue the rebase process in this terminal with Git commands:\n\n"+
+			"    cd %v\n",
+			wd, submoduleDir, rel, invRel)
+	}
+	return nil
 }
