@@ -267,7 +267,14 @@ func setupMockRepo(dir, branch string) error {
 }
 
 func addMockSubmodule(dir, upstream string) error {
-	if err := runGit(dir, "submodule", "add", upstream, "go"); err != nil {
+	// "protocol.file.allow=always" lets the submodule command clone from a local directory. It's
+	// necessary as of Git 2.38.1, where the default was changed to "user" in response to
+	// CVE-2022-39253. It isn't a concern here where all repos involved are trusted. For more
+	// information, see:
+	// https://github.blog/2022-10-18-git-security-vulnerabilities-announced/#cve-2022-39253
+	// https://bugs.launchpad.net/ubuntu/+source/git/+bug/1993586
+	// https://git-scm.com/docs/git-config#Documentation/git-config.txt-protocolallow
+	if err := runGit(dir, "-c", "protocol.file.allow=always", "submodule", "add", upstream, "go"); err != nil {
 		return err
 	}
 	if err := runGit(dir, "commit", "-m", "Add submodule"); err != nil {
