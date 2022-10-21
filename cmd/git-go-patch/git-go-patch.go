@@ -78,7 +78,7 @@ func loadConfig() (*patch.FoundConfig, error) {
 		if semver.Compare(version, config.MinimumToolVersion) < 0 {
 			fmt.Printf("Your copy of git-go-patch is too old for this repository. Use this command to upgrade:\n\n" +
 				"  go install github.com/microsoft/go-infra/cmd/git-go-patch@latest\n")
-			return nil, fmt.Errorf("tool version is lower than config file minimum version: %v < %v", version, config.MinimumToolVersion)
+			return nil, fmt.Errorf("tool version is lower than config file minimum version: %q < %q", version, config.MinimumToolVersion)
 		}
 	}
 	return config, nil

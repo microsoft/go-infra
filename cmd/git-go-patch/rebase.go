@@ -72,11 +72,11 @@ func warnIfOutsideSubmodule(submoduleDir string) error {
 
 	rel, err := filepath.Rel(submoduleDir, wd)
 	if err != nil {
-		return fmt.Errorf("unable to calculate relative path from %v to %v: %v", submoduleDir, wd, err)
+		return fmt.Errorf("unable to calculate relative path from %#q to %#q: %v", submoduleDir, wd, err)
 	}
 	invRel, err := filepath.Rel(wd, submoduleDir)
 	if err != nil {
-		return fmt.Errorf("unable to calculate inverse relative path from %v to %v: %v", wd, submoduleDir, err)
+		return fmt.Errorf("unable to calculate inverse relative path from %#q to %#q: %v", wd, submoduleDir, err)
 	}
 
 	// Handle ".." and "../foo" separately to properly handle "..foo" special case.

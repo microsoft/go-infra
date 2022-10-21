@@ -115,7 +115,7 @@ func FindAncestorConfig(dir string) (*FoundConfig, error) {
 		if byConvention == nil {
 			byConvention, err = dirConfig(dir)
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				log.Printf("Unable to determine if %v is a Go directory for a surprising reason: %v", dir, err)
+				log.Printf("Unable to determine if %#q is a Go directory for a surprising reason: %v", dir, err)
 			}
 		}
 
@@ -126,7 +126,7 @@ func FindAncestorConfig(dir string) (*FoundConfig, error) {
 			if byConvention != nil {
 				return byConvention, nil
 			}
-			return nil, fmt.Errorf("no %q file or Microsoft Go root found in any ancestor of %v", ConfigFileName, originalDir)
+			return nil, fmt.Errorf("no %#q file or Microsoft Go root found in any ancestor of %v", ConfigFileName, originalDir)
 		}
 		dir = parent
 	}
