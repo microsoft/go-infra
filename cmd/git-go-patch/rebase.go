@@ -57,26 +57,28 @@ func handleRebase(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if err := warnIfOutsideSubmodule(goDir); err != nil {
-		// Just log for diagnosis, this warning isn't critical.
-		fmt.Printf("Unexpected error while checking wd: %v\n", err)
-	}
+	warnIfOutsideSubmodule(goDir)
 	return nil
 }
 
-func warnIfOutsideSubmodule(submoduleDir string) error {
+func warnIfOutsideSubmodule(submoduleDir string) {
+	const unexpected = "WARNING: Unexpected error while checking if working dir is inside submodule: "
+
 	wd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("unable to get working dir: %v", wd)
+		fmt.Printf("%vunable to get working dir: %v\n", unexpected, wd)
+		return
 	}
 
 	rel, err := filepath.Rel(submoduleDir, wd)
 	if err != nil {
-		return fmt.Errorf("unable to calculate relative path from %#q to %#q: %v", submoduleDir, wd, err)
+		fmt.Printf("%vunable to calculate relative path from %#q to %#q: %v", unexpected, submoduleDir, wd, err)
+		return
 	}
 	invRel, err := filepath.Rel(wd, submoduleDir)
 	if err != nil {
-		return fmt.Errorf("unable to calculate inverse relative path from %#q to %#q: %v", wd, submoduleDir, err)
+		fmt.Printf("%vunable to calculate inverse relative path from %#q to %#q: %v", wd, unexpected, submoduleDir, err)
+		return
 	}
 
 	// Handle ".." and "../foo" separately to properly handle "..foo" special case.
@@ -87,5 +89,4 @@ func warnIfOutsideSubmodule(submoduleDir string) error {
 			"    cd %v\n",
 			wd, submoduleDir, rel, invRel)
 	}
-	return nil
 }
