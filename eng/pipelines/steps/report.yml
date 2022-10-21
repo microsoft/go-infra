@@ -1,0 +1,56 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Report the status of some part of the release process, or do nothing if no issue is passed.
+parameters:
+  # Number of the release issue on GitHub to report to.
+  - name: releaseIssue
+    type: string
+    default: 'nil'
+  # GitHub repo "owner/name" to report to.
+  - name: repo
+    type: string
+    default: '$(TargetGitHubRepo)'
+  # The release version being reported about, or empty string for a nonspecific build.
+  - name: version
+    type: string
+    default: ''
+  # The reason for the report, to clarify the step name in build logs.
+  - name: reason
+    type: string
+    default: ''
+  # The AzDO step condition to use. Default to always (even if canceled) because the default
+  # behavior of this template is to report about the currently running build.
+  - name: condition
+    type: string
+    default: always()
+  # Variables normally taken from the environment, but optionally overridable here to let pipelines
+  # report info about builds that have been queued but haven't started yet.
+  - name: buildPipeline
+    type: string
+    default: '$(Build.DefinitionName)'
+  - name: buildID
+    type: string
+    default: '$(Build.BuildId)'
+  - name: buildStatus
+    type: string
+    default: '$(Agent.JobStatus)'
+  # Indicate this is the first report about this build, and should be set as its start time.
+  - name: start
+    type: boolean
+    default: false
+
+steps:
+  - ${{ if ne(parameters.releaseIssue, 'nil') }}:
+    - script: |
+        releasego report \
+          -i '${{ parameters.releaseIssue }}' \
+          -repo '${{ parameters.repo }}' \
+          -version '${{ parameters.version }}' \
+          -build-pipeline '${{ parameters.buildPipeline }}' \
+          -build-id '${{ parameters.buildID }}' \
+          -build-status '${{ parameters.buildStatus }}' \
+          -build-start=${{ parameters.start }} \
+          -pat '$(GitHubPAT)'
+      displayName: 📣 Report ${{ parameters.reason }}
+      condition: ${{ parameters.condition }}
