@@ -91,22 +91,47 @@ func LogCmdUploadSummary(path string) {
 // this in the command description when using GetEnvBuildID or GetEnvBuildURL.
 const AzDOBuildDetectionDoc = "If AzDO env variables SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT, and BUILD_BUILDID are set, includes a link to the build.\n"
 
-// GetEnvBuildURL probes the environment to figure out the build URL, if this is running in an AzDO
-// pipeline build.
-func GetEnvBuildURL() string {
-	collection := getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
-	project := getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
-	id := GetEnvBuildID()
+func GetBuildURL(collection, project, id string) string {
 	if collection == "" || project == "" || id == "" {
 		return ""
 	}
 	return collection + project + "/_build/results?buildId=" + id
 }
 
+// GetEnvBuildURL probes the environment to figure out the build URL, if this is running in an AzDO
+// pipeline build.
+func GetEnvBuildURL() string {
+	return GetBuildURL(GetEnvCollectionURI(), GetEnvProject(), GetEnvBuildID())
+}
+
+// GetEnvCollectionURI probes the environment to figure out the collection URI, if this is running
+// in an AzDO pipeline build.
+func GetEnvCollectionURI() string {
+	return getEnvNotifyIfEmpty("SYSTEM_COLLECTIONURI")
+}
+
+// GetEnvProject probes the environment to figure out the AzDO project, if this is running in an
+// AzDO pipeline build.
+func GetEnvProject() string {
+	return getEnvNotifyIfEmpty("SYSTEM_TEAMPROJECT")
+}
+
 // GetEnvBuildID probes the environment to figure out the build ID, if this is running in an AzDO
 // pipeline build.
 func GetEnvBuildID() string {
 	return getEnvNotifyIfEmpty("BUILD_BUILDID")
+}
+
+// GetEnvDefinitionName probes the environment to figure out the build definition (pipeline) name,
+// if this is running in an AzDO pipeline build.
+func GetEnvDefinitionName() string {
+	return getEnvNotifyIfEmpty("BUILD_DEFINITIONNAME")
+}
+
+// GetEnvAgentJobStatus probes the environment to figure out the status of the current job, if this
+// is running in an AzDO pipeline build.
+func GetEnvAgentJobStatus() string {
+	return getEnvNotifyIfEmpty("AGENT_JOBSTATUS")
 }
 
 // getEnvNotifyIfEmpty finds the given environment variable and returns it. If the variable is not

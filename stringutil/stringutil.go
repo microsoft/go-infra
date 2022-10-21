@@ -18,6 +18,17 @@ func CutPrefix(s, prefix string) (after string, found bool) {
 	return s, false
 }
 
+// CutTwice calls strings.Cut twice to split s into three strings. If either separator isn't found
+// in s, returns s, "", "", false.
+func CutTwice(s, sep1, sep2 string) (before, between, after string, found bool) {
+	if before1, after1, found := strings.Cut(s, sep1); found {
+		if between, after2, found := strings.Cut(after1, sep2); found {
+			return before1, between, after2, true
+		}
+	}
+	return s, "", "", false
+}
+
 // ReadJSONFile reads one JSON value from the specified file.
 func ReadJSONFile(path string, i interface{}) (err error) {
 	f, err := os.Open(path)
