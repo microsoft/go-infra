@@ -145,11 +145,12 @@ func dirConfig(dir string) (*FoundConfig, error) {
 	}, nil
 }
 
-func isDir(dir string) (ok bool, err error) {
-	if info, err := os.Stat(dir); err != nil {
-		return info != nil && info.IsDir(), err
+func isDir(path string) (ok bool, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
 	}
-	return true, nil
+	return info.IsDir(), nil
 }
 
 func findConfigInDir(dir string) (*FoundConfig, error) {
