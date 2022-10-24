@@ -5,14 +5,17 @@
 package patch
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/microsoft/go-infra/executil"
 )
@@ -90,6 +93,76 @@ func WalkPatches(dir string, fn func(string) error) error {
 		}
 	}
 	return nil
+}
+
+const (
+	fromTimestampPrefix = "From "
+	fromAuthorPrefix    = "From: "
+	datePrefix          = "Date: "
+	subjectPrefix       = "Subject: "
+)
+
+// Patch is a parsed Git patch file.
+type Patch struct {
+	FromTimestamp string
+	FromAuthor    string
+	Date          string
+	Subject       string
+	Content       string
+}
+
+// Read reads and parses a patch from r.
+func Read(r io.Reader) (*Patch, error) {
+	var h Patch
+	var subject strings.Builder
+	var content strings.Builder
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+		line := scanner.Text()
+		if line == "---" || content.Len() != 0 {
+			// Header is done: read the rest of the patch into Content. Technically, "---" could
+			// occur inside the commit message, so we might be giving up early. But even "git
+			// format-patch" and "git am" don't round-trip "---" ("format-patch" doesn't escape it,
+			// "am" cuts off the message), so don't worry about it here.
+			content.WriteString(line)
+			content.WriteString("\n")
+		} else if strings.HasPrefix(line, fromTimestampPrefix) && h.FromTimestamp == "" {
+			h.FromTimestamp = line[len(fromTimestampPrefix):]
+		} else if strings.HasPrefix(line, fromAuthorPrefix) && h.FromAuthor == "" {
+			h.FromAuthor = line[len(fromAuthorPrefix):]
+		} else if strings.HasPrefix(line, datePrefix) && h.Date == "" {
+			h.Date = line[len(datePrefix):]
+		} else if strings.HasPrefix(line, subjectPrefix) && subject.Len() == 0 {
+			subject.WriteString(line[len(subjectPrefix):])
+			subject.WriteString("\n")
+		} else {
+			subject.WriteString(line)
+			subject.WriteString("\n")
+		}
+	}
+	h.Subject = subject.String()
+	h.Content = content.String()
+	return &h, nil
+}
+
+func (h *Patch) String() string {
+	var s strings.Builder
+	s.WriteString(fromTimestampPrefix)
+	s.WriteString(h.FromTimestamp)
+	s.WriteString("\n")
+	s.WriteString(fromAuthorPrefix)
+	s.WriteString(h.FromAuthor)
+	s.WriteString("\n")
+	s.WriteString(datePrefix)
+	s.WriteString(h.Date)
+	s.WriteString("\n")
+	s.WriteString(subjectPrefix)
+	s.WriteString(h.Subject)
+	s.WriteString(h.Content)
+	return s.String()
 }
 
 // FindAncestorConfig finds and reads the config file governing dir. Searches dir and all ancestor
