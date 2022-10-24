@@ -5,7 +5,11 @@
 package patch
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -32,8 +36,8 @@ const (
 
 // Apply runs a Git command to apply the patches in the repository onto the submodule. The exact Git
 // command used ("am" or "apply") depends on the patch mode.
-func Apply(rootDir string, mode ApplyMode) error {
-	goDir := filepath.Join(rootDir, "go")
+func Apply(config *FoundConfig, mode ApplyMode) error {
+	_, goDir := config.FullProjectRoots()
 
 	cmd := exec.Command("git")
 	cmd.Dir = goDir
@@ -52,7 +56,7 @@ func Apply(rootDir string, mode ApplyMode) error {
 	// too late to cause noisy warnings because of them.
 	cmd.Args = append(cmd.Args, "--whitespace=nowarn")
 
-	err := WalkGoPatches(rootDir, func(file string) error {
+	err := WalkGoPatches(config, func(file string) error {
 		cmd.Args = append(cmd.Args, file)
 		return nil
 	})
@@ -65,8 +69,8 @@ func Apply(rootDir string, mode ApplyMode) error {
 
 // WalkGoPatches finds patches in the given Microsoft Go repository root directory and runs fn once
 // per patch file path. If fn returns an error, walking terminates and the error is returned.
-func WalkGoPatches(rootDir string, fn func(string) error) error {
-	return WalkPatches(filepath.Join(rootDir, "patches"), fn)
+func WalkGoPatches(config *FoundConfig, fn func(string) error) error {
+	return WalkPatches(filepath.Join(config.RootDir, config.PatchesDir), fn)
 }
 
 // WalkPatches finds patches in the given directory and runs fn once per patch file path. If fn
@@ -86,4 +90,83 @@ func WalkPatches(dir string, fn func(string) error) error {
 		}
 	}
 	return nil
+}
+
+// FindAncestorConfig finds and reads the config file governing dir. Searches dir and all ancestor
+// directories of dir, similar to how ".git" files work.
+//
+// If no config file is found in any ancestor, and an ancestor dir appears to be like microsoft/go
+// by convention (contains a "patches" directory and a "go" directory), creates a config struct to
+// fit the conventional repo.
+func FindAncestorConfig(dir string) (*FoundConfig, error) {
+	originalDir := dir
+	var byConvention *FoundConfig
+	for {
+		c, err := findConfigInDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			// Found the config file in dir.
+			return c, nil
+		}
+		// We didn't find a config file, but check if we found a conventional fork directory. Keep
+		// track of only the first one (most nested one) that we find.
+		if byConvention == nil {
+			byConvention, err = dirConfig(dir)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Printf("Unable to determine if %#q is a Go directory for a surprising reason: %v", dir, err)
+			}
+		}
+
+		// We didn't find the config file yet. Find the parent dir for the next iteration.
+		parent := filepath.Dir(dir)
+		// When we've hit the filesystem root, Dir goes no further.
+		if dir == parent {
+			if byConvention != nil {
+				return byConvention, nil
+			}
+			return nil, fmt.Errorf("no %#q file or Microsoft Go root found in any ancestor of %v", ConfigFileName, originalDir)
+		}
+		dir = parent
+	}
+}
+
+func dirConfig(dir string) (*FoundConfig, error) {
+	if ok, err := isDir(filepath.Join(dir, conventionalConfig.SubmoduleDir)); !ok {
+		return nil, err
+	}
+	if ok, err := isDir(filepath.Join(dir, conventionalConfig.PatchesDir)); !ok {
+		return nil, err
+	}
+	return &FoundConfig{
+		Config:  conventionalConfig,
+		RootDir: dir,
+	}, nil
+}
+
+func isDir(path string) (ok bool, err error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	return info.IsDir(), nil
+}
+
+func findConfigInDir(dir string) (*FoundConfig, error) {
+	data, err := os.ReadFile(filepath.Join(dir, ConfigFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	config := FoundConfig{
+		RootDir: dir,
+	}
+	if err := json.Unmarshal(data, &config.Config); err != nil {
+		return nil, err
+	}
+	return &config, nil
 }

@@ -4,8 +4,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -35,12 +38,13 @@ func handleRebase(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, goDir, err := findProjectRoots()
+	config, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	_, goDir := config.FullProjectRoots()
 
-	since, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
+	since, err := readStatusFile(config.FullPrePatchStatusFilePath())
 	if err != nil {
 		return err
 	}
@@ -49,5 +53,40 @@ func handleRebase(p subcmd.ParseFunc) error {
 	cmd.Stdin = os.Stdin
 	cmd.Dir = goDir
 
-	return executil.Run(cmd)
+	if err := executil.Run(cmd); err != nil {
+		return err
+	}
+
+	warnIfOutsideSubmodule(goDir)
+	return nil
+}
+
+func warnIfOutsideSubmodule(submoduleDir string) {
+	const unexpected = "WARNING: Unexpected error while checking if working dir is inside submodule: "
+
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("%vunable to get working dir: %v\n", unexpected, wd)
+		return
+	}
+
+	rel, err := filepath.Rel(submoduleDir, wd)
+	if err != nil {
+		fmt.Printf("%vunable to calculate relative path from %#q to %#q: %v", unexpected, submoduleDir, wd, err)
+		return
+	}
+	invRel, err := filepath.Rel(wd, submoduleDir)
+	if err != nil {
+		fmt.Printf("%vunable to calculate inverse relative path from %#q to %#q: %v", wd, unexpected, submoduleDir, err)
+		return
+	}
+
+	// Handle ".." and "../foo" separately to properly handle "..foo" special case.
+	if rel == ".." || strings.HasPrefix(rel, filepath.FromSlash("../")) {
+		fmt.Printf("\nWARNING: The current working directory is not inside the submodule!\n"+
+			"  Working dir %#q relative to %#q is %#q.\n"+
+			"  To continue the rebase process in this terminal with Git commands:\n\n"+
+			"    cd %v\n",
+			wd, submoduleDir, rel, invRel)
+	}
 }

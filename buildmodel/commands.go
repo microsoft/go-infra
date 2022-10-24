@@ -520,7 +520,11 @@ func RunDockerfileGeneration(repoRoot string, forceSubmoduleReset bool) error {
 		// Apply patches to the index without changing the commit hash. This means that later, a
 		// "git add ." or "git commit -a" won't try to change the submodule hash. ApplyModeCommits
 		// creates fresh commits that aren't available anywhere and would break a fresh clone.
-		if err := patch.Apply(repoRoot, patch.ApplyModeIndex); err != nil {
+		patchConfig, err := patch.FindAncestorConfig(repoRoot)
+		if err != nil {
+			return err
+		}
+		if err := patch.Apply(patchConfig, patch.ApplyModeIndex); err != nil {
 			return err
 		}
 	}

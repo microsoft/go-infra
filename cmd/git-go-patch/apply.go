@@ -45,14 +45,15 @@ func handleApply(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	rootDir, goDir, err := findProjectRoots()
+	config, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	rootDir, goDir := config.FullProjectRoots()
 
 	// If we're being careful, abort if the submodule commit isn't what we expect.
 	if !*force {
-		if err := ensureSubmoduleCommitNotDirty(rootDir, goDir); err != nil {
+		if err := ensureSubmoduleCommitNotDirty(config); err != nil {
 			return err
 		}
 	}
@@ -72,15 +73,15 @@ func handleApply(p subcmd.ParseFunc) error {
 	// fails, the user needs to be able to fix up the patches inside the submodule and then run
 	// "git go-patch extract" to apply the fixes to the patch files. "extract" depends on the
 	// pre-patch status file. Start by ensuring the dir exists, then write the file.
-	if err := os.MkdirAll(getStatusFileDir(rootDir), os.ModePerm); err != nil {
+	if err := os.MkdirAll(config.FullStatusFileDir(), os.ModePerm); err != nil {
 		return err
 	}
 
-	if err := writeStatusFiles(prePatchHead, getPrePatchStatusFilePath(rootDir)); err != nil {
+	if err := writeStatusFiles(prePatchHead, config.FullPrePatchStatusFilePath()); err != nil {
 		return err
 	}
 
-	if err := patch.Apply(rootDir, patch.ApplyModeCommits); err != nil {
+	if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
 		return err
 	}
 
@@ -90,7 +91,7 @@ func handleApply(p subcmd.ParseFunc) error {
 	}
 
 	// Record the post-patch commit.
-	return writeStatusFiles(postPatchHead, getPostPatchStatusFilePath(rootDir))
+	return writeStatusFiles(postPatchHead, config.FullPostPatchStatusFilePath())
 }
 
 func writeStatusFiles(commit string, file string) error {
@@ -121,7 +122,8 @@ func getTargetSubmoduleCommit(rootDir string) (string, error) {
 	return treeData[2], nil
 }
 
-func ensureSubmoduleCommitNotDirty(rootDir, goDir string) error {
+func ensureSubmoduleCommitNotDirty(config *patch.FoundConfig) error {
+	rootDir, goDir := config.FullProjectRoots()
 	// Get the submodule commit before running any operations. If the submodule isn't
 	// initialized, Git finds the root repo and gives us its commit, instead.
 	preResetCommit, err := getCurrentCommit(goDir)
@@ -138,7 +140,7 @@ func ensureSubmoduleCommitNotDirty(rootDir, goDir string) error {
 		return nil
 	}
 
-	lastPostPatchCommit, err := readStatusFile(getPostPatchStatusFilePath(rootDir))
+	lastPostPatchCommit, err := readStatusFile(config.FullPostPatchStatusFilePath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Either the "apply" command hasn't been run before, or it has, but the user
@@ -155,7 +157,7 @@ func ensureSubmoduleCommitNotDirty(rootDir, goDir string) error {
 
 	// The last pre-patch commit is ok, too. This could be the case if the user ran "git submodule
 	// update" sometime after running "apply".
-	lastPrePatchCommit, err := readStatusFile(getPrePatchStatusFilePath(rootDir))
+	lastPrePatchCommit, err := readStatusFile(config.FullPrePatchStatusFilePath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
