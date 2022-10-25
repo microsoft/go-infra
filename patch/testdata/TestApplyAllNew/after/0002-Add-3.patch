@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Wed, 26 Oct 2022 16:30:29 -0700
+Subject: [PATCH] Add 3
+
+---
+ moremath.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/moremath.go b/moremath.go
+index f888c58db443c5..dcf7a4b4b000a2 100644
+--- a/moremath.go
++++ b/moremath.go
+@@ -1,7 +1,7 @@
+ package moremath
+ 
+ func Add(x, y int) int {
+-	return x + y
++	return x + y + 3
+ }
+ 
+ func BitwiseXor(x, y int) int {

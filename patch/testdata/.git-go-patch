@@ -1,0 +1,5 @@
+{
+  "SubmoduleDir": "moremath",
+  "PatchesDir": "patch-dev",
+  "StatusFileDir": "patch-dev/status"
+}

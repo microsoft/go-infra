@@ -102,13 +102,18 @@ const (
 	subjectPrefix       = "Subject: "
 )
 
-// Patch is a parsed Git patch file.
-type Patch struct {
+// Header is the part of a Git patch file before the "---".
+type Header struct {
 	FromTimestamp string
 	FromAuthor    string
 	Date          string
 	Subject       string
-	Content       string
+}
+
+// Patch is a parsed Git patch file.
+type Patch struct {
+	Header
+	Content string
 }
 
 // Read reads and parses a patch from r.
@@ -146,6 +151,23 @@ func Read(r io.Reader) (*Patch, error) {
 	h.Subject = subject.String()
 	h.Content = content.String()
 	return &h, nil
+}
+
+// ReadFile reads and parses the named patch file.
+func ReadFile(path string) (*Patch, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	p, err := Read(f)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func (h *Patch) String() string {

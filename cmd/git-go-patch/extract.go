@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/patch"
@@ -55,11 +56,17 @@ const patchNumberCommand = "patch number "
 
 func handleExtract(p subcmd.ParseFunc) error {
 	sinceFlag := flag.String("since", "", "The commit or ref to begin formatting patches at. If nothing is specified, use the last commit recorded by 'apply'.")
+	verbatim := flag.Bool("verbatim", false, "Extract every patch even if rewriting it results in only spurious changes.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary working directory used by the patch rewrite process, rather than cleaning it up.")
 
 	if err := p(); err != nil {
 		return err
 	}
+
+	// Keep track of time. Finding spurious changes takes a surprisingly long time, and devs should
+	// be able to make an informed decision about '-verbatim'.
+	var totalStopwatch, matchingStopwatch stopwatch
+	totalStopwatch.Start()
 
 	config, err := loadConfig()
 	if err != nil {
@@ -126,16 +133,24 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	// Set up a checker that will determine which patch files actually need to change.
+	var matcher *patch.MatchCheckRepo
+	if !*verbatim {
+		matchingStopwatch.Start()
+		matcher, err = patch.NewMatchCheckRepo(goDir, since, patchDir)
+		if err != nil {
+			return failSuggestVerbatim("failed to create patch checking context", err)
+		}
+		if !*keepTemp {
+			defer matcher.AttemptDelete()
+		}
+		matchingStopwatch.Stop()
+	}
+
 	// Start numbering patches at 1 (0001).
 	n := 1
 	if err := patch.WalkPatches(tmpRawDir, func(path string) error {
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		p, err := patch.Read(f)
+		p, err := patch.ReadFile(path)
 		if err != nil {
 			return err
 		}
@@ -177,18 +192,39 @@ func handleExtract(p subcmd.ParseFunc) error {
 			return fmt.Errorf("no number prefix found in %#q", path)
 		}
 		newName := fmt.Sprintf("%04v-%v", strconv.Itoa(n), after)
+		writeNewPatch := true
 
-		modifiedFile, err := os.Create(filepath.Join(tmpRenameDir, newName))
-		if err != nil {
-			return err
+		// Now that we're done modifying p, see if it has any effective differences vs. the old
+		// patch with the same header.
+		if matcher != nil {
+			matchingStopwatch.Start()
+			if err := matcher.Apply(path, p); err != nil {
+				return failSuggestVerbatim("failed to check patch for changes", err)
+			}
+			if matcher.LastApplyExistingMatch != "" {
+				// Copy the old file: we know the content is the same, but the filename might not
+				// be. (In particular, the patch number.)
+				if err := copyFile(filepath.Join(tmpRenameDir, newName), matcher.LastApplyExistingMatch); err != nil {
+					return err
+				}
+				writeNewPatch = false
+			}
+			matchingStopwatch.Stop()
 		}
-		defer modifiedFile.Close()
 
-		if _, err := modifiedFile.WriteString(p.String()); err != nil {
-			return fmt.Errorf("unable to write patch to %#q: %v", path, err)
-		}
-		if err := modifiedFile.Close(); err != nil {
-			return fmt.Errorf("unable to close patch %#q: %v", path, err)
+		if writeNewPatch {
+			modifiedFile, err := os.Create(filepath.Join(tmpRenameDir, newName))
+			if err != nil {
+				return err
+			}
+			defer modifiedFile.Close()
+
+			if _, err := modifiedFile.WriteString(p.String()); err != nil {
+				return fmt.Errorf("unable to write patch to %#q: %v", path, err)
+			}
+			if err := modifiedFile.Close(); err != nil {
+				return fmt.Errorf("unable to close patch %#q: %v", path, err)
+			}
 		}
 
 		n++
@@ -218,8 +254,21 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	log.Printf("Extracted patch files from %#q into %#q\n", goDir, patchDir)
+	totalStopwatch.Stop()
+	log.Printf("Extracted patch files from %#q into %#q in %v\n", goDir, patchDir, totalStopwatch.ElapsedMillis())
+	if matcher != nil {
+		log.Printf(
+			"Of that time, reducing spurious changes took %v. "+
+				"If this is a burden, consider using '-verbatim' mode to allow spurious changes but take ~%v.\n",
+			matchingStopwatch.ElapsedMillis(),
+			totalStopwatch.ElapsedMillis()-matchingStopwatch.ElapsedMillis())
+	}
 	return nil
+}
+
+// failSuggestVerbatim creates an error message that suggests using '-verbatim' as an alternative.
+func failSuggestVerbatim(description string, err error) error {
+	return fmt.Errorf("%v; use '-verbatim' or fix the underlying issue: %v", description, err)
 }
 
 // readPatchCommands reads the given patch file's header and returns all potential commands, with
@@ -267,4 +316,21 @@ func copyFile(dst, src string) error {
 		return err
 	}
 	return d.Close()
+}
+
+type stopwatch struct {
+	elapsed time.Duration
+	start   time.Time
+}
+
+func (s *stopwatch) Start() {
+	s.start = time.Now()
+}
+
+func (s *stopwatch) Stop() {
+	s.elapsed += time.Now().Sub(s.start)
+}
+
+func (s *stopwatch) ElapsedMillis() time.Duration {
+	return s.elapsed.Round(time.Millisecond)
 }
