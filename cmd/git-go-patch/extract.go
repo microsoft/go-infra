@@ -95,6 +95,10 @@ func handleExtract(p subcmd.ParseFunc) error {
 	tmpRawDir := filepath.Join(tmpPatchDir, "raw")
 	tmpRenameDir := filepath.Join(tmpPatchDir, "rename")
 
+	if err := os.MkdirAll(tmpRenameDir, os.ModePerm); err != nil {
+		return fmt.Errorf("unable to create temp dir for patch renames: %v", err)
+	}
+
 	cmd := exec.Command(
 		"git",
 		"format-patch",
@@ -124,14 +128,30 @@ func handleExtract(p subcmd.ParseFunc) error {
 
 	// Start numbering patches at 1 (0001).
 	n := 1
-	// Git has extracted the commits and given them sequential numbers in their filenames. Here,
-	// renumber the patch files with our own rules.
 	if err := patch.WalkPatches(tmpRawDir, func(path string) error {
-		cmds, err := readPatchCommands(path)
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		p, err := patch.Read(f)
+		if err != nil {
+			return err
+		}
+
+		if config.ExtractAsAuthor != "" {
+			p.FromAuthor = config.ExtractAsAuthor
+		}
+
+		subjectReader := strings.NewReader(p.Subject)
+		cmds, err := readPatchCommands(subjectReader)
 		if err != nil {
 			return err
 		}
 		for _, cmd := range cmds {
+			// Git has extracted the commits and given them sequential numbers in their filenames.
+			// Here, renumber the patch files with our own rules.
 			if after, found := stringutil.CutPrefix(cmd, patchNumberCommand); found {
 				num, err := strconv.Atoi(after)
 				if err != nil {
@@ -157,8 +177,18 @@ func handleExtract(p subcmd.ParseFunc) error {
 			return fmt.Errorf("no number prefix found in %#q", path)
 		}
 		newName := fmt.Sprintf("%04v-%v", strconv.Itoa(n), after)
-		if err := copyFile(filepath.Join(tmpRenameDir, newName), path); err != nil {
-			return fmt.Errorf("unable to rename %#q: %w", path, err)
+
+		modifiedFile, err := os.Create(filepath.Join(tmpRenameDir, newName))
+		if err != nil {
+			return err
+		}
+		defer modifiedFile.Close()
+
+		if _, err := modifiedFile.WriteString(p.String()); err != nil {
+			return fmt.Errorf("unable to write patch to %#q: %v", path, err)
+		}
+		if err := modifiedFile.Close(); err != nil {
+			return fmt.Errorf("unable to close patch %#q: %v", path, err)
 		}
 
 		n++
@@ -176,10 +206,14 @@ func handleExtract(p subcmd.ParseFunc) error {
 	}
 
 	// Move all patch files from the temp dir to the final dir.
+	log.Printf("Moving patches from %#q to destination %#q\n", tmpRenameDir, patchDir)
 	if err := patch.WalkPatches(tmpRenameDir, func(path string) error {
-		filename := filepath.Base(path)
-		log.Printf("Moving patch to destination: %#q\n", filename)
-		return copyFile(filepath.Join(patchDir, filename), path)
+		dstPath := filepath.Join(patchDir, filepath.Base(path))
+		err := copyFile(dstPath, path)
+		if err != nil {
+			return fmt.Errorf("failed to copy patch %#q to %#q: %v", path, dstPath, err)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -190,23 +224,16 @@ func handleExtract(p subcmd.ParseFunc) error {
 
 // readPatchCommands reads the given patch file's header and returns all potential commands, with
 // commandPrefix trimmed off.
-func readPatchCommands(path string) ([]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
+func readPatchCommands(r io.Reader) ([]string, error) {
 	var cmds []string
-
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		if err := scanner.Err(); err != nil {
 			return nil, err
 		}
 		t := scanner.Text()
 		if t == "---" {
-			// Header is done: stop reading. Technically, "---" could occur inside the commit
+			// Patch is done: stop reading. Technically, "---" could occur inside the commit
 			// message, so we might be giving up early. But even "git format-patch" and "git am"
 			// don't round-trip "---" ("format-patch" doesn't escape it, "am" cuts off the message),
 			// so don't worry about it here.
