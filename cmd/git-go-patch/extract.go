@@ -66,8 +66,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 	rootDir, goDir := config.FullProjectRoots()
-
-	patchDir := filepath.Join(rootDir, "patches")
+	patchDir := filepath.Join(rootDir, config.PatchesDir)
 
 	since := *sinceFlag
 	if since == "" {
