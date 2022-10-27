@@ -513,7 +513,7 @@ func RunDockerfileGeneration(repoRoot string, forceSubmoduleReset bool) error {
 		// No err: the submodule directory exists. Now, ensure the submodule is set up correctly and
 		// patched, so we can use the patched templates inside to generate our Dockerfiles.
 		fmt.Println("---- Resetting submodule...")
-		if err := submodule.Reset(repoRoot, forceSubmoduleReset); err != nil {
+		if err := submodule.Reset(repoRoot, goDir, forceSubmoduleReset); err != nil {
 			return err
 		}
 		fmt.Println("---- Applying patches to submodule index...")

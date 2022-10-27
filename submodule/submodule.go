@@ -7,7 +7,6 @@ package submodule
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/microsoft/go-infra/executil"
 )
@@ -35,9 +34,7 @@ func Init(rootDir, origin, fetchBearerToken string, shallow bool) error {
 
 // Reset updates the submodule (with '--init'). If "force", throw away changes in the submodule,
 // abort all in-progress Git operations like rebases, and clean all untracked files.
-func Reset(rootDir string, force bool) error {
-	goDir := filepath.Join(rootDir, "go")
-
+func Reset(rootDir, submoduleDir string, force bool) error {
 	// Update the submodule commit, and initialize if it hasn't been done already.
 	submoduleUpdateCmd := dirCmd(rootDir, "git", "submodule", "update", "--init")
 	if force {
@@ -61,30 +58,30 @@ func Reset(rootDir string, force bool) error {
 	if err != nil {
 		return err
 	}
-	goToplevel, err := getToplevel(goDir)
+	submoduleToplevel, err := getToplevel(submoduleDir)
 	if err != nil {
 		return err
 	}
 
-	if rootToplevel == goToplevel {
-		return fmt.Errorf("go submodule (%v) toplevel is the same as root (%v) toplevel: %v", goDir, rootDir, goToplevel)
+	if rootToplevel == submoduleToplevel {
+		return fmt.Errorf("submodule (%v) toplevel is the same as root (%v) toplevel: %v", submoduleDir, rootDir, submoduleToplevel)
 	}
 
 	// Abort long-running Git operations--sequences that span multiple commands. These may be active
 	// and can interfere with the reset process. Ignore errors and output: aborting returns non-zero
 	// exit codes and emits alarming-seeming output when there is nothing to do.
-	_ = executil.RunQuiet(dirCmd(goDir, "git", "am", "--abort"))
-	_ = executil.RunQuiet(dirCmd(goDir, "git", "rebase", "--abort"))
-	_ = executil.RunQuiet(dirCmd(goDir, "git", "merge", "--abort"))
+	_ = executil.RunQuiet(dirCmd(submoduleDir, "git", "am", "--abort"))
+	_ = executil.RunQuiet(dirCmd(submoduleDir, "git", "rebase", "--abort"))
+	_ = executil.RunQuiet(dirCmd(submoduleDir, "git", "merge", "--abort"))
 
 	// Reset the index and working directory. This doesn't clean up new untracked files.
-	if err := executil.Run(dirCmd(goDir, "git", "reset", "--hard")); err != nil {
+	if err := executil.Run(dirCmd(submoduleDir, "git", "reset", "--hard")); err != nil {
 		return err
 	}
 	// Delete untracked files detected by Git. Deliberately leave files that are ignored in
 	// '.gitignore': these files shouldn't interfere with the build process and could be used for
 	// incremental builds.
-	return executil.Run(dirCmd(goDir, "git", "clean", "-df"))
+	return executil.Run(dirCmd(submoduleDir, "git", "clean", "-df"))
 }
 
 func getToplevel(dir string) (string, error) {

@@ -59,7 +59,7 @@ func handleApply(p subcmd.ParseFunc) error {
 	}
 
 	if !*noRefresh {
-		if err := submodule.Reset(rootDir, *force); err != nil {
+		if err := submodule.Reset(rootDir, goDir, *force); err != nil {
 			return err
 		}
 	}
@@ -107,8 +107,8 @@ func getCurrentCommit(goDir string) (string, error) {
 	return executil.SpaceTrimmedCombinedOutput(currentCmd)
 }
 
-func getTargetSubmoduleCommit(rootDir string) (string, error) {
-	cmd := exec.Command("git", "ls-tree", "HEAD", "go")
+func getTargetSubmoduleCommit(rootDir, submoduleDir string) (string, error) {
+	cmd := exec.Command("git", "ls-tree", "HEAD", submoduleDir)
 	cmd.Dir = rootDir
 	// Format, from Git docs: "<mode> SP <type> SP <object> TAB <file>"
 	lsOut, err := executil.SpaceTrimmedCombinedOutput(cmd)
@@ -171,7 +171,7 @@ func ensureSubmoduleCommitNotDirty(config *patch.FoundConfig) error {
 	// Check if the submodule commit is the same as what the Git index of the outer repo expects. We
 	// need to check this because the user could have checked out a different version of the outer
 	// repo and run "git submodule update" without running "apply" again.
-	currentTargetCommit, err := getTargetSubmoduleCommit(rootDir)
+	currentTargetCommit, err := getTargetSubmoduleCommit(rootDir, goDir)
 	if err != nil {
 		return err
 	}
