@@ -198,13 +198,14 @@ func handleExtract(p subcmd.ParseFunc) error {
 		// patch with the same header.
 		if matcher != nil {
 			matchingStopwatch.Start()
-			if err := matcher.Apply(path, p); err != nil {
+			matchPath, err := matcher.CheckedApply(path, p)
+			if err != nil {
 				return failSuggestVerbatim("failed to check patch for changes", err)
 			}
-			if matcher.LastApplyExistingMatch != "" {
+			if matchPath != "" {
 				// Copy the old file: we know the content is the same, but the filename might not
 				// be. (In particular, the patch number.)
-				if err := copyFile(filepath.Join(tmpRenameDir, newName), matcher.LastApplyExistingMatch); err != nil {
+				if err := copyFile(filepath.Join(tmpRenameDir, newName), matchPath); err != nil {
 					return err
 				}
 				writeNewPatch = false

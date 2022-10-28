@@ -25,15 +25,16 @@ func TestMatchCheckRepo_Apply(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if err := m.Apply(path, p); err != nil {
+				matchPath, err := m.CheckedApply(path, p)
+				if err != nil {
 					return err
 				}
 				// Use an indicator in the patch file path to determine whether we expect a match or
 				// not. This isn't precise: we don't keep track of which patch file should be
-				// matched. This would either require more test-specific code in Apply or more
+				// matched. This would either require more test-specific code in CheckedApply or more
 				// intricate commit hash tracking, and it's not worthwhile for these scenario tests.
 				wantMatch := strings.HasSuffix(path, "_matching.patch")
-				match := m.LastApplyExistingMatch != ""
+				match := matchPath != ""
 				if wantMatch != match {
 					t.Errorf("applying patch %#q want match = %v, but match = %v", path, wantMatch, match)
 				}
