@@ -22,7 +22,7 @@ import (
 //
 // When adding a new feature to the git-go-patch tool, make sure it is backward compatible and
 // increment the patch number here.
-const version = "v1.0.0"
+const version = "v1.0.1"
 
 const description = `
 git-go-patch is a tool that helps work with the submodule and Git patch files used by the Microsoft
