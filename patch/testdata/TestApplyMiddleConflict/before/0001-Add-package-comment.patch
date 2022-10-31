@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Thu, 27 Oct 2022 10:21:50 -0700
+Subject: [PATCH] Add package comment
+
+---
+ moremath.go | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/moremath.go b/moremath.go
+index 13a2a66b33619f..fde34cfe5e2c7b 100644
+--- a/moremath.go
++++ b/moremath.go
+@@ -1,3 +1,4 @@
++// Package moremath provides not-very-useful functions with some bugs.
+ package moremath
+ 
+ func Add(x, y int) int {

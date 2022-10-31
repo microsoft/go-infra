@@ -71,13 +71,15 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 }
 
 // WalkGoPatches finds patches in the given Microsoft Go repository root directory and runs fn once
-// per patch file path. If fn returns an error, walking terminates and the error is returned.
+// per patch file path. If fn returns an error, walking terminates and the error is returned. The
+// walk iterates in the order the patches should be applied (alphabetical filename order).
 func WalkGoPatches(config *FoundConfig, fn func(string) error) error {
 	return WalkPatches(filepath.Join(config.RootDir, config.PatchesDir), fn)
 }
 
 // WalkPatches finds patches in the given directory and runs fn once per patch file path. If fn
-// returns an error, walking terminates and the error is returned.
+// returns an error, walking terminates and the error is returned. The walk iterates in the order
+// the patches should be applied (alphabetical filename order).
 func WalkPatches(dir string, fn func(string) error) error {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.patch"))
 	if err != nil {
@@ -102,13 +104,18 @@ const (
 	subjectPrefix       = "Subject: "
 )
 
-// Patch is a parsed Git patch file.
-type Patch struct {
+// Header is the part of a Git patch file before the "---".
+type Header struct {
 	FromTimestamp string
 	FromAuthor    string
 	Date          string
 	Subject       string
-	Content       string
+}
+
+// Patch is a parsed Git patch file.
+type Patch struct {
+	Header
+	Content string
 }
 
 // Read reads and parses a patch from r.
@@ -146,6 +153,23 @@ func Read(r io.Reader) (*Patch, error) {
 	h.Subject = subject.String()
 	h.Content = content.String()
 	return &h, nil
+}
+
+// ReadFile reads and parses the named patch file.
+func ReadFile(path string) (*Patch, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	p, err := Read(f)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func (h *Patch) String() string {

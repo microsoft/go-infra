@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Wed, 26 Oct 2022 16:30:10 -0700
+Subject: [PATCH] Subtract subtraction
+
+---
+ README.md   | 1 -
+ moremath.go | 4 ----
+ 2 files changed, 5 deletions(-)
+
+diff --git a/README.md b/README.md
+index a61a1dd748b426..cc218f4facea84 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,6 @@
+ This is a list of the project's features:
+ 
+ * Addition
+-* Subtraction
+ * Bitwise exclusive or
+ 
+ No more features.
+diff --git a/moremath.go b/moremath.go
+index c83a72b028176d..f888c58db443c5 100644
+--- a/moremath.go
++++ b/moremath.go
+@@ -4,10 +4,6 @@ func Add(x, y int) int {
+ 	return x + y
+ }
+ 
+-func Subtract(x, y int) int {
+-	return x + y
+-}
+-
+ func BitwiseXor(x, y int) int {
+ 	return x ^ y
+ }

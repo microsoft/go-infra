@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/microsoft/go-infra/executil"
@@ -146,6 +147,21 @@ func NewTempGitRepo() (string, error) {
 	}
 	log.Printf("Created dir %#q to store temp Git repo.\n", gitDir)
 	return gitDir, nil
+}
+
+func NewTempCloneRepo(src string) (string, error) {
+	absSrc, err := filepath.Abs(src)
+	if err != nil {
+		return "", err
+	}
+	d, err := os.MkdirTemp("", "temp-clone-*")
+	if err != nil {
+		return "", err
+	}
+	if err := Run(d, "clone", "--no-checkout", absSrc, d); err != nil {
+		return "", err
+	}
+	return d, nil
 }
 
 // AttemptDelete tries to delete the git dir. If an error occurs, log it, but this is not fatal.

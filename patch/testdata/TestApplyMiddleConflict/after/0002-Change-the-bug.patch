@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Thu, 27 Oct 2022 10:22:03 -0700
+Subject: [PATCH] Change the bug
+
+---
+ moremath.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/moremath.go b/moremath.go
+index ec9eea46fab12f..ae1ad446a76b89 100644
+--- a/moremath.go
++++ b/moremath.go
+@@ -10,5 +10,5 @@ func Subtract(x, y int) int {
+ }
+ 
+ func BitwiseXor(x, y int) int {
+-	return x ^ y
++	return x ^ y + 5
+ }
