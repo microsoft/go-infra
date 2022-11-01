@@ -8,4 +8,11 @@ These documents describe the reasons for this approach:
 
 * [**Patch files** vs. in-place modifications](patch-vs-in-place.md)
 * [**Submodule** vs. fork](submodule-vs-fork.md)
-* [**Branches**](branches.md)
+
+This document shows the branching we use for this repository and our fork:
+
+* [**../Branches**](../branches.md)
+
+We also developed [a tool called `git-go-patch`](../../cmd/git-go-patch) to help maintain the Microsoft Go patches.
+Other teams maintaining a submodule+patch fork may also find it useful.
+Let us know!
