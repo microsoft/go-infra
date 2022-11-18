@@ -18,6 +18,8 @@ Internal pipeline definitions:
   * 🚀 internal [`microsoft-go-infra-upstream-sync`](https://dev.azure.com/dnceng/internal/_build?definitionId=1061)
 * [`fuzz-pipeline.yml`](fuzz-pipeline.yml) - Run fuzz tests internally on a schedule.
   * 🚀 internal [`microsoft-go-infra-fuzz`](https://dev.azure.com/dnceng/internal/_build?definitionId=1182)
+* [`rolling-internal-validation-pipeline.yml`](rolling-internal-validation-pipeline.yml) - Runs scheduled internal validation checks.
+  * 🚀 internal [microsoft-go-infra-validation](https://dev.azure.com/dnceng/internal/_build?definitionId=1210)
 
 Internal release pipelines (see [release process docs](/docs/release-process)):
 
