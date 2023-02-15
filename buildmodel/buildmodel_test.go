@@ -138,16 +138,11 @@ func Test_makeOsArchPlatform(t *testing.T) {
 		},
 		{
 			"linux-arm no version if Mariner",
-			args{"linux", "cbl-mariner1.0", "arm", "7"},
-			want{"linux", "cbl-mariner1.0", "arm", ""},
+			args{"linux", "cbl-mariner2.0", "arm", "7"},
+			want{"linux", "cbl-mariner2.0", "arm", ""},
 		},
 		{
 			"linux-arm64 no version if Mariner",
-			args{"linux", "cbl-mariner1.0", "arm64", ""},
-			want{"linux", "cbl-mariner1.0", "arm64", ""},
-		},
-		{
-			"linux-arm64 no version if Mariner 2.0",
 			args{"linux", "cbl-mariner2.0", "arm64", ""},
 			want{"linux", "cbl-mariner2.0", "arm64", ""},
 		},

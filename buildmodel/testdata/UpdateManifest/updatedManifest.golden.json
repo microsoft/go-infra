@@ -161,6 +161,7 @@
                 "REPO": "$(Repo:golang)"
               },
               "architecture": "arm64",
+              "variant": "v8",
               "dockerfile": "src/microsoft/1.18/fips-linux/cbl-mariner1.0",
               "os": "linux",
               "osVersion": "cbl-mariner1.0",
