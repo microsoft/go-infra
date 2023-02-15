@@ -308,9 +308,9 @@ func makeOSArchPlatform(os, osVersion string, env *dockerversions.ArchEnv) *dock
 	// to specify more info: a version. .NET Docker infra calls this a "variant". This
 	// is not the same as the Official Go Image "variant" (OS name/version).
 	archVariant := env.GoImageArchVersionSuffix()
-	// CBL-Mariner 1.0 and 2.0 don't specify an ARM arch variant (version) in the Docker manifest,
+	// CBL-Mariner 2.0 doesn't specify an ARM arch variant (version) in the Docker manifest,
 	// so we must omit it, too: .NET Docker infra checks they match.
-	if strings.HasPrefix(osVersion, "cbl-mariner") {
+	if osVersion == "cbl-mariner2.0" {
 		archVariant = ""
 	}
 	return &dockermanifest.Platform{
