@@ -1,10 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Use runtime parameters to define these selections in YML. This also makes them
-# show up in the "Run" popup directly. This makes them much easier to set
-# manually, vs. digging into the Variables submenu with many clicks.
-# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters
+# For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
   - name: releaseVersion
     displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.

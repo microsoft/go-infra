@@ -10,6 +10,9 @@ Useful AzDO Pipeline YAML docs:
 * [Template types & usage](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops)
 * [Build and release tasks](https://docs.microsoft.com/en-us/azure/devops/pipelines/tasks/?view=azure-devops)
 
+General YAML resources:
+* [Advanced multi-line value handling (`>`, `|`, ...)](https://yaml-multiline.info/)
+
 ## Faster retry: one stage per job
 
 A typical way to arrange an AzDO pipeline is to add a job for each platform into a single stage:
@@ -60,6 +63,28 @@ parameters:
 In this mode, any additional parameters passed by a `- template: ...` statement are rejected as a template evaluation error. If we need some arbitrary parameters, we use an extra `object` param.
 
 Because `orange` is passed as a `boolean`, `${{ if parameters.orange }}` evaluates as expected.
+
+## Runtime parameters
+
+[Runtime parameters](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/runtime-parameters) are a way to specify parameters for a pipeline run that show up at the top level of the "Run" dialogue. These are nicer to use for commonly adjusted user inputs than variables: you don't need to dig deep in the UI to change them, and they have friendly labels defined in the pipeline YML file. The parameters are also usable in AzDO templates without the limitations of variables.
+
+We also use runtime parameters to transfer release data between pipelines in the automated release process.
+
+In AzDO YML, a runtime parameter either has a default value, or a value must be assigned by the user before the "Run" button is enabled.
+
+### 'nil' string default
+
+A problem is that AzDO doesn't treat the empty string `''` as a valid default value: AzDO requires the user to specify some non-empty string before hitting "Run". We sometimes need to define an optional string parameter without any meaningful default value. If `''` worked, it would be the easy choice for this scenario, but it doesn't work.
+
+As a workaround, when we need an optional string parameter, we use the string `nil` as the default value and `ne(parameter.example, 'nil')` to check if the parameter was set. For example:
+
+```yml
+parameters:
+  - name: example
+    displayName: 'Description of an example pseudo-optional string parameter'
+    type: string
+    default: nil
+```
 
 ## Templates for data reuse
 
