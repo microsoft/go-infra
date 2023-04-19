@@ -157,7 +157,8 @@ jobs:
                   -org 'https://dev.azure.com/dnceng/' \
                   -proj 'internal' \
                   -azdopat '$(System.AccessToken)' \
-                  -set-azdo-variable poll3MicrosoftGoBuildID
+                  -set-azdo-variable poll3MicrosoftGoBuildID \
+                  p releaseVersion '${{ parameters.releaseVersion }}'
               displayName: 🚀 Run microsoft/go internal build
             - template: ../steps/report.yml
               parameters:
