@@ -111,7 +111,12 @@ func TestGoVersion_UpstreamFormatGitTag(t *testing.T) {
 		{"do not drop middle zero", "1.0.1", "go1.0.1"},
 		{"drop ending zero", "1.1.0", "go1.1"},
 		{"never drop ones", "1.1.1", "go1.1.1"},
-		{"drop zeroes for v2", "2.0.0", "go2"},
+		// 1.21 changed zero behavior. https://github.com/golang/go/issues/57631
+		{"no zero in 1.20", "1.20.0", "go1.20"},
+		{"zero in 1.21", "1.21.0", "go1.21.0"},
+		{"zero in 1.22", "1.22.0", "go1.22.0"},
+		{"same 1.21 patching behavior", "1.21.1", "go1.21.1"},
+		{"don't drop zeros for v2", "2.0.0", "go2.0.0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

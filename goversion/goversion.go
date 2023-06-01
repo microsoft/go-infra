@@ -109,15 +109,26 @@ func (v *GoVersion) Full() string {
 	return v.MajorMinorPatchPrereleaseRevision() + v.NoteWithPrefix()
 }
 
-// UpstreamFormatGitTag returns the version in the format upstream uses for Git tags. Specifically,
-// revision, note, and trailing ".0" strings are omitted, and the prefix is "go".
+// UpstreamFormatGitTag returns the version in the format upstream uses for Git tags.
 func (v *GoVersion) UpstreamFormatGitTag() string {
-	n := v.Major
-	if v.Patch != "0" || v.Minor != "0" {
-		n += "." + v.Minor
+	// In versions of Go older than 1.21, zeros are omitted. https://github.com/golang/go/issues/57631
+	var omitZeros bool
+	if v.Major == "1" {
+		if minorNum, err := strconv.Atoi(v.Minor); err == nil {
+			omitZeros = minorNum < 21
+		}
 	}
-	if v.Patch != "0" {
-		n += "." + v.Patch
+	var n string
+	if omitZeros {
+		n = v.Major
+		if v.Patch != "0" || v.Minor != "0" {
+			n += "." + v.Minor
+		}
+		if v.Patch != "0" {
+			n += "." + v.Patch
+		}
+	} else {
+		n = v.Major + "." + v.Minor + "." + v.Patch
 	}
 	return "go" + n + v.Prerelease
 }
