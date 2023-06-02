@@ -29,7 +29,7 @@ stages:
           platform: linux-amd64
           pool:
             name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals build.ubuntu.1804.amd64
+            demands: ImageOverride -equals 1es-ubuntu-2004
 
       - template: jobs/fuzz.yml
         parameters:
@@ -38,7 +38,7 @@ stages:
           goExperiment: opensslcrypto
           pool:
             name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals build.ubuntu.1804.amd64
+            demands: ImageOverride -equals 1es-ubuntu-2004
 
       - template: jobs/fuzz.yml
         parameters:
@@ -47,4 +47,4 @@ stages:
           goExperiment: cngcrypto
           pool:
             name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals build.windows.amd64.vs2022
+            demands: ImageOverride -equals 1es-windows-2022
