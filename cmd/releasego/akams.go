@@ -145,6 +145,10 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 		urls = appendPathAndVerificationFilePaths(urls, a.URL)
 	}
 	urls = appendPathAndVerificationFilePaths(urls, assets.GoSrcURL)
+	// The assets.json is uploaded in the same virtual dir as src.
+	// Make an aka.ms URL for it.
+	urlBase := strings.Join(goSrcURLParts[:len(goSrcURLParts)-1], "/") + "/"
+	urls = append(urls, urlBase+"assets.json")
 
 	pairs := make([]akaMSLinkPair, 0, len(urls)*len(partial))
 
@@ -175,7 +179,12 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 }
 
 func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, error) {
+	// The assets.json file has no version number in it, so we need to add one.
+	if filename == "assets.json" {
+		return "go" + floatVersion + "." + filename, nil
+	}
 	f := strings.ReplaceAll(filename, buildNumber, floatVersion)
+	// Make sure something was actually replaced.
 	if f == filename {
 		return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
 	}
