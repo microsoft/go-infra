@@ -6,15 +6,13 @@
     "MirrorTarget": "https://dnceng@dev.azure.com/dnceng/internal/_git/microsoft-go-mirror",
     "BranchMap": {
       "master": "microsoft/main",
-      "release-branch.go*": "microsoft/?",
-      "dev.boringcrypto.go*": "microsoft/?"
+      "release-branch.go*": "microsoft/?"
     },
     "AutoSyncBranches": [
-      "master",
-      "release-branch.go1.18",
-      "dev.boringcrypto.go1.18",
-      "release-branch.go1.17",
-      "dev.boringcrypto.go1.17"
+      "master"
+    ],
+    "AutoMirrorBranches": [
+      "release-branch.go*"
     ],
     "MainBranch": "microsoft/main",
     "SubmoduleTarget": "go"

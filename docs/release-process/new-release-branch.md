@@ -40,6 +40,10 @@ The steps below use `1.x` as a stand-in for the target version of Go:
     1. Stage the submodule change with `git add go`
     1. `git commit` with a message like "Update submodule for 1.x".
     1. Push the commit and submit the branch as a microsoft/go PR into the branch you created earlier.
+    1. Make sure the upstream branch and commit are available in the internal [microsoft-go-mirror](https://dev.azure.com/dnceng/internal/_git/microsoft-go-mirror) repo.
+        * If not, queue [microsoft-go-infra-upstream-sync](https://dev.azure.com/dnceng/internal/_build?definitionId=1061) to run with default parameters. It automatically mirrors all upstream release branches.
+        * If the upstream sync pipeline ran relatively recently, this step isn't necessary.
+        * Missing branches/commits can cause the internal build to fail in a later step. Public CI doesn't use the internal mirror, so it won't catch this issue.
 
 1. Fix up PR CI failures.
     * Changing the submodule commit can cause patch conflicts, so you may need to resolve them. See [the git-go-patch README](/cmd/git-go-patch/README.md).
