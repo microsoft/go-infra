@@ -19,6 +19,13 @@ import (
 	"github.com/microsoft/go-infra/stringutil"
 )
 
+// fipsTagPrefixes is a list of prefixes that indicate the images is an image
+// wrapping another image for the purpose of modifying it to support FIPS.
+var fipsTagPrefixes = []string{
+	"fips-linux/",
+	"fips/",
+}
+
 // UpdateManifest takes a 'versions.json' model and updates a build manifest to make it build and
 // tag all versions specified. Slices in the generated model are sorted, for diff stability. Map
 // stability is handled by the Go JSON library when the model is serialized.
@@ -57,16 +64,19 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 
 			// The non-FIPS Docker tag that this FIPS image wraps, or empty string if not.
 			var fipsWrapTag string
-			if after, ok := stringutil.CutPrefix(variant, "fips-linux/"); ok {
-				osVersion = after
+			for _, fipsPrefix := range fipsTagPrefixes {
+				if after, ok := stringutil.CutPrefix(osVersion, fipsPrefix); ok {
+					osVersion = after
 
-				// Figure out the non-FIPS tag name so that we can wrap it.
-				fipsWrapTag = joinTag(applyVersionAffixes(majorMinorPatchRevision), osVersion)
-				// Replace applyVersionAffixes with a new func that preserves the existing behavior,
-				// but also adds "-fips" to the end.
-				oldApply := applyVersionAffixes
-				applyVersionAffixes = func(version string) string {
-					return joinTag(oldApply(version), "fips")
+					// Figure out the non-FIPS tag name so that we can wrap it.
+					fipsWrapTag = joinTag(applyVersionAffixes(majorMinorPatchRevision), osVersion)
+					// Replace applyVersionAffixes with a new func that preserves the existing behavior,
+					// but also adds "-fips" to the end.
+					oldApply := applyVersionAffixes
+					applyVersionAffixes = func(version string) string {
+						return joinTag(oldApply(version), "fips")
+					}
+					break
 				}
 			}
 
