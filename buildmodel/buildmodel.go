@@ -19,7 +19,7 @@ import (
 	"github.com/microsoft/go-infra/stringutil"
 )
 
-// fipsTagPrefixes is a list of prefixes that indicate the images is an image
+// fipsTagPrefixes is a list of prefixes that indicate a tag specifies an image
 // wrapping another image for the purpose of modifying it to support FIPS.
 var fipsTagPrefixes = []string{
 	"fips-linux/",
