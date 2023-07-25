@@ -81,6 +81,7 @@ func handleSync(p subcmd.ParseFunc) error {
 
 	// Only sync the single branch we intend to.
 	foundEntry.AutoSyncBranches = []string{versionUpstream}
+	foundEntry.AutoMirrorBranches = nil
 	if *commit != "" {
 		// Use the target commit, not just what happens to be the latest.
 		foundEntry.SourceBranchLatestCommit = map[string]string{versionUpstream: *commit}

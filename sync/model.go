@@ -39,7 +39,8 @@ type ConfigEntry struct {
 	Head string
 	// MirrorTarget	is an optional Git repository to push the upstream branch to. All mirroring
 	// operations must succeed before sync continues with this sync config entry. The mirror target
-	// is intended to be an internal repo, for reliability and security purposes.
+	// is intended to be an internal repo, for reliability and security purposes. Mirrored branches
+	// use the same name as they have in Upstream, ignoring BranchMap.
 	MirrorTarget string
 
 	// BranchMap is a map of source branch names in Upstream (keys) to use to update a corresponding
@@ -53,6 +54,11 @@ type ConfigEntry struct {
 	// command ignores this list, syncing a user-specified branch instead that may not even be in
 	// the AutoSyncBranches list.
 	AutoSyncBranches []string
+
+	// AutoMirrorBranches is a list of branches that should be mirrored to MirrorTarget, in addition
+	// to the list of branches in AutoSyncBranches. A "*" is glob matched. "./cmd/releasego sync"
+	// ignores this list to keep release activity separate from unrelated branch mirroring.
+	AutoMirrorBranches []string
 
 	// MainBranch is the main/master branch of the target repository. When creating a new release
 	// branch, it is forked from the tip of this branch.

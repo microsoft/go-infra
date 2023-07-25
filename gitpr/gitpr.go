@@ -111,6 +111,30 @@ func (b SyncPRRefSet) ForkFromMainRefspec(mainBranch string) string {
 	return createRefspec(mainBranch, b.Name)
 }
 
+// MirrorRefSet calculates the set of refs that correspond to a pure mirroring
+// operation, where the set of mirrored branches is specified by a pattern.
+type MirrorRefSet struct {
+	UpstreamPattern string
+}
+
+// UpstreamMirrorLocalBranchPattern is the name of the local ref (or pattern
+// matching multiple local refs) after it has been fetched from the upstream.
+func (b MirrorRefSet) UpstreamMirrorLocalBranchPattern() string {
+	return "fetched-upstream-mirror-pattern/" + b.UpstreamPattern
+}
+
+// UpstreamMirrorFetchRefspec fetches the remote refs that match the pattern to
+// local branches.
+func (b MirrorRefSet) UpstreamMirrorFetchRefspec() string {
+	return createRefspec(b.UpstreamPattern, b.UpstreamMirrorLocalBranchPattern())
+}
+
+// UpstreamMirrorRefspec pushes the local mirroring branches to back to
+// branches with the same name as the branches they were fetched from.
+func (b MirrorRefSet) UpstreamMirrorRefspec() string {
+	return createRefspec(b.UpstreamMirrorLocalBranchPattern(), b.UpstreamPattern)
+}
+
 // Remote is a parsed version of a Git Remote. It helps determine how to send a GitHub PR.
 type Remote struct {
 	url      string
