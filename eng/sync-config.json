@@ -15,7 +15,12 @@
       "release-branch.go*"
     ],
     "MainBranch": "microsoft/main",
-    "SubmoduleTarget": "go"
+    "SubmoduleTarget": "go",
+    "Postprocess": [
+      {
+        "Type": "ReapplyPatches3WayMerge"
+      }
+    ]
   },
   {
     "Upstream": "https://github.com/docker-library/golang",

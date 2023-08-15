@@ -72,7 +72,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	rootDir, goDir := config.FullProjectRoots()
+	rootDir, submoduleDir := config.FullProjectRoots()
 	patchDir := filepath.Join(rootDir, config.PatchesDir)
 
 	since := *sinceFlag
@@ -127,7 +127,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 
 		since,
 	)
-	cmd.Dir = goDir
+	cmd.Dir = submoduleDir
 
 	if err := executil.Run(cmd); err != nil {
 		return err
@@ -137,7 +137,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 	var matcher *patch.MatchCheckRepo
 	if !*verbatim {
 		matchingStopwatch.Start()
-		matcher, err = patch.NewMatchCheckRepo(goDir, since, patchDir)
+		matcher, err = patch.NewMatchCheckRepo(submoduleDir, since, patchDir)
 		if err != nil {
 			return failSuggestVerbatim("failed to create patch checking context", err)
 		}
@@ -255,8 +255,23 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	if config.PatchedCopyDir != "" {
+		copyDir := filepath.Join(rootDir, config.PatchedCopyDir)
+		cmd := executil.Dir(
+			submoduleDir,
+			"git",
+			"checkout-index",
+			"--all",
+			"-f",
+			"--prefix="+copyDir+"/",
+		)
+		if err := executil.Run(cmd); err != nil {
+			return err
+		}
+	}
+
 	totalStopwatch.Stop()
-	log.Printf("Extracted patch files from %#q into %#q in %v\n", goDir, patchDir, totalStopwatch.ElapsedMillis())
+	log.Printf("Extracted patch files from %#q into %#q in %v\n", submoduleDir, patchDir, totalStopwatch.ElapsedMillis())
 	if matcher != nil {
 		log.Printf(
 			"Of that time, reducing spurious changes took %v. "+

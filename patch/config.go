@@ -33,6 +33,9 @@ type Config struct {
 	// StatusFileDir is a gitignored directory to put workflow-related temporary status files,
 	// relative to the config file.
 	StatusFileDir string
+	// PatchedCopyDir is a directory where a patched copy of the upstream code
+	// is copied during patch extraction.
+	PatchedCopyDir string `json:",omitempty"`
 
 	// ExtractAsAuthor makes "git-go-patch extract" set this author in the resulting patch file.
 	//

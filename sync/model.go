@@ -81,6 +81,8 @@ type ConfigEntry struct {
 	// (default), that indicates the entire Upstream repository should be merged into the Target
 	// repository.
 	SubmoduleTarget string
+	// OneMergePerUpstreamCommit
+	OneMergePerUpstreamCommit bool
 
 	// GoVersionFileContent	is empty, or the Go version that the microsoft/go build should use
 	// after the sync. Should be in the upstream format, e.g. go1.17.10 and go1.18. Sync examines
