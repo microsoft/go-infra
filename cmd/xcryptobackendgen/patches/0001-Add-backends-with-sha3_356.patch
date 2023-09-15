@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Mon, 28 Aug 2023 16:39:33 -0500
+Subject: [PATCH] Add sha3 with placeholder backend for compilation
+
+---
+ hkdf/hkdf.go                  |  2 ++
+ internal/backend/nobackend.go | 47 +++++++++++++++++++++++++++++++++++
+ sha3/hashes.go                | 19 ++++++++++++++
+ 3 files changed, 68 insertions(+)
+ create mode 100644 internal/backend/nobackend.go
+
+diff --git a/hkdf/hkdf.go b/hkdf/hkdf.go
+index dda3f143bec506..8700f761b3b6de 100644
+--- a/hkdf/hkdf.go
++++ b/hkdf/hkdf.go
+@@ -13,6 +13,7 @@ package hkdf // import "golang.org/x/crypto/hkdf"
+ import (
+ 	"crypto/hmac"
+ 	"errors"
++	"fmt"
+ 	"hash"
+ 	"io"
+ )
+@@ -88,6 +89,7 @@ func Expand(hash func() hash.Hash, pseudorandomKey, info []byte) io.Reader {
+ // New returns a Reader, from which keys can be read, using the given hash,
+ // secret, salt and context info. Salt and info can be nil.
+ func New(hash func() hash.Hash, secret, salt, info []byte) io.Reader {
++	fmt.Println("This is a not-so-subtle modification to x/crypto that you got automatically!")
+ 	prk := Extract(hash, secret, salt)
+ 	return Expand(hash, prk, info)
+ }
+diff --git a/internal/backend/nobackend.go b/internal/backend/nobackend.go
+new file mode 100644
+index 00000000000000..c0bc5b36756a20
+--- /dev/null
++++ b/internal/backend/nobackend.go
+@@ -0,0 +1,47 @@
++// Generated code. DO NOT EDIT.
++
++package backend
++
++import (
++	"crypto"
++	"crypto/cipher"
++	"hash"
++	"io"
++)
++
++const Enabled = false
++
++func NewSHA1() hash.Hash     { panic("cryptobackend: not available") }
++func NewSHA224() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA256() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA384() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA512() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA3_224() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_256() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_384() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_512() hash.Hash { panic("cryptobackend: not available") }
++
++func SHA1(p []byte) (sum [20]byte)     { panic("cryptobackend: not available") }
++func SHA224(p []byte) (sum [28]byte)   { panic("cryptobackend: not available") }
++func SHA256(p []byte) (sum [32]byte)   { panic("cryptobackend: not available") }
++func SHA384(p []byte) (sum [48]byte)   { panic("cryptobackend: not available") }
++func SHA512(p []byte) (sum [64]byte)   { panic("cryptobackend: not available") }
++func SHA3_224(p []byte) (sum [28]byte) { panic("cryptobackend: not available") }
++func SHA3_256(p []byte) (sum [32]byte) { panic("cryptobackend: not available") }
++func SHA3_384(p []byte) (sum [48]byte) { panic("cryptobackend: not available") }
++func SHA3_512(p []byte) (sum [64]byte) { panic("cryptobackend: not available") }
++
++func SupportsHash(h crypto.Hash) bool { panic("cryptobackend: not available") }
++
++func NewHMAC(h func() hash.Hash, key []byte) hash.Hash { panic("cryptobackend: not available") }
++
++func NewAESCipher(key []byte) (cipher.Block, error) { panic("cryptobackend: not available") }
++func NewGCMTLS(c cipher.Block) (cipher.AEAD, error) { panic("cryptobackend: not available") }
++
++func ExpandHKDF(h func() hash.Hash, pseudorandomKey, info []byte) (io.Reader, error) {
++	panic("cryptobackend: not available")
++}
++
++func ExtractHKDF(h func() hash.Hash, secret, salt []byte) ([]byte, error) {
++	panic("cryptobackend: not available")
++}
+diff --git a/sha3/hashes.go b/sha3/hashes.go
+index 0d8043fd2a173d..28b94b633dc67e 100644
+--- a/sha3/hashes.go
++++ b/sha3/hashes.go
+@@ -9,7 +9,10 @@ package sha3
+ // bytes.
+ 
+ import (
++	"crypto"
+ 	"hash"
++
++	"golang.org/x/crypto/internal/backend"
+ )
+ 
+ // New224 creates a new SHA3-224 hash.
+@@ -26,6 +29,14 @@ func New224() hash.Hash {
+ // Its generic security strength is 256 bits against preimage attacks,
+ // and 128 bits against collision attacks.
+ func New256() hash.Hash {
++	if backend.Enabled {
++		if backend.SupportsHash(crypto.SHA3_256) {
++			println("using backend sha3_256")
++			return backend.NewSHA3_256()
++		} else {
++			println("backend doesn't support sha3_256")
++		}
++	}
+ 	if h := new256Asm(); h != nil {
+ 		return h
+ 	}
+@@ -74,6 +85,14 @@ func Sum224(data []byte) (digest [28]byte) {
+ 
+ // Sum256 returns the SHA3-256 digest of the data.
+ func Sum256(data []byte) (digest [32]byte) {
++	if backend.Enabled {
++		if backend.SupportsHash(crypto.SHA3_256) {
++			println("using backend sha3_256")
++			return backend.SHA3_256(data)
++		} else {
++			println("backend doesn't support sha3_256")
++		}
++	}
+ 	h := New256()
+ 	h.Write(data)
+ 	h.Sum(digest[:0])

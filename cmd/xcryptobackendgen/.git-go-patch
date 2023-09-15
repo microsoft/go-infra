@@ -1,0 +1,6 @@
+{
+  "MinimumToolVersion": "v1.0.1",
+  "SubmoduleDir": "xcrypto",
+  "PatchesDir": "patches",
+  "StatusFileDir": "artifacts/go-patch"
+}
