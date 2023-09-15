@@ -1,0 +1,2 @@
+# Always use LF to simplify test output checking.
+*.go text eol=lf
