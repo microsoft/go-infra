@@ -1,4 +1,4 @@
-package fork
+package xcryptofork
 
 import (
 	"path/filepath"

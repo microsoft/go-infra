@@ -1,4 +1,4 @@
-package fork
+package xcryptofork
 
 import (
 	"errors"
@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/microsoft/go-infra/stringutil"
 	"golang.org/x/tools/go/ast/astutil"
 )
 
@@ -28,7 +29,7 @@ func commands(n ast.Node) []string {
 	ast.Inspect(n, func(n ast.Node) bool {
 		if n, ok := n.(*ast.Comment); !ok {
 			return true
-		} else if cmd, ok := strings.CutPrefix(n.Text, xCryptoBackendMapPrefix); !ok {
+		} else if cmd, ok := stringutil.CutPrefix(n.Text, xCryptoBackendMapPrefix); !ok {
 			return true
 		} else {
 			cmds = append(cmds, cmd)

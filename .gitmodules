@@ -2,5 +2,5 @@
 	path = cmd/fuzzcrypto/go-cose
 	url = https://github.com/veraison/go-cose
 [submodule "cmd/xcryptobackendgen/xcrypto"]
-	path = cmd/xcryptobackendgen/xcrypto
+	path = xcryptofork/xcrypto
 	url = https://go.googlesource.com/crypto
