@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/microsoft/go-infra/internal/fork"
+	fork "github.com/microsoft/go-infra/xcryptofork"
 )
 
 var forkRootDir = flag.String("fork", "", "Crypto fork root directory")
