@@ -1,6 +1,6 @@
 [submodule "cmd/fuzzcrypto/go-cose"]
 	path = cmd/fuzzcrypto/go-cose
 	url = https://github.com/veraison/go-cose
-[submodule "cmd/xcryptobackendgen/xcrypto"]
+[submodule "xcryptofork/xcrypto"]
 	path = xcryptofork/xcrypto
 	url = https://go.googlesource.com/crypto

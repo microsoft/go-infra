@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Thu, 28 Sep 2023 23:12:08 -0500
+Subject: [PATCH] Implement algorithms using backend proxies
+
+Implement:
+
+* hkdf
+* md4
+* pbkdf2
+* several sha3 hashes
+---
+ hkdf/hkdf.go     | 16 ++++++++++++++++
+ md4/md4.go       |  9 +++++++++
+ pbkdf2/pbkdf2.go |  9 +++++++++
+ sha3/hashes.go   | 27 +++++++++++++++++++++++++++
+ 4 files changed, 61 insertions(+)
+
+diff --git a/hkdf/hkdf.go b/hkdf/hkdf.go
+index dda3f143bec506..13180f5c71a24d 100644
+--- a/hkdf/hkdf.go
++++ b/hkdf/hkdf.go
+@@ -15,6 +15,8 @@ import (
+ 	"errors"
+ 	"hash"
+ 	"io"
++
++	"golang.org/x/crypto/internal/backend"
+ )
+ 
+ // Extract generates a pseudorandom key for use with Expand from an input secret
+@@ -24,6 +26,13 @@ import (
+ // Expand invocations and different context values. Most common scenarios,
+ // including the generation of multiple keys, should use New instead.
+ func Extract(hash func() hash.Hash, secret, salt []byte) []byte {
++	if backend.Enabled && backend.SupportsHKDF() {
++		key, err := backend.ExtractHKDF(hash, secret, salt)
++		if err != nil {
++			panic("x/crypto/hkdf: " + err.Error())
++		}
++		return key
++	}
+ 	if salt == nil {
+ 		salt = make([]byte, hash().Size())
+ 	}
+@@ -81,6 +90,13 @@ func (f *hkdf) Read(p []byte) (int, error) {
+ // random or pseudorandom cryptographically strong key. See RFC 5869, Section
+ // 3.3. Most common scenarios will want to use New instead.
+ func Expand(hash func() hash.Hash, pseudorandomKey, info []byte) io.Reader {
++	if backend.Enabled && backend.SupportsHKDF() {
++		r, err := backend.ExpandHKDF(hash, pseudorandomKey, info)
++		if err != nil {
++			panic("x/crypto/hkdf: " + err.Error())
++		}
++		return r
++	}
+ 	expander := hmac.New(hash, pseudorandomKey)
+ 	return &hkdf{expander, expander.Size(), info, 1, nil, nil}
+ }
+diff --git a/md4/md4.go b/md4/md4.go
+index 59d3480693050f..846043f0a5915d 100644
+--- a/md4/md4.go
++++ b/md4/md4.go
+@@ -12,6 +12,8 @@ package md4 // import "golang.org/x/crypto/md4"
+ import (
+ 	"crypto"
+ 	"hash"
++
++	"golang.org/x/crypto/internal/backend"
+ )
+ 
+ func init() {
+@@ -51,6 +53,9 @@ func (d *digest) Reset() {
+ 
+ // New returns a new hash.Hash computing the MD4 checksum.
+ func New() hash.Hash {
++	if backend.Enabled && backend.SupportsHash(crypto.MD4) {
++		return backend.NewMD4()
++	}
+ 	d := new(digest)
+ 	d.Reset()
+ 	return d
+@@ -87,6 +92,10 @@ func (d *digest) Write(p []byte) (nn int, err error) {
+ }
+ 
+ func (d0 *digest) Sum(in []byte) []byte {
++	if backend.Enabled && backend.SupportsHash(crypto.MD4) {
++		result := backend.MD4(in)
++		return result[:]
++	}
+ 	// Make a copy of d0, so that caller can keep writing and summing.
+ 	d := new(digest)
+ 	*d = *d0
+diff --git a/pbkdf2/pbkdf2.go b/pbkdf2/pbkdf2.go
+index 904b57e01d7a50..3d432e5c013be5 100644
+--- a/pbkdf2/pbkdf2.go
++++ b/pbkdf2/pbkdf2.go
+@@ -21,6 +21,8 @@ package pbkdf2 // import "golang.org/x/crypto/pbkdf2"
+ import (
+ 	"crypto/hmac"
+ 	"hash"
++
++	"golang.org/x/crypto/internal/backend"
+ )
+ 
+ // Key derives a key from the password, salt and iteration count, returning a
+@@ -40,6 +42,13 @@ import (
+ // Using a higher iteration count will increase the cost of an exhaustive
+ // search but will also make derivation proportionally slower.
+ func Key(password, salt []byte, iter, keyLen int, h func() hash.Hash) []byte {
++	if backend.Enabled && backend.SupportsPBKDF2() {
++		key, err := backend.PBKDF2(password, salt, iter, keyLen, h)
++		if err != nil {
++			panic("x/crypto/pbkdf2: " + err.Error())
++		}
++		return key
++	}
+ 	prf := hmac.New(h, password)
+ 	hashLen := prf.Size()
+ 	numBlocks := (keyLen + hashLen - 1) / hashLen
+diff --git a/sha3/hashes.go b/sha3/hashes.go
+index 0d8043fd2a173d..f7640244595139 100644
+--- a/sha3/hashes.go
++++ b/sha3/hashes.go
+@@ -9,13 +9,19 @@ package sha3
+ // bytes.
+ 
+ import (
++	"crypto"
+ 	"hash"
++
++	"golang.org/x/crypto/internal/backend"
+ )
+ 
+ // New224 creates a new SHA3-224 hash.
+ // Its generic security strength is 224 bits against preimage attacks,
+ // and 112 bits against collision attacks.
+ func New224() hash.Hash {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_224) {
++		return backend.NewSHA3_224()
++	}
+ 	if h := new224Asm(); h != nil {
+ 		return h
+ 	}
+@@ -26,6 +32,9 @@ func New224() hash.Hash {
+ // Its generic security strength is 256 bits against preimage attacks,
+ // and 128 bits against collision attacks.
+ func New256() hash.Hash {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_256) {
++		return backend.NewSHA3_256()
++	}
+ 	if h := new256Asm(); h != nil {
+ 		return h
+ 	}
+@@ -36,6 +45,9 @@ func New256() hash.Hash {
+ // Its generic security strength is 384 bits against preimage attacks,
+ // and 192 bits against collision attacks.
+ func New384() hash.Hash {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_384) {
++		return backend.NewSHA3_384()
++	}
+ 	if h := new384Asm(); h != nil {
+ 		return h
+ 	}
+@@ -46,6 +58,9 @@ func New384() hash.Hash {
+ // Its generic security strength is 512 bits against preimage attacks,
+ // and 256 bits against collision attacks.
+ func New512() hash.Hash {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_512) {
++		return backend.NewSHA3_512()
++	}
+ 	if h := new512Asm(); h != nil {
+ 		return h
+ 	}
+@@ -66,6 +81,9 @@ func NewLegacyKeccak512() hash.Hash { return &state{rate: 72, outputLen: 64, dsb
+ 
+ // Sum224 returns the SHA3-224 digest of the data.
+ func Sum224(data []byte) (digest [28]byte) {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_224) {
++		return backend.SHA3_224(data)
++	}
+ 	h := New224()
+ 	h.Write(data)
+ 	h.Sum(digest[:0])
+@@ -74,6 +92,9 @@ func Sum224(data []byte) (digest [28]byte) {
+ 
+ // Sum256 returns the SHA3-256 digest of the data.
+ func Sum256(data []byte) (digest [32]byte) {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_256) {
++		return backend.SHA3_256(data)
++	}
+ 	h := New256()
+ 	h.Write(data)
+ 	h.Sum(digest[:0])
+@@ -82,6 +103,9 @@ func Sum256(data []byte) (digest [32]byte) {
+ 
+ // Sum384 returns the SHA3-384 digest of the data.
+ func Sum384(data []byte) (digest [48]byte) {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_384) {
++		return backend.SHA3_384(data)
++	}
+ 	h := New384()
+ 	h.Write(data)
+ 	h.Sum(digest[:0])
+@@ -90,6 +114,9 @@ func Sum384(data []byte) (digest [48]byte) {
+ 
+ // Sum512 returns the SHA3-512 digest of the data.
+ func Sum512(data []byte) (digest [64]byte) {
++	if backend.Enabled && backend.SupportsHash(crypto.SHA3_512) {
++		return backend.SHA3_512(data)
++	}
+ 	h := New512()
+ 	h.Write(data)
+ 	h.Sum(digest[:0])
