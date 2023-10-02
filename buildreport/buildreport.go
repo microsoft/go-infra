@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
+	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
@@ -201,6 +202,12 @@ func Notify(ctx context.Context, owner string, repoName string, pat string, issu
 		switch s.Name {
 		case releaseBuildPipelineName:
 			notification = "Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.\n"
+			if goversion.New(s.Version).Patch == "0" {
+				notification += "\nThis appears to be a new major version! " +
+					"Once the release is done, check if [the download links](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/Downloads.md) " +
+					"or [the recommended Docker tags](https://github.com/microsoft/go-images#recommended-tags) " +
+					"need an update.\n"
+			}
 		case releaseImagesPipelineName:
 			notification = "Completed building all images! " +
 				"Before you [announce](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement), " +
