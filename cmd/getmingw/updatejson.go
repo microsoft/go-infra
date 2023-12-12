@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -46,7 +47,7 @@ func updateJson(p subcmd.ParseFunc) error {
 	for _, seed := range flag.Args() {
 		switch *source {
 		case Nixman:
-			version, ok := strings.CutPrefix(seed, niXmanPrefix)
+			version, ok := stringutil.CutPrefix(seed, niXmanPrefix)
 			if !ok {
 				return fmt.Errorf("seed %#q doesn't have a tag URL prefix", seed)
 			}
@@ -81,7 +82,7 @@ func updateJson(p subcmd.ParseFunc) error {
 				}
 			}
 		case Winlibs:
-			r, ok := strings.CutPrefix(seed, winlibsPrefix)
+			r, ok := stringutil.CutPrefix(seed, winlibsPrefix)
 			if !ok {
 				return fmt.Errorf("seed %#q doesn't have a tag URL prefix", seed)
 			}
