@@ -54,6 +54,86 @@
     "URL": "https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0posix-17.0.6-11.0.1-msvcrt-r3/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64msvcrt-11.0.1-r3.7z",
     "SHA512": "8be7374bd0bf20accd61143a65f5071f04fd8fd6017b10ad72b31af85cf67ef6e819794da3a5f8661dcf02a1ce33a6d92c397623718119b0f5486a865a8ee59a"
   },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-posix-dwarf-msvcrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "i686",
+    "Threading": "posix",
+    "Exception": "dwarf",
+    "Runtime": "msvcrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-posix-dwarf-msvcrt-rt_v10-rev2.7z",
+    "SHA512": "e62e506c41a57f9667295ff216c30fdeb4177d5ad288963297e7f56ae8e6ee720d2721e1c204ce271bb0be02a95653d5ef389c64d16bf2867d27523785b6d9c6"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-posix-dwarf-ucrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "i686",
+    "Threading": "posix",
+    "Exception": "dwarf",
+    "Runtime": "ucrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-posix-dwarf-ucrt-rt_v10-rev2.7z",
+    "SHA512": "777c3be422a763bf9381797ce9eb981e876cdff4277b734299245615b303c34f98c0e3fb1264fcb33b396b542ea25178111b3cc8be802ade84b0614f62c5ec7a"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-win32-dwarf-msvcrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "i686",
+    "Threading": "win32",
+    "Exception": "dwarf",
+    "Runtime": "msvcrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-win32-dwarf-msvcrt-rt_v10-rev2.7z",
+    "SHA512": "08eb37e98c57a0edaa04bb7283dc82124862b27a6f7a96aa0251acf6dc77aa9c3b487d7333bc68db75dcfd2c34ca4d3db2301bdf87bf9f8a811ddadfc5e783a9"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-win32-dwarf-ucrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "i686",
+    "Threading": "win32",
+    "Exception": "dwarf",
+    "Runtime": "ucrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/i686-12.2.0-release-win32-dwarf-ucrt-rt_v10-rev2.7z",
+    "SHA512": "8b2f905d9ae3a94260a0d4fa14c7c3c004c0a6c0efd511bdd196233db5f7cd286a445c4f90a3bf7abdbae7417a3c4cb7b3db8c839032f61af0b50ada058a0446"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-posix-seh-msvcrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "x86_64",
+    "Threading": "posix",
+    "Exception": "seh",
+    "Runtime": "msvcrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-posix-seh-msvcrt-rt_v10-rev2.7z",
+    "SHA512": "95084089e65987dcfe41a229b2899590dc35ae2a750c7633383b8f15ca21393969d594715e6ad1a62d1e9c674b76703231e008393c1ee30fdcb560ef264a1bfc"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-posix-seh-ucrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "x86_64",
+    "Threading": "posix",
+    "Exception": "seh",
+    "Runtime": "ucrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-posix-seh-ucrt-rt_v10-rev2.7z",
+    "SHA512": "dd3aab104c1bfb7c96278f0cbb47f7814e55edb7f69f91a7b625d840fa32ae490264c389cf4e077f4142e123bcdbec903c2499ba10e2e8a73b073b172e0aa10c"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-win32-seh-msvcrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "x86_64",
+    "Threading": "win32",
+    "Exception": "seh",
+    "Runtime": "msvcrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-win32-seh-msvcrt-rt_v10-rev2.7z",
+    "SHA512": "9c0362f519f9f13e782a047068370cd77ec09a5b6ca1f74c6cded92725e2f110f45df2670d835d4dec1dbd3149b1d2a571b617f76e125058a705f217071060ab"
+  },
+  "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-win32-seh-ucrt-rt_v10-rev2.7z": {
+    "Source": "nixman",
+    "Version": "12.2.0-rt_v10-rev2",
+    "Arch": "x86_64",
+    "Threading": "win32",
+    "Exception": "seh",
+    "Runtime": "ucrt",
+    "URL": "https://github.com/niXman/mingw-builds-binaries/releases/download/12.2.0-rt_v10-rev2/x86_64-12.2.0-release-win32-seh-ucrt-rt_v10-rev2.7z",
+    "SHA512": "c312d8b30d1f80cd2cac36d55812d7d8e416cb0d41b340e7c7ffbc51865759fef4b46c21640ce69f06328377431a92574a8b28b5dcf014d11e4ce15ed25d2b23"
+  },
   "https://github.com/niXman/mingw-builds-binaries/releases/download/13.2.0-rt_v11-rev0/i686-13.2.0-release-posix-dwarf-msvcrt-rt_v11-rev0.7z": {
     "Source": "nixman",
     "Version": "13.2.0-rt_v11-rev0",

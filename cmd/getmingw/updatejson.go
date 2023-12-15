@@ -47,7 +47,7 @@ func updateJson(p subcmd.ParseFunc) error {
 	for _, seed := range flag.Args() {
 		switch *source {
 		case Nixman:
-			version, ok := stringutil.CutPrefix(seed, niXmanPrefix)
+			version, ok := stringutil.CutPrefix(seed, niXmanPrefix+"tag/")
 			if !ok {
 				return fmt.Errorf("seed %#q doesn't have a tag URL prefix", seed)
 			}
@@ -73,7 +73,7 @@ func updateJson(p subcmd.ParseFunc) error {
 							}
 							b.Source = Nixman
 							b.Version = version
-							b.URL = niXmanPrefix + version +
+							b.URL = niXmanPrefix + "download/" + version +
 								"/" + b.Arch + "-" + nums + "-release-" + b.Threading + "-" + b.Exception + "-" + b.Runtime +
 								"-" + rev + ".7z"
 							newBuilds = append(newBuilds, &b)

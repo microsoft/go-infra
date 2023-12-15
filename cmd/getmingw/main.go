@@ -38,7 +38,7 @@ const (
 	Sourceforge string = "sourceforge"
 )
 
-const niXmanPrefix = "https://github.com/niXman/mingw-builds-binaries/releases/tag/"
+const niXmanPrefix = "https://github.com/niXman/mingw-builds-binaries/releases/"
 const winlibsPrefix = "https://github.com/brechtsanders/winlibs_mingw/releases/download/"
 
 var subcommands []subcmd.Option
