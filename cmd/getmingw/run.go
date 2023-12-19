@@ -34,21 +34,22 @@ func run(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if !(len(sources.Values) != 0) {
-		return fmt.Errorf("must specify at least one source")
-	}
-	if !(len(versions.Values) != 0) {
-		return fmt.Errorf("must specify at least one version")
-	}
 	if !*multi {
-		if len(sources.Values) > 1 ||
-			len(versions.Values) > 1 ||
-			len(arches.Values) > 1 ||
-			len(threadings.Values) > 1 ||
-			len(exceptions.Values) > 1 ||
-			len(runtimes.Values) > 1 ||
-			len(llvms.Values) > 1 {
-			return fmt.Errorf("multiple specified, but -multi not set")
+		for _, s := range []struct {
+			name   string
+			values *subcmd.MultiStringFlag
+		}{
+			{"source", &sources},
+			{"version", &versions},
+			{"arch", &arches},
+			{"threading", &threadings},
+			{"exception", &exceptions},
+			{"runtime", &runtimes},
+			{"llvm", &llvms},
+		} {
+			if len(s.values.Values) > 1 {
+				return fmt.Errorf("multiple %q flags specified %v, but -multi not set", s.name, s.values.Values)
+			}
 		}
 	}
 
@@ -62,15 +63,18 @@ func run(p subcmd.ParseFunc) error {
 		return fmt.Errorf("no matching MinGW found")
 	}
 	if *multi {
-		log.Printf("Using %v matches:\n", len(matches))
-		for _, b := range matches {
-			log.Printf("  %#v\n", b)
-		}
+		log.Printf("Running comamnd with each of %v matches.\n", len(matches))
 	} else {
 		if len(matches) > 1 {
 			log.Printf("Found %v matches, expected just one. Add more parameters to constrain the search, or add '-multi'. Matches:", len(matches))
+			w := newBuildTabWriter(os.Stdout)
 			for _, b := range matches {
-				log.Printf("  %#v\n", b)
+				if _, err := fmt.Fprintln(w, b.FilterTabString()); err != nil {
+					return err
+				}
+			}
+			if err := w.Flush(); err != nil {
+				return err
 			}
 			return fmt.Errorf("multiple matches found")
 		}
@@ -91,7 +95,7 @@ func run(p subcmd.ParseFunc) error {
 	}
 	wg.Wait()
 	originalPath := os.Getenv("PATH")
-	for _, b := range matches {
+	for i, b := range matches {
 		binDir, err := b.GetOrCreateCacheBinDir()
 		if err != nil {
 			return err
@@ -105,7 +109,11 @@ func run(p subcmd.ParseFunc) error {
 		if len(args) == 0 {
 			args = []string{"gcc", "--version"}
 		}
-		log.Printf("Running command with:\n  %v\n  %v", b.URL, binDir)
+		var matchNum string
+		if *multi {
+			matchNum = fmt.Sprintf(" %v/%v", i+1, len(matches))
+		}
+		log.Printf("Running command with fetched MinGW%v:\n  URL: %v\n  Config: %v\n  Bin: %v", matchNum, b.URL, b.FilterTabString(), binDir)
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Env = append(os.Environ(), "PATH="+newPath)
 		cmd.Stdout = os.Stdout

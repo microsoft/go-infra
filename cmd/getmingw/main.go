@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -114,6 +115,24 @@ func filter(builds map[string]build) []*build {
 	return result
 }
 
+func newBuildTabWriter(w io.Writer) *tabwriter.Writer {
+	tw := tabwriter.NewWriter(w, 0, 0, 1, ' ', tabwriter.DiscardEmptyColumns)
+	headerBuild := build{
+		Source:    "Source",
+		Version:   "Version",
+		Arch:      "Arch",
+		Threading: "Threading",
+		Exception: "Exception",
+		Runtime:   "Runtime",
+		LLVM:      "LLVM",
+	}
+	_, err := tw.Write([]byte(headerBuild.FilterTabString() + "\n"))
+	if err != nil {
+		panic(err)
+	}
+	return tw
+}
+
 func cacheDir() (string, error) {
 	userDir, err := os.UserHomeDir()
 	if err != nil {
@@ -135,7 +154,10 @@ type build struct {
 	// LLVM is "llvm" or "no" for WinLibs. "" for other sources.
 	LLVM string `json:",omitempty"`
 
-	URL    string
+	// URL of the download. Assumed to be unique for a specific download.
+	// Not included in filtering.
+	URL string
+	// SHA512 is the checksum of the download. Not included in filtering.
 	SHA512 string
 }
 
@@ -275,4 +297,18 @@ func (b *build) CacheKey() string {
 	u.WriteString("-")
 	u.WriteString(b.SHA512[:32])
 	return u.String()
+}
+
+// FilterTabString returns a tab-separated string of all filtered fields.
+func (b *build) FilterTabString() string {
+	return strings.Join([]string{
+		b.Source,
+		b.Version,
+		b.Arch,
+		b.Threading,
+		b.Exception,
+		b.Runtime,
+		b.LLVM,
+		"",
+	}, "\t")
 }

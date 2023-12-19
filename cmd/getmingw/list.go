@@ -6,8 +6,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"strings"
+	"text/tabwriter"
 	"text/template"
 
 	"github.com/microsoft/go-infra/subcmd"
@@ -45,6 +48,13 @@ func list(p subcmd.ParseFunc) error {
 	}
 	builds := filter(existingBuilds)
 
+	var w io.Writer
+	if tmpl == nil {
+		w = newBuildTabWriter(os.Stdout)
+	} else {
+		w = os.Stdout
+	}
+
 	var printed map[string]struct{}
 	if *unique {
 		printed = make(map[string]struct{})
@@ -56,7 +66,7 @@ func list(p subcmd.ParseFunc) error {
 				return err
 			}
 		} else {
-			fmt.Fprintf(&line, "%#v", b)
+			line.WriteString(b.FilterTabString())
 		}
 		if *unique {
 			if _, ok := printed[line.String()]; ok {
@@ -64,7 +74,12 @@ func list(p subcmd.ParseFunc) error {
 			}
 			printed[line.String()] = struct{}{}
 		}
-		fmt.Println(line.String())
+		fmt.Fprintln(w, line.String())
+	}
+	if tw, ok := w.(*tabwriter.Writer); ok {
+		if err := tw.Flush(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
