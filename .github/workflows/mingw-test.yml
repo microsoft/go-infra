@@ -1,0 +1,53 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# This job tests that getmingw can set up MinGW and adjust PATH to use it by
+# default, and that it works in both win2019 and win2022.
+
+name: GetMinGW-Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# This is testing a problem originally found in this action, so some parts are
+# based on what it does:
+# https://github.com/containerd/containerd/blob/a8a22c9e825c76fded5c6f767a8633ccc2dc115b/.github/workflows/ci.yml#L214-L217
+jobs:
+  mingw-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-2019, windows-2022 ]
+        go-version: [ 1.20.x, 1.21.x ]
+        mingw-version:
+          - '-source nixman -version 13.2.0-rt_v11-rev0 -arch x86_64 -threading posix -exception seh -runtime msvcrt'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false # see https://github.com/actions/setup-go/issues/368
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Run getmingw diag
+        run: go run ./cmd/getmingw diagnose
+
+      # Check: does this hit 0xc0000139?
+      - name: Run with -race, built in MinGW
+        run: |
+          go run -race ./cmd/getmingw diagnose || echo "Failed"
+          exit 0
+
+      - name: Set up MinGW
+        run: go run ./cmd/getmingw run ${{ matrix.mingw-version }} -ci github-actions-env
+
+      - name: Run getmingw diag
+        run: go run ./cmd/getmingw diagnose
+
+      - name: Run with race detector
+        run: go run -race ./cmd/getmingw diagnose

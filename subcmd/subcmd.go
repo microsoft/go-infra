@@ -92,3 +92,17 @@ func Run(cmdBaseDoc, description string, options []Option) error {
 	printMainUsage()
 	return fmt.Errorf("error: not a valid option: %v", os.Args[1])
 }
+
+// MultiStringFlag is a flag that can be specified multiple times. Use with flag.Var.
+type MultiStringFlag struct {
+	Values []string
+}
+
+func (f *MultiStringFlag) String() string {
+	return ""
+}
+
+func (f *MultiStringFlag) Set(value string) error {
+	f.Values = append(f.Values, value)
+	return nil
+}
