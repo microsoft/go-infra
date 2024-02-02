@@ -194,32 +194,7 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 
 // Notify determines if a notification is necessary for the given status update and sends it.
 func Notify(ctx context.Context, owner string, repoName string, pat string, issue int, s State) error {
-	var notification string
-	switch s.Status {
-	case SymbolFailed:
-		notification = "Build failed!\n"
-	case SymbolSucceeded:
-		switch s.Name {
-		case releaseBuildPipelineName:
-			notification = "Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.\n"
-			if goversion.New(s.Version).Patch == "0" {
-				notification += "\nThis appears to be a new major version! " +
-					"Once the release is done, check if [the download links](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/Downloads.md) " +
-					"or [the recommended Docker tags](https://github.com/microsoft/go-images#recommended-tags) " +
-					"need an update.\n"
-			}
-		case releaseImagesPipelineName:
-			notification = "Completed building all images! " +
-				"Before you [announce](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement), " +
-				"confirm the MAR/MCR images are updated using commands like these:\n\n" +
-				"```\n" +
-				"image=mcr.microsoft.com/oss/go/microsoft/golang:1-bullseye\n" +
-				"docker pull $image\n" +
-				"docker run -it --rm $image go version\n" +
-				"```\n"
-		}
-	}
-
+	notification := s.notificationPreamble()
 	if notification == "" {
 		return nil
 	}
@@ -287,6 +262,35 @@ func (s *State) updateFrom(source State) {
 	if !source.StartTime.IsZero() {
 		s.StartTime = source.StartTime
 	}
+}
+
+func (s *State) notificationPreamble() string {
+	switch s.Status {
+	case SymbolFailed:
+		return "Build failed!\n"
+	case SymbolSucceeded:
+		switch s.Name {
+		case releaseBuildPipelineName:
+			notification := "Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.\n"
+			if goversion.New(s.Version).Patch == "0" {
+				notification += "\nThis appears to be a new major version! If so, here are a few things that will need an update when the release is done:\n" +
+					"* [ ] The [microsoft/go download links](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/Downloads.md)\n" +
+					"* [ ] The [internal site's download links](https://eng.ms/docs/more/languages-at-microsoft/go/articles/overview#go-releases)\n" +
+					"* [ ] The [recommended Docker tags](https://github.com/microsoft/go-images#recommended-tags)\n"
+			}
+			return notification
+		case releaseImagesPipelineName:
+			return "Completed building all images! " +
+				"Before you [announce](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement), " +
+				"confirm the MAR/MCR images are updated using commands like these:\n\n" +
+				"```\n" +
+				"image=mcr.microsoft.com/oss/go/microsoft/golang:1-bullseye\n" +
+				"docker pull $image\n" +
+				"docker run -it --rm $image go version\n" +
+				"```\n"
+		}
+	}
+	return ""
 }
 
 type commentBody struct {

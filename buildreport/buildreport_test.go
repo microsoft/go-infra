@@ -138,3 +138,32 @@ func Test_commentBody_body_UpdateExisting(t *testing.T) {
 	}
 	goldentest.Check(t, "go test ./buildreport -run "+t.Name(), filepath.Join("testdata", "report", "update-existing.golden.md"), got)
 }
+
+func Test_State_notificationPreamble(t *testing.T) {
+	tests := []struct {
+		name         string
+		pipelineName string
+		version      string
+		status       string
+	}{
+		{"not-started", releaseBuildPipelineName, "1.21.1-1", SymbolNotStarted},
+		{"go-new-branch", releaseBuildPipelineName, "1.21.0-1", SymbolSucceeded},
+		{"go-servicing", releaseBuildPipelineName, "1.21.3-1", SymbolSucceeded},
+		{"images", releaseImagesPipelineName, "1.21.1-1", SymbolSucceeded},
+		{"failed", releaseBuildPipelineName, "1.21.1-1", SymbolFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &State{
+				Name:    tt.pipelineName,
+				Version: tt.version,
+				Status:  tt.status,
+			}
+			goldentest.Check(
+				t,
+				"go test ./buildreport -run "+t.Name(),
+				filepath.Join("testdata", "report", "notify."+tt.name+".golden.md"),
+				s.notificationPreamble())
+		})
+	}
+}
