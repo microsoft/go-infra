@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential"
 )
@@ -68,7 +67,7 @@ func (c *Client) newRequest(ctx context.Context, method string, url string, body
 	if err != nil {
 		return nil, err
 	}
-	url = path.Join(c.apiUrlTarget(), url)
+	url = c.apiUrlTarget() + "/" + url
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
