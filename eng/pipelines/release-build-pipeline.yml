@@ -258,7 +258,7 @@ jobs:
                   -tenant='$(AkaMSTenant)' \
                   -createdBy='$(AkaMSCreatedBy)' \
                   -groupOwner='$(AkaMSGroupOwner)' \
-                  -akaMSOwners='$(AkaMSOwners)'
+                  -owners='$(AkaMSOwners)'
               displayName: 🎓 Update aka.ms links
 
           - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
