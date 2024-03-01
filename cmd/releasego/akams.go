@@ -36,6 +36,30 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 		&latestShortLinkPrefix,
 		"prefix", "golang/release/dev/latest/",
 		"The shortened URL prefix to use, including '/'. The default value includes 'dev' and is not intended for production use.")
+	flag.StringVar(
+		&akaMSClientID,
+		"clientID", "",
+		"The client ID to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSClientSecret,
+		"clientSecret", "",
+		"The client secret to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSTenant,
+		"tenant", "",
+		"The tenant to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSCreatedBy,
+		"createdBy", "",
+		"The user to use as the creator of the AKA.MS links.")
+	flag.StringVar(
+		&akaMSGroupOwner,
+		"groupOwner", "",
+		"The group owner to use for the AKA.MS links.")
+	flag.StringVar(
+		&akaMSOwners,
+		"owners", "",
+		"The owners to use for the AKA.MS links.")
 
 	if err := p(); err != nil {
 		return err

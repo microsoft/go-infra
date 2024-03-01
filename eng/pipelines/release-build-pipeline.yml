@@ -250,17 +250,15 @@ jobs:
 
           - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
             - script: |
-                # Pass owners through environment. (Contains semicolons.)
-                export AkaMSOwners="$(AkaMSOwners)"
-
                 releasego akams \
                   -build-asset-json '$(buildAssetJsonFile)' \
                   -prefix '$(VanityUrlPrefix)' \
-                  /p:AkaMSClientId='$(akams-client-id)' \
-                  /p:AkaMSClientSecret='$(akams-client-secret)' \
-                  /p:AkaMSTenant='$(AkaMSTenant)' \
-                  /p:AkaMSCreatedBy='$(AkaMSCreatedBy)' \
-                  /p:AkaMSGroupOwner='$(AkaMSGroupOwner)'
+                  -clientID='$(akams-client-id)' \
+                  -clientSecret='$(akams-client-secret)' \
+                  -tenant='$(AkaMSTenant)' \
+                  -createdBy='$(AkaMSCreatedBy)' \
+                  -groupOwner='$(AkaMSGroupOwner)' \
+                  -akaMSOwners='$(AkaMSOwners)'
               displayName: 🎓 Update aka.ms links
 
           - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
