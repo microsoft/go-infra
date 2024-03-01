@@ -66,6 +66,10 @@ To fix this, follow the process to make changes to a patch file. While running `
 1. If there are more conflicts, go back to step 2.
 1. Run `git go-patch extract` to save the fixes to your repository's patch files.
 
+When creating a commit with the fixed patch files, make sure not to include the submodule change.
+`git go-patch apply` creates temporary local commits inside the submodule with unique commit hashes.
+References to these hashes won't work in other clones of the repository, causing submodule initialization errors.
+
 If you have many patch files authored by different developers and it isn't reasonable for one person to resolve all the conflicts, you can fix a few patches and run `git go-patch extract` to save all the fixes completed so far.
 Be careful when staging your WIP patch files in the outer repo, because `extract` doesn't fully understand this situation and will delete the patches that haven't been fixed up yet.
 The next dev to work on resolution can then check out the WIP branch and run `git go-patch apply` to pick up where the last dev left it.

@@ -79,6 +79,12 @@ func LogCmdSetVariable(name, value string) {
 	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
 }
 
+// LogCmdPrependPath uses an AzDO logging command to prepend a path to future steps' PATH env vars.
+// https://learn.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#prependpath-prepend-a-path-to-the--path-environment-variable
+func LogCmdPrependPath(path string) {
+	fmt.Printf("##vso[task.prependpath]%v\n", path)
+}
+
 // LogCmdUploadSummary uses an AzDO logging command to upload a summary file. The file is shown on
 // the build page in an "Extensions" tab. If it is a Markdown file, it is rendered with a subset of
 // Markdown features. The path must be a full path.

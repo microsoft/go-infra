@@ -59,3 +59,43 @@ func Test_createLinkPairs(t *testing.T) {
 		}
 	}
 }
+
+func Test_makeFloatingFilename(t *testing.T) {
+	type args struct {
+		filename     string
+		buildNumber  string
+		floatVersion string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    string
+		wantErr bool
+	}{
+		// Actual 1.21.0 names.
+		{"1.21", args{"go.20230808.6.linux-amd64.tar.gz", "20230808.6", "1.21"}, "go1.21.linux-amd64.tar.gz", false},
+		{"1.21 windows", args{"go.20230808.6.windows-amd64.zip", "20230808.6", "1.21"}, "go1.21.windows-amd64.zip", false},
+		{"1.21 src", args{"go.20230808.6.src.tar.gz", "20230808.6", "1.21"}, "go1.21.src.tar.gz", false},
+		{"1.21 assets", args{"assets.json", "20230808.6", "1.21"}, "go1.21.assets.json", false},
+
+		// The naming change in 1.22 means we need to handle cases like these.
+		{"1.22", args{"go1.22.0-1234.5.linux-amd64.tar.gz", "1234.5", "1.22"}, "go1.22.linux-amd64.tar.gz", false},
+		{"1.22 windows", args{"go1.22.0-1234.5.windows-amd64.zip", "1234.5", "1.22"}, "go1.22.windows-amd64.zip", false},
+
+		// Make sure names that don't fit the requirements are rejected.
+		{"missing build number", args{"go1.22.0-.linux-amd64.tar.gz", "1234.5", "1.22.0"}, "", true},
+		{"dev build", args{"go1.22-abc1234567-dev.linux-amd64.tar.gz", "1234.5", "1.22.0"}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := makeFloatingFilename(tt.args.filename, tt.args.buildNumber, tt.args.floatVersion)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("makeFloatingFilename() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("makeFloatingFilename() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

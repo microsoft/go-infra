@@ -136,10 +136,6 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 				return nil, fmt.Errorf("unable to determine short link for %#q: not enough '/' segments to be an asset URL", u)
 			}
 			filename := urlParts[len(urlParts)-1]
-			// Make our aka.ms links more like official Go links: remove '.' between first parts.
-			if strings.HasPrefix(filename, "go.") {
-				filename = "go" + strings.TrimPrefix(filename, "go.")
-			}
 			f, err := makeFloatingFilename(filename, buildNumber, p)
 			if err != nil {
 				return nil, fmt.Errorf("unable to process URL %#q: %w", u, err)
@@ -156,14 +152,13 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 }
 
 func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, error) {
-	// The assets.json file has no version number in it, so we need to add one.
+	// The assets.json filename has no version number in it, so we need to add one.
 	if filename == "assets.json" {
 		return "go" + floatVersion + "." + filename, nil
 	}
-	f := strings.ReplaceAll(filename, buildNumber, floatVersion)
-	// Make sure something was actually replaced.
-	if f == filename {
-		return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
+	// The build number and all information before it is version-related and needs to be replaced.
+	if _, after, ok := strings.Cut(filename, buildNumber); ok {
+		return "go" + floatVersion + after, nil
 	}
-	return f, nil
+	return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
 }

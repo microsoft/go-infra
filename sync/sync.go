@@ -306,6 +306,14 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		}
 		branches = append(branches, nb)
 	}
+	// Auto-mirrored branches are simpler: always get the latest commits to
+	// push to the mirror repo with the same branch name.
+	autoMirrorBranches := make([]*gitpr.MirrorRefSet, 0, len(entry.AutoMirrorBranches))
+	for _, upstreamPattern := range entry.AutoMirrorBranches {
+		autoMirrorBranches = append(autoMirrorBranches, &gitpr.MirrorRefSet{
+			UpstreamPattern: upstreamPattern,
+		})
+	}
 
 	if *f.CreateBranches {
 		if entry.MainBranch == "" {
@@ -367,6 +375,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
 	}
+	for _, b := range autoMirrorBranches {
+		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamMirrorFetchRefspec())
+	}
 	if err := run(fetchUpstream); err != nil {
 		return nil, err
 	}
@@ -391,6 +402,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	if entry.MirrorTarget != "" {
 		mirror := newGitCmd("push", auther.InsertAuth(entry.MirrorTarget))
 		for _, b := range branches {
+			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
+		}
+		for _, b := range autoMirrorBranches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
 		if *f.DryRun {
