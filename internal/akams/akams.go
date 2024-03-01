@@ -18,8 +18,8 @@ const (
 )
 
 type Client struct {
-	tentant string
-	client  confidential.Client
+	tenant string
+	client confidential.Client
 }
 
 func NewClient(id, secret, tenant string) (*Client, error) {
@@ -27,11 +27,11 @@ func NewClient(id, secret, tenant string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := confidential.New(authority, id, cred, nil)
+	client, err := confidential.New(authority, id, cred)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{tentant: tenant, client: client}, nil
+	return &Client{tenant: tenant, client: client}, nil
 }
 
 func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
@@ -79,5 +79,5 @@ func (c *Client) newRequest(ctx context.Context, method string, url string, body
 }
 
 func (c *Client) apiUrlTarget() string {
-	return apiBaseUrl + "/1/" + c.tentant
+	return apiBaseUrl + "/1/" + c.tenant
 }
