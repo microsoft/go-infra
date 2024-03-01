@@ -71,7 +71,6 @@ jobs:
       releaseVersion: ${{ parameters.releaseVersion }}
       releaseIssue: ${{ parameters.releaseIssue }}
       retryInstructionsFlags: '-checkboxes'
-      useDotNet: ${{ parameters.runAkaMSUpdate }}
       variables:
         # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
         # overridden with a logging command as the pipeline moves on.

@@ -4,17 +4,14 @@
 package main
 
 import (
-	"encoding/xml"
+	"context"
 	"flag"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
-	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/internal/akams"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -24,24 +21,11 @@ func init() {
 		Name:    "akams",
 		Summary: "Create aka.ms links based on a given build asset JSON file.",
 		Description: `
-
-This command uses an MSBuild task supplied by .NET Arcade to carry out the communication with aka.ms
-services. Therefore, it must be executed within the go-infra repository, where it can use the eng
-directory that sets up the Arcade task. The .NET SDK must also be installed on the machine, and
-'dotnet' on PATH.
-
 Example:
 
   go run ./cmd/releasego akams -build-asset-json /downloads/assets.json -version 1.17.8-1
-
-All non-flag args are passed through to the MSBuild project. Use this to configure the link
-ownership information and to add authentication. Keep in mind that because this command uses the
-standard flag library, all flag args must be passed before the first non-flag arg.
-
-See UpdateAkaMSLinks.csproj for information about the MSBuild properties that must be set.
 `,
-		TakeArgsReason: "More args to pass through to the MSBuild project.",
-		Handle:         handleAKAMS,
+		Handle: handleAKAMS,
 	})
 }
 
@@ -68,18 +52,18 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 	return nil
 }
 
-var latestShortLinkPrefix string
+var (
+	latestShortLinkPrefix string
+	akaMSClientID         string
+	akaMSClientSecret     string
+	akaMSTenant           string
+	akaMSCreatedBy        string
+	akaMSGroupOwner       string
+	akaMSOwners           string
+)
 
 func createAkaMSLinks(assetFilePath string) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	akaMSDir := filepath.Join(wd, "eng", "artifacts", "akams")
-	if err := os.MkdirAll(akaMSDir, os.ModeDir|os.ModePerm); err != nil {
-		return err
-	}
+	ctx := context.Background()
 
 	var b buildassets.BuildAssets
 	if err := stringutil.ReadJSONFile(assetFilePath, &b); err != nil {
@@ -91,35 +75,28 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	content, err := propsFileContent(linkPairs)
+	links := make([]akams.Link, len(linkPairs))
+	for i, l := range linkPairs {
+		links[i] = akams.Link{
+			ShortURL:   l.Short,
+			TargetURL:  l.Target,
+			CreatedBy:  akaMSCreatedBy,
+			Owners:     akaMSOwners,
+			GroupOwner: akaMSGroupOwner,
+			IsVanity:   true,
+		}
+	}
+
+	client, err := akams.NewClient(akaMSClientID, akaMSClientSecret, akaMSTenant)
 	if err != nil {
 		return err
 	}
-
-	projectPath := filepath.Join(wd, "eng", "publishing", "UpdateAkaMSLinks", "UpdateAkaMSLinks.csproj")
-	propsPath := filepath.Join(akaMSDir, "AkaMSLinks.props")
-	if err := os.WriteFile(propsPath, []byte(content), 0666); err != nil {
-		return err
-	}
-
-	log.Printf("---- File content for generated file %v\n%v\n", propsPath, content)
-
-	cmd := exec.Command(
-		"dotnet", "build", projectPath,
-		fmt.Sprintf("/p:LinkItemPropsFile=\"%v\"", propsPath))
-	// Pass any additional args through. Likely /p:Key=Value and /bl:Something.binlog
-	cmd.Args = append(cmd.Args, flag.Args()...)
-	return executil.Run(cmd)
+	return client.CreateBulk(ctx, links)
 }
 
 type akaMSLinkPair struct {
-	Short  string `xml:"Include,attr"`
-	Target string `xml:"TargetUrl,attr"`
-}
-
-type akaMSPropsFile struct {
-	XMLName   xml.Name        `xml:"Project"`
-	ItemGroup []akaMSLinkPair `xml:">AkaMSLink"`
+	Short  string
+	Target string
 }
 
 func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
@@ -189,12 +166,4 @@ func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, e
 		return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
 	}
 	return f, nil
-}
-
-func propsFileContent(pairs []akaMSLinkPair) (string, error) {
-	x, err := xml.MarshalIndent(akaMSPropsFile{ItemGroup: pairs}, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(x) + "\n", nil
 }
