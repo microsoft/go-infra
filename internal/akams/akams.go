@@ -58,7 +58,7 @@ func NewClientCustom(apiBaseURL string, host Host, tenant string, httpClient *ht
 	return &Client{baseURL: baseURL, httpClient: httpClient}, nil
 }
 
-func (c *Client) Get(shortURL string) (bool, error) {
+func (c *Client) exists(shortURL string) (bool, error) {
 	req, err := c.newRequest(context.Background(), http.MethodGet, shortURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request: %v", err)
@@ -107,34 +107,42 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 		return err
 	}
 
+	toCreate := make([]CreateLinkRequest, 0, len(links))
 	toUpdate := make([]UpdateLinkRequest, 0, len(links))
 	for _, l := range links {
-		exists, err := c.Get(l.ShortURL)
+		exists, err := c.exists(l.ShortURL)
 		if err != nil {
 			return err
 		}
-		if exists {
-			// Link already exists.
-			continue
+		if !exists {
+			toCreate = append(toCreate, l)
+		} else {
+			toUpdate = append(toUpdate, UpdateLinkRequest{
+				ShortURL:       l.ShortURL,
+				TargetURL:      l.TargetURL,
+				MobileURL:      l.MobileURL,
+				IsAllowParam:   l.IsAllowParam,
+				IsTrackParam:   l.IsTrackParam,
+				Description:    l.Description,
+				GroupOwner:     l.GroupOwner,
+				LastModifiedBy: l.LastModifiedBy,
+				Owners:         l.Owners,
+				Category:       l.Category,
+				IsActive:       l.IsActive,
+			})
 		}
-		toUpdate = append(toUpdate, UpdateLinkRequest{
-			ShortURL:       l.ShortURL,
-			TargetURL:      l.TargetURL,
-			IsAllowParam:   l.IsAllowParam,
-			IsTrackParam:   l.IsTrackParam,
-			Description:    l.Description,
-			GroupOwner:     l.GroupOwner,
-			LastModifiedBy: l.LastModifiedBy,
-			Owners:         l.Owners,
-			Category:       l.Category,
-			IsActive:       l.IsActive,
-		})
 	}
-	if len(toUpdate) == 0 {
-		// No links to update.
-		return err
+	if len(toUpdate) != 0 {
+		if err := c.UpdateBulk(ctx, toUpdate); err != nil {
+			return err
+		}
 	}
-	return c.UpdateBulk(ctx, toUpdate)
+	if len(toCreate) != 0 {
+		if err := c.CreateBulk(ctx, toCreate); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // UpdateBulk updates multiple links in bulk.

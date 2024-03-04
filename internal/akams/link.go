@@ -3,7 +3,7 @@ package akams
 type CreateLinkRequest struct {
 	ShortURL                    string `json:"shortUrl,omitempty"`
 	TargetURL                   string `json:"targetUrl"`
-	MobileUrl                   string `json:"mobileUrl,omitempty"`
+	MobileURL                   string `json:"mobileUrl,omitempty"`
 	CreatedBy                   string `json:"createdBy"`
 	LastModifiedBy              string `json:"lastModifiedBy"`
 	IsVanity                    bool   `json:"isVanity,omitempty"`
@@ -21,7 +21,7 @@ type CreateLinkRequest struct {
 type UpdateLinkRequest struct {
 	ShortURL       string `json:"shortUrl,omitempty"`
 	TargetURL      string `json:"targetUrl"`
-	MobileUrl      string `json:"mobileUrl,omitempty"`
+	MobileURL      string `json:"mobileUrl,omitempty"`
 	IsAllowParam   bool   `json:"isAllowParam,omitempty"`
 	IsTrackParam   bool   `json:"isTrackParam,omitempty"`
 	Description    string `json:"description,omitempty"`
