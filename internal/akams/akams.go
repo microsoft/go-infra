@@ -46,6 +46,7 @@ func NewClient(tenant string, httpClient *http.Client) (*Client, error) {
 	return NewClientCustom(apiProdBaseUrl, HostAkaMs, tenant, httpClient)
 }
 
+// NewClientCustom creates a new [Client] with a custom API base URL and host.
 func NewClientCustom(apiBaseURL string, host Host, tenant string, httpClient *http.Client) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{}
@@ -96,6 +97,10 @@ func (c *Client) CreateBulk(ctx context.Context, links []CreateLinkRequest) erro
 	return nil
 }
 
+// CreateOrUpdateBulk creates or updates multiple links in bulk.
+// If a link already exists, it will be updated.
+// If a link does not exist, it will be created.
+// If any link fails to be created or updated, the function will return an error.
 func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkRequest) error {
 	err := c.CreateBulk(ctx, links)
 	if err == nil {
@@ -132,13 +137,13 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 			})
 		}
 	}
-	if len(toUpdate) != 0 {
-		if err := c.UpdateBulk(ctx, toUpdate); err != nil {
+	if len(toCreate) != 0 {
+		if err := c.CreateBulk(ctx, toCreate); err != nil {
 			return err
 		}
 	}
-	if len(toCreate) != 0 {
-		if err := c.CreateBulk(ctx, toCreate); err != nil {
+	if len(toUpdate) != 0 {
+		if err := c.UpdateBulk(ctx, toUpdate); err != nil {
 			return err
 		}
 	}
