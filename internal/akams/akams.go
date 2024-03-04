@@ -16,11 +16,13 @@ const (
 	authority  = "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/oauth2/authorize"
 )
 
+// Client is a client for the aka.ms API.
 type Client struct {
 	baseURL string
 	client  confidential.Client
 }
 
+// NewClient creates a new [Client].
 func NewClient(id, secret, tenant string) (*Client, error) {
 	cred, err := confidential.NewCredFromSecret(secret)
 	if err != nil {
@@ -34,6 +36,7 @@ func NewClient(id, secret, tenant string) (*Client, error) {
 	return &Client{baseURL: baseURL, client: client}, nil
 }
 
+// CreateBulk creates multiple links in bulk.
 func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
 	// Bulk limitation is 50_000 bytes in body, max items is 300.
 	// Limit the max size to 100 which is typically ~70% of the overall allowable size.

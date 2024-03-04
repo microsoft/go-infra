@@ -1,5 +1,6 @@
 package akams
 
+// Link is a link in the aka.ms service.
 type Link struct {
 	ShortURL                    string `json:"shortUrl,omitempty"`
 	TargetURL                   string `json:"targetUrl"`
