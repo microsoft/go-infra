@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/confidential"
