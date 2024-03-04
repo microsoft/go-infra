@@ -52,7 +52,7 @@ func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
 			return fmt.Errorf("request failed: %v", err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 	}
