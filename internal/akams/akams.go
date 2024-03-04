@@ -54,10 +54,12 @@ func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
 		if err != nil {
 			return fmt.Errorf("request failed: %v", err)
 		}
-		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("request failed: %d\n%s", resp.StatusCode, string(body))
 		}
+		resp.Body.Close()
 	}
 	return nil
 }
