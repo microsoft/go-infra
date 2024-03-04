@@ -102,12 +102,14 @@ func createAkaMSLinks(assetFilePath string) error {
 	links := make([]akams.Link, len(linkPairs))
 	for i, l := range linkPairs {
 		links[i] = akams.Link{
-			ShortURL:   l.Short,
-			TargetURL:  l.Target,
-			CreatedBy:  akaMSCreatedBy,
-			Owners:     akaMSOwners,
-			GroupOwner: akaMSGroupOwner,
-			IsVanity:   true,
+			ShortURL:       l.Short,
+			TargetURL:      l.Target,
+			CreatedBy:      akaMSCreatedBy,
+			LastModifiedBy: akaMSCreatedBy,
+			Owners:         akaMSOwners,
+			GroupOwner:     akaMSGroupOwner,
+			IsVanity:       true,
+			IsAllowParam:   true,
 		}
 	}
 
