@@ -8,10 +8,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/internal/akams"
+	"github.com/microsoft/go-infra/internal/msal"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -113,11 +115,30 @@ func createAkaMSLinks(assetFilePath string) error {
 		}
 	}
 
-	client, err := akams.NewClient(akaMSClientID, akaMSClientSecret, akaMSTenant)
+	transport, err := msal.NewConfidentialTransport(msal.MicrosoftAuthority, akaMSClientID, akaMSClientSecret)
+	if err != nil {
+		return fmt.Errorf("failed to create MSAL transport: %v", err)
+	}
+	transport.Scopes = []string{akams.Scope + "/.default"}
+	httpClient := &http.Client{Transport: transport}
+	client, err := akams.NewClient(akaMSTenant, httpClient)
 	if err != nil {
 		return fmt.Errorf("failed to create bulk links: %v", err)
 	}
-	return client.CreateBulk(ctx, links)
+
+	// Bulk limitation is 50_000 bytes in body, max items is 300.
+	// Limit the max size to 100 which is typically ~70% of the overall allowable size.
+	const bulkSize = 100
+	for i := 0; i < len(links); i += bulkSize {
+		end := i + bulkSize
+		if end > len(links) {
+			end = len(links)
+		}
+		if err := client.CreateBulk(ctx, links[i:end]); err != nil {
+			return fmt.Errorf("failed to create bulk links[%d:%d]: %v", i, end, err)
+		}
+	}
+	return nil
 }
 
 type akaMSLinkPair struct {
