@@ -39,7 +39,7 @@ func TestNewClientCustom(t *testing.T) {
 }
 
 func TestCreateBulk(t *testing.T) {
-	links := []akams.Link{
+	links := []akams.CreateLinkRequest{
 		{ShortURL: "short", TargetURL: "target"},
 		{ShortURL: "short2", TargetURL: "target2"},
 	}
@@ -52,7 +52,7 @@ func TestCreateBulk(t *testing.T) {
 		if want := fmt.Sprintf("/aka/%s/%s/bulk", host, tentant); r.URL.Path != want {
 			t.Errorf("expected path %s, got %s", want, r.URL.Path)
 		}
-		var got []akams.Link
+		var got []akams.CreateLinkRequest
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
@@ -78,7 +78,7 @@ func TestCreateBulkFail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = client.CreateBulk(context.Background(), []akams.Link{})
+	err = client.CreateBulk(context.Background(), []akams.CreateLinkRequest{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

@@ -101,9 +101,9 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	links := make([]akams.Link, len(linkPairs))
+	links := make([]akams.CreateLinkRequest, len(linkPairs))
 	for i, l := range linkPairs {
-		links[i] = akams.Link{
+		links[i] = akams.CreateLinkRequest{
 			ShortURL:       l.Short,
 			TargetURL:      l.Target,
 			CreatedBy:      akaMSCreatedBy,
@@ -133,7 +133,7 @@ func createAkaMSLinks(assetFilePath string) error {
 		if end > len(links) {
 			end = len(links)
 		}
-		if err := client.CreateBulk(ctx, links[i:end]); err != nil {
+		if err := client.CreateOrUpdateBulk(ctx, links[i:end]); err != nil {
 			return fmt.Errorf("failed to create aka.ms bulk links[%d:%d]: %v", i, end, err)
 		}
 	}
