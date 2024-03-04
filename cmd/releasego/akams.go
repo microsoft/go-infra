@@ -120,10 +120,9 @@ func createAkaMSLinks(assetFilePath string) error {
 		return fmt.Errorf("failed to create MSAL transport: %v", err)
 	}
 	transport.Scopes = []string{akams.Scope + "/.default"}
-	httpClient := &http.Client{Transport: transport}
-	client, err := akams.NewClient(akaMSTenant, httpClient)
+	client, err := akams.NewClient(akaMSTenant, &http.Client{Transport: transport})
 	if err != nil {
-		return fmt.Errorf("failed to create bulk links: %v", err)
+		return fmt.Errorf("failed to create aka.ms client: %v", err)
 	}
 
 	// Bulk limitation is 50_000 bytes in body, max items is 300.
@@ -135,7 +134,7 @@ func createAkaMSLinks(assetFilePath string) error {
 			end = len(links)
 		}
 		if err := client.CreateBulk(ctx, links[i:end]); err != nil {
-			return fmt.Errorf("failed to create bulk links[%d:%d]: %v", i, end, err)
+			return fmt.Errorf("failed to create aka.ms bulk links[%d:%d]: %v", i, end, err)
 		}
 	}
 	return nil
