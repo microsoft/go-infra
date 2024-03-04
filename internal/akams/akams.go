@@ -17,8 +17,8 @@ const (
 )
 
 type Client struct {
-	tenant string
-	client confidential.Client
+	baseURL string
+	client  confidential.Client
 }
 
 func NewClient(id, secret, tenant string) (*Client, error) {
@@ -30,7 +30,8 @@ func NewClient(id, secret, tenant string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{tenant: tenant, client: client}, nil
+	baseURL := apiBaseUrl + "/1/" + tenant
+	return &Client{baseURL: baseURL, client: client}, nil
 }
 
 func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
@@ -44,15 +45,15 @@ func (c *Client) CreateBulk(ctx context.Context, links []Link) error {
 		}
 		req, err := c.newRequest(ctx, "POST", "/bulk", links[i:end])
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to create request: %v", err)
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			return err
+			return fmt.Errorf("request failed: %v", err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-			return fmt.Errorf("failed to create bulk links: %s", resp.Status)
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 		}
 	}
 	return nil
@@ -67,7 +68,7 @@ func (c *Client) newRequest(ctx context.Context, method string, url string, body
 	if err != nil {
 		return nil, err
 	}
-	url = c.apiUrlTarget() + url
+	url = c.baseURL + url
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -75,8 +76,4 @@ func (c *Client) newRequest(ctx context.Context, method string, url string, body
 	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
-}
-
-func (c *Client) apiUrlTarget() string {
-	return apiBaseUrl + "/1/" + c.tenant
 }

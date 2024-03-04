@@ -113,7 +113,7 @@ func createAkaMSLinks(assetFilePath string) error {
 
 	client, err := akams.NewClient(akaMSClientID, akaMSClientSecret, akaMSTenant)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create bulk links: %v", err)
 	}
 	return client.CreateBulk(ctx, links)
 }
