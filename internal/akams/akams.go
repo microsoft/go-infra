@@ -67,7 +67,7 @@ func (c *Client) newRequest(ctx context.Context, method string, url string, body
 	if err != nil {
 		return nil, err
 	}
-	url = c.apiUrlTarget() + "/" + url
+	url = c.apiUrlTarget() + url
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(data))
 	if err != nil {
 		return nil, err
