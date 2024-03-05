@@ -59,8 +59,8 @@ func NewClientCustom(apiBaseURL string, host Host, tenant string, httpClient *ht
 	return &Client{baseURL: baseURL, httpClient: httpClient}, nil
 }
 
-func (c *Client) exists(shortURL string) (bool, error) {
-	req, err := c.newRequest(context.Background(), http.MethodGet, shortURL, nil)
+func (c *Client) exists(ctx context.Context, shortURL string) (bool, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, shortURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("failed to create request: %v", err)
 	}
@@ -116,7 +116,7 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 	toCreate := make([]CreateLinkRequest, 0, len(links))
 	toUpdate := make([]UpdateLinkRequest, 0, len(links))
 	for _, l := range links {
-		exists, err := c.exists(l.ShortURL)
+		exists, err := c.exists(ctx, l.ShortURL)
 		if err != nil {
 			return err
 		}

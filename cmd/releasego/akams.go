@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -114,6 +115,11 @@ func createAkaMSLinks(assetFilePath string) error {
 			IsAllowParam:   true,
 		}
 	}
+	payload, err := json.MarshalIndent(links, "", "  ")
+	if err != nil {
+		return err
+	}
+	log.Printf("---- Links %v\n", string(payload))
 
 	transport, err := msal.NewConfidentialTransport(msal.MicrosoftAuthority, akaMSClientID, akaMSClientSecret)
 	if err != nil {
