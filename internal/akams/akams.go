@@ -102,6 +102,7 @@ func (c *Client) CreateBulk(ctx context.Context, links []CreateLinkRequest) erro
 // If a link does not exist, it will be created.
 // If any link fails to be created or updated, the function will return an error.
 func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkRequest) error {
+	// First try to create all links.
 	err := c.CreateBulk(ctx, links)
 	if err == nil {
 		// All links were created successfully.
@@ -111,7 +112,7 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 	if e, ok := err.(*ResponseError); !ok || e.StatusCode != http.StatusBadRequest {
 		return err
 	}
-
+	// We need to identify which links already exist and which don't.
 	toCreate := make([]CreateLinkRequest, 0, len(links))
 	toUpdate := make([]UpdateLinkRequest, 0, len(links))
 	for _, l := range links {
@@ -122,21 +123,10 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 		if !exists {
 			toCreate = append(toCreate, l)
 		} else {
-			toUpdate = append(toUpdate, UpdateLinkRequest{
-				ShortURL:       l.ShortURL,
-				TargetURL:      l.TargetURL,
-				MobileURL:      l.MobileURL,
-				IsAllowParam:   l.IsAllowParam,
-				IsTrackParam:   l.IsTrackParam,
-				Description:    l.Description,
-				GroupOwner:     l.GroupOwner,
-				LastModifiedBy: l.LastModifiedBy,
-				Owners:         l.Owners,
-				Category:       l.Category,
-				IsActive:       l.IsActive,
-			})
+			toUpdate = append(toUpdate, l.ToUpdateLinkRequest())
 		}
 	}
+	// Create the links that don't exist and update the ones that do.
 	if len(toCreate) != 0 {
 		if err := c.CreateBulk(ctx, toCreate); err != nil {
 			return err

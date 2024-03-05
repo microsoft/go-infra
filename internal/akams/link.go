@@ -18,6 +18,22 @@ type CreateLinkRequest struct {
 	BypassCvsCheckJustification string `json:"bypassCvsCheckJustification,omitempty"`
 }
 
+func (c *CreateLinkRequest) ToUpdateLinkRequest() UpdateLinkRequest {
+	return UpdateLinkRequest{
+		ShortURL:       c.ShortURL,
+		TargetURL:      c.TargetURL,
+		MobileURL:      c.MobileURL,
+		IsAllowParam:   c.IsAllowParam,
+		IsTrackParam:   c.IsTrackParam,
+		Description:    c.Description,
+		GroupOwner:     c.GroupOwner,
+		LastModifiedBy: c.LastModifiedBy,
+		Owners:         c.Owners,
+		Category:       c.Category,
+		IsActive:       c.IsActive,
+	}
+}
+
 type UpdateLinkRequest struct {
 	ShortURL       string `json:"shortUrl,omitempty"`
 	TargetURL      string `json:"targetUrl"`
