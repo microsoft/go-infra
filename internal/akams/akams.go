@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+// akams package provides a client for the aka.ms API.
+// See https://aka.ms/akaapi for more information.
 package akams
 
 import (
