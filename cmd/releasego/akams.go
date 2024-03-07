@@ -131,17 +131,8 @@ func createAkaMSLinks(assetFilePath string) error {
 		return fmt.Errorf("failed to create aka.ms client: %v", err)
 	}
 
-	// Bulk limitation is 50_000 bytes in body, max items is 300.
-	// Limit the max size to 100 which is typically ~70% of the overall allowable size.
-	const bulkSize = 100
-	for i := 0; i < len(links); i += bulkSize {
-		end := i + bulkSize
-		if end > len(links) {
-			end = len(links)
-		}
-		if err := client.CreateOrUpdateBulk(ctx, links[i:end]); err != nil {
-			return fmt.Errorf("failed to create aka.ms bulk links[%d:%d]: %v", i, end, err)
-		}
+	if err := client.CreateOrUpdateBulk(ctx, links); err != nil {
+		return fmt.Errorf("failed to create aka.ms bulk links: %v", err)
 	}
 	return nil
 }

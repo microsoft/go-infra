@@ -30,6 +30,12 @@ const (
 	HostMicrosoft365COM Host = "7"
 )
 
+const (
+	defaultBulkSize     = 300
+	defaultMaxSizeBytes = 50_000
+)
+
+// ResponseError is an error returned by the aka.ms API.
 type ResponseError struct {
 	StatusCode int
 	Body       string
@@ -41,8 +47,10 @@ func (e *ResponseError) Error() string {
 
 // Client is a client for the aka.ms API.
 type Client struct {
-	baseURL    *url.URL
-	httpClient *http.Client
+	baseURL      *url.URL
+	httpClient   *http.Client
+	bulkSize     int
+	maxSizeBytes int
 }
 
 // NewClient creates a new [Client].
@@ -61,44 +69,64 @@ func NewClientCustom(apiBaseURL string, host Host, tenant string, httpClient *ht
 		return nil, err
 	}
 	baseURL = baseURL.JoinPath("aka", string(host), tenant, "/")
-	return &Client{baseURL: baseURL, httpClient: httpClient}, nil
+	return &Client{baseURL: baseURL, httpClient: httpClient, bulkSize: defaultBulkSize, maxSizeBytes: defaultMaxSizeBytes}, nil
 }
 
-func (c *Client) exists(ctx context.Context, shortURL string) (bool, error) {
-	req, err := c.newRequest(ctx, http.MethodGet, shortURL, nil)
-	if err != nil {
-		return false, fmt.Errorf("failed to create request: %v", err)
+// SetBulkLimit sets the maximum number of items and the maximum size in bytes
+// for bulk operations. The default is 300 items and 50_000 bytes.
+// Setting a value of 0 or negative for bulkSize or maxSizeBytes will reset the limit to the default.
+func (c *Client) SetBulkLimit(bulkSize int, maxSizeBytes int) {
+	if bulkSize <= 0 {
+		bulkSize = defaultBulkSize
+	} else {
+		c.bulkSize = bulkSize
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, c.reqError(resp)
+	if maxSizeBytes <= 0 {
+		maxSizeBytes = defaultMaxSizeBytes
+	} else {
+		c.maxSizeBytes = maxSizeBytes
 	}
 }
 
 // CreateBulk creates multiple links in bulk.
 func (c *Client) CreateBulk(ctx context.Context, links []CreateLinkRequest) error {
-	req, err := c.newRequest(ctx, http.MethodPost, "bulk", links)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return c.reqError(resp)
-	}
-	return nil
+	return chunkSlice(links, c.bulkSize, c.maxSizeBytes, func(r io.Reader) error {
+		req, err := c.newRequest(ctx, http.MethodPost, "bulk", r)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return c.reqError(resp)
+		}
+		return nil
+	})
+}
+
+// UpdateBulk updates multiple links in bulk.
+func (c *Client) UpdateBulk(ctx context.Context, links []UpdateLinkRequest) error {
+	return chunkSlice(links, c.bulkSize, c.maxSizeBytes, func(r io.Reader) error {
+		req, err := c.newRequest(ctx, http.MethodPut, "bulk", r)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %v", err)
+		}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
+			// success
+		default:
+			return c.reqError(resp)
+		}
+		return nil
+	})
 }
 
 // CreateOrUpdateBulk creates or updates multiple links in bulk.
@@ -144,24 +172,24 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 	return nil
 }
 
-// UpdateBulk updates multiple links in bulk.
-func (c *Client) UpdateBulk(ctx context.Context, links []UpdateLinkRequest) error {
-	req, err := c.newRequest(ctx, http.MethodPut, "bulk", links)
+func (c *Client) exists(ctx context.Context, shortURL string) (bool, error) {
+	req, err := c.newRequest(ctx, http.MethodGet, shortURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %v", err)
+		return false, fmt.Errorf("failed to create request: %v", err)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %v", err)
+		return false, fmt.Errorf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
-	case http.StatusAccepted, http.StatusNoContent, http.StatusNotFound:
-		// success
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
 	default:
-		return c.reqError(resp)
+		return false, c.reqError(resp)
 	}
-	return nil
 }
 
 func (c *Client) reqError(resp *http.Response) error {
@@ -170,18 +198,9 @@ func (c *Client) reqError(resp *http.Response) error {
 	return &ResponseError{StatusCode: resp.StatusCode, Body: string(body)}
 }
 
-func (c *Client) newRequest(ctx context.Context, method string, urlStr string, body any) (*http.Request, error) {
+func (c *Client) newRequest(ctx context.Context, method string, urlStr string, body io.Reader) (*http.Request, error) {
 	u := c.baseURL.JoinPath(urlStr)
-	var buf io.ReadWriter
-	if body != nil {
-		buf = &bytes.Buffer{}
-		enc := json.NewEncoder(buf)
-		enc.SetEscapeHTML(false)
-		if err := enc.Encode(body); err != nil {
-			return nil, err
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), buf)
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -190,4 +209,56 @@ func (c *Client) newRequest(ctx context.Context, method string, urlStr string, b
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req, nil
+}
+
+// chunkSlice chunks s into bulkSize chunks preserving the order of the items,
+// encodes each chunk into JSON, and calls fn with the encoded chunk.
+// The maximum encoded size of each chunk is limited to maxSizeBytes.
+// If the size of an item is larger than maxSizeBytes, an error will be returned.
+// If fn returns an error, the function will stop and return the error.
+func chunkSlice[T any](s []T, bulkSize int, maxSizeBytes int, fn func(io.Reader) error) error {
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	if len(s) == 0 {
+		buf.WriteByte(']')
+		return fn(&buf)
+	}
+	// We try to convert the slice to JSON in chunks to avoid hitting the maximum request size.
+	// The end result have the same encoding as if we had used json.Marshal.
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	var callFn bool
+	for i := 0; i < len(s); {
+		lastSize := buf.Len() // keep in case we need to rewind.
+		if err := enc.Encode(s[i]); err != nil {
+			return err
+		}
+		buf.Truncate(buf.Len() - 1) // Remove the trailing newline added by enc.Encode.
+		buf.WriteByte(',')          // Add a comma to separate items.
+		if buf.Len() > maxSizeBytes {
+			// The last item was too big.
+			if size := buf.Len() - lastSize; size > maxSizeBytes {
+				// The last item is too big to fit in a chunk.
+				return fmt.Errorf("item %d is too large: %d bytes", i, size)
+			}
+			// Rewind and call fn.
+			buf.Truncate(lastSize)
+			callFn = true
+		} else {
+			// The last item fits, continue.
+			i++
+			// Call fn if we reached the end or the bulk size.
+			callFn = i == len(s) || i%bulkSize == 0
+		}
+		if callFn {
+			buf.Truncate(buf.Len() - 1) // Remove the trailing comma.
+			buf.WriteByte(']')          // Close the JSON array.
+			if err := fn(&buf); err != nil {
+				return err
+			}
+			buf.Reset()        // Reset the buffer for the next chunk.
+			buf.WriteByte('[') // Open a new JSON array.
+		}
+	}
+	return nil
 }
