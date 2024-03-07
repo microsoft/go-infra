@@ -93,11 +93,11 @@ func (c *Client) CreateBulk(ctx context.Context, links []CreateLinkRequest) erro
 	return chunkSlice(links, c.bulkSize, c.maxSizeBytes, func(r io.Reader) error {
 		req, err := c.newRequest(ctx, http.MethodPost, "bulk", r)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %v", err)
+			return err
 		}
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.do(req)
 		if err != nil {
-			return fmt.Errorf("request failed: %v", err)
+			return err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -112,11 +112,11 @@ func (c *Client) UpdateBulk(ctx context.Context, links []UpdateLinkRequest) erro
 	return chunkSlice(links, c.bulkSize, c.maxSizeBytes, func(r io.Reader) error {
 		req, err := c.newRequest(ctx, http.MethodPut, "bulk", r)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %v", err)
+			return err
 		}
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.do(req)
 		if err != nil {
-			return fmt.Errorf("request failed: %v", err)
+			return err
 		}
 		defer resp.Body.Close()
 		switch resp.StatusCode {
@@ -175,11 +175,11 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 func (c *Client) exists(ctx context.Context, shortURL string) (bool, error) {
 	req, err := c.newRequest(ctx, http.MethodGet, shortURL, nil)
 	if err != nil {
-		return false, fmt.Errorf("failed to create request: %v", err)
+		return false, err
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
-		return false, fmt.Errorf("request failed: %v", err)
+		return false, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -202,13 +202,21 @@ func (c *Client) newRequest(ctx context.Context, method string, urlStr string, b
 	u := c.baseURL.JoinPath(urlStr)
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req, nil
+}
+
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %v", err)
+	}
+	return resp, nil
 }
 
 // chunkSlice chunks s into bulkSize chunks preserving the order of the items,
