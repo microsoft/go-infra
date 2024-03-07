@@ -195,9 +195,9 @@ type srvHandler struct {
 }
 
 func setup(t *testing.T, handler ...srvHandler) (*httptest.Server, *akams.Client) {
-	tentant := "tenant"
+	tenant := "tenant"
 	host := akams.HostO365COM
-	basePath := fmt.Sprintf("/aka/%s/%s/", host, tentant)
+	basePath := fmt.Sprintf("/aka/%s/%s/", host, tenant)
 	var query int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if query >= len(handler) {
@@ -225,7 +225,7 @@ func setup(t *testing.T, handler ...srvHandler) (*httptest.Server, *akams.Client
 		}
 		query++
 	}))
-	client, err := akams.NewClientCustom(srv.URL, host, tentant, srv.Client())
+	client, err := akams.NewClientCustom(srv.URL, host, tenant, srv.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
