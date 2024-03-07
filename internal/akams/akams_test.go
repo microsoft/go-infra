@@ -115,7 +115,7 @@ func TestCreateBulk_Fail_MaxSize(t *testing.T) {
 	defer close()
 	client.SetBulkLimit(0, 1)
 	err := client.CreateBulk(context.Background(), links)
-	wantErr := "item 0 is too large: 91 bytes"
+	wantErr := "item 0 is too large: 91 bytes > 1 byte maximum"
 	if err == nil || err.Error() != wantErr {
 		t.Fatalf("expected %q, got %q", wantErr, err)
 	}
@@ -160,7 +160,7 @@ func TestUpdateBulk_Fail_MaxSize(t *testing.T) {
 	defer close()
 	client.SetBulkLimit(0, 1)
 	err := client.UpdateBulk(context.Background(), links)
-	wantErr := "item 0 is too large: 74 bytes"
+	wantErr := "item 0 is too large: 74 bytes > 1 byte maximum"
 	if err == nil || err.Error() != wantErr {
 		t.Fatalf("expected %q, got %q", wantErr, err)
 	}
