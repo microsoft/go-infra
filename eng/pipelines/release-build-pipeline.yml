@@ -253,12 +253,12 @@ jobs:
                 releasego akams \
                   -build-asset-json '$(buildAssetJsonFile)' \
                   -prefix '$(VanityUrlPrefix)' \
-                  -clientID='$(akams-client-id)' \
-                  -clientSecret='$(akams-client-secret)' \
-                  -tenant='$(AkaMSTenant)' \
-                  -createdBy='$(AkaMSCreatedBy)' \
-                  -groupOwner='$(AkaMSGroupOwner)' \
-                  -owners='$(AkaMSOwners)'
+                  -clientID '$(akams-client-id)' \
+                  -clientSecret '$(akams-client-secret)' \
+                  -tenant '$(AkaMSTenant)' \
+                  -createdBy '$(AkaMSCreatedBy)' \
+                  -groupOwner '$(AkaMSGroupOwner)' \
+                  -owners '$(AkaMSOwners)'
               displayName: 🎓 Update aka.ms links
 
           - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
