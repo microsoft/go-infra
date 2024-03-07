@@ -77,7 +77,6 @@ func (c *Client) exists(ctx context.Context, shortURL string) (bool, error) {
 	default:
 		return false, c.reqError(resp)
 	}
-
 }
 
 // CreateBulk creates multiple links in bulk.
@@ -161,6 +160,7 @@ func (c *Client) UpdateBulk(ctx context.Context, links []UpdateLinkRequest) erro
 }
 
 func (c *Client) reqError(resp *http.Response) error {
+	// Try to preserve the response body. It may have important context to fix the issue.
 	body, _ := io.ReadAll(resp.Body)
 	return &ResponseError{StatusCode: resp.StatusCode, Body: string(body)}
 }
