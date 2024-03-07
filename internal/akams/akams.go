@@ -219,9 +219,11 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// chunkSlice chunks s into bulkSize chunks preserving the order of the items,
-// encodes each chunk into JSON, and calls fn with the encoded chunk.
-// The maximum encoded size of each chunk is limited to maxSizeBytes.
+// chunkSlice chunks s, encodes each chunk into JSON,
+// and calls fn with the encoded chunk.
+// The maximum encoded size of each chunk is limited to maxSizeBytes,
+// and each chunk has at most bulkSize items.
+// The order of the items is preserved.
 // If the size of an item is larger than maxSizeBytes, an error will be returned.
 // If fn returns an error, the function will stop and return the error.
 func chunkSlice[T any](s []T, bulkSize int, maxSizeBytes int, fn func(io.Reader) error) error {
@@ -247,7 +249,7 @@ func chunkSlice[T any](s []T, bulkSize int, maxSizeBytes int, fn func(io.Reader)
 			// The last item was too big.
 			if size := buf.Len() - lastSize; size > maxSizeBytes {
 				// The last item is too big to fit in a chunk.
-				return fmt.Errorf("item %d is too large: %d bytes", i, size)
+				return fmt.Errorf("item %d is too large: %d bytes > %d byte maximum", i, size, maxSizeBytes)
 			}
 			// Rewind and call fn.
 			buf.Truncate(lastSize)
