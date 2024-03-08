@@ -99,30 +99,3 @@ func Test_makeFloatingFilename(t *testing.T) {
 		})
 	}
 }
-
-func Test_propsFileContent(t *testing.T) {
-	pairs := []akaMSLinkPair{
-		{
-			Short: "from", Target: "to",
-		},
-		{
-			Short:  "release/latest/go1.18.2-linux-amd64.tar.gz",
-			Target: "https://example.org/go/go1.18.s-linux-amd64.tar.gz",
-		},
-	}
-	want := `<Project>
-  <ItemGroup>
-    <AkaMSLink Include="from" TargetUrl="to"></AkaMSLink>
-    <AkaMSLink Include="release/latest/go1.18.2-linux-amd64.tar.gz" TargetUrl="https://example.org/go/go1.18.s-linux-amd64.tar.gz"></AkaMSLink>
-  </ItemGroup>
-</Project>
-`
-
-	got, err := propsFileContent(pairs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Errorf("propsFileContent() got %v, want %v", got, want)
-	}
-}

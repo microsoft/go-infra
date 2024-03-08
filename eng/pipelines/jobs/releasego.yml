@@ -19,10 +19,6 @@ parameters:
   # A string of flags to pass "add-retry-instructions" for this job, or empty string to skip.
   retryInstructionsFlags: ''
 
-  # Enables the UseDotNet task during the initialization steps. Used for release steps in the Arcade
-  # toolset, which runs on .NET.
-  useDotNet: false
-
   # Additional variables to include.
   variables: {}
   # The release steps to run.
@@ -65,13 +61,6 @@ jobs:
           go install ./cmd/releasego
           echo "##vso[task.prependpath]$(go env GOPATH)/bin"
         displayName: Install releasego
-
-      # Only set up .NET SDK after the reporting tool is ready, in case setup fails.
-      - ${{ if eq(parameters.useDotNet, true) }}:
-        - task: UseDotNet@2
-          displayName: 'Use .NET SDK'
-          inputs:
-            version: 6.x
 
       - template: ../steps/report.yml
         parameters:

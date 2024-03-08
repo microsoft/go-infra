@@ -4,17 +4,17 @@
 package main
 
 import (
-	"encoding/xml"
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"net/http"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
-	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/internal/akams"
+	"github.com/microsoft/go-infra/internal/msal"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -24,24 +24,11 @@ func init() {
 		Name:    "akams",
 		Summary: "Create aka.ms links based on a given build asset JSON file.",
 		Description: `
-
-This command uses an MSBuild task supplied by .NET Arcade to carry out the communication with aka.ms
-services. Therefore, it must be executed within the go-infra repository, where it can use the eng
-directory that sets up the Arcade task. The .NET SDK must also be installed on the machine, and
-'dotnet' on PATH.
-
 Example:
 
   go run ./cmd/releasego akams -build-asset-json /downloads/assets.json -version 1.17.8-1
-
-All non-flag args are passed through to the MSBuild project. Use this to configure the link
-ownership information and to add authentication. Keep in mind that because this command uses the
-standard flag library, all flag args must be passed before the first non-flag arg.
-
-See UpdateAkaMSLinks.csproj for information about the MSBuild properties that must be set.
 `,
-		TakeArgsReason: "More args to pass through to the MSBuild project.",
-		Handle:         handleAKAMS,
+		Handle: handleAKAMS,
 	})
 }
 
@@ -52,6 +39,30 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 		&latestShortLinkPrefix,
 		"prefix", "golang/release/dev/latest/",
 		"The shortened URL prefix to use, including '/'. The default value includes 'dev' and is not intended for production use.")
+	flag.StringVar(
+		&akaMSClientID,
+		"clientID", "",
+		"The client ID to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSClientSecret,
+		"clientSecret", "",
+		"The client secret to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSTenant,
+		"tenant", "",
+		"The tenant to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSCreatedBy,
+		"createdBy", "",
+		"The user to use as the creator of the AKA.MS links.")
+	flag.StringVar(
+		&akaMSGroupOwner,
+		"groupOwner", "",
+		"The group owner to use for the AKA.MS links.")
+	flag.StringVar(
+		&akaMSOwners,
+		"owners", "",
+		"The owners to use for the AKA.MS links.")
 
 	if err := p(); err != nil {
 		return err
@@ -68,18 +79,18 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 	return nil
 }
 
-var latestShortLinkPrefix string
+var (
+	latestShortLinkPrefix string
+	akaMSClientID         string
+	akaMSClientSecret     string
+	akaMSTenant           string
+	akaMSCreatedBy        string
+	akaMSGroupOwner       string
+	akaMSOwners           string
+)
 
 func createAkaMSLinks(assetFilePath string) error {
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-
-	akaMSDir := filepath.Join(wd, "eng", "artifacts", "akams")
-	if err := os.MkdirAll(akaMSDir, os.ModeDir|os.ModePerm); err != nil {
-		return err
-	}
+	ctx := context.Background()
 
 	var b buildassets.BuildAssets
 	if err := stringutil.ReadJSONFile(assetFilePath, &b); err != nil {
@@ -91,35 +102,44 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	content, err := propsFileContent(linkPairs)
+	links := make([]akams.CreateLinkRequest, len(linkPairs))
+	for i, l := range linkPairs {
+		links[i] = akams.CreateLinkRequest{
+			ShortURL:       l.Short,
+			TargetURL:      l.Target,
+			CreatedBy:      akaMSCreatedBy,
+			LastModifiedBy: akaMSCreatedBy,
+			Owners:         akaMSOwners,
+			GroupOwner:     akaMSGroupOwner,
+			IsVanity:       true,
+			IsAllowParam:   true,
+		}
+	}
+	payload, err := json.MarshalIndent(links, "", "  ")
 	if err != nil {
 		return err
 	}
+	log.Printf("---- Links %v\n", string(payload))
 
-	projectPath := filepath.Join(wd, "eng", "publishing", "UpdateAkaMSLinks", "UpdateAkaMSLinks.csproj")
-	propsPath := filepath.Join(akaMSDir, "AkaMSLinks.props")
-	if err := os.WriteFile(propsPath, []byte(content), 0666); err != nil {
-		return err
+	transport, err := msal.NewConfidentialTransport(msal.MicrosoftAuthority, akaMSClientID, akaMSClientSecret)
+	if err != nil {
+		return fmt.Errorf("failed to create MSAL transport: %v", err)
+	}
+	transport.Scopes = []string{akams.Scope + "/.default"}
+	client, err := akams.NewClient(akaMSTenant, &http.Client{Transport: transport})
+	if err != nil {
+		return fmt.Errorf("failed to create aka.ms client: %v", err)
 	}
 
-	log.Printf("---- File content for generated file %v\n%v\n", propsPath, content)
-
-	cmd := exec.Command(
-		"dotnet", "build", projectPath,
-		fmt.Sprintf("/p:LinkItemPropsFile=\"%v\"", propsPath))
-	// Pass any additional args through. Likely /p:Key=Value and /bl:Something.binlog
-	cmd.Args = append(cmd.Args, flag.Args()...)
-	return executil.Run(cmd)
+	if err := client.CreateOrUpdateBulk(ctx, links); err != nil {
+		return fmt.Errorf("failed to create aka.ms bulk links: %v", err)
+	}
+	return nil
 }
 
 type akaMSLinkPair struct {
-	Short  string `xml:"Include,attr"`
-	Target string `xml:"TargetUrl,attr"`
-}
-
-type akaMSPropsFile struct {
-	XMLName   xml.Name        `xml:"Project"`
-	ItemGroup []akaMSLinkPair `xml:">AkaMSLink"`
+	Short  string
+	Target string
 }
 
 func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
@@ -184,12 +204,4 @@ func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, e
 		return "go" + floatVersion + after, nil
 	}
 	return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
-}
-
-func propsFileContent(pairs []akaMSLinkPair) (string, error) {
-	x, err := xml.MarshalIndent(akaMSPropsFile{ItemGroup: pairs}, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(x) + "\n", nil
 }
