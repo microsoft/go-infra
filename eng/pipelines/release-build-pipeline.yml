@@ -85,229 +85,231 @@ extends:
         configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
 
     stages:
-      - template: stages/releasego.yml
-        parameters:
-          releaseVersion: ${{ parameters.releaseVersion }}
-          releaseIssue: ${{ parameters.releaseIssue }}
-          retryInstructionsFlags: '-checkboxes'
-          variables:
-            # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
-            # overridden with a logging command as the pipeline moves on.
-            poll1MicrosoftGoPRNumber: ${{ parameters.poll1MicrosoftGoPRNumber }}
-            poll2MicrosoftGoCommitHash: ${{ parameters.poll2MicrosoftGoCommitHash }}
-            poll3MicrosoftGoBuildID: ${{ parameters.poll3MicrosoftGoBuildID }}
-            poll4MicrosoftGoImagesPRNumber: ${{ parameters.poll4MicrosoftGoImagesPRNumber }}
-          steps:
-            # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
-            # retry build will have a non-nil value in one of these parameters. Only the value of the last
-            # step's parameter matters.
-            - ${{ if eq(parameters.poll4MicrosoftGoImagesPRNumber, 'nil') }}:
-              - ${{ if eq(parameters.poll3MicrosoftGoBuildID, 'nil') }}:
-                - ${{ if eq(parameters.poll2MicrosoftGoCommitHash, 'nil') }}:
-                  - ${{ if eq(parameters.poll1MicrosoftGoPRNumber, 'nil') }}:
-                    # Poll for the right commit to use for this release.
+      - stage: Release
+        jobs:
+          - template: /eng/pipelines/jobs/releasego.yml@self
+            parameters:
+              releaseVersion: ${{ parameters.releaseVersion }}
+              releaseIssue: ${{ parameters.releaseIssue }}
+              retryInstructionsFlags: '-checkboxes'
+              variables:
+                # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
+                # overridden with a logging command as the pipeline moves on.
+                poll1MicrosoftGoPRNumber: ${{ parameters.poll1MicrosoftGoPRNumber }}
+                poll2MicrosoftGoCommitHash: ${{ parameters.poll2MicrosoftGoCommitHash }}
+                poll3MicrosoftGoBuildID: ${{ parameters.poll3MicrosoftGoBuildID }}
+                poll4MicrosoftGoImagesPRNumber: ${{ parameters.poll4MicrosoftGoImagesPRNumber }}
+              steps:
+                # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
+                # retry build will have a non-nil value in one of these parameters. Only the value of the last
+                # step's parameter matters.
+                - ${{ if eq(parameters.poll4MicrosoftGoImagesPRNumber, 'nil') }}:
+                  - ${{ if eq(parameters.poll3MicrosoftGoBuildID, 'nil') }}:
+                    - ${{ if eq(parameters.poll2MicrosoftGoCommitHash, 'nil') }}:
+                      - ${{ if eq(parameters.poll1MicrosoftGoPRNumber, 'nil') }}:
+                        # Poll for the right commit to use for this release.
+                        - script: |
+                            releasego get-upstream-commit \
+                              -version '${{ parameters.releaseVersion }}' \
+                              -set-azdo-variable upstreamReleasedCommit
+                          displayName: ⌚ Get upstream commit for release
+                          # 6 hours. This step may take an arbitrarily long time while if we ran the release
+                          # job preemptively. But at some point, a dev needs to check that the tool is working
+                          # properly and the upstream release is progressing as expected.
+                          timeoutInMinutes: 360
+                        # Either make sure the microsoft/go branch has the correct commit as its submodule, or
+                        # submit a PR that sets the submodule commit.
+                        - script: |
+                            releasego sync \
+                              -c '$(ReleaseSyncConfigPath)' \
+                              -commit '$(upstreamReleasedCommit)' \
+                              -version '${{ parameters.releaseVersion }}' \
+                              -git-auth pat \
+                              -github-user '$(GitHubUser)' \
+                              -github-pat '$(GitHubPAT)' \
+                              -github-pat-reviewer '$(GitHubPATReviewer)' \
+                              -azdo-dnceng-pat '$(AzDODncengPAT)' \
+                              -create-branches \
+                              -set-azdo-variable-pr-number poll1MicrosoftGoPRNumber \
+                              -set-azdo-variable-up-to-date-commit poll2MicrosoftGoCommitHash
+                          displayName: Sync to upstream commit
+
+                      # Now we have poll1MicrosoftGoPRNumber, which may be nil if no PR is required
+                      - script: |
+                          releasego get-merged-pr-commit \
+                            -repo '$(TargetGitHubRepo)' \
+                            -pr '$(poll1MicrosoftGoPRNumber)' \
+                            -pat '$(GitHubPAT)' \
+                            -set-azdo-variable poll2MicrosoftGoCommitHash
+                        displayName: ⌚ Get sync PR merged commit hash
+                        timeoutInMinutes: 60
+                        condition: and(succeeded(), ne(variables.poll1MicrosoftGoPRNumber, 'nil'))
+
+                    # Now we have poll2MicrosoftGoCommitHash
                     - script: |
-                        releasego get-upstream-commit \
-                          -version '${{ parameters.releaseVersion }}' \
-                          -set-azdo-variable upstreamReleasedCommit
-                      displayName: ⌚ Get upstream commit for release
-                      # 6 hours. This step may take an arbitrarily long time while if we ran the release
-                      # job preemptively. But at some point, a dev needs to check that the tool is working
-                      # properly and the upstream release is progressing as expected.
-                      timeoutInMinutes: 360
-                    # Either make sure the microsoft/go branch has the correct commit as its submodule, or
-                    # submit a PR that sets the submodule commit.
+                        releasego wait-azdo-commit \
+                          -commit '$(poll2MicrosoftGoCommitHash)' \
+                          -name '$(TargetAzDORepo)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)'
+                      displayName: ⌚ Wait for internal mirror
+                      timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+                    # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
+                    # default Branch is "microsoft/main". So, we need to figure out the release branch name
+                    # and save it as a variable to pass it to AzDO.
+                    #
+                    # Testing adds a complication: testing commits won't be found in the actual release
+                    # branches, so we need a way to override. This is done using BuildPipelineFullBranchName
+                    # from the variable group. For actual releases, it should have the value
+                    # "refs/heads/microsoft/$(UpstreamTargetBranchName)". But in a testing variable group, it
+                    # can point at any ordinary dev branch that has the sync commit.
                     - script: |
-                        releasego sync \
-                          -c '$(ReleaseSyncConfigPath)' \
-                          -commit '$(upstreamReleasedCommit)' \
+                        releasego get-target-branch \
                           -version '${{ parameters.releaseVersion }}' \
-                          -git-auth pat \
-                          -github-user '$(GitHubUser)' \
+                          -set-azdo-variable-branch-name UpstreamTargetBranchName
+                      displayName: Get target branch containing commit
+                    - script: |
+                        releasego build-pipeline \
+                          -commit '$(poll2MicrosoftGoCommitHash)' \
+                          -branch '$(BuildPipelineFullBranchName)' \
+                          -id '$(GoPipelineID)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)' \
+                          -set-azdo-variable poll3MicrosoftGoBuildID \
+                          p releaseVersion '${{ parameters.releaseVersion }}'
+                      displayName: 🚀 Run microsoft/go internal build
+                    - template: ../steps/report.yml
+                      parameters:
+                        releaseIssue: ${{ parameters.releaseIssue }}
+                        version: ${{ parameters.releaseVersion }}
+                        condition: succeeded()
+                        buildPipeline: microsoft-go
+                        buildID: $(poll3MicrosoftGoBuildID)
+                        buildStatus: '?'
+                        start: true
+                        reason: queued build
+
+                  # Now we have poll3MicrosoftGoBuildID
+                  - script: |
+                      releasego wait-build \
+                        -id '$(poll3MicrosoftGoBuildID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -azdopat '$(System.AccessToken)'
+                    displayName: ⌚ Wait for internal build
+                    timeoutInMinutes: 120
+                  - template: ../steps/report.yml
+                    parameters:
+                      releaseIssue: ${{ parameters.releaseIssue }}
+                      version: ${{ parameters.releaseVersion }}
+                      condition: succeeded()
+                      buildPipeline: microsoft-go
+                      buildID: $(poll3MicrosoftGoBuildID)
+                      buildStatus: Succeeded
+                      reason: completed internal build
+
+                  # Download build asset JSON from completed internal build to update go-images with.
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download Build Asset JSON
+                    inputs:
+                      source: specific
+                      artifact: BuildAssets
+                      project: internal
+                      pipeline: $(GoPipelineID)
+                      runVersion: specific
+                      runId: $(poll3MicrosoftGoBuildID)
+                      path: $(assetsDir)
+                  # Download built and signed binaries. These are already on blob storage, but steps in this
+                  # pipeline will publish a subset of these as GitHub Release attachments.
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download binaries
+                    inputs:
+                      source: specific
+                      artifact: Binaries Signed
+                      project: internal
+                      pipeline: $(GoPipelineID)
+                      runVersion: specific
+                      runId: $(poll3MicrosoftGoBuildID)
+                      path: $(artifactsDir)
+
+                  - script: |
+                      releasego get-asset-version \
+                        -build-asset-json '$(buildAssetJsonFile)' \
+                        -version '${{ parameters.releaseVersion }}' \
+                        -set-azdo-variable 'buildAssetVersion'
+                    displayName: Read and verify build asset version
+
+                  - script: |
+                      releasego get-build-info \
+                        -id '$(poll3MicrosoftGoBuildID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -prefix 'BuildInfo' \
+                        -azdopat '$(System.AccessToken)'
+                    displayName: Get build info
+
+                  - ${{ if eq(parameters.runTag, true) }}:
+                    - script: |
+                        releasego tag \
+                          -tag 'v$(buildAssetVersion)' \
+                          -commit '$(BuildInfoSourceVersion)' \
+                          -repo '$(TargetGitHubRepo)' \
+                          -pat '$(GitHubPAT)'
+                      displayName: 🎓 Create GitHub tag
+
+                  - ${{ if eq(parameters.runGitHubRelease, true) }}:
+                    - script: |
+                        releasego repo-release \
+                          -tag 'v$(buildAssetVersion)' \
+                          -repo '$(TargetGitHubRepo)' \
+                          -build-asset-json '$(buildAssetJsonFile)' \
+                          -build-dir '$(artifactsDir)' \
+                          -pat '$(GitHubPAT)'
+                      displayName: 🎓 Create GitHub release
+
+                  - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
+                    - script: |
+                        releasego akams \
+                          -build-asset-json '$(buildAssetJsonFile)' \
+                          -prefix '$(VanityUrlPrefix)' \
+                          -clientID '$(akams-client-id)' \
+                          -clientSecret '$(akams-client-secret)' \
+                          -tenant '$(AkaMSTenant)' \
+                          -createdBy '$(AkaMSCreatedBy)' \
+                          -groupOwner '$(AkaMSGroupOwner)' \
+                          -owners '$(AkaMSOwners)'
+                      displayName: 🎓 Update aka.ms links
+
+                  - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
+                    # Update the target Docker repo. The origin is defined with "_" as the username because
+                    # the username doesn't matter, only the PAT. $(GitHubPAT) may be some other user's: it is
+                    # provided by the variable group.
+                    - script: |
+                        set -euxo pipefail
+                        # Install jq, used to evaluate Dockerfile templates.
+                        sudo apt update && sudo apt install -y jq
+
+                        go run ./cmd/dockerupdatepr \
+                          -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
                           -github-pat '$(GitHubPAT)' \
                           -github-pat-reviewer '$(GitHubPATReviewer)' \
-                          -azdo-dnceng-pat '$(AzDODncengPAT)' \
-                          -create-branches \
-                          -set-azdo-variable-pr-number poll1MicrosoftGoPRNumber \
-                          -set-azdo-variable-up-to-date-commit poll2MicrosoftGoCommitHash
-                      displayName: Sync to upstream commit
+                          -build-asset-json '$(buildAssetJsonFile)' \
+                          -manual-branch '$(TargetGoImagesBranch)' \
+                          -set-azdo-variable-pr-number poll4MicrosoftGoImagesPRNumber
+                      displayName: Update go-images
 
-                  # Now we have poll1MicrosoftGoPRNumber, which may be nil if no PR is required
+                - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
+                  # Now we have poll4MicrosoftGoImagesPRNumber, which may be nil if no PR is required
                   - script: |
                       releasego get-merged-pr-commit \
-                        -repo '$(TargetGitHubRepo)' \
-                        -pr '$(poll1MicrosoftGoPRNumber)' \
-                        -pat '$(GitHubPAT)' \
-                        -set-azdo-variable poll2MicrosoftGoCommitHash
-                    displayName: ⌚ Get sync PR merged commit hash
-                    timeoutInMinutes: 60
-                    condition: and(succeeded(), ne(variables.poll1MicrosoftGoPRNumber, 'nil'))
-
-                # Now we have poll2MicrosoftGoCommitHash
-                - script: |
-                    releasego wait-azdo-commit \
-                      -commit '$(poll2MicrosoftGoCommitHash)' \
-                      -name '$(TargetAzDORepo)' \
-                      -org 'https://dev.azure.com/dnceng/' \
-                      -proj 'internal' \
-                      -azdopat '$(System.AccessToken)'
-                  displayName: ⌚ Wait for internal mirror
-                  timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
-                # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
-                # default Branch is "microsoft/main". So, we need to figure out the release branch name
-                # and save it as a variable to pass it to AzDO.
-                #
-                # Testing adds a complication: testing commits won't be found in the actual release
-                # branches, so we need a way to override. This is done using BuildPipelineFullBranchName
-                # from the variable group. For actual releases, it should have the value
-                # "refs/heads/microsoft/$(UpstreamTargetBranchName)". But in a testing variable group, it
-                # can point at any ordinary dev branch that has the sync commit.
-                - script: |
-                    releasego get-target-branch \
-                      -version '${{ parameters.releaseVersion }}' \
-                      -set-azdo-variable-branch-name UpstreamTargetBranchName
-                  displayName: Get target branch containing commit
-                - script: |
-                    releasego build-pipeline \
-                      -commit '$(poll2MicrosoftGoCommitHash)' \
-                      -branch '$(BuildPipelineFullBranchName)' \
-                      -id '$(GoPipelineID)' \
-                      -org 'https://dev.azure.com/dnceng/' \
-                      -proj 'internal' \
-                      -azdopat '$(System.AccessToken)' \
-                      -set-azdo-variable poll3MicrosoftGoBuildID \
-                      p releaseVersion '${{ parameters.releaseVersion }}'
-                  displayName: 🚀 Run microsoft/go internal build
-                - template: ../steps/report.yml
-                  parameters:
-                    releaseIssue: ${{ parameters.releaseIssue }}
-                    version: ${{ parameters.releaseVersion }}
-                    condition: succeeded()
-                    buildPipeline: microsoft-go
-                    buildID: $(poll3MicrosoftGoBuildID)
-                    buildStatus: '?'
-                    start: true
-                    reason: queued build
-
-              # Now we have poll3MicrosoftGoBuildID
-              - script: |
-                  releasego wait-build \
-                    -id '$(poll3MicrosoftGoBuildID)' \
-                    -org 'https://dev.azure.com/dnceng/' \
-                    -proj 'internal' \
-                    -azdopat '$(System.AccessToken)'
-                displayName: ⌚ Wait for internal build
-                timeoutInMinutes: 120
-              - template: ../steps/report.yml
-                parameters:
-                  releaseIssue: ${{ parameters.releaseIssue }}
-                  version: ${{ parameters.releaseVersion }}
-                  condition: succeeded()
-                  buildPipeline: microsoft-go
-                  buildID: $(poll3MicrosoftGoBuildID)
-                  buildStatus: Succeeded
-                  reason: completed internal build
-
-              # Download build asset JSON from completed internal build to update go-images with.
-              - task: DownloadPipelineArtifact@2
-                displayName: Download Build Asset JSON
-                inputs:
-                  source: specific
-                  artifact: BuildAssets
-                  project: internal
-                  pipeline: $(GoPipelineID)
-                  runVersion: specific
-                  runId: $(poll3MicrosoftGoBuildID)
-                  path: $(assetsDir)
-              # Download built and signed binaries. These are already on blob storage, but steps in this
-              # pipeline will publish a subset of these as GitHub Release attachments.
-              - task: DownloadPipelineArtifact@2
-                displayName: Download binaries
-                inputs:
-                  source: specific
-                  artifact: Binaries Signed
-                  project: internal
-                  pipeline: $(GoPipelineID)
-                  runVersion: specific
-                  runId: $(poll3MicrosoftGoBuildID)
-                  path: $(artifactsDir)
-
-              - script: |
-                  releasego get-asset-version \
-                    -build-asset-json '$(buildAssetJsonFile)' \
-                    -version '${{ parameters.releaseVersion }}' \
-                    -set-azdo-variable 'buildAssetVersion'
-                displayName: Read and verify build asset version
-
-              - script: |
-                  releasego get-build-info \
-                    -id '$(poll3MicrosoftGoBuildID)' \
-                    -org 'https://dev.azure.com/dnceng/' \
-                    -proj 'internal' \
-                    -prefix 'BuildInfo' \
-                    -azdopat '$(System.AccessToken)'
-                displayName: Get build info
-
-              - ${{ if eq(parameters.runTag, true) }}:
-                - script: |
-                    releasego tag \
-                      -tag 'v$(buildAssetVersion)' \
-                      -commit '$(BuildInfoSourceVersion)' \
-                      -repo '$(TargetGitHubRepo)' \
-                      -pat '$(GitHubPAT)'
-                  displayName: 🎓 Create GitHub tag
-
-              - ${{ if eq(parameters.runGitHubRelease, true) }}:
-                - script: |
-                    releasego repo-release \
-                      -tag 'v$(buildAssetVersion)' \
-                      -repo '$(TargetGitHubRepo)' \
-                      -build-asset-json '$(buildAssetJsonFile)' \
-                      -build-dir '$(artifactsDir)' \
-                      -pat '$(GitHubPAT)'
-                  displayName: 🎓 Create GitHub release
-
-              - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
-                - script: |
-                    releasego akams \
-                      -build-asset-json '$(buildAssetJsonFile)' \
-                      -prefix '$(VanityUrlPrefix)' \
-                      -clientID '$(akams-client-id)' \
-                      -clientSecret '$(akams-client-secret)' \
-                      -tenant '$(AkaMSTenant)' \
-                      -createdBy '$(AkaMSCreatedBy)' \
-                      -groupOwner '$(AkaMSGroupOwner)' \
-                      -owners '$(AkaMSOwners)'
-                  displayName: 🎓 Update aka.ms links
-
-              - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
-                # Update the target Docker repo. The origin is defined with "_" as the username because
-                # the username doesn't matter, only the PAT. $(GitHubPAT) may be some other user's: it is
-                # provided by the variable group.
-                - script: |
-                    set -euxo pipefail
-                    # Install jq, used to evaluate Dockerfile templates.
-                    sudo apt update && sudo apt install -y jq
-
-                    go run ./cmd/dockerupdatepr \
-                      -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
-                      -github-pat '$(GitHubPAT)' \
-                      -github-pat-reviewer '$(GitHubPATReviewer)' \
-                      -build-asset-json '$(buildAssetJsonFile)' \
-                      -manual-branch '$(TargetGoImagesBranch)' \
-                      -set-azdo-variable-pr-number poll4MicrosoftGoImagesPRNumber
-                  displayName: Update go-images
-
-            - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
-              # Now we have poll4MicrosoftGoImagesPRNumber, which may be nil if no PR is required
-              - script: |
-                  releasego get-merged-pr-commit \
-                    -repo '$(TargetGoImagesGitHubRepo)' \
-                    -pr '$(poll4MicrosoftGoImagesPRNumber)' \
-                    -pat '$(GitHubPAT)'
-                displayName: ⌚ Wait for go-images update PR merge
-                timeoutInMinutes: 120
-                # Skip this task if the PR number isn't set. This might intentionally happen if we have to
-                # release a new binary/source revision of an out-of-support version of Go, and we don't
-                # still support Docker images for that version.
-                condition: and(succeeded(), ne(variables.poll4MicrosoftGoImagesPRNumber, 'nil'))
+                        -repo '$(TargetGoImagesGitHubRepo)' \
+                        -pr '$(poll4MicrosoftGoImagesPRNumber)' \
+                        -pat '$(GitHubPAT)'
+                    displayName: ⌚ Wait for go-images update PR merge
+                    timeoutInMinutes: 120
+                    # Skip this task if the PR number isn't set. This might intentionally happen if we have to
+                    # release a new binary/source revision of an out-of-support version of Go, and we don't
+                    # still support Docker images for that version.
+                    condition: and(succeeded(), ne(variables.poll4MicrosoftGoImagesPRNumber, 'nil'))
