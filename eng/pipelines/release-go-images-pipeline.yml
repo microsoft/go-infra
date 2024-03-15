@@ -47,24 +47,41 @@ variables:
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
 
-stages:
-  - ${{ if eq(parameters.approveAheadOfTime, false) }}:
-    - stage: WaitForApproval
-      jobs:
-        - job: Approve
-          pool: server
-          timeoutInMinutes: 1440 # 1 day
-          steps:
-            - task: ManualValidation@0
-              inputs:
-                instructions: >
-                  Once the microsoft/go build is complete, approve this step to start polling for
-                  dependency flow completion in microsoft/go-images.
-                onTimeout: 'reject'
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
 
-  - stage: Release
-    jobs:
-      - template: jobs/releasego.yml
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-windows-2022
+        os: windows
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
+
+    stages:
+      - ${{ if eq(parameters.approveAheadOfTime, false) }}:
+        - stage: WaitForApproval
+          jobs:
+            - job: Approve
+              pool: server
+              timeoutInMinutes: 1440 # 1 day
+              steps:
+                - task: ManualValidation@0
+                  inputs:
+                    instructions: >
+                      Once the microsoft/go build is complete, approve this step to start polling for
+                      dependency flow completion in microsoft/go-images.
+                    onTimeout: 'reject'
+
+      - template: stages/releasego.yml
         parameters:
           releaseIssue: ${{ parameters.releaseIssue }}
           retryInstructionsFlags: '-preapproval'
