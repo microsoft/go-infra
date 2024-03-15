@@ -30,75 +30,96 @@ variables:
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
 
-jobs:
-  - template: jobs/releasego.yml
-    parameters:
-      steps:
-        - script: |
-            releasego create-release-day-issue \
-              -notify '${{ parameters.notify }}' \
-              -releases '${{ join(',', parameters.releaseVersions) }}' \
-              -repo '$(TargetGitHubRepo)' \
-              -pat '$(GitHubPAT)' \
-              -set-azdo-variable-name GO_RELEASE_DAY_ISSUE_NUMBER
-          displayName: Create release day tracking issue
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
 
-        - template: ../steps/report.yml
-          parameters:
-            releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
-            reason: start
-            buildStatus: InProgress
-            start: true
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-windows-2022
+        os: windows
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
 
-        - ${{ each version in parameters.releaseVersions }}:
-          - script: |
-              releasego build-pipeline \
-                -id '$(GoReleaseBuildPipelineID)' \
-                -org 'https://dev.azure.com/dnceng/' \
-                -proj 'internal' \
-                -branch '$(Build.SourceBranch)' \
-                -commit '$(Build.SourceVersion)' \
-                -azdopat '$(System.AccessToken)' \
-                -set-azdo-variable GO_RELEASE_BUILDID \
-                p releaseVersion '${{ version }}' \
-                p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
-                p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
-            displayName: (${{ version }}) 🚀 Start microsoft/go build preparation
-          - template: ../steps/report.yml
+    stages:
+      - stage: Release
+        jobs:
+          - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
-              releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
-              version: ${{ version }}
-              condition: succeeded()
-              buildPipeline: microsoft-go-infra-release-build
-              buildID: $(GO_RELEASE_BUILDID)
-              buildStatus: NotStarted
-              start: true
-              reason: queued build
+              steps:
+                - script: |
+                    releasego create-release-day-issue \
+                      -notify '${{ parameters.notify }}' \
+                      -releases '${{ join(',', parameters.releaseVersions) }}' \
+                      -repo '$(TargetGitHubRepo)' \
+                      -pat '$(GitHubPAT)' \
+                      -set-azdo-variable-name GO_RELEASE_DAY_ISSUE_NUMBER
+                  displayName: Create release day tracking issue
 
-        - script: |
-            releasego build-pipeline \
-              -id '$(GoReleaseImagesPipelineID)' \
-              -org 'https://dev.azure.com/dnceng/' \
-              -proj 'internal' \
-              -branch '$(Build.SourceBranch)' \
-              -commit '$(Build.SourceVersion)' \
-              -azdopat '$(System.AccessToken)' \
-              -set-azdo-variable GO_RELEASE_IMAGES_BUILDID \
-              p releaseVersions '${{ convertToJson(parameters.releaseVersions) }}' \
-              p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
-              p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
-          displayName: 🚀 Start microsoft/go-images build
-        - template: ../steps/report.yml
-          parameters:
-            releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
-            condition: succeeded()
-            buildPipeline: microsoft-go-infra-release-go-images
-            buildID: $(GO_RELEASE_IMAGES_BUILDID)
-            buildStatus: NotStarted
-            start: true
-            reason: queued build
+                - template: ../steps/report.yml
+                  parameters:
+                    releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
+                    reason: start
+                    buildStatus: InProgress
+                    start: true
 
-        - template: ../steps/report.yml
-          parameters:
-            releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
-            reason: complete
+                - ${{ each version in parameters.releaseVersions }}:
+                  - script: |
+                      releasego build-pipeline \
+                        -id '$(GoReleaseBuildPipelineID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -branch '$(Build.SourceBranch)' \
+                        -commit '$(Build.SourceVersion)' \
+                        -azdopat '$(System.AccessToken)' \
+                        -set-azdo-variable GO_RELEASE_BUILDID \
+                        p releaseVersion '${{ version }}' \
+                        p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
+                        p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+                    displayName: (${{ version }}) 🚀 Start microsoft/go build preparation
+                  - template: ../steps/report.yml
+                    parameters:
+                      releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
+                      version: ${{ version }}
+                      condition: succeeded()
+                      buildPipeline: microsoft-go-infra-release-build
+                      buildID: $(GO_RELEASE_BUILDID)
+                      buildStatus: NotStarted
+                      start: true
+                      reason: queued build
+
+                - script: |
+                    releasego build-pipeline \
+                      -id '$(GoReleaseImagesPipelineID)' \
+                      -org 'https://dev.azure.com/dnceng/' \
+                      -proj 'internal' \
+                      -branch '$(Build.SourceBranch)' \
+                      -commit '$(Build.SourceVersion)' \
+                      -azdopat '$(System.AccessToken)' \
+                      -set-azdo-variable GO_RELEASE_IMAGES_BUILDID \
+                      p releaseVersions '${{ convertToJson(parameters.releaseVersions) }}' \
+                      p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
+                      p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+                  displayName: 🚀 Start microsoft/go-images build
+                - template: ../steps/report.yml
+                  parameters:
+                    releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
+                    condition: succeeded()
+                    buildPipeline: microsoft-go-infra-release-go-images
+                    buildID: $(GO_RELEASE_IMAGES_BUILDID)
+                    buildStatus: NotStarted
+                    start: true
+                    reason: queued build
+
+                - template: ../steps/report.yml
+                  parameters:
+                    releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
+                    reason: complete

@@ -32,7 +32,8 @@ jobs:
     pool:
       # This is a utility job: use generic recent LTS.
       name: NetCore1ESPool-Svc-Internal
-      demands: ImageOverride -equals Build.Ubuntu.1804.Amd64
+      image: 1es-ubuntu-2004
+      os: linux
     variables:
       # Release steps may need to download build asset JSONs. Set up variables.
       assetsDir: $(Pipeline.Workspace)/BuildAssets
