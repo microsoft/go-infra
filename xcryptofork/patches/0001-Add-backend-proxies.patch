@@ -1,0 +1,394 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Davis Goodin <dagood@microsoft.com>
+Date: Thu, 28 Sep 2023 23:11:12 -0500
+Subject: [PATCH] Add backend proxies
+
+Add full backend proxies to internal/backend. These are copies of proxies
+generated using a development version of the microsoft/go repository. They
+should be regenerated when microsoft/go uses this repository.
+
+To share the x/crypto patches, it may be better to use a single placeholder
+backend that acts as nobackend without any build tags. This would let the repo
+build and provide an API that every backend needs to implement without being
+tied to a particular fork of Go.
+---
+ internal/backend/boring_linux.go  | 106 ++++++++++++++++++++++++++++++
+ internal/backend/cng_windows.go   |  91 +++++++++++++++++++++++++
+ internal/backend/nobackend.go     |  66 +++++++++++++++++++
+ internal/backend/openssl_linux.go |  83 +++++++++++++++++++++++
+ 4 files changed, 346 insertions(+)
+ create mode 100644 internal/backend/boring_linux.go
+ create mode 100644 internal/backend/cng_windows.go
+ create mode 100644 internal/backend/nobackend.go
+ create mode 100644 internal/backend/openssl_linux.go
+
+diff --git a/internal/backend/boring_linux.go b/internal/backend/boring_linux.go
+new file mode 100644
+index 00000000000000..1ad8f21187872e
+--- /dev/null
++++ b/internal/backend/boring_linux.go
+@@ -0,0 +1,106 @@
++// Generated code. DO NOT EDIT.
++
++// This file implements a proxy that links into a specific crypto backend.
++
++//go:build goexperiment.boringcrypto && linux && cgo && (amd64 || arm64) && !android && !msan
++
++// The following functions defined in the API are not implemented by the backend and panic instead:
++//
++//	NewSHA3_224
++//	NewSHA3_256
++//	NewSHA3_384
++//	NewSHA3_512
++//	SHA3_224
++//	SHA3_256
++//	SHA3_384
++//	SHA3_512
++
++package backend
++
++import (
++	"crypto"
++	_ "unsafe"
++	"io"
++	"hash"
++	"crypto/cipher"
++)
++
++const Enabled = true
++//go:linkname SupportsHash crypto/internal/backend.SupportsHash
++func SupportsHash(h crypto.Hash) bool
++//go:linkname NewSHA1 crypto/internal/backend.NewSHA1
++func NewSHA1() hash.Hash
++//go:linkname NewSHA224 crypto/internal/backend.NewSHA224
++func NewSHA224() hash.Hash
++//go:linkname NewSHA256 crypto/internal/backend.NewSHA256
++func NewSHA256() hash.Hash
++//go:linkname NewSHA384 crypto/internal/backend.NewSHA384
++func NewSHA384() hash.Hash
++//go:linkname NewSHA512 crypto/internal/backend.NewSHA512
++func NewSHA512() hash.Hash
++// Not implemented by this backend.
++func NewSHA3_224() hash.Hash {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func NewSHA3_256() hash.Hash {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func NewSHA3_384() hash.Hash {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func NewSHA3_512() hash.Hash {
++	panic("not implemented by this backend")
++}
++//go:linkname SHA1 crypto/internal/backend.SHA1
++func SHA1(p []byte) (sum [20]byte)
++//go:linkname SHA224 crypto/internal/backend.SHA224
++func SHA224(p []byte) (sum [28]byte)
++//go:linkname SHA256 crypto/internal/backend.SHA256
++func SHA256(p []byte) (sum [32]byte)
++//go:linkname SHA384 crypto/internal/backend.SHA384
++func SHA384(p []byte) (sum [48]byte)
++//go:linkname SHA512 crypto/internal/backend.SHA512
++func SHA512(p []byte) (sum [64]byte)
++// Not implemented by this backend.
++func SHA3_224(p []byte) (sum [28]byte) {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func SHA3_256(p []byte) (sum [32]byte) {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func SHA3_384(p []byte) (sum [48]byte) {
++	panic("not implemented by this backend")
++}
++// Not implemented by this backend.
++func SHA3_512(p []byte) (sum [64]byte) {
++	panic("not implemented by this backend")
++}
++//go:linkname NewHMAC crypto/internal/backend.NewHMAC
++func NewHMAC(h func() hash.Hash, key []byte) hash.Hash
++//go:linkname NewAESCipher crypto/internal/backend.NewAESCipher
++func NewAESCipher(key []byte) (cipher.Block, error)
++//go:linkname NewGCMTLS crypto/internal/backend.NewGCMTLS
++func NewGCMTLS(c cipher.Block) (cipher.AEAD, error)
++//go:linkname SupportsHKDF crypto/internal/backend.SupportsHKDF
++func SupportsHKDF() bool
++//go:linkname ExpandHKDF crypto/internal/backend.ExpandHKDF
++func ExpandHKDF(h func() hash.Hash, pseudorandomKey, info []byte) (io.Reader, error)
++//go:linkname ExtractHKDF crypto/internal/backend.ExtractHKDF
++func ExtractHKDF(h func() hash.Hash, secret, salt []byte) ([]byte, error)
++//go:linkname SupportsTLS1PRF crypto/internal/backend.SupportsTLS1PRF
++func SupportsTLS1PRF() bool
++//go:linkname TLS1PRF crypto/internal/backend.TLS1PRF
++func TLS1PRF(result, secret, label, seed []byte, h func() hash.Hash) error
++//go:linkname SupportsPBKDF2 crypto/internal/backend.SupportsPBKDF2
++func SupportsPBKDF2() bool
++//go:linkname PBKDF2 crypto/internal/backend.PBKDF2
++func PBKDF2(password, salt []byte, iter, keyLen int, h func() hash.Hash) ([]byte, error)
++//go:linkname NewMD4 crypto/internal/backend.NewMD4
++func NewMD4() hash.Hash
++//go:linkname MD4 crypto/internal/backend.MD4
++func MD4(p []byte) (sum [16]byte)
+diff --git a/internal/backend/cng_windows.go b/internal/backend/cng_windows.go
+new file mode 100644
+index 00000000000000..c64f733cfc3572
+--- /dev/null
++++ b/internal/backend/cng_windows.go
+@@ -0,0 +1,91 @@
++// Generated code. DO NOT EDIT.
++
++// This file implements a proxy that links into a specific crypto backend.
++
++//go:build goexperiment.cngcrypto && windows
++
++// The following functions defined in the API are not implemented by the backend and panic instead:
++//
++//	NewSHA3_224
++//	SHA3_224
++
++package backend
++
++import (
++	"crypto"
++	_ "unsafe"
++	"io"
++	"hash"
++	"crypto/cipher"
++)
++
++const Enabled = true
++//go:linkname SupportsHash crypto/internal/backend.SupportsHash
++func SupportsHash(h crypto.Hash) bool
++//go:linkname NewSHA1 crypto/internal/backend.NewSHA1
++func NewSHA1() hash.Hash
++//go:linkname NewSHA224 crypto/internal/backend.NewSHA224
++func NewSHA224() hash.Hash
++//go:linkname NewSHA256 crypto/internal/backend.NewSHA256
++func NewSHA256() hash.Hash
++//go:linkname NewSHA384 crypto/internal/backend.NewSHA384
++func NewSHA384() hash.Hash
++//go:linkname NewSHA512 crypto/internal/backend.NewSHA512
++func NewSHA512() hash.Hash
++// Not implemented by this backend.
++func NewSHA3_224() hash.Hash {
++	panic("not implemented by this backend")
++}
++//go:linkname NewSHA3_256 crypto/internal/backend.NewSHA3_256
++func NewSHA3_256() hash.Hash
++//go:linkname NewSHA3_384 crypto/internal/backend.NewSHA3_384
++func NewSHA3_384() hash.Hash
++//go:linkname NewSHA3_512 crypto/internal/backend.NewSHA3_512
++func NewSHA3_512() hash.Hash
++//go:linkname SHA1 crypto/internal/backend.SHA1
++func SHA1(p []byte) (sum [20]byte)
++//go:linkname SHA224 crypto/internal/backend.SHA224
++func SHA224(p []byte) (sum [28]byte)
++//go:linkname SHA256 crypto/internal/backend.SHA256
++func SHA256(p []byte) (sum [32]byte)
++//go:linkname SHA384 crypto/internal/backend.SHA384
++func SHA384(p []byte) (sum [48]byte)
++//go:linkname SHA512 crypto/internal/backend.SHA512
++func SHA512(p []byte) (sum [64]byte)
++// Not implemented by this backend.
++func SHA3_224(p []byte) (sum [28]byte) {
++	panic("not implemented by this backend")
++}
++//go:linkname SHA3_256 crypto/internal/backend.SHA3_256
++//go:noescape
++func SHA3_256(p []byte) (sum [32]byte)
++//go:linkname SHA3_384 crypto/internal/backend.SHA3_384
++//go:noescape
++func SHA3_384(p []byte) (sum [48]byte)
++//go:linkname SHA3_512 crypto/internal/backend.SHA3_512
++//go:noescape
++func SHA3_512(p []byte) (sum [64]byte)
++//go:linkname NewHMAC crypto/internal/backend.NewHMAC
++func NewHMAC(h func() hash.Hash, key []byte) hash.Hash
++//go:linkname NewAESCipher crypto/internal/backend.NewAESCipher
++func NewAESCipher(key []byte) (cipher.Block, error)
++//go:linkname NewGCMTLS crypto/internal/backend.NewGCMTLS
++func NewGCMTLS(c cipher.Block) (cipher.AEAD, error)
++//go:linkname SupportsHKDF crypto/internal/backend.SupportsHKDF
++func SupportsHKDF() bool
++//go:linkname ExpandHKDF crypto/internal/backend.ExpandHKDF
++func ExpandHKDF(h func() hash.Hash, pseudorandomKey, info []byte) (io.Reader, error)
++//go:linkname ExtractHKDF crypto/internal/backend.ExtractHKDF
++func ExtractHKDF(h func() hash.Hash, secret, salt []byte) ([]byte, error)
++//go:linkname SupportsTLS1PRF crypto/internal/backend.SupportsTLS1PRF
++func SupportsTLS1PRF() bool
++//go:linkname TLS1PRF crypto/internal/backend.TLS1PRF
++func TLS1PRF(result, secret, label, seed []byte, h func() hash.Hash) error
++//go:linkname SupportsPBKDF2 crypto/internal/backend.SupportsPBKDF2
++func SupportsPBKDF2() bool
++//go:linkname PBKDF2 crypto/internal/backend.PBKDF2
++func PBKDF2(password, salt []byte, iter, keyLen int, h func() hash.Hash) ([]byte, error)
++//go:linkname NewMD4 crypto/internal/backend.NewMD4
++func NewMD4() hash.Hash
++//go:linkname MD4 crypto/internal/backend.MD4
++func MD4(p []byte) (sum [16]byte)
+diff --git a/internal/backend/nobackend.go b/internal/backend/nobackend.go
+new file mode 100644
+index 00000000000000..4b397e6ed41314
+--- /dev/null
++++ b/internal/backend/nobackend.go
+@@ -0,0 +1,66 @@
++// Generated code. DO NOT EDIT.
++
++//go:build !(goexperiment.boringcrypto && linux && cgo && (amd64 || arm64) && !android && !msan) && !(goexperiment.cngcrypto && windows) && !(goexperiment.opensslcrypto && linux && cgo)
++
++package backend
++
++import (
++	"crypto"
++	"crypto/cipher"
++	"hash"
++	"io"
++)
++
++const Enabled = false
++
++func SupportsHash(h crypto.Hash) bool { panic("cryptobackend: not available") }
++
++func NewSHA1() hash.Hash     { panic("cryptobackend: not available") }
++func NewSHA224() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA256() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA384() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA512() hash.Hash   { panic("cryptobackend: not available") }
++func NewSHA3_224() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_256() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_384() hash.Hash { panic("cryptobackend: not available") }
++func NewSHA3_512() hash.Hash { panic("cryptobackend: not available") }
++
++func SHA1(p []byte) (sum [20]byte)     { panic("cryptobackend: not available") }
++func SHA224(p []byte) (sum [28]byte)   { panic("cryptobackend: not available") }
++func SHA256(p []byte) (sum [32]byte)   { panic("cryptobackend: not available") }
++func SHA384(p []byte) (sum [48]byte)   { panic("cryptobackend: not available") }
++func SHA512(p []byte) (sum [64]byte)   { panic("cryptobackend: not available") }
++func SHA3_224(p []byte) (sum [28]byte) { panic("cryptobackend: not available") }
++func SHA3_256(p []byte) (sum [32]byte) { panic("cryptobackend: not available") }
++func SHA3_384(p []byte) (sum [48]byte) { panic("cryptobackend: not available") }
++func SHA3_512(p []byte) (sum [64]byte) { panic("cryptobackend: not available") }
++
++func NewHMAC(h func() hash.Hash, key []byte) hash.Hash { panic("cryptobackend: not available") }
++
++func NewAESCipher(key []byte) (cipher.Block, error) { panic("cryptobackend: not available") }
++func NewGCMTLS(c cipher.Block) (cipher.AEAD, error) { panic("cryptobackend: not available") }
++
++func SupportsHKDF() bool { panic("cryptobackend: not available") }
++
++func ExpandHKDF(h func() hash.Hash, pseudorandomKey, info []byte) (io.Reader, error) {
++	panic("cryptobackend: not available")
++}
++
++func ExtractHKDF(h func() hash.Hash, secret, salt []byte) ([]byte, error) {
++	panic("cryptobackend: not available")
++}
++
++func SupportsTLS1PRF() bool { panic("cryptobackend: not available") }
++
++func TLS1PRF(result, secret, label, seed []byte, h func() hash.Hash) error {
++	panic("cryptobackend: not available")
++}
++
++func SupportsPBKDF2() bool { panic("cryptobackend: not available") }
++
++func PBKDF2(password, salt []byte, iter, keyLen int, h func() hash.Hash) ([]byte, error) {
++	panic("cryptobackend: not available")
++}
++
++func NewMD4() hash.Hash           { panic("cryptobackend: not available") }
++func MD4(p []byte) (sum [16]byte) { panic("cryptobackend: not available") }
+diff --git a/internal/backend/openssl_linux.go b/internal/backend/openssl_linux.go
+new file mode 100644
+index 00000000000000..1dcac8848eec6a
+--- /dev/null
++++ b/internal/backend/openssl_linux.go
+@@ -0,0 +1,83 @@
++// Generated code. DO NOT EDIT.
++
++// This file implements a proxy that links into a specific crypto backend.
++
++//go:build goexperiment.opensslcrypto && linux && cgo
++
++package backend
++
++import (
++	"crypto"
++	_ "unsafe"
++	"io"
++	"hash"
++	"crypto/cipher"
++)
++
++const Enabled = true
++//go:linkname SupportsHash crypto/internal/backend.SupportsHash
++func SupportsHash(h crypto.Hash) bool
++//go:linkname NewSHA1 crypto/internal/backend.NewSHA1
++func NewSHA1() hash.Hash
++//go:linkname NewSHA224 crypto/internal/backend.NewSHA224
++func NewSHA224() hash.Hash
++//go:linkname NewSHA256 crypto/internal/backend.NewSHA256
++func NewSHA256() hash.Hash
++//go:linkname NewSHA384 crypto/internal/backend.NewSHA384
++func NewSHA384() hash.Hash
++//go:linkname NewSHA512 crypto/internal/backend.NewSHA512
++func NewSHA512() hash.Hash
++//go:linkname NewSHA3_224 crypto/internal/backend.NewSHA3_224
++func NewSHA3_224() hash.Hash
++//go:linkname NewSHA3_256 crypto/internal/backend.NewSHA3_256
++func NewSHA3_256() hash.Hash
++//go:linkname NewSHA3_384 crypto/internal/backend.NewSHA3_384
++func NewSHA3_384() hash.Hash
++//go:linkname NewSHA3_512 crypto/internal/backend.NewSHA3_512
++func NewSHA3_512() hash.Hash
++//go:linkname SHA1 crypto/internal/backend.SHA1
++func SHA1(p []byte) (sum [20]byte)
++//go:linkname SHA224 crypto/internal/backend.SHA224
++func SHA224(p []byte) (sum [28]byte)
++//go:linkname SHA256 crypto/internal/backend.SHA256
++func SHA256(p []byte) (sum [32]byte)
++//go:linkname SHA384 crypto/internal/backend.SHA384
++func SHA384(p []byte) (sum [48]byte)
++//go:linkname SHA512 crypto/internal/backend.SHA512
++func SHA512(p []byte) (sum [64]byte)
++//go:linkname SHA3_224 crypto/internal/backend.SHA3_224
++//go:noescape
++func SHA3_224(p []byte) (sum [28]byte)
++//go:linkname SHA3_256 crypto/internal/backend.SHA3_256
++//go:noescape
++func SHA3_256(p []byte) (sum [32]byte)
++//go:linkname SHA3_384 crypto/internal/backend.SHA3_384
++//go:noescape
++func SHA3_384(p []byte) (sum [48]byte)
++//go:linkname SHA3_512 crypto/internal/backend.SHA3_512
++//go:noescape
++func SHA3_512(p []byte) (sum [64]byte)
++//go:linkname NewHMAC crypto/internal/backend.NewHMAC
++func NewHMAC(h func() hash.Hash, key []byte) hash.Hash
++//go:linkname NewAESCipher crypto/internal/backend.NewAESCipher
++func NewAESCipher(key []byte) (cipher.Block, error)
++//go:linkname NewGCMTLS crypto/internal/backend.NewGCMTLS
++func NewGCMTLS(c cipher.Block) (cipher.AEAD, error)
++//go:linkname SupportsHKDF crypto/internal/backend.SupportsHKDF
++func SupportsHKDF() bool
++//go:linkname ExpandHKDF crypto/internal/backend.ExpandHKDF
++func ExpandHKDF(h func() hash.Hash, pseudorandomKey, info []byte) (io.Reader, error)
++//go:linkname ExtractHKDF crypto/internal/backend.ExtractHKDF
++func ExtractHKDF(h func() hash.Hash, secret, salt []byte) ([]byte, error)
++//go:linkname SupportsTLS1PRF crypto/internal/backend.SupportsTLS1PRF
++func SupportsTLS1PRF() bool
++//go:linkname TLS1PRF crypto/internal/backend.TLS1PRF
++func TLS1PRF(result, secret, label, seed []byte, h func() hash.Hash) error
++//go:linkname SupportsPBKDF2 crypto/internal/backend.SupportsPBKDF2
++func SupportsPBKDF2() bool
++//go:linkname PBKDF2 crypto/internal/backend.PBKDF2
++func PBKDF2(password, salt []byte, iter, keyLen int, h func() hash.Hash) ([]byte, error)
++//go:linkname NewMD4 crypto/internal/backend.NewMD4
++func NewMD4() hash.Hash
++//go:linkname MD4 crypto/internal/backend.MD4
++func MD4(p []byte) (sum [16]byte)
