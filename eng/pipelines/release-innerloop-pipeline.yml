@@ -1,0 +1,126 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
+parameters:
+  - name: releaseVersion
+    displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
+    type: string
+
+  - name: releaseIssue
+    displayName: microsoft/go issue number to comment on once complete, or nil.
+    type: string
+    default: 'nil'
+  
+  - name: microsoftGoCommitHash
+    displayName: The commit to run the innerloop tests for.
+    type: string
+
+  # Allow retrying a build pointing at an existing run.
+  - name: poll1MicrosoftGoInnerloopBuildID
+    displayName: '1: internal innerloop build ID to poll for completion.'
+    type: string
+    default: nil
+
+  # This parameter intentionally has no default: see release-go-pipeline.yml
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
+
+trigger: none
+pr: none
+
+variables:
+  - group: Microsoft-GoLang-bot
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
+  - template: variables/release-pipelines.yml
+
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-windows-2022
+        os: windows
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
+
+    stages:
+      - stage: Release
+        jobs:
+          - template: /eng/pipelines/jobs/releasego.yml@self
+            parameters:
+              releaseVersion: ${{ parameters.releaseVersion }}
+              releaseIssue: ${{ parameters.releaseIssue }}
+              variables:
+                # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
+                # overridden with a logging command as the pipeline moves on.
+                poll1MicrosoftGoInnerloopBuildID: ${{ parameters.poll1MicrosoftGoInnerloopBuildID }}
+              steps:
+                # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
+                # retry build will have a non-nil value in one of these parameters. Only the value of the last
+                # step's parameter matters.
+                - ${{ if eq(parameters.poll1MicrosoftGoInnerloopBuildID, 'nil') }}:
+                  # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
+                  # default Branch is "microsoft/main". So, we need to figure out the release branch name
+                  # and save it as a variable to pass it to AzDO.
+                  #
+                  # Testing adds a complication: testing commits won't be found in the actual release
+                  # branches, so we need a way to override. This is done using BuildPipelineFullBranchName
+                  # from the variable group. For actual releases, it should have the value
+                  # "refs/heads/microsoft/$(UpstreamTargetBranchName)". But in a testing variable group, it
+                  # can point at any ordinary dev branch that has the sync commit.
+                  - script: |
+                      releasego get-target-branch \
+                        -version '${{ parameters.releaseVersion }}' \
+                        -set-azdo-variable-branch-name UpstreamTargetBranchName
+                    displayName: Get target branch containing commit
+                  - script: |
+                      releasego build-pipeline \
+                        -commit '${{ parameters.microsoftGoCommitHash }}' \
+                        -branch '$(BuildPipelineFullBranchName)' \
+                        -id '$(GoInnerloopPipelineID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -azdopat '$(System.AccessToken)' \
+                        -set-azdo-variable poll1MicrosoftGoInnerloopBuildID
+                    displayName: 🚀 Run microsoft/go internal innerloop build
+                  # Report that the job started to provide the release runner with a direct link.
+                  - template: ../steps/report.yml
+                    parameters:
+                      releaseIssue: ${{ parameters.releaseIssue }}
+                      version: ${{ parameters.releaseVersion }}
+                      condition: succeeded()
+                      buildPipeline: microsoft-go-innerloop
+                      buildID: $(poll1MicrosoftGoInnerloopBuildID)
+                      buildStatus: NotStarted
+                      start: true
+                      reason: queued build
+
+                # Now we have poll1MicrosoftGoInnerloopBuildID
+                - script: |
+                    releasego wait-build \
+                      -id '$(poll1MicrosoftGoInnerloopBuildID)' \
+                      -org 'https://dev.azure.com/dnceng/' \
+                      -proj 'internal' \
+                      -azdopat '$(System.AccessToken)'
+                  displayName: ⌚ Wait for innerloop
+                  timeoutInMinutes: 120
+                - template: ../steps/report.yml
+                  parameters:
+                    releaseIssue: ${{ parameters.releaseIssue }}
+                    version: ${{ parameters.releaseVersion }}
+                    condition: and(ne('$(poll1MicrosoftGoInnerloopBuildID)', 'nil'), succeededOrFailed())
+                    buildPipeline: microsoft-go-innerloop
+                    buildID: $(poll1MicrosoftGoInnerloopBuildID)
+                    reason: innerloop status
