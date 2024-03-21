@@ -38,11 +38,13 @@ For example, a security patch release for 1.18 and 1.19 may look like this:
     * It will take some time to reserve a build agent. Expect up to ten minutes.
 
 1. Wait for notifications on the release tracking issue.
-    * When the "microsoft-go-infra-release-build" build is complete and successful for every version in the release, continue to the next step.
+    * Continue once both of these builds complete successfully for every version in the release:
+        * **microsoft-go-infra-release-build**
+        * **microsoft-go-infra-release-innerloop**
     * If an error occurs, refer to the rest of this doc for diagnosis and retry guidance.
 
 1. Click on the "microsoft-go-infra-release-go-images" build and approve it to let it continue.
-    * It is ok to do this a little early if you expect the builds to be done soon. The approval gate only exists to prevent excessive polling.
+    * Don't do this early. This pipeline updates active tags in MAR, so it's important to make sure the innerloop run is successful on the exact commit to be released.
 
 1. Wait for a notification on the release tracking issue.
     * Continue if the images build is successful.

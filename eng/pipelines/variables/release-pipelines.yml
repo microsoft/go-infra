@@ -1,0 +1,12 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Release-related pipeline IDs, for queueing.
+
+variables:
+  # Pipeline that runs the innerloop test pipeline.
+  - name: GoReleaseInnerloopPipelineID
+    value: 1348
+  # Innerloop test pipeline.
+  - name: GoInnerloopPipelineID
+    value: 1342
