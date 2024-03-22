@@ -37,6 +37,13 @@ jobs:
       variables:
         bucketArgs: -bucket ${{ id }}/${{ length(parameters.runnerIDs) }}
 
+      templateContext:
+        outputs:
+          - output: pipelineArtifact
+            path: $(Build.SourcesDirectory)/cmd/fuzzcrypto
+            artifact: ${{ parameters.name }} ${{ id }} testdata
+            condition: failed()
+
       steps:
         - checkout: self
           submodules: true
@@ -55,11 +62,6 @@ jobs:
             env:
               GOEXPERIMENT: ${{ parameters.goExperiment }}
             timeoutInMinutes: ${{ parameters.fuzzTimeoutMinutes }}
-
-          - publish: $(Build.SourcesDirectory)/cmd/fuzzcrypto
-            artifact: ${{ parameters.name }} ${{ id }} testdata
-            displayName: Upload testdata on failure
-            condition: failed()
 
         - ${{ else }}:
           # Test with ordinary Go.
