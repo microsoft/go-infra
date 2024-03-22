@@ -103,7 +103,7 @@ extends:
                       condition: succeeded()
                       buildPipeline: microsoft-go-innerloop
                       buildID: $(poll1MicrosoftGoInnerloopBuildID)
-                      buildStatus: NotStarted
+                      buildStatus: '?'
                       start: true
                       reason: queued build
 
