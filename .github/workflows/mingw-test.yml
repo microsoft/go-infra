@@ -26,7 +26,7 @@ jobs:
           - '-source nixman -version 13.2.0-rt_v11-rev0 -arch x86_64 -threading posix -exception seh -runtime msvcrt'
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
           cache: false # see https://github.com/actions/setup-go/issues/368
