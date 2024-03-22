@@ -32,7 +32,7 @@ jobs:
           cache: false # see https://github.com/actions/setup-go/issues/368
 
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Run getmingw diag
         run: go run ./cmd/getmingw diagnose
