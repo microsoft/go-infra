@@ -84,6 +84,7 @@ extends:
       tsa:
         enabled: true
         configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
+      codeql:
 
     stages:
       - stage: Release
