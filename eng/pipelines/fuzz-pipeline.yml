@@ -19,32 +19,49 @@ resources:
     - pipeline: build
       source: microsoft-go
       branch: microsoft/main
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
 
-stages:
-  - stage: Fuzz
-    jobs:
-      - template: jobs/fuzz.yml
-        parameters:
-          name: Linux
-          platform: linux-amd64
-          pool:
-            name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals 1es-ubuntu-2004
+extends:
+  template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Internal
+        image: 1es-windows-2022
+        os: windows
 
-      - template: jobs/fuzz.yml
-        parameters:
-          name: Linux_openssl
-          platform: linux-amd64
-          goExperiment: opensslcrypto
-          pool:
-            name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals 1es-ubuntu-2004
+    stages:
+      - stage: Fuzz
+        jobs:
+          - template: /eng/pipelines/jobs/fuzz.yml@self
+            parameters:
+              name: Linux
+              platform: linux-amd64
+              pool:
+                name: NetCore1ESPool-Internal
+                image: 1es-ubuntu-2004
+                os: linux
 
-      - template: jobs/fuzz.yml
-        parameters:
-          name: Windows_cng
-          platform: windows-amd64
-          goExperiment: cngcrypto
-          pool:
-            name: NetCore1ESPool-Internal
-            demands: ImageOverride -equals 1es-windows-2022
+          - template: /eng/pipelines/jobs/fuzz.yml@self
+            parameters:
+              name: Linux_openssl
+              platform: linux-amd64
+              goExperiment: opensslcrypto
+              pool:
+                name: NetCore1ESPool-Internal
+                image: 1es-ubuntu-2004
+                os: linux
+
+          - template: /eng/pipelines/jobs/fuzz.yml@self
+            parameters:
+              name: Windows_cng
+              platform: windows-amd64
+              goExperiment: cngcrypto
+              pool:
+                name: NetCore1ESPool-Internal
+                image: 1es-windows-2022
+                os: windows

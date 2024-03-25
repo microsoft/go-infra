@@ -15,24 +15,44 @@ variables:
   - group: Microsoft-GoLang-bot
   - group: DotNet-VSTS-Infra-Access
 
-jobs:
-  - job: Sync
-    pool:
-      vmImage: ubuntu-20.04
-    workspace:
-      clean: all
-    steps:
-      - template: steps/checkout-unix-task.yml
-      - template: steps/init-pwsh-task.yml
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
 
-      - template: steps/init-go.yml
-      - template: steps/set-bot-git-author.yml
+extends:
+  template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Internal
+        image: 1es-windows-2022
+        os: windows
 
-      - pwsh: |
-          go run ./cmd/sync `
-            -git-auth pat `
-            -github-user microsoft-golang-bot `
-            -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
-            -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
-            -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
-        displayName: Sync
+    stages:
+      - stage: Sync
+        jobs:
+          - job: Sync
+            pool:
+              name: NetCore1ESPool-Internal
+              image: 1es-ubuntu-2004
+              os: linux
+            workspace:
+              clean: all
+            steps:
+              - template: /eng/pipelines/steps/checkout-unix-task.yml@self
+              - template: /eng/pipelines/steps/init-pwsh-task.yml@self
+
+              - template: /eng/pipelines/steps/init-go.yml@self
+              - template: /eng/pipelines/steps/set-bot-git-author.yml@self
+
+              - pwsh: |
+                  go run ./cmd/sync `
+                    -git-auth pat `
+                    -github-user microsoft-golang-bot `
+                    -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+                    -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
+                    -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
+                displayName: Sync

@@ -4,6 +4,9 @@
 trigger: none
 pr: none
 
+variables:
+  - group: Microsoft-GoLang-bot
+
 resources:
   pipelines:
     - pipeline: build
@@ -19,42 +22,56 @@ resources:
             - microsoft/release-branch.*
             - microsoft/dev.boringcrypto.go*
             - dev/official/*
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
 
-variables:
-  - group: Microsoft-GoLang-bot
+extends:
+  template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-windows-2022
+        os: windows
 
-jobs:
-  - job: Update
-    workspace:
-      clean: all
-    pool:
-      # This is a utility job: use generic recent LTS.
-      vmImage: ubuntu-20.04
-    variables:
-      assetJsonPath: $(Pipeline.Workspace)/build/BuildAssets/assets.json
-    steps:
-      - template: steps/checkout-unix-task.yml
-      - template: steps/init-pwsh-task.yml
+    stages:
+      - stage: Update
+        jobs:
+          - job: Update
+            workspace:
+              clean: all
+            pool:
+              name: NetCore1ESPool-Internal
+              image: 1es-ubuntu-2004
+              os: linux
+            variables:
+              assetJsonPath: $(Pipeline.Workspace)/build/BuildAssets/assets.json
+            steps:
+              - template: /eng/pipelines/steps/checkout-unix-task.yml@self
+              - template: /eng/pipelines/steps/init-pwsh-task.yml@self
 
-      - pwsh: |
-          echo "pipelineName: $(resources.pipeline.build.pipelineName)"
-          echo "pipelineID: $(resources.pipeline.build.pipelineID)"
-          echo "runName: $(resources.pipeline.build.runName)"
-          echo "runID: $(resources.pipeline.build.runID)"
-          echo "sourceBranch: $(resources.pipeline.build.sourceBranch)"
-          echo "sourceCommit: $(resources.pipeline.build.sourceCommit)"
-        displayName: Log source build/pipeline info
+              - pwsh: |
+                  echo "pipelineName: $(resources.pipeline.build.pipelineName)"
+                  echo "pipelineID: $(resources.pipeline.build.pipelineID)"
+                  echo "runName: $(resources.pipeline.build.runName)"
+                  echo "runID: $(resources.pipeline.build.runID)"
+                  echo "sourceBranch: $(resources.pipeline.build.sourceBranch)"
+                  echo "sourceCommit: $(resources.pipeline.build.sourceCommit)"
+                displayName: Log source build/pipeline info
 
-      - download: build
-        artifact: BuildAssets
+              - download: build
+                artifact: BuildAssets
 
-      - template: steps/init-go.yml
-      - template: steps/set-bot-git-author.yml
+              - template: /eng/pipelines/steps/init-go.yml@self
+              - template: /eng/pipelines/steps/set-bot-git-author.yml@self
 
-      - pwsh: |
-          go run ./cmd/dockerupdatepr `
-            -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-images `
-            -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
-            -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
-            -build-asset-json "$(assetJsonPath)"
-        displayName: Update go-images
+              - pwsh: |
+                  go run ./cmd/dockerupdatepr `
+                    -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-images `
+                    -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+                    -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
+                    -build-asset-json "$(assetJsonPath)"
+                displayName: Update go-images
