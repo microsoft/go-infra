@@ -1,4 +1,4 @@
-Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.
+Completed releasing one version! If every version's release-build and innerloop tests are successful, approve the release-go-images build to continue.
 
 This appears to be a new major version! If so, here are a few things that will need an update when the release is done:
 * [ ] The [microsoft/go download links](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/Downloads.md)
