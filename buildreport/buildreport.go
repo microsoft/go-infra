@@ -271,7 +271,7 @@ func (s *State) notificationPreamble() string {
 	case SymbolSucceeded:
 		switch s.Name {
 		case releaseBuildPipelineName:
-			notification := "Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.\n"
+			notification := "Completed releasing one version! If every version's release-build and innerloop tests are successful, approve the release-go-images build to continue.\n"
 			if goversion.New(s.Version).Patch == "0" {
 				notification += "\nThis appears to be a new major version! If so, here are a few things that will need an update when the release is done:\n" +
 					"* [ ] The [microsoft/go download links](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/Downloads.md)\n" +

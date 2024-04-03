@@ -1,1 +1,1 @@
-Completed releasing one version! If every version's release-build has finished, approve the release-go-images build to continue.
+Completed releasing one version! If every version's release-build and innerloop tests are successful, approve the release-go-images build to continue.
