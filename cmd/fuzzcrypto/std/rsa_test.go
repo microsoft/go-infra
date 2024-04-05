@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -69,10 +70,10 @@ func FuzzRSAOAEP(f *testing.F) {
 		}
 		enc, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, &key.PublicKey, msg, label)
 		if err != nil {
-			if errors.Is(err, rsa.ErrMessageTooLong) {
-				return
+			if !validRSAError(err) {
+				t.Fatal(err)
 			}
-			t.Fatal(err)
+			return
 		}
 		dec, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, key, enc, label)
 		if err != nil {
@@ -95,10 +96,10 @@ func FuzzRSAPKCS1(f *testing.F) {
 		}
 		enc, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, msg)
 		if err != nil {
-			if errors.Is(err, rsa.ErrMessageTooLong) {
-				return
+			if !validRSAError(err) {
+				t.Fatal(err)
 			}
-			t.Fatal(err)
+			return
 		}
 		dec, err := rsa.DecryptPKCS1v15(rand.Reader, key, enc)
 		if err != nil {
@@ -123,15 +124,10 @@ func FuzzRSASignPSS(f *testing.F) {
 		hashed := sha256.Sum256(msg)
 		sig, err := rsa.SignPSS(rand.Reader, key, crypto.SHA256, hashed[:], &opts)
 		if err != nil {
-			// Key size being too small is an invalid input, not a problem.
-			switch err.Error() {
-			case "crypto/rsa: key size too small for PSS signature", "crypto/rsa: invalid key size":
-				return
+			if !validRSAError(err) {
+				t.Fatal(err)
 			}
-			if errors.Is(err, rsa.ErrMessageTooLong) {
-				return
-			}
-			t.Fatal(err)
+			return
 		}
 		err = rsa.VerifyPSS(&key.PublicKey, crypto.SHA256, hashed[:], sig, &opts)
 		if err != nil {
@@ -157,7 +153,10 @@ func FuzzRSASignPKCS1v15(f *testing.F) {
 		hashed := sha256.Sum256(msg)
 		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
 		if err != nil {
-			t.Fatal(err)
+			if !validRSAError(err) {
+				t.Fatal(err)
+			}
+			return
 		}
 		err = rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, hashed[:], sig)
 		if err != nil {
@@ -169,6 +168,26 @@ func FuzzRSASignPKCS1v15(f *testing.F) {
 			t.Errorf("Verify succeeded despite intentionally invalid hash!")
 		}
 	})
+}
+
+func validRSAError(err error) bool {
+	if err == nil {
+		return true
+	}
+	// Key size being too small is an invalid input, not a problem.
+	errStr := err.Error()
+	switch errStr {
+	case "crypto/rsa: key size too small for PSS signature", "crypto/rsa: invalid key size":
+		return true
+	}
+	if strings.Contains(errStr, "data too large for key size") {
+		// This is the OpenSSL error message for rsa.ErrMessageTooLong.
+		return true
+	}
+	if errors.Is(err, rsa.ErrMessageTooLong) {
+		return true
+	}
+	return false
 }
 
 // xor returns b with one byte xored with x.
