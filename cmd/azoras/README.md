@@ -45,5 +45,5 @@ azoras deprecate myregistry.azurecr.io/myimage:sha256:foo
 This subcommand can also deprecated multiple images at once using a file with a line-separated list of images.
 
 ```shell
-azoras deprecate images.txt -bulk
+azoras deprecate -bulk images.txt
 ```

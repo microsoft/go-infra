@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"log"
@@ -30,16 +31,16 @@ func init() {
 Examples:
 
 	go run ./cmd/azoras deprecate myregistry.azurecr.io/myimage:sha256:foo
-	go run ./cmd/azoras deprecate images.txt -bulk -eol 2022-12-31T23:59:59Z
+	go run ./cmd/azoras deprecate -bulk images.txt -eol 2022-12-31T23:59:59Z
 		`,
 		Handle:         handleDeprecate,
-		TakeArgsReason: "The fully qualified image to deprecate or a file containing a newline-separated list of images to deprecate if -bulk is set.",
+		TakeArgsReason: "A list of fully-qualified image to deprecate",
 	})
 }
 
 func handleDeprecate(p subcmd.ParseFunc) error {
 	eolStr := flag.String("eol", "", "The end-of-life date for the image in RFC3339 format. Defaults to the current time.")
-	bulk := flag.Bool("bulk", false, "Deprecate multiple images.")
+	bulk := flag.String("bulk", "", "A file containing a line-separated list of images to deprecate in bulk.")
 	if err := p(); err != nil {
 		return err
 	}
@@ -55,24 +56,21 @@ func handleDeprecate(p subcmd.ParseFunc) error {
 			return err
 		}
 	}
-	if !*bulk {
-		// Deprecate a single image.
-		return deprecate(ref, eol)
+	images := append([]string{}, flag.Args()...)
+	if *bulk != "" {
+		data, err := os.ReadFile(ref)
+		if err != nil {
+			return err
+		}
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+		images = append(images, strings.Split(string(data), "\n")...)
 	}
 
-	// Deprecate multiple images.
-	data, err := os.ReadFile(ref)
-	if err != nil {
-		return err
-	}
-	images := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
-	return deprecateBulk(images, eol)
-}
-
-// deprecateBulk deprecates multiple images in bulk.
-func deprecateBulk(images []string, eol time.Time) error {
 	var err error
 	for _, image := range images {
+		if image == "" {
+			continue
+		}
 		if err1 := deprecate(image, eol); err1 != nil {
 			log.Printf("Failed to deprecate image %s: %v\n", image, err1)
 			if err == nil {
