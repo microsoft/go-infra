@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+
 package archive
 
 import (
@@ -10,8 +11,8 @@ import (
 
 // UntarOneFile extracts a single file from a tar archive.
 // It returns the contents of the file, or nil if the file is not found.
-func UntarOneFile(name string, r io.Reader, isGziped bool) ([]byte, error) {
-	if isGziped {
+func UntarOneFile(name string, r io.Reader, isGzipped bool) ([]byte, error) {
+	if isGzipped {
 		var err error
 		r, err = gzip.NewReader(r)
 		if err != nil {

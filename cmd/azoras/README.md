@@ -20,12 +20,17 @@ azoras install
 azoras doesn't handle authentication, you need to login to your Azure ACR registry with the ORAS CLI.
 See https://oras.land/docs/how_to_guides/authentication for more information.
 
-azoras provides a helper subcommand to login to login the ORAS CLI to your Azure ACR registry using the Azure CLI.
-You first need to login to the Azure CLI with `az login` and then run:
+azoras provides a helper subcommand to login the ORAS CLI to your Azure ACR registry using the Azure CLI.
 
-```shell
-azoras login
-```
+1. Log into the Azure CLI:
+    ```shell
+    az login
+    ```
+2. Use the utility command to log into your ACR:
+    ```shell
+    azoras login <acr-name>
+    ```
+    An ACR name is `golangimages`, *not* its login server URL.
 
 ## Subcommands
 

@@ -98,7 +98,11 @@ func deprecate(image string, eol time.Time) error {
 			return nil
 		}
 	}
-	cmdOras := exec.Command("oras", "attach", "--artifact-type", artifactTypeLifecycle, "--annotation", annotationNameEoL+"="+eol.Format(time.RFC3339), image)
+	cmdOras := exec.Command(
+		"oras", "attach",
+		"--artifact-type", artifactTypeLifecycle,
+		"--annotation", annotationNameEoL+"="+eol.Format(time.RFC3339),
+		image)
 	err = executil.Run(cmdOras)
 	if err != nil {
 		return err
