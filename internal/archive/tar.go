@@ -6,6 +6,7 @@ package archive
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"io"
 )
 
@@ -20,6 +21,7 @@ func UntarOneFile(name string, r io.Reader, isGzipped bool) ([]byte, error) {
 		}
 	}
 	tr := tar.NewReader(r)
+	var data []byte
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -29,8 +31,14 @@ func UntarOneFile(name string, r io.Reader, isGzipped bool) ([]byte, error) {
 			return nil, err
 		}
 		if header.Name == name {
-			return io.ReadAll(tr)
+			if data != nil {
+				return nil, errors.New("multiple files found with the same name")
+			}
+			data, err = io.ReadAll(tr)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
-	return nil, nil
+	return data, nil
 }
