@@ -50,11 +50,7 @@ func handleInit(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	if err := downloadAndInstallOras(dir); err != nil {
-		os.RemoveAll(dir) // Best effort to clean up the directory.
-		return err
-	}
-	return nil
+	return downloadAndInstallOras(dir)
 }
 
 // downloadOras downloads the ORAS CLI and installs it in the recommended location.
@@ -84,9 +80,7 @@ func install(dir string, content []byte, format string) error {
 		return err
 	}
 	log.Println("Installed ORAS CLI")
-	if runtime.GOOS == "windows" {
-		log.Printf("Add %#q to your PATH environment variable so that oras.exe can be found.\n", dir)
-	}
+	log.Printf("Add %#q to your PATH environment variable so that oras can be found.\n", dir)
 	return nil
 }
 
@@ -154,14 +148,15 @@ func orasGitHubFileName() string {
 }
 
 func installDir() (string, error) {
-	var dir string
-	switch runtime.GOOS {
-	case "windows":
-		dir = filepath.Join(os.Getenv("USERPROFILE"), "bin")
-	default:
-		dir = "/usr/local/bin"
+	userDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	err := os.MkdirAll(dir, 0o755)
+	dir := filepath.Join(userDir, ".msft-go-infra", "oras")
+	err = os.MkdirAll(dir, 0o755)
+	if err != nil {
+		return "", err
+	}
 	return dir, err
 }
 
