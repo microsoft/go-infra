@@ -47,7 +47,7 @@ func handleDeprecate(p subcmd.ParseFunc) error {
 	if _, err := exec.LookPath("oras"); err != nil {
 		return err
 	}
-	ref := flag.Arg(0)
+
 	eol := time.Now()
 	if *eolStr != "" {
 		var err error
@@ -58,7 +58,7 @@ func handleDeprecate(p subcmd.ParseFunc) error {
 	}
 	images := append([]string{}, flag.Args()...)
 	if *bulk != "" {
-		data, err := os.ReadFile(ref)
+		data, err := os.ReadFile(*bulk)
 		if err != nil {
 			return err
 		}
