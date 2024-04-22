@@ -70,7 +70,7 @@ func FuzzRSAOAEP(f *testing.F) {
 		}
 		enc, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, &key.PublicKey, msg, label)
 		if err != nil {
-			if !validRSAError(err) {
+			if !errorCorrectlyRejectedRSAInput(err) {
 				t.Fatal(err)
 			}
 			return
@@ -96,7 +96,7 @@ func FuzzRSAPKCS1(f *testing.F) {
 		}
 		enc, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, msg)
 		if err != nil {
-			if !validRSAError(err) {
+			if !errorCorrectlyRejectedRSAInput(err) {
 				t.Fatal(err)
 			}
 			return
@@ -124,7 +124,7 @@ func FuzzRSASignPSS(f *testing.F) {
 		hashed := sha256.Sum256(msg)
 		sig, err := rsa.SignPSS(rand.Reader, key, crypto.SHA256, hashed[:], &opts)
 		if err != nil {
-			if !validRSAError(err) {
+			if !errorCorrectlyRejectedRSAInput(err) {
 				t.Fatal(err)
 			}
 			return
@@ -153,7 +153,7 @@ func FuzzRSASignPKCS1v15(f *testing.F) {
 		hashed := sha256.Sum256(msg)
 		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
 		if err != nil {
-			if !validRSAError(err) {
+			if !errorCorrectlyRejectedRSAInput(err) {
 				t.Fatal(err)
 			}
 			return
@@ -170,7 +170,7 @@ func FuzzRSASignPKCS1v15(f *testing.F) {
 	})
 }
 
-func validRSAError(err error) bool {
+func errorCorrectlyRejectedRSAInput(err error) bool {
 	if err == nil {
 		return true
 	}
