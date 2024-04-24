@@ -57,7 +57,7 @@ extends:
         enabledOnNonDefaultBranches: ${{ parameters.enableCodeQL }}
         language: go
       suppression:
-        suppressionFile: $(Build.SourcesDirectory)/eng/compliance/.gdnsuppress
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
       tsa:
         enabled: ${{ not(parameters.disableTSA) }}
         configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json

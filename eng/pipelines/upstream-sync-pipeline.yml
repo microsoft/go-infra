@@ -30,6 +30,8 @@ extends:
         name: NetCore1ESPool-Internal
         image: 1es-windows-2022
         os: windows
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
 
     stages:
       - stage: Sync
