@@ -32,6 +32,9 @@ extends:
         os: windows
       suppression:
         suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
 
     stages:
       - stage: Sync

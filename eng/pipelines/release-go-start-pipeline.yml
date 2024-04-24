@@ -49,7 +49,7 @@ extends:
         suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
       tsa:
         enabled: true
-        configFile: $(Build.SourcesDirectory)/eng/compliance/tsaoptions.json
+        configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
 
     stages:
       - stage: Release
