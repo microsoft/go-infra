@@ -36,6 +36,11 @@ extends:
         name: NetCore1ESPool-Svc-Internal
         image: 1es-windows-2022
         os: windows
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
 
     stages:
       - stage: Update
