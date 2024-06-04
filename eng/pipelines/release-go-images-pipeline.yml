@@ -89,6 +89,10 @@ extends:
             parameters:
               releaseIssue: ${{ parameters.releaseIssue }}
               retryInstructionsFlags: '-preapproval'
+              outputs:
+                - output: pipelineArtifact
+                  path: $(Pipeline.Workspace)/AnnouncementData
+                  artifact: AnnouncementData
               variables:
                 poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
                 poll2MicrosoftGoImagesBuildID: ${{ parameters.poll2MicrosoftGoImagesBuildID }}
@@ -146,6 +150,11 @@ extends:
                       -azdopat '$(System.AccessToken)'
                   displayName: ⌚ Wait for go-images build
                   timeoutInMinutes: 120
+
+                - script: |
+                    releasego generate-announcement -o $(Pipeline.Workspace)/AnnouncementData
+                  displayName: Generate announcement details
+                  
                 - template: ../steps/report.yml
                   parameters:
                     releaseIssue: ${{ parameters.releaseIssue }}
