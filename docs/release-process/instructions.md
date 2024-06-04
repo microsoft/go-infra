@@ -49,7 +49,10 @@ For example, a security patch release for 1.18 and 1.19 may look like this:
 1. Wait for a notification on the release tracking issue.
     * Continue if the images build is successful.
 
-1. Send a message to the internal announcement distribution group about the new version!  
+1. Send a message to the internal announcement distribution group about the new version!
+
+1. Submit a PR to update Azure Linux 3.0 to use the new version of Go.
+    * See [Azure Linux spec file update instructions](azurelinux-spec-update.md) for more details.
 
 ## Making the internal announcement
 
