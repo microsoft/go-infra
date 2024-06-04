@@ -12,6 +12,9 @@ parameters:
   # we don't need to wait 8 hours to get notified about any particular step taking too long.
   timeoutInMinutes: 540
 
+  # 1ES PT template context outputs.
+  outputs: []
+
   # Version to release, or empty string if no single version is associated with this job.
   releaseVersion: ''
   # The microsoft/go release issue to post a success/failure report to, or 'nil'.
@@ -50,6 +53,8 @@ jobs:
         instructionsLinkArg: '-instructions-link'
 
       ${{ insert }}: ${{ parameters.variables }}
+    templateContext:
+      outputs: ${{ parameters.outputs }}
     steps:
       - template: ../steps/fail-if-retry.yml
 
