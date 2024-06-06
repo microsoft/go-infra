@@ -299,17 +299,26 @@ extends:
                       displayName: 🎓 Create GitHub release
 
                   - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
-                    - script: |
-                        releasego akams \
-                          -build-asset-json '$(buildAssetJsonFile)' \
-                          -prefix '$(VanityUrlPrefix)' \
-                          -clientID '$(akams-client-id)' \
-                          -clientSecret '$(akams-client-secret)' \
-                          -tenant '$(AkaMSTenant)' \
-                          -createdBy '$(AkaMSCreatedBy)' \
-                          -groupOwner '$(AkaMSGroupOwner)' \
-                          -owners '$(AkaMSOwners)'
+                    - task: AzureCLI@2
                       displayName: 🎓 Update aka.ms links
+                      inputs:
+                        azureSubscription: 'DotNet-Engineering-Services_KeyVault'
+                        scriptType: 'bash'
+                        scriptLocation: 'inlineScript'
+                        inlineScript: |
+                          # Get Azure Key Vault's JSON cert wrapper as an intermediate file in temp.
+                          # Based on Arcade: https://github.com/dotnet/arcade/blob/7507f80c8db285bbc9939c1dff522a761cf4edc0/eng/publishing/v3/publish.yml#L125-L132
+                          az keyvault secret show --vault-name EngKeyVault --name Redirection-UST-Client-NetCoreDeployment > $(Agent.TempDirectory)/akamsclientcert.json
+
+                          releasego akams \
+                            -build-asset-json '$(buildAssetJsonFile)' \
+                            -prefix '$(VanityUrlPrefix)' \
+                            -clientID '$(akams-client-id)' \
+                            -clientCertVaultFile '$(Agent.TempDirectory)/akamsclientcert.json' \
+                            -tenant '$(AkaMSTenant)' \
+                            -createdBy '$(AkaMSCreatedBy)' \
+                            -groupOwner '$(AkaMSGroupOwner)' \
+                            -owners '$(AkaMSOwners)'
 
                   - ${{ if eq(parameters.runGoImagesUpdate, true) }}:
                     # Update the target Docker repo. The origin is defined with "_" as the username because
