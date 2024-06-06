@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -24,6 +26,9 @@ func init() {
 		Name:    "akams",
 		Summary: "Create aka.ms links based on a given build asset JSON file.",
 		Description: `
+
+Either clientSecret or clientCertVaultFile must be passed to authenticate with the AKA.MS API.
+
 Example:
 
   go run ./cmd/releasego akams -build-asset-json /downloads/assets.json -version 1.17.8-1
@@ -47,6 +52,11 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 		&akaMSClientSecret,
 		"clientSecret", "",
 		"The client secret to use for the AKA.MS API.")
+	flag.StringVar(
+		&akaMSClientCertVaultFile,
+		"clientCertVaultFile", "",
+		"The path of the certificate to use for the AKA.MS API. "+
+			"The expected format matches the output of 'az keyvault secret show': JSON with a property 'value' that contains a base64-encoded PFX-encoded certificate.")
 	flag.StringVar(
 		&akaMSTenant,
 		"tenant", "",
@@ -80,13 +90,14 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 }
 
 var (
-	latestShortLinkPrefix string
-	akaMSClientID         string
-	akaMSClientSecret     string
-	akaMSTenant           string
-	akaMSCreatedBy        string
-	akaMSGroupOwner       string
-	akaMSOwners           string
+	latestShortLinkPrefix    string
+	akaMSClientID            string
+	akaMSClientSecret        string
+	akaMSClientCertVaultFile string
+	akaMSTenant              string
+	akaMSCreatedBy           string
+	akaMSGroupOwner          string
+	akaMSOwners              string
 )
 
 func createAkaMSLinks(assetFilePath string) error {
@@ -121,10 +132,26 @@ func createAkaMSLinks(assetFilePath string) error {
 	}
 	log.Printf("---- Links %v\n", string(payload))
 
-	transport, err := msal.NewConfidentialTransport(msal.MicrosoftAuthority, akaMSClientID, akaMSClientSecret)
-	if err != nil {
-		return fmt.Errorf("failed to create MSAL transport: %v", err)
+	var transport *msal.ConfidentialCredentialTransport
+	// Prefer certificate if multiple authentication methods are provided.
+	if akaMSClientCertVaultFile != "" {
+		jsonBytes, err := os.ReadFile(akaMSClientCertVaultFile)
+		if err != nil {
+			return fmt.Errorf("failed to read Azure Key Vault file: %v", err)
+		}
+		transport, err = msal.NewConfidentialTransportFromAzureKeyVaultJSON(msal.MicrosoftAuthority, akaMSClientID, jsonBytes)
+		if err != nil {
+			return fmt.Errorf("failed to create MSAL transport with Azure Key Vault certificate: %v", err)
+		}
+	} else if akaMSClientSecret != "" {
+		transport, err = msal.NewConfidentialTransportFromSecret(msal.MicrosoftAuthority, akaMSClientID, akaMSClientSecret)
+		if err != nil {
+			return fmt.Errorf("failed to create MSAL transport with client secret: %v", err)
+		}
+	} else {
+		return errors.New("no authentication details provided")
 	}
+
 	transport.Scopes = []string{akams.Scope + "/.default"}
 	client, err := akams.NewClient(akaMSTenant, &http.Client{Transport: transport})
 	if err != nil {
