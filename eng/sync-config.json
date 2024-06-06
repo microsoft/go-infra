@@ -21,7 +21,7 @@
     "Upstream": "https://github.com/docker-library/golang",
     "Target": "https://github.com/microsoft/go-images",
     "BranchMap": {
-      "master": "microsoft/nightly"
+      "master": "microsoft/main"
     },
     "AutoSyncBranches": [
       "master"
