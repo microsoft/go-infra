@@ -14,14 +14,13 @@ resources:
       trigger:
         branches:
           include:
-            # go-images doesn't currently have a place for updates from microsoft/main to go. This
-            # should be addressed once the repo has a nightly branch:
-            # https://github.com/microsoft/go/issues/169. Until then, don't trigger on
-            # microsoft/main because those updates will always fail to generate.
+            # The microsoft/go release branches deliver updates to go-images via
+            # release automation, not this pipeline, so they are not included.
+
+            # microsoft/main would be included if we wanted to deliver nightly
+            # in-development builds from go-images.
+            # See https://github.com/microsoft/go-lab/issues/80
             # - microsoft/main
-            - microsoft/release-branch.*
-            - microsoft/dev.boringcrypto.go*
-            - dev/official/*
   repositories:
     - repository: 1ESPipelineTemplates
       type: git
