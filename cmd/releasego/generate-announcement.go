@@ -75,7 +75,7 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 	var releaseVersions string
 	var outputPath string
 
-	flag.StringVar(&releaseDate, "release-date", "05-12-1992", "The release date of the Go version in DD-MM-YYYY format.")
+	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in DD-MM-YYYY format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&outputPath, "o", "", "Comma-separated list of version numbers for the Go release.")
 	if err := p(); err != nil {
