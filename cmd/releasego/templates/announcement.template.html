@@ -1,0 +1,11 @@
+<p>The Microsoft builds of the Go security patches released today, {{ .ReleaseDate }}, are now <a href="https://github.com/microsoft/go#binary-distribution">available for download</a>. The new versions are:</p>
+    <ul>
+        {{- range .MSGoVersions }}
+        <li>{{ . }}</li>
+        {{- end }}
+    </ul>
+<p>For more information about the changes included in this release, please visit the official 
+{{range $index, $version := .GoVersions}}
+<a href="{{$version.URL}}">Go {{$version.Version}}</a>{{if isLast $index $.GoVersions}}, and {{else}}, {{end}}
+{{end}}
+release notes.</p>

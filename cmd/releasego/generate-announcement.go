@@ -2,9 +2,14 @@ package main
 
 import (
 	_ "embed"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -25,33 +30,102 @@ func init() {
 }
 
 type ReleaseInfo struct {
-	ReleaseDate string
-	Versions    []string
-	Label       string
-	Details     string
+	ReleaseDate  string
+	MSGoVersions []string
+	GoVersions   []GoVersion
 }
 
-// VersionDetails generates a formatted string listing the versions.
-// Unless there are no edge cases, the output will be most likely generated in first or second format.
-// Last clause is added for rare case of more than two versions being released at once.
-func (r *ReleaseInfo) VersionDetails() string {
-	switch len(r.Versions) {
-	case 0:
-		return ""
-	case 1:
-		return fmt.Sprintf("Go %s is released.", r.Versions[0])
-	case 2:
-		return fmt.Sprintf("Go %s and Go %s are released.", r.Versions[0], r.Versions[1])
-	default:
-		versionsStr := strings.Join(r.Versions[:len(r.Versions)-1], ", Go ")
-		return fmt.Sprintf("Go %s, and Go %s are released.", versionsStr, r.Versions[len(r.Versions)-1])
+func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
+	const inputLayout = "02-01-2006"
+	if dateStr == "" {
+		return errors.New("release date cannot be empty")
+	}
+
+	parsedTime, err := time.Parse(inputLayout, dateStr)
+	if err != nil {
+		return fmt.Errorf("invalid date format for release date %q: %w", dateStr, err)
+	}
+	r.ReleaseDate = parsedTime.Format("January 2")
+
+	return nil
+}
+
+func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
+	r.MSGoVersions = append(r.MSGoVersions, goVersions...)
+	for _, version := range goVersions {
+		version = truncateMSGoVersionTag(version)
+		r.GoVersions = append(r.GoVersions, GoVersion{
+			URL:     createGoReleaseLinkFromVersion(version),
+			Version: version,
+		})
 	}
 }
 
-//go:embed templates/announcement.template.md
-var announcementTemplatae string
+type GoVersion struct {
+	URL     string
+	Version string
+}
+
+//go:embed templates/announcement.template.html
+var announcementTemplate string
 
 func generateAnnouncement(p subcmd.ParseFunc) error {
-	template.New("announcement.template.md")
+	releaseInfo := new(ReleaseInfo)
+	var releaseDate string
+	var releaseVersions string
+	var outputPath string
+
+	flag.StringVar(&releaseDate, "release-date", "05-12-1992", "The release date of the Go version in DD-MM-YYYY format.")
+	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
+	flag.StringVar(&outputPath, "o", "", "Comma-separated list of version numbers for the Go release.")
+	if err := p(); err != nil {
+		return err
+	}
+
+	if err := releaseInfo.SetReleaseDate(releaseDate); err != nil {
+		return fmt.Errorf("failed to set release date: %w", err)
+	}
+
+	releaseInfo.ParseGoVersions(strings.Split(releaseVersions, ","))
+
+	output, err := generateOutput(outputPath)
+	if err != nil {
+		return fmt.Errorf("error creating output file: %w", err)
+	}
+
+	tmpl, err := template.New("announcement.template.html").Funcs(template.FuncMap{"isLast": isLast}).Parse(announcementTemplate)
+	if err != nil {
+		return err
+	}
+
+	if err := tmpl.Execute(output, releaseInfo); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func generateOutput(path string) (io.WriteCloser, error) {
+	if path == "" {
+		return os.Stdout, nil
+	}
+
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file at path %q: %w", path, err)
+	}
+	return file, nil
+}
+
+func createGoReleaseLinkFromVersion(releaseID string) string {
+	return "https://go.dev/doc/devel/release#go" + releaseID
+}
+
+func truncateMSGoVersionTag(goVersion string) string {
+	parts := strings.Split(goVersion, "-")
+	return parts[0]
+}
+
+func isLast(index int, versions []GoVersion) bool {
+	return index == len(versions)-1
 }
