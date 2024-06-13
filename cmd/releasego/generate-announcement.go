@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -92,6 +93,7 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 	if err != nil {
 		return fmt.Errorf("error creating output file: %w", err)
 	}
+	defer output.Close()
 
 	tmpl, err := template.New("announcement.template.html").Funcs(template.FuncMap{"isLast": isLast}).Parse(announcementTemplate)
 	if err != nil {
@@ -108,6 +110,11 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 func generateOutput(path string) (io.WriteCloser, error) {
 	if path == "" {
 		return os.Stdout, nil
+	}
+
+	dirPath := filepath.Dir(path)
+	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
+		return nil, err
 	}
 
 	file, err := os.Create(path)
