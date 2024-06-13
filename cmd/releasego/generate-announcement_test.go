@@ -8,39 +8,21 @@ func TestGenerateAnnouncement(t *testing.T) {
 
 }
 
-func TestVersionDetails(t *testing.T) {
-	tests := []struct {
-		versions []string
-		expected string
-	}{
-		{
-			versions: []string{},
-			expected: "",
-		},
-		{
-			versions: []string{"1.22.3-1"},
-			expected: "[Go 1.22.3-1 is released]",
-		},
-		{
-			versions: []string{"1.22.3-1", "1.21.10-1"},
-			expected: "[Go 1.22.3-1 and Go 1.21.10-1 are released]",
-		},
-		{
-			versions: []string{"1.22.3-1", "1.21.10-1", "1.20.9-1"},
-			expected: "[Go 1.22.3-1, Go 1.21.10-1, and Go 1.20.9-1 are released]",
-		},
-		{
-			versions: []string{"1.22.3-1", "1.21.10-1", "1.20.9-1", "1.19.8-1"},
-			expected: "[Go 1.22.3-1, Go 1.21.10-1, Go 1.20.9-1, and Go 1.19.8-1 are released]",
-		},
-	}
+func TestGoReleaseVersionLink(t *testing.T) {
+	releaseID := "1.22.3"
+	expected := "https://go.dev/doc/devel/release#go1.22.3"
 
-	for _, tt := range tests {
-		releaseInfo := new(ReleaseInfo)
-		releaseInfo.Versions = tt.versions
-		result := releaseInfo.VersionDetails()
-		if result != tt.expected {
-			t.Errorf("got %q, want %q", result, tt.expected)
-		}
+	result := createGoReleaseLinkFromVersion(releaseID)
+	if result != expected {
+		t.Errorf("expected the release link to be %q, but got %q", expected, result)
+	}
+}
+
+func TestTruncateMSGoVersionTag(t *testing.T) {
+	msGoVersion := "1.22.3-1"
+	expected := "1.22.3"
+	goVersion := truncateMSGoVersionTag(msGoVersion)
+	if goVersion != expected {
+		t.Errorf("expected the version tag to be truncated to %q, but got %q", expected, msGoVersion)
 	}
 }
