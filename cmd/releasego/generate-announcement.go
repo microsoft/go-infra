@@ -40,7 +40,7 @@ type ReleaseInfo struct {
 }
 
 func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
-	const inputLayout = "02-01-2006"
+	const inputLayout = "2006-01-02"
 	if dateStr == "" {
 		return errors.New("release date cannot be empty")
 	}
@@ -79,7 +79,7 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 	var releaseVersions string
 	var outputPath string
 
-	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in DD-MM-YYYY format.")
+	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&outputPath, "o", "", "Comma-separated list of version numbers for the Go release.")
 	if err := p(); err != nil {
