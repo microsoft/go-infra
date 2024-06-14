@@ -23,12 +23,12 @@ func init() {
 		Name:    "generate-announcement",
 		Summary: "Generate an HTML formatted blog post for Go version releases.",
 		Description: `
-		The 'generate-announcement' command is used to create an HTML formatted 
-		blog post for the Microsoft builds of Go security patch releases. This command requires 
-		the release date, the list of released versions, and a release label. It outputs an 
-		HTML formatted blog post that includes the release date, the versions released, 
-		and a link to the upstream Go announcement.
-		`,
+The 'generate-announcement' command is used to create an HTML formatted 
+blog post for the Microsoft builds of Go security patch releases. This command requires 
+the release date, the list of released versions, and a release label. It outputs an 
+HTML formatted blog post that includes the release date, the versions released, 
+and a link to the upstream Go announcement.
+`,
 		Handle: generateAnnouncement,
 	})
 }
