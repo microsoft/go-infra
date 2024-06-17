@@ -73,7 +73,7 @@ type GoVersion struct {
 //go:embed templates/announcement.template.html
 var announcementTemplate string
 
-func generateAnnouncement(p subcmd.ParseFunc) error {
+func generateAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := new(ReleaseInfo)
 	var releaseDate string
 	var releaseVersions string
@@ -81,7 +81,7 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 
 	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
-	flag.StringVar(&outputPath, "o", "", "Comma-separated list of version numbers for the Go release.")
+	flag.StringVar(&outputPath, "o", "", "Output path for final blogpost HTML file")
 	if err := p(); err != nil {
 		return err
 	}
@@ -91,12 +91,14 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 	}
 
 	releaseInfo.ParseGoVersions(strings.Split(releaseVersions, ","))
-
-	output, err := generateOutput(outputPath)
-	if err != nil {
-		return fmt.Errorf("error creating output file: %w", err)
+	var output io.WriteCloser = os.Stdout
+	if len(outputPath) == 0 {
+		output, err = generateOutput(outputPath)
+		if err != nil {
+			return fmt.Errorf("error creating output file: %w", err)
+		}
+		defer output.Close()
 	}
-	defer output.Close()
 
 	tmpl, err := template.New("announcement.template.html").Funcs(template.FuncMap{"isLast": isLast}).Parse(announcementTemplate)
 	if err != nil {
@@ -111,10 +113,6 @@ func generateAnnouncement(p subcmd.ParseFunc) error {
 }
 
 func generateOutput(path string) (io.WriteCloser, error) {
-	if path == "" {
-		return os.Stdout, nil
-	}
-
 	dirPath := filepath.Dir(path)
 	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
 		return nil, err
