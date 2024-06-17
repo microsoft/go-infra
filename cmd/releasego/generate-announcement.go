@@ -81,7 +81,7 @@ func generateAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
-	flag.StringVar(&outputPath, "o", "", "Output path for final blogpost HTML file")
+	flag.StringVar(&outputPath, "o", "", "Output path for final blogpost markdown file")
 	if err := p(); err != nil {
 		return err
 	}
