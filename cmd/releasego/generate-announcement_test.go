@@ -20,12 +20,3 @@ func TestGoReleaseVersionLink(t *testing.T) {
 		t.Errorf("expected the release link to be %q, but got %q", expected, result)
 	}
 }
-
-func TestTruncateMSGoVersionTag(t *testing.T) {
-	msGoVersion := "1.22.3-1"
-	expected := "1.22.3"
-	goVersion := truncateMSGoVersionTag(msGoVersion)
-	if goVersion != expected {
-		t.Errorf("expected the version tag to be truncated to %q, but got %q", expected, msGoVersion)
-	}
-}

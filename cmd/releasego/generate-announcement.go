@@ -15,6 +15,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -57,7 +58,7 @@ func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
 func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
 	r.MSGoVersions = append(r.MSGoVersions, goVersions...)
 	for _, version := range goVersions {
-		version = truncateMSGoVersionTag(version)
+		version = goversion.New(version).UpstreamFormatGitTag()
 		r.GoVersions = append(r.GoVersions, GoVersion{
 			URL:     createGoReleaseLinkFromVersion(version),
 			Version: version,
@@ -127,11 +128,6 @@ func generateOutput(path string) (io.WriteCloser, error) {
 
 func createGoReleaseLinkFromVersion(releaseID string) string {
 	return "https://go.dev/doc/devel/release#go" + releaseID
-}
-
-func truncateMSGoVersionTag(goVersion string) string {
-	parts := strings.Split(goVersion, "-")
-	return parts[0]
 }
 
 func isLast(index int, versions []GoVersion) bool {
