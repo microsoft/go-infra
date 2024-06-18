@@ -95,6 +95,11 @@ func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
 	}
 }
 
+func (r *ReleaseInfo) SetTitle(versions []string) {
+	r.Title = generateBlogPostTitle(versions)
+	r.Slug = generateSlug(r.Title)
+}
+
 type GoVersion struct {
 	URL     string
 	Version string
@@ -107,10 +112,12 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo()
 	var releaseDate string
 	var releaseVersions string
+	var author string
 	var tags string
 
 	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
+	flag.StringVar(&author, "author", "", "Comma-separated list of tags for the Go release.")
 	flag.StringVar(&tags, "tags", "", "Comma-separated list of tags for the Go release.")
 
 	if err := p(); err != nil {
@@ -120,7 +127,10 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	if err := releaseInfo.SetReleaseDate(releaseDate); err != nil {
 		return fmt.Errorf("failed to set release date: %w", err)
 	}
-	releaseInfo.ParseGoVersions(strings.Split(releaseVersions, ","))
+	versionsList := strings.Split(releaseVersions, ",")
+
+	releaseInfo.SetTitle(versionsList)
+	releaseInfo.ParseGoVersions(versionsList)
 
 	var output io.WriteCloser = os.Stdout
 
@@ -134,6 +144,20 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	return nil
+}
+
+func generateBlogPostTitle(versions []string) string {
+	count := len(versions)
+	if count == 0 {
+		return ""
+	} else if count == 1 {
+		return fmt.Sprintf("Go %s build now available.", versions[0])
+	} else if count == 2 {
+		return fmt.Sprintf("Go %s and %s Microsoft builds now available.", versions[0], versions[1])
+	} else {
+		allExceptLast := strings.Join(versions[:count-1], ", ")
+		return fmt.Sprintf("Go %s and %s Microsoft builds now available.", allExceptLast, versions[count-1])
+	}
 }
 
 func generateSlug(input string) string {
