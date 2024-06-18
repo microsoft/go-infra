@@ -152,8 +152,8 @@ extends:
                   timeoutInMinutes: 120
 
                 - script: |
-                    releasego generate-announcement -o $(Pipeline.Workspace)/AnnouncementData
-                  displayName: Generate announcement details
+                    releasego publish-announcement
+                  displayName: Publishing announcement details
                   
                 - template: ../steps/report.yml
                   parameters:
