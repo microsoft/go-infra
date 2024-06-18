@@ -10,10 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
+	"unicode"
 
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
@@ -30,14 +31,41 @@ the release date, the list of released versions, and a release label. It outputs
 HTML formatted blog post that includes the release date, the versions released, 
 and a link to the upstream Go announcement.
 `,
-		Handle: generateAnnouncement,
+		Handle: publishAnnouncement,
 	})
 }
 
 type ReleaseInfo struct {
-	ReleaseDate  string
-	MSGoVersions []string
-	GoVersions   []GoVersion
+	Title         string
+	Author        string
+	Slug          string
+	Categories    []string
+	Tags          []string
+	ReleaseDate   string
+	FeaturedImage string // Add this field for featured_image
+	Versions      []GoVersionData
+}
+
+func (ri ReleaseInfo) CategoriesString() string {
+	return strings.Join(ri.Categories, ", ")
+}
+
+func (ri ReleaseInfo) TagsString() string {
+	return strings.Join(ri.Tags, ", ")
+}
+
+func NewReleaseInfo() *ReleaseInfo {
+	return &ReleaseInfo{
+		Categories: []string{"Microsoft for Go Developers", "Security"},
+		Tags:       []string{"go", "release", "security"},
+	}
+}
+
+type GoVersionData struct {
+	MSGoVersion     string
+	MSGoVersionLink string
+	GoVersion       string
+	GoVersionLink   string
 }
 
 func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
@@ -56,12 +84,13 @@ func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
 }
 
 func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
-	r.MSGoVersions = append(r.MSGoVersions, goVersions...)
 	for _, version := range goVersions {
-		version = goversion.New(version).UpstreamFormatGitTag()
-		r.GoVersions = append(r.GoVersions, GoVersion{
-			URL:     createGoReleaseLinkFromVersion(version),
-			Version: version,
+		goVersion := goversion.New(version).UpstreamFormatGitTag()
+		r.Versions = append(r.Versions, GoVersionData{
+			MSGoVersion:     "v" + version,
+			MSGoVersionLink: createMSGoReleaseLinkFromVersion(version),
+			GoVersion:       goVersion,
+			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion),
 		})
 	}
 }
@@ -71,18 +100,19 @@ type GoVersion struct {
 	Version string
 }
 
-//go:embed templates/announcement.template.html
+//go:embed templates/announcement.template.md
 var announcementTemplate string
 
-func generateAnnouncement(p subcmd.ParseFunc) (err error) {
-	releaseInfo := new(ReleaseInfo)
+func publishAnnouncement(p subcmd.ParseFunc) (err error) {
+	releaseInfo := NewReleaseInfo()
 	var releaseDate string
 	var releaseVersions string
-	var outputPath string
+	var tags string
 
 	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
-	flag.StringVar(&outputPath, "o", "", "Output path for final blogpost markdown file")
+	flag.StringVar(&tags, "tags", "", "Comma-separated list of tags for the Go release.")
+
 	if err := p(); err != nil {
 		return err
 	}
@@ -90,18 +120,11 @@ func generateAnnouncement(p subcmd.ParseFunc) (err error) {
 	if err := releaseInfo.SetReleaseDate(releaseDate); err != nil {
 		return fmt.Errorf("failed to set release date: %w", err)
 	}
-
 	releaseInfo.ParseGoVersions(strings.Split(releaseVersions, ","))
-	var output io.WriteCloser = os.Stdout
-	if len(outputPath) == 0 {
-		output, err = generateOutput(outputPath)
-		if err != nil {
-			return fmt.Errorf("error creating output file: %w", err)
-		}
-		defer output.Close()
-	}
 
-	tmpl, err := template.New("announcement.template.html").Funcs(template.FuncMap{"isLast": isLast}).Parse(announcementTemplate)
+	var output io.WriteCloser = os.Stdout
+
+	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
 	if err != nil {
 		return err
 	}
@@ -113,23 +136,34 @@ func generateAnnouncement(p subcmd.ParseFunc) (err error) {
 	return nil
 }
 
-func generateOutput(path string) (io.WriteCloser, error) {
-	dirPath := filepath.Dir(path)
-	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
-		return nil, err
-	}
+func generateSlug(input string) string {
+	// Convert to lowercase
+	input = strings.ToLower(input)
 
-	file, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create file at path %q: %w", path, err)
-	}
-	return file, nil
+	// Replace spaces and punctuation with hyphens
+	result := strings.Map(func(r rune) rune {
+		if unicode.IsPunct(r) || unicode.IsSpace(r) {
+			return '-'
+		}
+		return r
+	}, input)
+
+	// Remove any remaining non-alphanumeric characters (excluding hyphens)
+	result = regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(result, "")
+
+	// Remove multiple consecutive hyphens
+	result = regexp.MustCompile(`-+`).ReplaceAllString(result, "-")
+
+	// Trim hyphens from start and end
+	result = strings.Trim(result, "-")
+
+	return result
+}
+
+func createMSGoReleaseLinkFromVersion(releaseID string) string {
+	return "https://github.com/microsoft/go/releases/tag/v" + releaseID
 }
 
 func createGoReleaseLinkFromVersion(releaseID string) string {
-	return "https://go.dev/doc/devel/release#go" + releaseID
-}
-
-func isLast(index int, versions []GoVersion) bool {
-	return index == len(versions)-1
+	return "https://go.dev/doc/devel/release#" + releaseID
 }
