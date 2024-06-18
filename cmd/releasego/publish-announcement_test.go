@@ -4,11 +4,45 @@
 package main
 
 import (
+	"bytes"
+	"path/filepath"
 	"testing"
+
+	"github.com/microsoft/go-infra/goldentest"
 )
 
-func TestPublishAnnouncement(t *testing.T) {
+func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
+	newInfo := func(releaseDate string, versions []string) *ReleaseInfo {
+		ri := NewReleaseInfo()
+		if err := ri.SetReleaseDate(releaseDate); err != nil {
+			t.Errorf("SetReleaseDate() error = %v", err)
+		}
+		ri.SetTitle(versions)
+		ri.ParseGoVersions(versions)
+		return ri
+	}
 
+	tests := []struct {
+		name string
+		ri   *ReleaseInfo
+	}{
+		{"real-2024-06-04", newInfo("2024-06-04", []string{"1.22.4-1", "1.21.11-1"})},
+		{"only-one-branch", newInfo("2028-01-30", []string{"1.22.8-3"})},
+		{"three-branches", newInfo("2036-12-31", []string{"1.23.1-1", "1.22.8-1", "1.21.11-16"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b bytes.Buffer
+			if err := tt.ri.WriteAnnouncement(&b); err != nil {
+				t.Errorf("WriteAnnouncement() error = %v", err)
+				return
+			}
+			goldentest.Check(
+				t, "Test_ReleaseInfo_WriteAnnouncement ",
+				filepath.Join("testdata", "publish-announcement", tt.name+".golden.md"),
+				b.String())
+		})
+	}
 }
 
 func TestGenerateSlug(t *testing.T) {

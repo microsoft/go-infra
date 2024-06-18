@@ -100,6 +100,14 @@ func (r *ReleaseInfo) SetTitle(versions []string) {
 	r.Slug = generateSlug(r.Title)
 }
 
+func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
+	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
+	if err != nil {
+		return err
+	}
+	return tmpl.Execute(wr, r)
+}
+
 type GoVersion struct {
 	URL     string
 	Version string
@@ -134,16 +142,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	var output io.WriteCloser = os.Stdout
 
-	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
-	if err != nil {
-		return err
-	}
-
-	if err := tmpl.Execute(output, releaseInfo); err != nil {
-		return err
-	}
-
-	return nil
+	return releaseInfo.WriteAnnouncement(output)
 }
 
 func generateBlogPostTitle(versions []string) string {
