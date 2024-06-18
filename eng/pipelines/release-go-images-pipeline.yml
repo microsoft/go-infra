@@ -168,7 +168,6 @@ extends:
                       -release-date '${{ format('{0:yyyy-MM-dd}', pipeline.startTime) }' \
                       -is-security '${{ parameters.isSecurityRelease }}' \
                       -pat '$(GitHubPAT)' \
-
                   displayName: Publishing announcement details
                   
                 - template: ../steps/report.yml
