@@ -15,6 +15,16 @@ parameters:
     type: string
     default: nil
 
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
+
   # If someone's manually queueing this build, let them skip the approval stage. It takes time to
   # acquire a serverless agent to present the approval step, so the dev has to pay attention and
   # catch it. Instead, let them approve it ahead of time by skipping it. The default is always used
@@ -152,7 +162,13 @@ extends:
                   timeoutInMinutes: 120
 
                 - script: |
-                    releasego publish-announcement
+                    releasego publish-announcement \
+                      -author '${{ parameters.notify }}' \
+                      -versions '${{ join(',', parameters.releaseVersions) }}' \
+                      -release-date '${{ format('{0:yyyy-MM-dd}', pipeline.startTime) }' \
+                      -is-security '${{ parameters.isSecurityRelease }}' \
+                      -pat '$(GitHubPAT)' \
+
                   displayName: Publishing announcement details
                   
                 - template: ../steps/report.yml
