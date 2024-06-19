@@ -117,10 +117,6 @@ extends:
             parameters:
               releaseIssue: ${{ parameters.releaseIssue }}
               retryInstructionsFlags: '-preapproval'
-              outputs:
-                - output: pipelineArtifact
-                  path: $(Pipeline.Workspace)/AnnouncementData
-                  artifact: AnnouncementData
               variables:
                 poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
                 poll2MicrosoftGoImagesBuildID: ${{ parameters.poll2MicrosoftGoImagesBuildID }}
