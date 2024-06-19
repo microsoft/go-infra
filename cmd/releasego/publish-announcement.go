@@ -4,11 +4,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/go-github/github"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -68,19 +71,8 @@ type GoVersionData struct {
 	GoVersionLink   string
 }
 
-func (r *ReleaseInfo) SetReleaseDate(dateStr string) error {
-	const inputLayout = "2006-01-02"
-	if dateStr == "" {
-		return errors.New("release date cannot be empty")
-	}
-
-	parsedTime, err := time.Parse(inputLayout, dateStr)
-	if err != nil {
-		return fmt.Errorf("invalid date format for release date %q: %w", dateStr, err)
-	}
-	r.ReleaseDate = parsedTime.Format("January 2")
-
-	return nil
+func (r *ReleaseInfo) SetReleaseDate(releaseDate time.Time) {
+	r.ReleaseDate = releaseDate.Format("January 2")
 }
 
 func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
@@ -121,39 +113,81 @@ var announcementTemplate string
 
 func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo()
-	var releaseDate string
+	var releaseDateStr string
 	var releaseVersions string
 	var author string
 	var security bool
-
-	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
+	var test bool
+	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
+	flag.BoolVar(&test, "test", false, "Test the announcement template. This will output the generated announcement to stdout.")
+	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
 		return err
 	}
 
-	if err := releaseInfo.SetReleaseDate(releaseDate); err != nil {
-		return fmt.Errorf("failed to set r	elease date: %w", err)
+	const inputLayout = "2006-01-02"
+	if releaseDateStr == "" {
+		return errors.New("release date cannot be empty")
+	}
+	releaseDate, err := time.Parse(inputLayout, releaseDateStr)
+	if err != nil {
+		return fmt.Errorf("invalid date format for release date %q: %w", releaseDateStr, err)
 	}
 	versionsList := strings.Split(releaseVersions, ",")
 
+	releaseInfo.SetReleaseDate(releaseDate)
 	releaseInfo.SetTitle(versionsList)
 	releaseInfo.ParseGoVersions(versionsList)
 	releaseInfo.SetAuthor(author)
 	releaseInfo.IsSecurityRelease(security)
 
-	var output io.WriteCloser = os.Stdout
+	ctx := context.Background()
+	client, err := githubutil.NewClient(ctx, *pat)
+	if err != nil {
+		return err
+	}
 
 	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
 	if err != nil {
 		return err
 	}
 
-	if err := tmpl.Execute(output, releaseInfo); err != nil {
-		return err
+	if test {
+		return tmpl.Execute(os.Stdout, releaseInfo)
+	}
+
+	var content bytes.Buffer
+	if err := tmpl.Execute(&content, releaseInfo); err != nil {
+		return fmt.Errorf("error executing template: %w", err)
+	}
+
+	client.Repositories.CreateFile(ctx, "microsoft", "go-devblog", "content/post/"+releaseInfo.Slug+".md", &github.RepositoryContentFileOptions{})
+	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
+
+	// check if the file already exists in the go-devblog repository
+	exists, err := FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
+	if err != nil {
+		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
+	}
+	if exists {
+		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
+	}
+
+	// Upload the announcement to the go-devblog repository
+	if err := UploadFile(
+		ctx,
+		client,
+		"microsoft",
+		"go-devblog",
+		"main",
+		blogFilePath,
+		fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
+		content.Bytes()); err != nil {
+		return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
 	}
 
 	return nil
@@ -218,4 +252,29 @@ func mapUsernames(githubUsername string) string {
 	}
 
 	return githubUsername
+}
+
+// UploadFile is a function that will upload a file to a given repository.
+func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
+	_, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
+		Message: &message,
+		Content: content,
+		Branch:  &branch,
+	})
+	return err
+}
+
+func FileExists(ctx context.Context, client *github.Client, owner, repo, filePath string) (bool, error) {
+	_, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, filePath, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == 404 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func generateBlogFilePath(releaseDate time.Time, slug string) string {
+	return fmt.Sprintf("%s/%s/%s.md", releaseDate.Year(), releaseDate.Month().String(), slug)
 }
