@@ -34,8 +34,14 @@ parameters:
     type: boolean
     default: false
 
-  - name: buildGoImages
-    displayName: Make a new build of microsoft/go-images. Mark this as false to skip building an image.
+  # Allow disabling specific parts of the internal build release. These can be used to re-run
+  # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runGoImagesBuild
+    displayName: Build/Publish Go images
+    type: boolean
+    default: true
+  - name: runPublishAnnouncement
+    displayName: Publish announcement details
     type: boolean
     default: true
 
@@ -164,7 +170,7 @@ extends:
                       reason: queued build
 
                 # Now we have poll2MicrosoftGoImagesBuildID
-                - ${{ if eq(parameters.buildGoImages, true) }}:
+                - ${{ if eq(parameters.runGoImagesBuild, true) }}:
                   - script: |
                       releasego wait-build \
                         -id '$(poll2MicrosoftGoImagesBuildID)' \
@@ -174,14 +180,15 @@ extends:
                     displayName: ⌚ Wait for go-images build
                     timeoutInMinutes: 120
 
-                - script: |
-                    releasego publish-announcement \
-                      -author '${{ parameters.notify }}' \
-                      -versions '${{ join(',', parameters.releaseVersions) }}' \
-                      -release-date $(date +%Y-%m-%d) \
-                      -security '${{ parameters.isSecurityRelease }}' \
-                      -pat '$(GitHubPAT)' \
-                  displayName: Publishing announcement details
+                - ${{ if eq(parameters.runPublishAnnouncement, true) }}:
+                  - script: |
+                      releasego publish-announcement \
+                        -author '${{ parameters.notify }}' \
+                        -versions '${{ join(',', parameters.releaseVersions) }}' \
+                        -release-date $(date +%Y-%m-%d) \
+                        -security='${{ parameters.isSecurityRelease }}' \
+                        -pat '$(GitHubPAT)'
+                    displayName: Publishing announcement details
                   
                 - template: ../steps/report.yml
                   parameters:
