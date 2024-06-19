@@ -370,6 +370,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 						owner {
 							login
 						}
+						nameWithOwner
 					}
 				}
 			}
@@ -386,23 +387,25 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	// to submit multiple, similar PRs from this bot.)
 	//
 	// Declared adjacent to the query because the query determines the structure.
+	type PRNode struct {
+		ExistingPR
+		HeadRepositoryOwner struct {
+			Login string
+		}
+		BaseRepository struct {
+			Owner struct {
+				Login string
+			}
+			NameWithOwner string
+		}
+	}
 	result := &struct {
 		// Note: Go encoding/json only detects exported properties (capitalized), but it does handle
 		// matching it to the lowercase JSON for us.
 		Data struct {
 			User struct {
 				PullRequests struct {
-					Nodes []struct {
-						ExistingPR
-						HeadRepositoryOwner struct {
-							Login string
-						}
-						BaseRepository struct {
-							Owner struct {
-								Login string
-							}
-						}
-					}
+					Nodes    []PRNode
 					PageInfo struct {
 						HasNextPage bool
 					}
@@ -415,6 +418,13 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 		return nil, err
 	}
 	fmt.Printf("%+v\n", result)
+
+	// The user.pullRequests GitHub API isn't able to filter by repo name, so do it ourselves.
+	result.Data.User.PullRequests.Nodes = selectFunc(
+		result.Data.User.PullRequests.Nodes,
+		func(n PRNode) bool {
+			return n.BaseRepository.NameWithOwner == target.GetOwnerSlashRepo()
+		})
 
 	// Basic search result validation. We could be more flexible in some cases, but the goal here is
 	// to detect an unknown state early so we don't end up doing something strange.
@@ -469,4 +479,20 @@ func EnablePRAutoMerge(nodeID string, pat string) error {
 // not already have a "refs/heads/" prefix.
 func createRefspec(source, dest string) string {
 	return fmt.Sprintf("refs/heads/%v:refs/heads/%v", source, dest)
+}
+
+// selectFunc returns a new slice where each element from s for which keep
+// returns true has been copied.
+//
+// Capable of similar things as slices.DeleteFunc, but slices is not available
+// in the Go version in the go.mod as of writing. selectFunc is simpler: it does
+// not modify the existing slice.
+func selectFunc[S ~[]E, E any](s S, keep func(E) bool) S {
+	var r S
+	for _, v := range s {
+		if keep(v) {
+			r = append(r, v)
+		}
+	}
+	return r
 }
