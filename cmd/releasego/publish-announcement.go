@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
@@ -165,7 +164,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("error executing template: %w", err)
 	}
 
-	client.Repositories.CreateFile(ctx, "microsoft", "go-devblog", "content/post/"+releaseInfo.Slug+".md", &github.RepositoryContentFileOptions{})
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
 	// check if the file already exists in the go-devblog repository
