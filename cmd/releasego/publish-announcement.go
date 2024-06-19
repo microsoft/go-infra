@@ -169,7 +169,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
 	// check if the file already exists in the go-devblog repository
-	exists, err := FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
+	exists, err := githubutil.FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
 	if err != nil {
 		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
 	}
@@ -178,7 +178,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	// Upload the announcement to the go-devblog repository
-	if err := UploadFile(
+	if err := githubutil.UploadFile(
 		ctx,
 		client,
 		"microsoft",
@@ -240,11 +240,10 @@ func createGoReleaseLinkFromVersion(releaseID string) string {
 }
 
 func mapUsernames(githubUsername string) string {
+	// add github username and wordpress username in case they are different
 	usernames := map[string]string{
-		"gdams":     "gadams",
-		"dagood":    "dagood",
-		"qmuntal":   "qmuntaldiaz",
-		"mertakman": "mertakman",
+		"gdams":   "gadams",
+		"qmuntal": "qmuntaldiaz",
 	}
 
 	if wordpressUsername, exists := usernames[githubUsername]; exists {
@@ -252,27 +251,6 @@ func mapUsernames(githubUsername string) string {
 	}
 
 	return githubUsername
-}
-
-// UploadFile is a function that will upload a file to a given repository.
-func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
-	_, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
-		Message: &message,
-		Content: content,
-		Branch:  &branch,
-	})
-	return err
-}
-
-func FileExists(ctx context.Context, client *github.Client, owner, repo, filePath string) (bool, error) {
-	_, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, filePath, nil)
-	if err != nil {
-		if resp != nil && resp.StatusCode == 404 {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
 }
 
 func generateBlogFilePath(releaseDate time.Time, slug string) string {

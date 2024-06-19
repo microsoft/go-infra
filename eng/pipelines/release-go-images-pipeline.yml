@@ -173,7 +173,7 @@ extends:
                       -author '${{ parameters.notify }}' \
                       -versions '${{ join(',', parameters.releaseVersions) }}' \
                       -release-date $(date +%Y-%m-%d) \
-                      -is-security '${{ parameters.isSecurityRelease }}' \
+                      -security '${{ parameters.isSecurityRelease }}' \
                       -pat '$(GitHubPAT)' \
                   displayName: Publishing announcement details
                   

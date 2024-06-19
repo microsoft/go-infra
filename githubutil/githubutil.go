@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -109,4 +110,26 @@ func FetchEachPage(f func(options github.ListOptions) (*github.Response, error))
 		}
 		options.Page = resp.NextPage
 	}
+}
+
+// UploadFile is a function that will upload a file to a given repository.
+func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
+	_, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
+		Message: &message,
+		Content: content,
+		Branch:  &branch,
+	})
+	return err
+}
+
+// FileExists is a function that will check if a file exists in a given repository.
+func FileExists(ctx context.Context, client *github.Client, owner, repo, filePath string) (bool, error) {
+	_, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, filePath, nil)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
