@@ -56,8 +56,8 @@ func (ri ReleaseInfo) TagsString() string {
 
 func NewReleaseInfo() *ReleaseInfo {
 	return &ReleaseInfo{
-		Categories: []string{"Microsoft for Go Developers", "Security"},
-		Tags:       []string{"go", "release", "security"},
+		Categories: []string{"Microsoft for Go Developers"},
+		Tags:       []string{"go", "release"},
 	}
 }
 
@@ -100,6 +100,17 @@ func (r *ReleaseInfo) SetTitle(versions []string) {
 	r.Slug = generateSlug(r.Title)
 }
 
+func (r *ReleaseInfo) SetAuthor(author string) {
+	r.Author = mapUsernames(author)
+}
+
+func (r *ReleaseInfo) IsSecurityRelease(IsSecurityRelease bool) {
+	if IsSecurityRelease {
+		r.Categories = append(r.Categories, "Security")
+		r.Tags = append(r.Tags, "security")
+	}
+}
+
 type GoVersion struct {
 	URL     string
 	Version string
@@ -113,24 +124,26 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	var releaseDate string
 	var releaseVersions string
 	var author string
-	var tags string
+	var security bool
 
 	flag.StringVar(&releaseDate, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
-	flag.StringVar(&author, "author", "", "Comma-separated list of tags for the Go release.")
-	flag.StringVar(&tags, "tags", "", "Comma-separated list of tags for the Go release.")
+	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
+	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
 
 	if err := p(); err != nil {
 		return err
 	}
 
 	if err := releaseInfo.SetReleaseDate(releaseDate); err != nil {
-		return fmt.Errorf("failed to set release date: %w", err)
+		return fmt.Errorf("failed to set r	elease date: %w", err)
 	}
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo.SetTitle(versionsList)
 	releaseInfo.ParseGoVersions(versionsList)
+	releaseInfo.SetAuthor(author)
+	releaseInfo.IsSecurityRelease(security)
 
 	var output io.WriteCloser = os.Stdout
 
@@ -190,4 +203,19 @@ func createMSGoReleaseLinkFromVersion(releaseID string) string {
 
 func createGoReleaseLinkFromVersion(releaseID string) string {
 	return "https://go.dev/doc/devel/release#" + releaseID
+}
+
+func mapUsernames(githubUsername string) string {
+	usernames := map[string]string{
+		"gdams":     "gadams",
+		"dagood":    "dagood",
+		"qmuntal":   "qmuntaldiaz",
+		"mertakman": "mertakman",
+	}
+
+	if wordpressUsername, exists := usernames[githubUsername]; exists {
+		return wordpressUsername
+	}
+
+	return githubUsername
 }
