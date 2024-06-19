@@ -34,6 +34,11 @@ parameters:
     type: boolean
     default: false
 
+  - name: buildGoImages
+    displayName: Make a new build of microsoft/go-images. Mark this as false to skip building an image.
+    type: boolean
+    default: true
+
   # Allow retrying a build starting at any of these points.
   - name: poll1MicrosoftGoImagesCommitHash
     displayName: '1: microsoft/go-images commit hash to poll for build.'
@@ -159,14 +164,15 @@ extends:
                       reason: queued build
 
                 # Now we have poll2MicrosoftGoImagesBuildID
-                - script: |
-                    releasego wait-build \
-                      -id '$(poll2MicrosoftGoImagesBuildID)' \
-                      -org 'https://dev.azure.com/dnceng/' \
-                      -proj 'internal' \
-                      -azdopat '$(System.AccessToken)'
-                  displayName: ⌚ Wait for go-images build
-                  timeoutInMinutes: 120
+                - ${{ if eq(parameters.buildGoImages, true) }}:
+                  - script: |
+                      releasego wait-build \
+                        -id '$(poll2MicrosoftGoImagesBuildID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -azdopat '$(System.AccessToken)'
+                    displayName: ⌚ Wait for go-images build
+                    timeoutInMinutes: 120
 
                 - script: |
                     releasego publish-announcement \
