@@ -254,5 +254,5 @@ func mapUsernames(githubUsername string) string {
 }
 
 func generateBlogFilePath(releaseDate time.Time, slug string) string {
-	return fmt.Sprintf("%s/%s/%s.md", releaseDate.Year(), releaseDate.Month().String(), slug)
+	return fmt.Sprintf("%d/%s/%s.md", releaseDate.Year(), releaseDate.Month().String(), slug)
 }
