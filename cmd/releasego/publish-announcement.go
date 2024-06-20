@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -102,6 +103,15 @@ func (r *ReleaseInfo) IsSecurityRelease(IsSecurityRelease bool) {
 	}
 }
 
+func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
+	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
+	if err != nil {
+		return err
+	}
+
+	return tmpl.Execute(wr, r)
+}
+
 type GoVersion struct {
 	URL     string
 	Version string
@@ -150,17 +160,12 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return err
 	}
 
-	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
-	if err != nil {
-		return err
-	}
-
 	if test {
-		return tmpl.Execute(os.Stdout, releaseInfo)
+		return releaseInfo.WriteAnnouncement(os.Stdout)
 	}
 
-	var content bytes.Buffer
-	if err := tmpl.Execute(&content, releaseInfo); err != nil {
+	content := new(bytes.Buffer)
+	if err := releaseInfo.WriteAnnouncement(content); err != nil {
 		return fmt.Errorf("error executing template: %w", err)
 	}
 
