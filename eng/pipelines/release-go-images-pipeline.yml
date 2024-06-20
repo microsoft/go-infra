@@ -18,11 +18,8 @@ parameters:
   - name: isSecurityRelease
     displayName: >
       This release includes security fixes:
-    type: string
-    default: False
-    values:
-      - True
-      - False
+    type: boolean
+    default: false
 
   # If someone's manually queueing this build, let them skip the approval stage. It takes time to
   # acquire a serverless agent to present the approval step, so the dev has to pay attention and
