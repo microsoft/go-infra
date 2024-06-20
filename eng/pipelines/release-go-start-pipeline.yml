@@ -9,15 +9,13 @@ parameters:
       (-fips) if they apply. Write in YAML format: write one version number per line with '-' and a
       space at the beginning of each line.
     type: object
+
   - name: isSecurityRelease
     displayName: >
       This release includes security fixes:
-    type: string
-    default: Cancel
-    values:
-      - True
-      - False
-      - Cancel
+    type: boolean
+    default: false
+    
   - name: notify
     displayName: >
       A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
