@@ -228,6 +228,10 @@ func generateSlug(input string) string {
 	// Remove multiple consecutive hyphens
 	result = regexp.MustCompile(`-+`).ReplaceAllString(result, "-")
 
+	// Add -- between version numbers like go-1-23-1-1 and 1-22-8-1
+	re := regexp.MustCompile(`(\d+-\d+-\d+-\d+)-(\d+-\d+-\d+-\d+)`)
+	result = re.ReplaceAllString(result, "$1--$2")
+
 	// Trim hyphens from start and end
 	result = strings.Trim(result, "-")
 
