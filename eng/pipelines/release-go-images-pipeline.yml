@@ -56,10 +56,8 @@ parameters:
 
   - name: notify
     displayName: >
-      A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
-      include '@' below. 'ghost' notifies nobody.
+      A GitHub username which is mapped to a Wordpress username for authoring the release blog posts.
     type: string
-    default: ghost
 
   # This parameter intentionally has no default: see release-go-pipeline.yml
   - name: goReleaseConfigVariableGroup
