@@ -7,20 +7,14 @@ import (
 	"bytes"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
 
 func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
-	newInfo := func(releaseDateStr string, versions []string) *ReleaseInfo {
+	newInfo := func(versions []string) *ReleaseInfo {
 		ri := NewReleaseInfo()
-		releaseDate, err := time.Parse("2006-01-02", releaseDateStr)
-		if err != nil {
-			t.Errorf("invalid date format for release date %q: %s", releaseDateStr, err)
-		}
 
-		ri.SetReleaseDate(releaseDate)
 		ri.SetTitle(versions)
 		ri.ParseGoVersions(versions)
 
@@ -31,9 +25,9 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 		name string
 		ri   *ReleaseInfo
 	}{
-		{"real-2024-06-04", newInfo("2024-06-04", []string{"1.22.4-1", "1.21.11-1"})},
-		{"only-one-branch", newInfo("2028-01-30", []string{"1.22.8-3"})},
-		{"three-branches", newInfo("2036-12-31", []string{"1.23.1-1", "1.22.8-1", "1.21.11-16"})},
+		{"real-2024-06-04", newInfo([]string{"1.22.4-1", "1.21.11-1"})},
+		{"only-one-branch", newInfo([]string{"1.22.8-3"})},
+		{"three-branches", newInfo([]string{"1.23.1-1", "1.22.8-1", "1.21.11-16"})},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

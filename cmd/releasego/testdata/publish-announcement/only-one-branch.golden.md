@@ -5,10 +5,10 @@ post_slug: go-1-22-8-3-microsoft-build-now-available
 categories: Microsoft for Go Developers
 tags: go, release
 featured_image:
-summary: The Microsoft builds of the Go security patches released on January 30 are now available for download.
+summary: The Microsoft builds of the Go security patches released today, are now available for download.
 ---
 
-The Microsoft builds of the Go security patches released today, January 30, are now [available for download](https://github.com/microsoft/go#binary-distribution). For more information about this release and the changes included, see the table below:
+The Microsoft builds of the Go security patches released today, are now [available for download](https://github.com/microsoft/go#binary-distribution). For more information about this release and the changes included, see the table below:
 
 | Microsoft Release | Upstream Tag |
 |-------------------|--------------|

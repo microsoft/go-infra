@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -44,7 +43,6 @@ type ReleaseInfo struct {
 	Slug          string
 	Categories    []string
 	Tags          []string
-	ReleaseDate   string
 	FeaturedImage string // Add this field for featured_image
 	Versions      []GoVersionData
 }
@@ -69,10 +67,6 @@ type GoVersionData struct {
 	MSGoVersionLink string
 	GoVersion       string
 	GoVersionLink   string
-}
-
-func (r *ReleaseInfo) SetReleaseDate(releaseDate time.Time) {
-	r.ReleaseDate = releaseDate.Format("January 2")
 }
 
 func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
@@ -122,11 +116,13 @@ var announcementTemplate string
 
 func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo()
+
 	var releaseDateStr string
 	var releaseVersions string
 	var author string
 	var security bool
 	var test bool
+
 	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
@@ -140,15 +136,15 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	const inputLayout = "2006-01-02"
 	if releaseDateStr == "" {
-		return errors.New("release date cannot be empty")
+		releaseDateStr = time.Now().Format(inputLayout)
 	}
+
 	releaseDate, err := time.Parse(inputLayout, releaseDateStr)
 	if err != nil {
 		return fmt.Errorf("invalid date format for release date %q: %w", releaseDateStr, err)
 	}
 	versionsList := strings.Split(releaseVersions, ",")
 
-	releaseInfo.SetReleaseDate(releaseDate)
 	releaseInfo.SetTitle(versionsList)
 	releaseInfo.ParseGoVersions(versionsList)
 	releaseInfo.SetAuthor(author)
