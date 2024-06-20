@@ -1,5 +1,5 @@
 ---
-post_title: Go 1.22.8-3 Microsoft build now available.
+post_title: Go 1.22.8-3 Microsoft build now available
 author1: 
 post_slug: go-1-22-8-3-microsoft-build-now-available
 categories: Microsoft for Go Developers
