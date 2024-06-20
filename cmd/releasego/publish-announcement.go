@@ -139,7 +139,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("invalid date format for release date %q: %w", releaseDateStr, err)
 	}
 	versionsList := strings.Split(releaseVersions, ",")
-
 	releaseInfo.SetTitle(versionsList)
 	releaseInfo.ParseGoVersions(versionsList)
 	releaseInfo.SetAuthor(author)
