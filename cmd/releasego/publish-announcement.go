@@ -201,7 +201,7 @@ func generateBlogPostTitle(versions []string) string {
 	if count == 0 {
 		return ""
 	} else if count == 1 {
-		return fmt.Sprintf("Go %s build now available.", versions[0])
+		return fmt.Sprintf("Go %s Microsoft build now available.", versions[0])
 	} else if count == 2 {
 		return fmt.Sprintf("Go %s and %s Microsoft builds now available.", versions[0], versions[1])
 	} else {
