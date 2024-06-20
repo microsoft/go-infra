@@ -106,11 +106,6 @@ func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
 	return tmpl.Execute(wr, r)
 }
 
-type GoVersion struct {
-	URL     string
-	Version string
-}
-
 //go:embed templates/announcement.template.md
 var announcementTemplate string
 
