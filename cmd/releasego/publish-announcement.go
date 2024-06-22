@@ -47,6 +47,41 @@ type ReleaseInfo struct {
 	Versions      []GoVersionData
 }
 
+// take all this methods and make it one constructor function for ReleaseInfo
+func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
+	ri := new(ReleaseInfo)
+
+	// Generate human-readable title and URL-friendly slug from the Go versions.
+	ri.Title = generateBlogPostTitle(versions)
+	ri.Slug = generateSlug(ri.Title)
+
+	// Set default categories and tags for the blog post.
+	ri.Categories = []string{"Microsoft for Go Developers"}
+	ri.Tags = []string{"go", "release"}
+
+	// Process each Go version, extracting release information and generating links.
+	for _, version := range versions {
+		goVersion := goversion.New(version).UpstreamFormatGitTag()
+		ri.Versions = append(ri.Versions, GoVersionData{
+			MSGoVersion:     "v" + version,
+			MSGoVersionLink: createMSGoReleaseLinkFromVersion(version),
+			GoVersion:       goVersion,
+			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion),
+		})
+	}
+
+	// Map the author's username to the appropriate format for the blog post.
+	ri.Author = mapUsernames(author)
+
+	// If this is a security release, add the "Security" category and tag to the post.
+	if security {
+		ri.Categories = append(ri.Categories, "Security")
+		ri.Tags = append(ri.Tags, "security")
+	}
+
+	return ri
+}
+
 func (ri ReleaseInfo) CategoriesString() string {
 	return strings.Join(ri.Categories, ", ")
 }
@@ -55,46 +90,11 @@ func (ri ReleaseInfo) TagsString() string {
 	return strings.Join(ri.Tags, ", ")
 }
 
-func NewReleaseInfo() *ReleaseInfo {
-	return &ReleaseInfo{
-		Categories: []string{"Microsoft for Go Developers"},
-		Tags:       []string{"go", "release"},
-	}
-}
-
 type GoVersionData struct {
 	MSGoVersion     string
 	MSGoVersionLink string
 	GoVersion       string
 	GoVersionLink   string
-}
-
-func (r *ReleaseInfo) ParseGoVersions(goVersions []string) {
-	for _, version := range goVersions {
-		goVersion := goversion.New(version).UpstreamFormatGitTag()
-		r.Versions = append(r.Versions, GoVersionData{
-			MSGoVersion:     "v" + version,
-			MSGoVersionLink: createMSGoReleaseLinkFromVersion(version),
-			GoVersion:       goVersion,
-			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion),
-		})
-	}
-}
-
-func (r *ReleaseInfo) SetTitle(versions []string) {
-	r.Title = generateBlogPostTitle(versions)
-	r.Slug = generateSlug(r.Title)
-}
-
-func (r *ReleaseInfo) SetAuthor(author string) {
-	r.Author = mapUsernames(author)
-}
-
-func (r *ReleaseInfo) IsSecurityRelease(IsSecurityRelease bool) {
-	if IsSecurityRelease {
-		r.Categories = append(r.Categories, "Security")
-		r.Tags = append(r.Tags, "security")
-	}
 }
 
 func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
@@ -110,8 +110,6 @@ func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
 var announcementTemplate string
 
 func publishAnnouncement(p subcmd.ParseFunc) (err error) {
-	releaseInfo := NewReleaseInfo()
-
 	var releaseDateStr string
 	var releaseVersions string
 	var author string
@@ -139,10 +137,8 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("invalid date format for release date %q: %w", releaseDateStr, err)
 	}
 	versionsList := strings.Split(releaseVersions, ",")
-	releaseInfo.SetTitle(versionsList)
-	releaseInfo.ParseGoVersions(versionsList)
-	releaseInfo.SetAuthor(author)
-	releaseInfo.IsSecurityRelease(security)
+
+	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
 
 	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, *pat)

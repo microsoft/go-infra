@@ -1,9 +1,9 @@
 ---
 post_title: Go 1.22.8-3 Microsoft build now available
-author1: 
+author1: Test Author
 post_slug: go-1-22-8-3-microsoft-build-now-available
-categories: Microsoft for Go Developers
-tags: go, release
+categories: Microsoft for Go Developers, Security
+tags: go, release, security
 featured_image:
 summary: The Microsoft builds of the Go security patches released today, are now available for download.
 ---

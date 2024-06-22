@@ -1,9 +1,9 @@
 ---
 post_title: Go 1.23.1-1, 1.22.8-1 and 1.21.11-16 Microsoft builds now available
-author1: 
+author1: Test Author
 post_slug: go-1-23-1-1--1-22-8-1-and-1-21-11-16-microsoft-builds-now-available
-categories: Microsoft for Go Developers
-tags: go, release
+categories: Microsoft for Go Developers, Security
+tags: go, release, security
 featured_image:
 summary: The Microsoft builds of the Go security patches released today, are now available for download.
 ---

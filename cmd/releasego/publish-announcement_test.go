@@ -7,27 +7,25 @@ import (
 	"bytes"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
 
 func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
-	newInfo := func(versions []string) *ReleaseInfo {
-		ri := NewReleaseInfo()
-
-		ri.SetTitle(versions)
-		ri.ParseGoVersions(versions)
-
-		return ri
-	}
+	var (
+		// testTime is June 4, 2024
+		testTime = time.Date(2024, 6, 4, 0, 0, 0, 0, time.UTC)
+		author   = "Test Author"
+	)
 
 	tests := []struct {
 		name string
 		ri   *ReleaseInfo
 	}{
-		{"real-2024-06-04", newInfo([]string{"1.22.4-1", "1.21.11-1"})},
-		{"only-one-branch", newInfo([]string{"1.22.8-3"})},
-		{"three-branches", newInfo([]string{"1.23.1-1", "1.22.8-1", "1.21.11-16"})},
+		{"real-2024-06-04", NewReleaseInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
+		{"only-one-branch", NewReleaseInfo(testTime, []string{"1.22.8-3"}, author, true)},
+		{"three-branches", NewReleaseInfo(testTime, []string{"1.23.1-1", "1.22.8-1", "1.21.11-16"}, author, true)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
