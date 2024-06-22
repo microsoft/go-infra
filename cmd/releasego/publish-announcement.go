@@ -25,7 +25,7 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "publish-announcement",
-		Summary: "Generate an markdown formatted blog post for Go version releases and publish it to go-devblog repo.",
+		Summary: "Generate a markdown-formatted blog post for Go version releases and publish it to the go-devblog repo.",
 		Description: `
 The 'publish-announcement' command is used to create an HTML formatted 
 blog post for the Microsoft builds of Go security patch releases. This command requires 
