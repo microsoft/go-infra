@@ -161,26 +161,38 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
-	// check if the file already exists in the go-devblog repository
-	exists, err := githubutil.FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
-	if err != nil {
+	if err := githubutil.Retry(func() error {
+		// check if the file already exists in the go-devblog repository
+		exists, err := githubutil.FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
+		if err != nil {
+			return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
+		}
+		if exists {
+			return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
+		}
+
+		return nil
+	}); err != nil {
 		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
 	}
-	if exists {
-		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
-	}
 
-	// Upload the announcement to the go-devblog repository
-	if err := githubutil.UploadFile(
-		ctx,
-		client,
-		"microsoft",
-		"go-devblog",
-		"main",
-		blogFilePath,
-		fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
-		content.Bytes()); err != nil {
-		return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
+	if err := githubutil.Retry(func() error {
+		// Upload the announcement to the go-devblog repositoryy main branch with proper commit message
+		if err := githubutil.UploadFile(
+			ctx,
+			client,
+			"microsoft",
+			"go-devblog",
+			"main",
+			blogFilePath,
+			fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
+			content.Bytes()); err != nil {
+			return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
 	}
 
 	return nil
