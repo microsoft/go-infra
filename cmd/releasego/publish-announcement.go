@@ -27,11 +27,10 @@ func init() {
 		Name:    "publish-announcement",
 		Summary: "Generate a markdown-formatted blog post for Go version releases and publish it to the go-devblog repo.",
 		Description: `
-The 'publish-announcement' command is used to create an HTML formatted 
-blog post for the Microsoft builds of Go security patch releases. This command requires 
-the release date, the list of released versions, and a release label. It outputs an 
-HTML formatted blog post that includes the release date, the versions released, 
-and a link to the upstream Go announcement.
+The publish-announcement command automates the creation of Markdown-formatted blog 
+posts for Microsoft's Go releases. It generates a post containing release details, 
+relevant links, and metadata, then commits it to the go-devblog repository for 
+subsequent drafting as a WordPress article.
 `,
 		Handle: publishAnnouncement,
 	})
