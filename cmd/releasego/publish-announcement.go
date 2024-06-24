@@ -156,6 +156,8 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	if dryRun {
+		fmt.Printf("Would have submitted at path '%s'\n", generateBlogFilePath(releaseDate, releaseInfo.Slug))
+		fmt.Println("=====")
 		return releaseInfo.WriteAnnouncement(os.Stdout)
 	}
 
