@@ -39,19 +39,28 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	golangSignaturesFileContent, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "azurelinux", "main", golangSignaturesFilepath)
-	if !exists {
+	if err != nil {
+		return fmt.Errorf("failed to download file %s: %w", golangSignaturesFilepath, err)
+	} else if !exists {
 		return fmt.Errorf("file %s not found in azurelinux repository", golangSignaturesFilepath)
 	}
 
 	golangSpecFileContent, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "azurelinux", "main", golangSignaturesFilepath)
-	if !exists {
+	if err != nil {
+		return fmt.Errorf("failed to download file %s: %w", golangSignaturesFilepath, err)
+	} else if !exists {
 		return fmt.Errorf("file %s not found in azurelinux repository", golangSignaturesFilepath)
 	}
 
 	cgManifestContent, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "azurelinux", "main", cgManifestFilepath)
-	if !exists {
+	if err != nil {
+		return fmt.Errorf("failed to download file %s: %w", cgManifestFilepath, err)
+	} else if !exists {
 		return fmt.Errorf("file %s not found in azurelinux repository", cgManifestFilepath)
 	}
+
+	// #todo
+	_, _, _ = golangSpecFileContent, cgManifestContent, golangSignaturesFileContent
 
 	return nil
 }

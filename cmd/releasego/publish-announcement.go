@@ -170,19 +170,13 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
-	if err := githubutil.Retry(func() error {
-		// check if the file already exists in the go-devblog repository
-		_, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath)
-		if err != nil {
-			return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
-		}
-		if exists {
-			return fmt.Errorf("file %q already exists in go-devblog repository", blogFilePath)
-		}
-
-		return nil
-	}); err != nil {
+	// check if the file already exists in the go-devblog repository
+	_, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath)
+	if err != nil {
 		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
+	}
+	if exists {
+		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
 	}
 
 	if err := githubutil.Retry(func() error {
