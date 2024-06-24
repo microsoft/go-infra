@@ -9,7 +9,6 @@ import (
 )
 
 func TestUpdateAzureLinux(t *testing.T) {
-
 }
 
 func TestUpdateSignaturesFileContent(t *testing.T) {
