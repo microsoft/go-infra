@@ -168,13 +168,13 @@ extends:
                           -azdopat '$(System.AccessToken)'
                       displayName: ⌚ Wait for go-images build
                       timeoutInMinutes: 120
-                  - script: |
-                      releasego publish-announcement \
-                        -author '${{ parameters.notify }}' \
-                        -versions '${{ join(',', parameters.releaseVersions) }}' \
-                        -security='${{ parameters.isSecurityRelease }}' \
-                        -pat '$(GitHubPAT)'
-                    displayName: Publishing announcement details
+                - script: |
+                    releasego publish-announcement \
+                      -author '${{ parameters.notify }}' \
+                      -versions '${{ join(',', parameters.releaseVersions) }}' \
+                      -security='${{ parameters.isSecurityRelease }}' \
+                      -pat '$(GitHubPAT)'
+                  displayName: Publishing announcement details
                   
                 - template: ../steps/report.yml
                   parameters:
