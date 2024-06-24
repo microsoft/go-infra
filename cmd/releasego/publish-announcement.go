@@ -203,7 +203,7 @@ func generateBlogPostTitle(versions []string) string {
 		return fmt.Sprintf("Go %s and %s Microsoft builds now available", versions[0], versions[1])
 	} else {
 		allExceptLast := strings.Join(versions[:count-1], ", ")
-		return fmt.Sprintf("Go %s and %s Microsoft builds now available", allExceptLast, versions[count-1])
+		return fmt.Sprintf("Go %s, and %s Microsoft builds now available", allExceptLast, versions[count-1])
 	}
 }
 
