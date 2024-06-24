@@ -13,8 +13,12 @@ parameters:
   - name: isSecurityRelease
     displayName: >
       This release includes security fixes:
-    type: boolean
-    default: false
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
     
   - name: notify
     displayName: >
