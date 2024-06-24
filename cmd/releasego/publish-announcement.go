@@ -105,10 +105,14 @@ type GoVersionData struct {
 func (r *ReleaseInfo) WriteAnnouncement(wr io.Writer) error {
 	tmpl, err := template.New("announcement.template.md").Parse(announcementTemplate)
 	if err != nil {
-		return err
+		return fmt.Errorf("error parsing announcement template: %w", err)
 	}
 
-	return tmpl.Execute(wr, r)
+	if err := tmpl.Execute(wr, r); err != nil {
+		return fmt.Errorf("error executing announcement template: %w", err)
+	}
+
+	return nil
 }
 
 //go:embed templates/announcement.template.md
@@ -157,7 +161,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	content := new(bytes.Buffer)
 	if err := releaseInfo.WriteAnnouncement(content); err != nil {
-		return fmt.Errorf("error executing template: %w", err)
+		return err
 	}
 
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
