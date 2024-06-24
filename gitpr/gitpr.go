@@ -266,7 +266,7 @@ type GitHubRequestError struct {
 }
 
 func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response *GitHubResponse, err error) {
-	prSubmitContent, err := json.MarshalIndent(request, "", "")
+	prSubmitContent, _ := json.MarshalIndent(request, "", "")
 	fmt.Printf("Submitting payload: %s\n", prSubmitContent)
 
 	httpRequest, err := http.NewRequest("POST", "https://api.github.com/repos/"+ownerRepo+"/pulls", bytes.NewReader(prSubmitContent))

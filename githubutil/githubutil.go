@@ -66,7 +66,7 @@ func Retry(f func() error) error {
 			if i+1 < retryAttempts {
 				var rateErr *github.RateLimitError
 				if errors.As(err, &rateErr) {
-					resetDuration := rateErr.Rate.Reset.Sub(time.Now())
+					resetDuration := time.Until(rateErr.Rate.Reset.Time)
 
 					log.Printf("...rate limit exceeded. Reset at %v, %v from now.\n", rateErr.Rate.Reset, resetDuration)
 					if resetDuration > maxRateLimitResetWait {

@@ -688,9 +688,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			c.Args = append(c.Args, "--force")
 		}
 		c.Args = append(c.Args, auther.InsertAuth(remote))
-		for _, r := range refspecs {
-			c.Args = append(c.Args, r)
-		}
+		c.Args = append(c.Args, refspecs...)
 		if *f.DryRun {
 			c.Args = append(c.Args, "-n")
 		}

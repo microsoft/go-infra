@@ -104,7 +104,7 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 
 	startTime := time.Now()
 	for {
-		elapsed := time.Now().Sub(startTime)
+		elapsed := time.Since(startTime)
 		if elapsed > reportRetryTimeoutDuration {
 			return fmt.Errorf("retry timeout %v expended", reportRetryTimeoutDuration)
 		}
@@ -205,7 +205,7 @@ func Notify(ctx context.Context, owner string, repoName string, pat string, issu
 	}
 
 	return githubutil.Retry(func() error {
-		c := commentBody{reports: []State{*&s}}
+		c := commentBody{reports: []State{s}}
 		body, err := c.body()
 		if err != nil {
 			return err

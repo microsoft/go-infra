@@ -329,7 +329,7 @@ func (s *stopwatch) Start() {
 }
 
 func (s *stopwatch) Stop() {
-	s.elapsed += time.Now().Sub(s.start)
+	s.elapsed += time.Since(s.start)
 }
 
 func (s *stopwatch) ElapsedMillis() time.Duration {
