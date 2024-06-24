@@ -113,13 +113,13 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	var releaseVersions string
 	var author string
 	var security bool
-	var test bool
+	var dryRun bool
 
 	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Microsoft Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
-	flag.BoolVar(&test, "test", false, "Test the announcement template. This will output the generated announcement to stdout.")
+	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push blog post to GitHub.")
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
@@ -145,7 +145,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return err
 	}
 
-	if test {
+	if dryRun {
 		return releaseInfo.WriteAnnouncement(os.Stdout)
 	}
 
