@@ -175,7 +175,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 			return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
 		}
 		if exists {
-			return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
+			return fmt.Errorf("file %q already exists in go-devblog repository", blogFilePath)
 		}
 
 		return nil
