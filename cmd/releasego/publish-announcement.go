@@ -36,6 +36,12 @@ subsequent drafting as a WordPress article.
 	})
 }
 
+// add github username and wordpress username in case they are different
+var githubToWordpressUsernames = map[string]string{
+	"gdams":   "gadams",
+	"qmuntal": "qmuntaldiaz",
+}
+
 type ReleaseInfo struct {
 	Title         string
 	Author        string
@@ -217,6 +223,11 @@ func generateSlug(input string) string {
 		if unicode.IsPunct(r) || unicode.IsSpace(r) {
 			return '-'
 		}
+
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return -1
+		}
+
 		return r
 	}, input)
 
@@ -245,13 +256,7 @@ func createGoReleaseLinkFromVersion(releaseID string) string {
 }
 
 func mapUsernames(githubUsername string) string {
-	// add github username and wordpress username in case they are different
-	usernames := map[string]string{
-		"gdams":   "gadams",
-		"qmuntal": "qmuntaldiaz",
-	}
-
-	if wordpressUsername, exists := usernames[githubUsername]; exists {
+	if wordpressUsername, exists := githubToWordpressUsernames[githubUsername]; exists {
 		return wordpressUsername
 	}
 

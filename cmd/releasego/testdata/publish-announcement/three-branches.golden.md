@@ -1,5 +1,5 @@
 ---
-post_title: Go 1.23.1-1, 1.22.8-1 and 1.21.11-16 Microsoft builds now available
+post_title: Go 1.23.1-1, 1.22.8-1, and 1.21.11-16 Microsoft builds now available
 author1: Test Author
 post_slug: go-1-23-1-1--1-22-8-1-and-1-21-11-16-microsoft-builds-now-available
 categories: Microsoft for Go Developers, Security
