@@ -172,7 +172,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 	if err := githubutil.Retry(func() error {
 		// check if the file already exists in the go-devblog repository
-		exists, err := githubutil.FileExists(ctx, client, "microsoft", "go-devblog", blogFilePath)
+		_, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath)
 		if err != nil {
 			return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
 		}
