@@ -15,6 +15,12 @@ parameters:
     type: string
     default: nil
 
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: boolean
+    default: false
+
   # If someone's manually queueing this build, let them skip the approval stage. It takes time to
   # acquire a serverless agent to present the approval step, so the dev has to pay attention and
   # catch it. Instead, let them approve it ahead of time by skipping it. The default is always used
@@ -23,6 +29,17 @@ parameters:
     displayName: Approve right now, skipping the approval stage.
     type: boolean
     default: false
+
+  # Allow disabling specific parts of the internal build release. These can be used to re-run
+  # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runGoImagesBuild
+    displayName: Build/Publish Go images
+    type: boolean
+    default: true
+  - name: runPublishAnnouncement
+    displayName: Publish announcement details
+    type: boolean
+    default: true
 
   # Allow retrying a build starting at any of these points.
   - name: poll1MicrosoftGoImagesCommitHash
@@ -33,6 +50,11 @@ parameters:
     displayName: '2: Go image build ID to poll for completion.'
     type: string
     default: nil
+
+  - name: notify
+    displayName: >
+      A GitHub username which is mapped to a Wordpress username for authoring the release blog posts.
+    type: string
 
   # This parameter intentionally has no default: see release-go-pipeline.yml
   - name: goReleaseConfigVariableGroup
@@ -96,56 +118,64 @@ extends:
                 # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
                 # retry build will have a non-nil value in one of these parameters. Only the value of the last
                 # step's parameter matters.
-                - ${{ if eq(parameters.poll2MicrosoftGoImagesBuildID, 'nil') }}:
-                  - ${{ if eq(parameters.poll1MicrosoftGoImagesCommitHash, 'nil') }}:
-                    # First, poll for a commit that includes all the versions we want to build/release.
+                - ${{ if eq(parameters.runGoImagesBuild, true) }}:
+                  - ${{ if eq(parameters.poll2MicrosoftGoImagesBuildID, 'nil') }}:
+                    - ${{ if eq(parameters.poll1MicrosoftGoImagesCommitHash, 'nil') }}:
+                      # First, poll for a commit that includes all the versions we want to build/release.
+                      - script: |
+                          releasego get-images-commit \
+                            -versions '${{ join(',', parameters.releaseVersions) }}' \
+                            -branch 'refs/heads/$(TargetGoImagesBranch)' \
+                            -repo 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
+                            -set-azdo-variable poll1MicrosoftGoImagesCommitHash
+                        displayName: ⌚ Wait for go-images dependency flow
+
+                    # Now we have MicrosoftGoImagesCommitHash
                     - script: |
-                        releasego get-images-commit \
-                          -versions '${{ join(',', parameters.releaseVersions) }}' \
+                        releasego wait-azdo-commit \
+                          -commit '$(poll1MicrosoftGoImagesCommitHash)' \
+                          -name '$(TargetAzDOImagesRepo)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)'
+                      displayName: ⌚ Wait for internal mirror
+                      timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+                    - script: |
+                        releasego build-pipeline \
+                          -commit '$(poll1MicrosoftGoImagesCommitHash)' \
                           -branch 'refs/heads/$(TargetGoImagesBranch)' \
-                          -repo 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
-                          -set-azdo-variable poll1MicrosoftGoImagesCommitHash
-                      displayName: ⌚ Wait for go-images dependency flow
-
-                  # Now we have MicrosoftGoImagesCommitHash
-                  - script: |
-                      releasego wait-azdo-commit \
-                        -commit '$(poll1MicrosoftGoImagesCommitHash)' \
-                        -name '$(TargetAzDOImagesRepo)' \
-                        -org 'https://dev.azure.com/dnceng/' \
-                        -proj 'internal' \
-                        -azdopat '$(System.AccessToken)'
-                    displayName: ⌚ Wait for internal mirror
-                    timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
-                  - script: |
-                      releasego build-pipeline \
-                        -commit '$(poll1MicrosoftGoImagesCommitHash)' \
-                        -branch 'refs/heads/$(TargetGoImagesBranch)' \
-                        -id '$(GoImagesPipelineID)' \
-                        -org 'https://dev.azure.com/dnceng/' \
-                        -proj 'internal' \
-                        -azdopat '$(System.AccessToken)' \
-                        -set-azdo-variable poll2MicrosoftGoImagesBuildID \
-                    displayName: 🚀 Start go-images build/publish
-                  - template: ../steps/report.yml
-                    parameters:
-                      releaseIssue: ${{ parameters.releaseIssue }}
-                      condition: succeeded()
-                      buildPipeline: microsoft-go-images
-                      buildID: $(poll2MicrosoftGoImagesBuildID)
-                      buildStatus: '?'
-                      start: true
-                      reason: queued build
-
-                # Now we have poll2MicrosoftGoImagesBuildID
+                          -id '$(GoImagesPipelineID)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)' \
+                          -set-azdo-variable poll2MicrosoftGoImagesBuildID \
+                      displayName: 🚀 Start go-images build/publish
+                    - template: ../steps/report.yml
+                      parameters:
+                        releaseIssue: ${{ parameters.releaseIssue }}
+                        condition: succeeded()
+                        buildPipeline: microsoft-go-images
+                        buildID: $(poll2MicrosoftGoImagesBuildID)
+                        buildStatus: '?'
+                        start: true
+                        reason: queued build
+                    # Now we have poll2MicrosoftGoImagesBuildID 
+                    - script: |
+                        releasego wait-build \
+                          -id '$(poll2MicrosoftGoImagesBuildID)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)'
+                      displayName: ⌚ Wait for go-images build
+                      timeoutInMinutes: 120
                 - script: |
-                    releasego wait-build \
-                      -id '$(poll2MicrosoftGoImagesBuildID)' \
-                      -org 'https://dev.azure.com/dnceng/' \
-                      -proj 'internal' \
-                      -azdopat '$(System.AccessToken)'
-                  displayName: ⌚ Wait for go-images build
-                  timeoutInMinutes: 120
+                    releasego publish-announcement \
+                      -author '${{ parameters.notify }}' \
+                      -versions '${{ join(',', parameters.releaseVersions) }}' \
+                      -security='${{ parameters.isSecurityRelease }}' \
+                      -pat '$(GitHubPAT)'
+                  displayName: Publishing announcement details
+                  
                 - template: ../steps/report.yml
                   parameters:
                     releaseIssue: ${{ parameters.releaseIssue }}

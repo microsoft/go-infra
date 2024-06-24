@@ -10,6 +10,16 @@ parameters:
       space at the beginning of each line.
     type: object
 
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
+    
   - name: notify
     displayName: >
       A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
@@ -54,6 +64,10 @@ extends:
     stages:
       - stage: Release
         jobs:
+          # Validation for complex inputs.
+          - ${{ if not(in(parameters.isSecurityRelease, 'True', 'False')) }}:
+            - 'Cancelled run. Please pick an option to indicate whether or not this is a security release.': error
+
           - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
               steps:
@@ -108,6 +122,8 @@ extends:
                       -azdopat '$(System.AccessToken)' \
                       -set-azdo-variable GO_RELEASE_IMAGES_BUILDID \
                       p releaseVersions '${{ convertToJson(parameters.releaseVersions) }}' \
+                      p notify '${{ parameters.notify }}' \
+                      p isSecurityRelease '${{ parameters.isSecurityRelease }}' \
                       p releaseIssue '$(GO_RELEASE_DAY_ISSUE_NUMBER)' \
                       p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
                   displayName: 🚀 Start microsoft/go-images build
