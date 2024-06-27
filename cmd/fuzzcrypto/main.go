@@ -56,11 +56,11 @@ const helpRun = `Run only those fuzz targets matching the regular expression.`
 const defaultFuzzTime = 5 * time.Minute
 
 func main() {
-	var verbose = flag.Bool("v", false, "Verbose output.")
+	verbose := flag.Bool("v", false, "Verbose output.")
 	var fuzzDuration durationOrCountFlag
 	flag.Var(&fuzzDuration, "fuzztime", helpFuzztime)
-	var run = flagRegex("run", helpRun)
-	var bucket, bucketCount = flagBucket("bucket", helpBucket)
+	run := flagRegex("run", helpRun)
+	bucket, bucketCount := flagBucket("bucket", helpBucket)
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
 		flag.PrintDefaults()

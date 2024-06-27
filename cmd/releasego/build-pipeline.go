@@ -53,8 +53,8 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	var parameters = make(map[string]string)
-	var variables = make(map[string]string)
+	parameters := make(map[string]string)
+	variables := make(map[string]string)
 
 	if url := azdo.GetEnvBuildURL(); url != "" {
 		variables["DebugGoReleaseQueuePipelineOriginURL"] = url
