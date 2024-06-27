@@ -101,7 +101,7 @@ func Poll(checker PollChecker, delay time.Duration) string {
 	for {
 		result, err := checker.Check()
 		if err == nil {
-			log.Printf("Check suceeded, result: %q.\n", result)
+			log.Printf("Check succeeded, result: %q.\n", result)
 			return result
 		}
 		log.Printf("Failed check: %v, next poll in %v...", err, delay)
