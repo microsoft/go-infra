@@ -20,7 +20,7 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "update-azure-linux",
-		Summary:     "Update the Azure Linux Microsoft Go version after release.",
+		Summary:     "Update the Go spec files for Azure Linux.",
 		Description: "",
 		Handle:      updateAzureLinux,
 	})
