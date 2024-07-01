@@ -487,7 +487,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 						return err
 					}
 				} else {
-					if err := os.WriteFile(path, []byte(content), 0666); err != nil {
+					if err := os.WriteFile(path, []byte(content), 0o666); err != nil {
 						return err
 					}
 					if err := run(newGitCmd("add", "--", path)); err != nil {
@@ -808,7 +808,6 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			b.Result.PR = pr
 			return nil
 		}()
-
 		// If we got an error, don't panic! Log the error and set a flag to indicate it happened,
 		// then continue to process the next branch in the for loop.
 		//

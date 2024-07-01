@@ -284,7 +284,7 @@ func addMockSubmodule(dir, upstream string) error {
 }
 
 func addMockFile(dir, relativePath, content string) error {
-	if err := os.WriteFile(filepath.Join(dir, relativePath), []byte(content), 0666); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, relativePath), []byte(content), 0o666); err != nil {
 		return err
 	}
 	if err := runGit(dir, "add", "."); err != nil {
