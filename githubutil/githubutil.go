@@ -50,14 +50,16 @@ func ParseRepoFlag(repo *string) (owner, name string, err error) {
 	return
 }
 
-const retryAttempts = 5
-const maxRateLimitResetWait = time.Minute * 15
-const rateLimitResetWaitSlack = time.Second * 5
+const (
+	retryAttempts           = 5
+	maxRateLimitResetWait   = time.Minute * 15
+	rateLimitResetWaitSlack = time.Second * 5
+)
 
 // Retry runs f up to 'retryAttempts' times, printing the error if one is encountered. Handles
 // GitHub rate limit exceeded errors by waiting, if the reset will happen reasonably soon.
 func Retry(f func() error) error {
-	var i = 0
+	i := 0
 	for ; i < retryAttempts; i++ {
 		log.Printf("   attempt %v/%v...\n", i+1, retryAttempts)
 		err := f()
@@ -66,7 +68,7 @@ func Retry(f func() error) error {
 			if i+1 < retryAttempts {
 				var rateErr *github.RateLimitError
 				if errors.As(err, &rateErr) {
-					resetDuration := rateErr.Rate.Reset.Sub(time.Now())
+					resetDuration := time.Until(rateErr.Rate.Reset.Time)
 
 					log.Printf("...rate limit exceeded. Reset at %v, %v from now.\n", rateErr.Rate.Reset, resetDuration)
 					if resetDuration > maxRateLimitResetWait {

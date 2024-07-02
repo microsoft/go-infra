@@ -1,0 +1,15 @@
+# Configure "golangci-lint" command. This file makes it behave the same for devs and CI.
+# See https://golangci-lint.run/usage/configuration
+linters:
+  enable:
+    # Defaults.
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Added.
+    - gofumpt
+    - bodyclose

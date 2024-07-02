@@ -51,8 +51,10 @@ Each command starts with "` + commandPrefix + `", then:
 	})
 }
 
-const commandPrefix = "github.com/microsoft/go-infra/cmd/git-go-patch command: "
-const patchNumberCommand = "patch number "
+const (
+	commandPrefix      = "github.com/microsoft/go-infra/cmd/git-go-patch command: "
+	patchNumberCommand = "patch number "
+)
 
 func handleExtract(p subcmd.ParseFunc) error {
 	sinceFlag := flag.String("since", "", "The commit or ref to begin formatting patches at. If nothing is specified, use the last commit recorded by 'apply'.")
@@ -329,7 +331,7 @@ func (s *stopwatch) Start() {
 }
 
 func (s *stopwatch) Stop() {
-	s.elapsed += time.Now().Sub(s.start)
+	s.elapsed += time.Since(s.start)
 }
 
 func (s *stopwatch) ElapsedMillis() time.Duration {

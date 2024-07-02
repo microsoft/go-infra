@@ -487,7 +487,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 						return err
 					}
 				} else {
-					if err := os.WriteFile(path, []byte(content), 0666); err != nil {
+					if err := os.WriteFile(path, []byte(content), 0o666); err != nil {
 						return err
 					}
 					if err := run(newGitCmd("add", "--", path)); err != nil {
@@ -688,9 +688,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			c.Args = append(c.Args, "--force")
 		}
 		c.Args = append(c.Args, auther.InsertAuth(remote))
-		for _, r := range refspecs {
-			c.Args = append(c.Args, r)
-		}
+		c.Args = append(c.Args, refspecs...)
 		if *f.DryRun {
 			c.Args = append(c.Args, "-n")
 		}
@@ -810,7 +808,6 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			b.Result.PR = pr
 			return nil
 		}()
-
 		// If we got an error, don't panic! Log the error and set a flag to indicate it happened,
 		// then continue to process the next branch in the for loop.
 		//
