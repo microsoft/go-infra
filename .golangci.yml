@@ -15,6 +15,7 @@ linters:
     - bodyclose
     - nakedret
     - predeclared
+    - godox
 
 linters-settings:
   nakedret:
