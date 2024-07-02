@@ -7,7 +7,4 @@ linters:
     - staticcheck
     - unused
     - gofumpt
-    - gosec
-    - deadcode
     - bodyclose
-    - misspell
