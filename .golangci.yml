@@ -16,6 +16,7 @@ linters:
     - nakedret
     - predeclared
     - godox
+    - unconvert
 
 linters-settings:
   nakedret:

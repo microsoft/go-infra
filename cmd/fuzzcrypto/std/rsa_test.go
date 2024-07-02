@@ -79,7 +79,7 @@ func FuzzRSAOAEP(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(dec, []byte(msg)) {
+		if !bytes.Equal(dec, msg) {
 			t.Errorf("got:%x want:%x", dec, msg)
 		}
 	})
@@ -105,7 +105,7 @@ func FuzzRSAPKCS1(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(dec, []byte(msg)) {
+		if !bytes.Equal(dec, msg) {
 			t.Errorf("got:%x want:%x", dec, msg)
 		}
 	})
