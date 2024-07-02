@@ -3,3 +3,5 @@
 ###############################################################################
 * text=auto encoding=UTF-8
 *.sh text eol=lf
+# Always use LF for Go files to avoid CRLF issues with golangci-lint.
+*.go text eol=lf
