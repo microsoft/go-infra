@@ -14,6 +14,7 @@ linters:
     - gofumpt
     - bodyclose
     - nakedret
+    - predeclared
 
 linters-settings:
   nakedret:
