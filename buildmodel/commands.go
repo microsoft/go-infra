@@ -29,7 +29,7 @@ import (
 // ParseBoundFlags parses all flags that have been registered with the flag package. This function
 // handles '-help' and validates no unhandled args were passed, so may exit rather than returning.
 func ParseBoundFlags(description string) {
-	var help = flag.Bool("h", false, "Print this help message.")
+	help := flag.Bool("h", false, "Print this help message.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "\nUsage:\n")
@@ -124,7 +124,7 @@ type PRFlags struct {
 // BindPRFlags creates PRFlags with the 'flag' package, globally registering them in the flag
 // package so ParseBoundFlags will find them.
 func BindPRFlags() *PRFlags {
-	var artifactsDir = filepath.Join(getwd(), "eng", "artifacts")
+	artifactsDir := filepath.Join(getwd(), "eng", "artifacts")
 	return &PRFlags{
 		dryRun:       flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
 		tempGitDir:   flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
@@ -435,8 +435,8 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 // the 'versions.json' and 'manifest.json' files and updates them based on the given build assets
 // struct. If the struct pointer is nil, only updates the 'manifest.json'.
 func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
-	var versionsJSONPath = filepath.Join(repoRoot, "src", "microsoft", "versions.json")
-	var manifestJSONPath = filepath.Join(repoRoot, "manifest.json")
+	versionsJSONPath := filepath.Join(repoRoot, "src", "microsoft", "versions.json")
+	manifestJSONPath := filepath.Join(repoRoot, "manifest.json")
 
 	var versions dockerversions.Versions
 	if err := stringutil.ReadJSONFile(versionsJSONPath, &versions); err != nil {

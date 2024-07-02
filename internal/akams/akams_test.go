@@ -283,7 +283,9 @@ func setup(t *testing.T, handler ...srvHandler) (closer func(), client *akams.Cl
 		}
 		w.WriteHeader(h.respStatus)
 		if h.respBody != "" {
-			w.Write([]byte(h.respBody))
+			if _, err := w.Write([]byte(h.respBody)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		query++
 	}))

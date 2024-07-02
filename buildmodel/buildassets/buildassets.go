@@ -110,9 +110,11 @@ func (b BuildAssets) GoVersion() *goversion.GoVersion {
 // Basic information about how the build output assets are formatted by Microsoft builds of Go. The
 // archiving infra is stored in each release branch to make it local to the code it operates on and
 // less likely to unintentionally break, so some of that information is duplicated here.
-var archiveSuffixes = []string{".tar.gz", ".zip"}
-var checksumSuffix = ".sha256"
-var sourceArchiveSuffix = ".src.tar.gz"
+var (
+	archiveSuffixes     = []string{".tar.gz", ".zip"}
+	checksumSuffix      = ".sha256"
+	sourceArchiveSuffix = ".src.tar.gz"
+)
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
 // source, and includes extra information that helps make sense of the build results.

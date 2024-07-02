@@ -17,8 +17,10 @@ import (
 	"github.com/microsoft/go-infra/stringutil"
 )
 
-const githubPrefix = "https://github.com/"
-const azdoDncengPrefix = "https://dnceng@dev.azure.com/"
+const (
+	githubPrefix     = "https://github.com/"
+	azdoDncengPrefix = "https://dnceng@dev.azure.com/"
+)
 
 // URLAuther manipulates a Git repository URL (GitHub, AzDO, ...) such that Git commands taking a
 // remote will work with the URL. This is intentionally vague: it could add an access token into the

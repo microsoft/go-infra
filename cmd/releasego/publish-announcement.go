@@ -194,7 +194,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 			blogFilePath,
 			fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
 			content.Bytes()); err != nil {
-
 			return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
 		}
 

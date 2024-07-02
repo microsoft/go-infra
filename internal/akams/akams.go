@@ -77,12 +77,12 @@ func NewClientCustom(apiBaseURL string, host Host, tenant string, httpClient *ht
 // Setting a value of 0 or negative for bulkSize or maxSizeBytes will reset the limit to the default.
 func (c *Client) SetBulkLimit(bulkSize int, maxSizeBytes int) {
 	if bulkSize <= 0 {
-		bulkSize = defaultBulkSize
+		c.bulkSize = defaultBulkSize
 	} else {
 		c.bulkSize = bulkSize
 	}
 	if maxSizeBytes <= 0 {
-		maxSizeBytes = defaultMaxSizeBytes
+		c.maxSizeBytes = defaultMaxSizeBytes
 	} else {
 		c.maxSizeBytes = maxSizeBytes
 	}

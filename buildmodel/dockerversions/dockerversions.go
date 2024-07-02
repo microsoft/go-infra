@@ -96,7 +96,7 @@ func (a *ArchEnv) GoImageArchVersionSuffix() string {
 // to identify this OS/arch in its versions.json file. Linux is the default OS, so if it is the
 // ArchEnv's OS, it isn't included in this string.
 func (a *ArchEnv) GoImageOSArchKey() string {
-	var s = a.GoImageArchKey()
+	s := a.GoImageArchKey()
 	if a.GOOS != "linux" {
 		s = a.GOOS + "-" + s
 	}

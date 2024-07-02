@@ -21,7 +21,8 @@ func Test_parseReportComment(t *testing.T) {
 		{
 			"no-section",
 			args{"Comment body!"},
-			commentBody{"Comment body!", "", nil, "", false}},
+			commentBody{"Comment body!", "", nil, "", false},
+		},
 		{
 			"no-data",
 			args{"Before" + beginDataSectionMarker + "" + endDataSectionMarker + "After"},

@@ -24,7 +24,7 @@ func Check(t *testing.T, rerunCmd, goldenPath, actual string) {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), os.ModePerm); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(goldenPath, []byte(actual), 0666); err != nil {
+		if err := os.WriteFile(goldenPath, []byte(actual), 0o666); err != nil {
 			t.Fatal(err)
 		}
 	}

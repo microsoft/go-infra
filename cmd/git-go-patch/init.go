@@ -40,7 +40,7 @@ func handleInit(p subcmd.ParseFunc) error {
 	}
 
 	// Don't overwrite existing file.
-	f, err := os.OpenFile(patch.ConfigFileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
+	f, err := os.OpenFile(patch.ConfigFileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return fmt.Errorf("unable to create new config file: %v", err)
 	}
