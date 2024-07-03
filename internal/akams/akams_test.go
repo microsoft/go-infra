@@ -47,8 +47,8 @@ func TestCreateBulk(t *testing.T) {
 		{ShortURL: "short2", TargetURL: "target2", LastModifiedBy: "lm", Owners: "o"},
 	}
 	wantBody := mustMarshal(t, links)
-	close, client := setup(t, srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody})
-	defer close()
+	closer, client := setup(t, srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody})
+	defer closer()
 	if err := client.CreateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +62,11 @@ func TestCreateBulk_Chunked_BulkSize(t *testing.T) {
 	}
 	wantBody1 := mustMarshal(t, links[:2])
 	wantBody2 := mustMarshal(t, links[2:])
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody1},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody2},
 	)
-	defer close()
+	defer closer()
 	client.SetBulkLimit(2, 0)
 	if err := client.CreateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
@@ -82,12 +82,12 @@ func TestCreateBulk_Chunked_BodySize(t *testing.T) {
 	wantBody1 := mustMarshal(t, links[:1])
 	wantBody2 := mustMarshal(t, links[1:2])
 	wantBody3 := mustMarshal(t, links[2:])
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody1},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody2},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody3},
 	)
-	defer close()
+	defer closer()
 	client.SetBulkLimit(0, len(wantBody1))
 	if err := client.CreateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
@@ -99,8 +99,8 @@ func TestCreateBulk_Fail_Request(t *testing.T) {
 	status := []int{http.StatusNotFound, http.StatusInternalServerError}
 	for _, s := range status {
 		t.Run(fmt.Sprint(s), func(t *testing.T) {
-			close, client := setup(t, srvHandler{respStatus: s, respBody: errStr, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: "[]"})
-			defer close()
+			closer, client := setup(t, srvHandler{respStatus: s, respBody: errStr, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: "[]"})
+			defer closer()
 			err := client.CreateBulk(context.Background(), []akams.CreateLinkRequest{})
 			testRequestFail(t, err, s, errStr)
 		})
@@ -111,8 +111,8 @@ func TestCreateBulk_Fail_MaxSize(t *testing.T) {
 	links := []akams.CreateLinkRequest{
 		{ShortURL: "short", TargetURL: "target", CreatedBy: "cb"},
 	}
-	close, client := setup(t)
-	defer close()
+	closer, client := setup(t)
+	defer closer()
 	client.SetBulkLimit(0, 1)
 	err := client.CreateBulk(context.Background(), links)
 	wantErr := "item 0 is too large: 91 bytes > 1 byte maximum"
@@ -130,8 +130,8 @@ func TestUpdateBulk(t *testing.T) {
 	status := []int{http.StatusAccepted, http.StatusNoContent, http.StatusNotFound}
 	for _, s := range status {
 		t.Run(fmt.Sprint(s), func(t *testing.T) {
-			close, client := setup(t, srvHandler{respStatus: s, wantMethod: http.MethodPut, wantPath: "bulk", wantBody: wantBody})
-			defer close()
+			closer, client := setup(t, srvHandler{respStatus: s, wantMethod: http.MethodPut, wantPath: "bulk", wantBody: wantBody})
+			defer closer()
 			if err := client.UpdateBulk(context.Background(), links); err != nil {
 				t.Fatal(err)
 			}
@@ -144,8 +144,8 @@ func TestUpdateBulk_Fail(t *testing.T) {
 	status := []int{http.StatusOK, http.StatusInternalServerError}
 	for _, s := range status {
 		t.Run(fmt.Sprint(s), func(t *testing.T) {
-			close, client := setup(t, srvHandler{respStatus: s, respBody: errStr, wantMethod: http.MethodPut, wantPath: "bulk", wantBody: "[]"})
-			defer close()
+			closer, client := setup(t, srvHandler{respStatus: s, respBody: errStr, wantMethod: http.MethodPut, wantPath: "bulk", wantBody: "[]"})
+			defer closer()
 			err := client.UpdateBulk(context.Background(), []akams.UpdateLinkRequest{})
 			testRequestFail(t, err, s, errStr)
 		})
@@ -156,8 +156,8 @@ func TestUpdateBulk_Fail_MaxSize(t *testing.T) {
 	links := []akams.UpdateLinkRequest{
 		{ShortURL: "short", TargetURL: "target"},
 	}
-	close, client := setup(t)
-	defer close()
+	closer, client := setup(t)
+	defer closer()
 	client.SetBulkLimit(0, 1)
 	err := client.UpdateBulk(context.Background(), links)
 	wantErr := "item 0 is too large: 74 bytes > 1 byte maximum"
@@ -173,8 +173,8 @@ func TestCreateOrUpdateBulk_NeedCreateOnly(t *testing.T) {
 		{ShortURL: "short2", TargetURL: "target2", LastModifiedBy: "lm", Owners: "o"},
 	}
 	wantBody := mustMarshal(t, links)
-	close, client := setup(t, srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody})
-	defer close()
+	closer, client := setup(t, srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk", wantBody: wantBody})
+	defer closer()
 	if err := client.CreateOrUpdateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
 	}
@@ -186,13 +186,13 @@ func TestCreateOrUpdateBulk_NeedUpdateOnly(t *testing.T) {
 		{ShortURL: "short", TargetURL: "target", CreatedBy: "cb"},
 		{ShortURL: "short2", TargetURL: "target2", CreatedBy: "cb2"},
 	}
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: http.StatusBadRequest, wantMethod: http.MethodPost, wantPath: "bulk"},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodGet, wantPath: links[0].ShortURL},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodGet, wantPath: links[1].ShortURL},
 		srvHandler{respStatus: http.StatusAccepted, wantMethod: http.MethodPut, wantPath: "bulk"},
 	)
-	defer close()
+	defer closer()
 	if err := client.CreateOrUpdateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
 	}
@@ -204,14 +204,14 @@ func TestCreateOrUpdateBulk_NeedUpdateAndCreate(t *testing.T) {
 		{ShortURL: "short", TargetURL: "target", CreatedBy: "cb"},
 		{ShortURL: "short2", TargetURL: "target2", CreatedBy: "cb2"},
 	}
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: http.StatusBadRequest, wantMethod: http.MethodPost, wantPath: "bulk"},
 		srvHandler{respStatus: http.StatusNotFound, wantMethod: http.MethodGet, wantPath: links[0].ShortURL},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodGet, wantPath: links[1].ShortURL},
 		srvHandler{respStatus: http.StatusOK, wantMethod: http.MethodPost, wantPath: "bulk"},
 		srvHandler{respStatus: http.StatusAccepted, wantMethod: http.MethodPut, wantPath: "bulk"},
 	)
-	defer close()
+	defer closer()
 	if err := client.CreateOrUpdateBulk(context.Background(), links); err != nil {
 		t.Fatal(err)
 	}
@@ -224,10 +224,10 @@ func TestCreateOrUpdateBulk_CreateFail(t *testing.T) {
 	}
 	status := http.StatusExpectationFailed
 	errStr := "fake error"
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: status, respBody: errStr, wantMethod: http.MethodPost, wantPath: "bulk"},
 	)
-	defer close()
+	defer closer()
 	err := client.CreateOrUpdateBulk(context.Background(), links)
 	testRequestFail(t, err, status, errStr)
 }
@@ -239,11 +239,11 @@ func TestCreateOrUpdateBulk_GetFail(t *testing.T) {
 	}
 	status := http.StatusExpectationFailed
 	errStr := "fake error"
-	close, client := setup(t,
+	closer, client := setup(t,
 		srvHandler{respStatus: http.StatusBadRequest, wantMethod: http.MethodPost, wantPath: "bulk"},
 		srvHandler{respStatus: status, respBody: errStr, wantMethod: http.MethodGet, wantPath: links[0].ShortURL},
 	)
-	defer close()
+	defer closer()
 	err := client.CreateOrUpdateBulk(context.Background(), links)
 	testRequestFail(t, err, status, errStr)
 }

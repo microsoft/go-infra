@@ -42,12 +42,11 @@ func ParseRepoFlag(repo *string) (owner, name string, err error) {
 	if *repo == "" {
 		return "", "", errors.New("repo not specified")
 	}
-	var found bool
-	owner, name, found = strings.Cut(*repo, "/")
+	owner, name, found := strings.Cut(*repo, "/")
 	if !found {
 		return "", "", fmt.Errorf("unable to split repo into owner and name: %v", repo)
 	}
-	return
+	return owner, name, nil
 }
 
 const (

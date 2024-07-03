@@ -13,3 +13,11 @@ linters:
     # Added.
     - gofumpt
     - bodyclose
+    - nakedret
+    - predeclared
+    - godox
+    - unconvert
+
+linters-settings:
+  nakedret:
+    max-func-lines: 0

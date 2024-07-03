@@ -96,9 +96,7 @@ go1.17.9b7 ed86dfc4e441 src https://go-boringcrypto.storage.googleapis.com/go1.1
 }
 
 func newFixture(t *testing.T) (local, upstream string) {
-	local = newEmptyGitRepo(t)
-	upstream = newUpstreamGitRepo(t)
-	return
+	return newEmptyGitRepo(t), newUpstreamGitRepo(t)
 }
 
 func newEmptyGitRepo(t *testing.T) string {

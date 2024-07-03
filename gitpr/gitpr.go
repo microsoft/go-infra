@@ -199,7 +199,7 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 
 	httpResponse, err := client.Do(request)
 	if err != nil {
-		return
+		return 0, err
 	}
 	defer httpResponse.Body.Close()
 	status = httpResponse.StatusCode
@@ -212,14 +212,14 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 
 	jsonBytes, err := ioutil.ReadAll(httpResponse.Body)
 	if err != nil {
-		return
+		return status, err
 	}
 
 	fmt.Printf("---- Full response:\n%v\n", string(jsonBytes))
 	fmt.Printf("----\n")
 
 	err = json.Unmarshal(jsonBytes, response)
-	return
+	return status, err
 }
 
 // sendJSONRequestSuccessful sends a request for JSON information via sendJSONRequest and verifies
@@ -268,20 +268,20 @@ type GitHubRequestError struct {
 func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response *GitHubResponse, err error) {
 	prSubmitContent, err := json.MarshalIndent(request, "", "")
 	if err != nil {
-		return
+		return nil, err
 	}
 	fmt.Printf("Submitting payload: %s\n", prSubmitContent)
 
 	httpRequest, err := http.NewRequest("POST", "https://api.github.com/repos/"+ownerRepo+"/pulls", bytes.NewReader(prSubmitContent))
 	if err != nil {
-		return
+		return nil, err
 	}
 	httpRequest.SetBasicAuth("", pat)
 
 	response = &GitHubResponse{}
 	statusCode, err := sendJSONRequest(httpRequest, response)
 	if err != nil {
-		return
+		return nil, err
 	}
 
 	switch statusCode {
@@ -320,7 +320,7 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response 
 	default:
 		err = fmt.Errorf("unexpected http status code: %v", statusCode)
 	}
-	return
+	return response, err
 }
 
 func QueryGraphQL(pat string, query string, variables map[string]interface{}, result interface{}) error {
