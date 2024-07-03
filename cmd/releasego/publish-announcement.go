@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -55,6 +56,9 @@ type ReleaseInfo struct {
 // take all this methods and make it one constructor function for ReleaseInfo
 func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
 	ri := new(ReleaseInfo)
+
+	// Sort the versions in descending order.
+	sortVersions(versions)
 
 	// Generate human-readable title and URL-friendly slug from the Go versions.
 	ri.Title = generateBlogPostTitle(versions)
@@ -217,6 +221,12 @@ func generateBlogPostTitle(versions []string) string {
 		allExceptLast := strings.Join(versions[:count-1], ", ")
 		return fmt.Sprintf("Go %s, and %s Microsoft builds now available", allExceptLast, versions[count-1])
 	}
+}
+
+func sortVersions(versions []string) {
+	sort.Slice(versions, func(i, j int) bool {
+		return goversion.New(versions[i]).MajorMinorPatch() > goversion.New(versions[j]).MajorMinorPatch()
+	})
 }
 
 func generateSlug(input string) string {
