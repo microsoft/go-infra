@@ -19,13 +19,21 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 		author   = "Test Author"
 	)
 
+	newInfo := func(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
+		ri, err := NewReleaseInfo(releaseDate, versions, author, security)
+		if err != nil {
+			t.Fatalf("NewReleaseInfo() error = %v", err)
+		}
+		return ri
+	}
+
 	tests := []struct {
 		name string
 		ri   *ReleaseInfo
 	}{
-		{"real-2024-06-04", NewReleaseInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
-		{"only-one-branch", NewReleaseInfo(testTime, []string{"1.22.8-3"}, author, true)},
-		{"three-branches", NewReleaseInfo(testTime, []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}, author, true)},
+		{"real-2024-06-04", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
+		{"only-one-branch", newInfo(testTime, []string{"1.22.8-3"}, author, true)},
+		{"three-branches", newInfo(testTime, []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}, author, true)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,37 +83,4 @@ func TestGoReleaseVersionLink(t *testing.T) {
 	if result != expected {
 		t.Errorf("expected the release link to be %q, but got %q", expected, result)
 	}
-}
-
-func TestGoReleaseVersionSorting(t *testing.T) {
-	versions := []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}
-	expected := []string{"1.23.1-1", "1.22.8-1", "1.21.11-16"}
-
-	sortVersions(versions)
-
-	if !equal(versions, expected) {
-		t.Errorf("expected the sorted versions to be %q, but got %q", expected, versions)
-	}
-
-	versions = []string{"1.22.4-1", "1.21.11-1"}
-	expected = []string{"1.22.4-1", "1.21.11-1"}
-
-	sortVersions(versions)
-
-	if !equal(versions, expected) {
-		t.Errorf("expected the sorted versions to be %q, but got %q", expected, versions)
-	}
-}
-
-// equal is a helper function to compare two slices of strings.
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

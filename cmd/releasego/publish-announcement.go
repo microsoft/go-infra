@@ -54,11 +54,22 @@ type ReleaseInfo struct {
 }
 
 // take all this methods and make it one constructor function for ReleaseInfo
-func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
+func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) (*ReleaseInfo, error) {
 	ri := new(ReleaseInfo)
 
-	// Sort the versions in descending order.
-	sortVersions(versions)
+	// Sort the versions in descending order
+	var sortErr error
+	sort.Slice(versions, func(i, j int) bool {
+		b, err := goversion.New(versions[i]).IsNewerThan(goversion.New(versions[j]))
+		if err != nil {
+			sortErr = err
+		}
+		return b
+	})
+
+	if sortErr != nil {
+		return nil, fmt.Errorf("error sorting versions: %w", sortErr)
+	}
 
 	// Generate human-readable title and URL-friendly slug from the Go versions.
 	ri.Title = generateBlogPostTitle(versions)
@@ -88,7 +99,7 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 		ri.Tags = append(ri.Tags, "security")
 	}
 
-	return ri
+	return ri, nil
 }
 
 func (ri ReleaseInfo) CategoriesString() string {
@@ -151,7 +162,10 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 	versionsList := strings.Split(releaseVersions, ",")
 
-	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
+	releaseInfo, err := NewReleaseInfo(releaseDate, versionsList, author, security)
+	if err != nil {
+		return fmt.Errorf("error creating release info: %w", err)
+	}
 
 	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, *pat)
@@ -221,12 +235,6 @@ func generateBlogPostTitle(versions []string) string {
 		allExceptLast := strings.Join(versions[:count-1], ", ")
 		return fmt.Sprintf("Go %s, and %s Microsoft builds now available", allExceptLast, versions[count-1])
 	}
-}
-
-func sortVersions(versions []string) {
-	sort.Slice(versions, func(i, j int) bool {
-		return goversion.New(versions[i]).MajorMinorPatch() > goversion.New(versions[j]).MajorMinorPatch()
-	})
 }
 
 func generateSlug(input string) string {

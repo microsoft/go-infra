@@ -156,3 +156,40 @@ func extractPrerelease(part, prerelease *string) {
 		*part = (*part)[:i]
 	}
 }
+
+// IsNewerThan compares two versions and returns true if the receiver is newer than the argument
+// version. The comparison is done by comparing the major, minor, patch, revision, prerelease and note parts in that
+// order. If all parts are equal, false is returned. It may return an error if a part is not an integer.
+func (v *GoVersion) IsNewerThan(other *GoVersion) (bool, error) {
+	cmp := func(a, b string) (bool, error) {
+		intA, err := strconv.ParseInt(a, 10, 64)
+		if err != nil {
+			return false, err
+		}
+		intB, err := strconv.ParseInt(b, 10, 64)
+		if err != nil {
+			return false, err
+		}
+		return intA > intB, nil
+	}
+
+	if v.Major != other.Major {
+		return cmp(v.Major, other.Major)
+	}
+	if v.Minor != other.Minor {
+		return cmp(v.Minor, other.Minor)
+	}
+	if v.Patch != other.Patch {
+		return cmp(v.Patch, other.Patch)
+	}
+	if v.Revision != other.Revision {
+		return cmp(v.Revision, other.Revision)
+	}
+	if v.Prerelease != other.Prerelease {
+		return v.Prerelease > other.Prerelease, nil
+	}
+	if v.Note != other.Note {
+		return v.Note > other.Note, nil
+	}
+	return false, nil
+}

@@ -4,6 +4,7 @@
 package goversion
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -123,6 +124,38 @@ func TestGoVersion_UpstreamFormatGitTag(t *testing.T) {
 			v := New(tt.version)
 			if got := v.UpstreamFormatGitTag(); got != tt.want {
 				t.Errorf("UpstreamFormatGitTag() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGoVersion_IsNewerThan(t *testing.T) {
+	tests := []struct {
+		version string
+		other   string
+		want    bool
+		wantErr bool
+	}{
+		{"1.21.3-1", "1.22.2-1", false, false},
+		{"1.22.2-1", "1.21.3-1", true, false},
+		{"1.22.2-1", "1.22.2-1", false, false},
+		{"1.22.2-2", "1.22.2-1", true, false},
+		{"1.100.2-1", "1.22.2-2", true, false},
+		{"2.1.1-1", "1.1.1-1", true, false},
+		{"1.1.2-1", "1.1.1-1", true, false},
+		{"1.1.1", "1.2.1-1", false, false},
+		{"&.1.1", "1.1.1-1", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%v_%v", tt.version, tt.other), func(t *testing.T) {
+			v := New(tt.version)
+			other := New(tt.other)
+			got, err := v.IsNewerThan(other)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("IsNewerThan() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("IsNewerThan() = %v, want %v", got, tt.want)
 			}
 		})
 	}
