@@ -10,7 +10,7 @@ summary: The Microsoft builds of the Go security patches released today, are now
 
 A new set of Microsoft Go builds
 {{- if .SecurityRelease }} including security fixes {{ else }} {{ end -}}
-is now [available for download](https://github.com/microsoft/go#binary-distribution).
+is now [available for download](https://github.com/microsoft/go#download-and-install).
 For more information about this release and the changes included, see the table below:
 
 | Microsoft Release | Upstream Tag |
