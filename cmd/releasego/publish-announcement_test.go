@@ -31,7 +31,8 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 		name string
 		ri   *ReleaseInfo
 	}{
-		{"real-2024-06-04", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
+		{"2024-06-04-real", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
+		{"2024-06-04-nonsecurity", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, false)},
 		{"only-one-branch", newInfo(testTime, []string{"1.22.8-3"}, author, true)},
 		{"three-branches", newInfo(testTime, []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}, author, true)},
 	}

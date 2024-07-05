@@ -44,13 +44,14 @@ var githubToWordpressUsernames = map[string]string{
 }
 
 type ReleaseInfo struct {
-	Title         string
-	Author        string
-	Slug          string
-	Categories    []string
-	Tags          []string
-	FeaturedImage string // Add this field for featured_image
-	Versions      []GoVersionData
+	Title           string
+	Author          string
+	Slug            string
+	Categories      []string
+	Tags            []string
+	FeaturedImage   string // Add this field for featured_image
+	Versions        []GoVersionData
+	SecurityRelease bool
 }
 
 // take all this methods and make it one constructor function for ReleaseInfo
@@ -97,6 +98,7 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 	if security {
 		ri.Categories = append(ri.Categories, "Security")
 		ri.Tags = append(ri.Tags, "security")
+		ri.SecurityRelease = true
 	}
 
 	return ri, nil
