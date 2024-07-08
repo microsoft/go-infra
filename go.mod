@@ -10,7 +10,7 @@ require (
 	github.com/go-test/deep v1.1.1
 	github.com/google/go-github v17.0.0+incompatible
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
-	golang.org/x/crypto v0.24.0
+	golang.org/x/crypto v0.25.0
 	golang.org/x/mod v0.18.0
 	golang.org/x/oauth2 v0.21.0
 )
