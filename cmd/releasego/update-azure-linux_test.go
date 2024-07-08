@@ -20,8 +20,6 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = assets
-
 	specFilepPath := filepath.Join("testdata", "update-azure-linux", "golang.spec")
 	specFile, err := os.ReadFile(specFilepPath)
 	if err != nil {
@@ -38,6 +36,13 @@ func TestUpdateSpecFileContent(t *testing.T) {
 	}
 
 	updatedspecFile, err := updateGoArchiveNameInSpecFile(string(specFile), path.Base(assets.GoSrcURL))
+	if err != nil {
+		t.Fatalf("Error updating Go archive name in spec file : %s", err)
+	}
+	updatedspecFile, err = updateGoRevisionInSpecFile(string(updatedspecFile), assets.GoVersion().Revision)
+	if err != nil {
+		t.Fatalf("Error updating Go revision in spec file : %s", err)
+	}
 
 	goldentest.Check(
 		t, "TestUpdateSpecFileContent ",
