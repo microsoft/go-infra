@@ -127,9 +127,8 @@ const (
 
 var (
 	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename  )(.+)`)
+	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision  )(.+)`)
 )
-
-// 	specFileGoFilenameRegex = regexp.MustCompile(`(%global\s+ms_go_filename\s+).+`)
 
 func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
 	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
@@ -147,6 +146,15 @@ func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, 
 	}
 
 	updatedContent := specFileGoFilenameRegex.ReplaceAllString(specContent, "${1}"+newArchiveName)
+	return updatedContent, nil
+}
+
+func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string, error) {
+	if !specFileRevisionRegex.MatchString(specContent) {
+		return "", fmt.Errorf("no Go revision version declaration found in spec content")
+	}
+
+	updatedContent := specFileRevisionRegex.ReplaceAllString(specContent, "${1}"+newRevisionVersion)
 	return updatedContent, nil
 }
 

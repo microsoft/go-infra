@@ -37,12 +37,12 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Expected extracted Go file version is not same as actual filename. Expected %s, returned %s", extractedGoFileVersion, "go1.22.4-20240604.2.src.tar.gz")
 	}
 
-	updated, err := updateGoArchiveNameInSpecFile(string(specFile), path.Base(assets.GoSrcURL))
+	updatedspecFile, err := updateGoArchiveNameInSpecFile(string(specFile), path.Base(assets.GoSrcURL))
 
 	goldentest.Check(
 		t, "TestUpdateSpecFileContent ",
 		filepath.Join("testdata", "update-azure-linux", "golang_updated.spec"),
-		updated)
+		updatedspecFile)
 }
 
 func TestUpdateSignaturesFileContent(t *testing.T) {
@@ -50,6 +50,8 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	t.Error(assets.GoVersion().Revision)
 	_ = assets
 }
 
@@ -58,5 +60,23 @@ func TestUpdateCGManifestFileContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = assets
+
+	cgManifestFilePath := filepath.Join("testdata", "update-azure-linux", "cgmanifest.json")
+	cgManifestFile, err := os.ReadFile(cgManifestFilePath)
+	if err != nil {
+		t.Fatalf("Error reading spec file from path %s, error is:%s", cgManifestFilePath, err)
+	}
+
+	updatedCgManifestFile, err := updateCGManifest(assets, cgManifestFile)
+	if err != nil {
+		t.Errorf("Error updating CG Manifest file : %s", err)
+	}
+
+	// append a new line for fully matching the file
+	updatedCgManifestFile = append(updatedCgManifestFile, '\n')
+
+	goldentest.Check(
+		t, "TestUpdateCGManifestFileContent ",
+		filepath.Join("testdata", "update-azure-linux", "cgmanifest_updated.json"),
+		string(updatedCgManifestFile))
 }
