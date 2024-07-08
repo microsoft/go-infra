@@ -17,6 +17,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// ErrNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
+var ErrNotExists = errors.New("file does not exist in the given repository and branch")
+
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	if pat == "" {
@@ -128,28 +131,28 @@ func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch,
 	return err
 }
 
-// DownloadFile is a function that will download a file from a given repository.
-func DownloadFile(ctx context.Context, client *github.Client, owner, repo, branch, path string) (file []byte, exists bool, err error) {
+// DownloadFile downloads a file from a given repository.
+func DownloadFile(ctx context.Context, client *github.Client, owner, repo, branch, path string) ([]byte, error) {
 	var fileContent *github.RepositoryContent
 	var resp *github.Response
+	var err error
 
 	if err = Retry(func() error {
 		fileContent, _, resp, err = client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{
 			Ref: branch,
 		})
-
 		return err
 	}); err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, false, nil
+			return nil, ErrNotExists
 		}
-		return nil, false, err
+		return nil, err
 	}
 
 	content, err := fileContent.GetContent()
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
-	return []byte(content), true, nil
+	return []byte(content), nil
 }

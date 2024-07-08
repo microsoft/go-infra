@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -210,7 +210,7 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 		}
 	}
 
-	jsonBytes, err := ioutil.ReadAll(httpResponse.Body)
+	jsonBytes, err := io.ReadAll(httpResponse.Body)
 	if err != nil {
 		return status, err
 	}

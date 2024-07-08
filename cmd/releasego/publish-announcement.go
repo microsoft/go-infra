@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -171,12 +172,11 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
 	// check if the file already exists in the go-devblog repository
-	_, exists, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath)
-	if err != nil {
+	if _, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath); err != nil {
+		if errors.Is(err, githubutil.ErrNotExists) {
+			return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
+		}
 		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
-	}
-	if exists {
-		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
 	}
 
 	if err := githubutil.Retry(func() error {

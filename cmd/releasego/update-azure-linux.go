@@ -6,9 +6,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"path"
+	"regexp"
+	"strings"
 
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -21,7 +24,7 @@ func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "update-azure-linux",
 		Summary:     "Update the Go spec files for Azure Linux.",
-		Description: "",
+		Description: " ",
 		Handle:      updateAzureLinux,
 	})
 }
@@ -57,7 +60,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSignaturesFileContent, err = updateSignatureFile(assets, golangSignaturesFileContent)
+	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, assets.GoSrcURL, path.Base(assets.GoSrcURL), assets.GoSrcHash)
 	if err != nil {
 		return err
 	}
@@ -99,13 +102,17 @@ func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 }
 
 func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, repo, branch, filePath string) ([]byte, error) {
-	fileContent, exists, err := githubutil.DownloadFile(ctx, client, owner, repo, branch, filePath)
+	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, branch, filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download file %s: %w", filePath, err)
+		if errors.Is(err, githubutil.ErrNotExists) {
+			// Handle the specific case of the file not existing
+			return nil, fmt.Errorf("file '%s' not found in repository '%s' on branch '%s'", filePath, repo, branch)
+		} else {
+			// Handle other errors (network issues, authentication, etc.)
+			return nil, fmt.Errorf("failed to download file '%s': %w", filePath, err)
+		}
 	}
-	if !exists {
-		return nil, fmt.Errorf("file %s not found in %s repository", filePath, repo)
-	}
+
 	if len(fileContent) == 0 {
 		return nil, fmt.Errorf("downloaded file %s is empty", filePath)
 	}
@@ -118,25 +125,67 @@ const (
 	cgManifestFilepath       = "cgmanifest.json"
 )
 
+var (
+	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename  )(.+)`)
+)
+
+// 	specFileGoFilenameRegex = regexp.MustCompile(`(%global\s+ms_go_filename\s+).+`)
+
+func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
+	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
+
+	if len(matches) < 2 {
+		return "", fmt.Errorf("no match found")
+	}
+
+	return strings.TrimSpace(matches[2]), nil
+}
+
+func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, error) {
+	if !specFileGoFilenameRegex.MatchString(specContent) {
+		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
+	}
+
+	updatedContent := specFileGoFilenameRegex.ReplaceAllString(specContent, "${1}"+newArchiveName)
+	return updatedContent, nil
+}
+
 func updateSpecFile(buildAssets *buildassets.BuildAssets, signatureFileContent []byte) ([]byte, error) {
-	// content := string(signatureFileContent)
-	//
-	// // Define the regex patterns
-	// msGoFilenamePattern := regexp.MustCompile(`(%global ms_go_filename\s+)\S+`)
-	// msGoRevisionPattern := regexp.MustCompile(`(%global ms_go_revision\s+)\d+`)
-	// versionPattern := regexp.MustCompile(`(Version:\s+)\d+\.\d+\.\d+`)
-	//
-	// // Replace the matched patterns with the new values
-	// content = msGoFilenamePattern.ReplaceAllString(content, `${1}`+msGoFilename)
-	// content = msGoRevisionPattern.ReplaceAllString(content, `${1}`+msGoRevision)
-	// content = versionPattern.ReplaceAllString(content, `${1}`+version)
+	content := string(signatureFileContent)
+
+	_ = content
 
 	return nil, nil
 }
 
-func updateSignatureFile(buildAssets *buildassets.BuildAssets, specFileContent []byte) ([]byte, error) {
+// JSONSignature structure to map the provided JSON data
+type JSONSignature struct {
+	Signatures map[string]string `json:"Signatures"`
+}
 
-	return nil, nil
+func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash string) ([]byte, error) {
+	var data JSONSignature
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return nil, err
+	}
+
+	// Check if the oldFilename exists in the map
+	if _, exists := data.Signatures[oldFilename]; !exists {
+		return nil, errors.New("old filename not found in signatures")
+	}
+
+	// Update the filename and hash in the map
+	delete(data.Signatures, oldFilename) // Remove the old entry
+	// add new filename and hash
+	data.Signatures[newFilename] = newHash
+
+	// Marshal the updated JSON back to a byte slice
+	updatedJSON, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedJSON, nil
 }
 
 type CGManifest struct {
@@ -158,18 +207,23 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 		return nil, fmt.Errorf("failed to parse cgmanifest.json: %w", err)
 	}
 
-	for i, registration := range cgManifest.Registrations {
-		if registration.Component.Other.Name == "golang" {
-			// Update the version and downloadUrl for the "golang" component
-			cgManifest.Registrations[i].Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
-			cgManifest.Registrations[i].Component.Other.DownloadURL = fmt.Sprintf(
+	updated := false
+	for i := range cgManifest.Registrations {
+		registration := &cgManifest.Registrations[i].Component.Other
+		if registration.Name == "golang" {
+			registration.Version = buildAssets.GoVersion().MajorMinorPatch()
+			registration.DownloadURL = fmt.Sprintf(
 				"https://github.com/microsoft/go/releases/download/%s/%s",
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
 			)
-
-			break // Exit the loop after finding and updating the "golang" component
+			updated = true
+			break
 		}
+	}
+
+	if !updated {
+		return nil, fmt.Errorf("golang component not found in cgmanifest.json")
 	}
 
 	// Serialize the updated cgManifest back to JSON
