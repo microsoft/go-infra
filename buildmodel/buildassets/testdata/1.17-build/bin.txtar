@@ -1,0 +1,16 @@
+A minimal example of the list of artifacts that can be produced by a Go 1.17
+build. These files are used to test build asset JSON generation, so most of the
+files have been truncated to have no content.
+
+-- go.linux-amd64.tar.gz --
+-- go.linux-amd64.tar.gz.sha256 --
+0000000000000000000000000000000000000000000000000000000000000000  go.linux-amd64.tar.gz
+-- go.linux-amd64.tar.gz.sig --
+-- go.linux-arm64.tar.gz --
+-- go.linux-arm64.tar.gz.sha256 --
+0000000000000000000000000000000000000000000000000000000000000000  go.linux-arm64.tar.gz
+-- go.linux-arm64.tar.gz.sig --
+-- go.linux-armv6l.tar.gz --
+-- go.linux-armv6l.tar.gz.sha256 --
+0000000000000000000000000000000000000000000000000000000000000000  go.linux-armv6l.tar.gz
+-- go.linux-armv6l.tar.gz.sig --

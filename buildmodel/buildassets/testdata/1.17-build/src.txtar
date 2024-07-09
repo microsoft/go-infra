@@ -1,0 +1,4 @@
+Minimal src files to exercise the asset.json generation process.
+
+-- VERSION --
+go1.17.2

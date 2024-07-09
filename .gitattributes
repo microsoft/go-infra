@@ -5,3 +5,5 @@
 *.sh text eol=lf
 # Always use LF for Go files to avoid CRLF issues with golangci-lint.
 *.go text eol=lf
+# Use LF for txtar files to avoid CR inputs to standard txtar library.
+*.txtar text eol=lf

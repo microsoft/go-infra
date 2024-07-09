@@ -1,0 +1,33 @@
+{
+  "branch": "placeholder-branch",
+  "buildId": "placeholder-build-id",
+  "version": "1.17.2-1",
+  "arches": [
+    {
+      "env": {
+        "GOARCH": "amd64",
+        "GOOS": "linux"
+      },
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://example.org/go.linux-amd64.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "arm64",
+        "GOOS": "linux"
+      },
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://example.org/go.linux-arm64.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "arm",
+        "GOARM": "6",
+        "GOOS": "linux"
+      },
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://example.org/go.linux-armv6l.tar.gz"
+    }
+  ],
+  "goSrcURL": ""
+}

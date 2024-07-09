@@ -10,6 +10,7 @@ package buildassets
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/buildmodel/publishmanifest"
 	"github.com/microsoft/go-infra/goversion"
 )
 
@@ -129,6 +131,9 @@ type BuildResultsDirectoryInfo struct {
 	// that will be published somewhere. This lets us include the final URL in the build asset data
 	// so auto-update can pick it up easily.
 	DestinationURL string
+	// DestinationManifest is the path of a manifest file that lists where each artifact has been
+	// published to. Fails if a file doesn't match up. Causes DestinationURL to be ignored.
+	DestinationManifest string
 	// Branch is the Git branch this build was built with. In many cases it can be determined with
 	// Git commands, but this is not always possible (or reliable), so we pass it through as a
 	// simple arg.
@@ -173,6 +178,32 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 		return a
 	}
 
+	getURL := func(name string) (string, error) {
+		return b.DestinationURL + "/" + name, nil
+	}
+	// Swap out getURL with a func that gets info from the destination manifest file, if one exists.
+	if b.DestinationManifest != "" {
+		data, err := os.ReadFile(b.DestinationManifest)
+		if err != nil {
+			return nil, fmt.Errorf("unable to read destination manifest file '%v': %w", b.DestinationManifest, err)
+		}
+		manifest, err := publishmanifest.Read(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal destination manifest file '%v': %w", b.DestinationManifest, err)
+		}
+		byFilename, err := manifest.ByFilename()
+		if err != nil {
+			return nil, fmt.Errorf("failed to map published files by name: %w", err)
+		}
+
+		getURL = func(name string) (string, error) {
+			if file, ok := byFilename[name]; ok {
+				return file.URL, nil
+			}
+			return "", fmt.Errorf("no URL found for %q", name)
+		}
+	}
+
 	var goSrcURL string
 
 	if b.ArtifactsDir != "" {
@@ -191,7 +222,10 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 
 			// Is it a source archive file?
 			if strings.HasSuffix(e.Name(), sourceArchiveSuffix) {
-				goSrcURL = b.DestinationURL + "/" + e.Name()
+				goSrcURL, err = getURL(e.Name())
+				if err != nil {
+					return nil, fmt.Errorf("unable to get URL for source archive %q: %w", e.Name(), err)
+				}
 				continue
 			}
 			// Is it a source archive file checksum?
@@ -248,7 +282,10 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 					}
 
 					a := getOrCreateArch(e.Name())
-					a.URL = b.DestinationURL + "/" + e.Name()
+					a.URL, err = getURL(e.Name())
+					if err != nil {
+						return nil, fmt.Errorf("unable to get URL for binary archive %q: %w", e.Name(), err)
+					}
 					a.Env = dockerversions.ArchEnv{
 						GOOS:   goOS,
 						GOARCH: goArch,

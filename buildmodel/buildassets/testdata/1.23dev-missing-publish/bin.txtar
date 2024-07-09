@@ -1,0 +1,12 @@
+A set of files representing a build, but with no content in the binary files.
+
+Note that this file contains go1.23-0def9d5c-20240709.2.windows-amd64.zip, but the output
+manifest doesn't have a matching entry. The summary creation process should detect that.
+
+-- go1.23-0def9d5c-20240709.2.src.tar.gz --
+-- go1.23-0def9d5c-20240709.2.src.tar.gz.sha256 --
+e18be7a50671fa8fce652bf58cb5e0960b2ebcd064d526c7616274ad3799a1cf  go1.23-0def9d5c-20240709.2.src.tar.gz
+-- go1.23-0def9d5c-20240709.2.src.tar.gz.sig --
+-- go1.23-0def9d5c-20240709.2.windows-amd64.zip --
+-- go1.23-0def9d5c-20240709.2.windows-amd64.zip.sha256 --
+cd6a8dc304f80147155fb3aded2e714238a4a7f939fb57e47f4b75281e662555  go1.23-0def9d5c-20240709.2.windows-amd64.zip
