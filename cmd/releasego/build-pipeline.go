@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
 	"github.com/microsoft/go-infra/azdo"
@@ -110,7 +111,10 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 
 	// Make our own client. The AzDO library doesn't support the 7.1 API needed to pass parameters:
 	// https://docs.microsoft.com/en-us/rest/api/azure/devops/build/builds/queue?view=azure-devops-rest-7.1
-	var client http.Client
+	client := http.Client{
+		// Generous timeout. Maximum observed time on dev machine during development: 10 seconds.
+		Timeout: time.Minute * 3,
+	}
 
 	request := &buildPipelineRequest{
 		DefinitionID:  *id,
