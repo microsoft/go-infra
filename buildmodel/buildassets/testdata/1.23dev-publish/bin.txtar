@@ -1,0 +1,21 @@
+A set of files representing a build, but with no content in the binary files.
+
+-- go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz --
+-- go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.sha256 --
+4d43335c30e564053b32a0f4489eeaf399d49fe5a201961a573e42234201e5d3  go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz
+-- go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.sig --
+-- go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz --
+-- go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.sha256 --
+4ff938e9b8bafe42809d441ec288679fb9759b34a5c4b162e0e4c335ecb4bcdd  go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz
+-- go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.sig --
+-- go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz --
+-- go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.sha256 --
+11cb59a7da47abfdb8b88be7339d97ce1e9e0ca3ebd8e0fbdc1cfde73d547279  go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz
+-- go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.sig --
+-- go1.23-0def9d5c-20240709.2.src.tar.gz --
+-- go1.23-0def9d5c-20240709.2.src.tar.gz.sha256 --
+e18be7a50671fa8fce652bf58cb5e0960b2ebcd064d526c7616274ad3799a1cf  go1.23-0def9d5c-20240709.2.src.tar.gz
+-- go1.23-0def9d5c-20240709.2.src.tar.gz.sig --
+-- go1.23-0def9d5c-20240709.2.windows-amd64.zip --
+-- go1.23-0def9d5c-20240709.2.windows-amd64.zip.sha256 --
+cd6a8dc304f80147155fb3aded2e714238a4a7f939fb57e47f4b75281e662555  go1.23-0def9d5c-20240709.2.windows-amd64.zip

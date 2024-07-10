@@ -4,69 +4,65 @@
 package buildassets
 
 import (
-	"fmt"
+	"encoding/json"
+	"errors"
 	"os"
 	"path"
-	"strings"
+	"path/filepath"
 	"testing"
 
-	"github.com/go-test/deep"
-	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/goldentest"
+	"golang.org/x/tools/txtar"
 )
 
-func TestBuildResultsDirectoryInfo_CreateSummary(t *testing.T) {
-	b := BuildResultsDirectoryInfo{
-		SourceDir:      "testdata/example-1.17-build/src",
-		ArtifactsDir:   "testdata/example-1.17-build/assets",
-		DestinationURL: "https://example.org",
-		Branch:         "release-branch.go1.17",
-		BuildID:        "placeholder-build-id",
+func TestBuildResultsDirectoryInfo_GoldenCreateSummary(t *testing.T) {
+	tests := []string{
+		"1.17-build",
+		"1.23dev-publish",
+		"1.23dev-missing-publish",
 	}
-	want := &BuildAssets{
-		Branch:  b.Branch,
-		BuildID: b.BuildID,
-		Version: "1.17.2-1",
-		Arches: []*dockerversions.Arch{
-			{
-				Env: dockerversions.ArchEnv{
-					GOARCH: "amd64",
-					GOOS:   "linux",
-				},
-				SHA256:    strings.Repeat("0", 64),
-				Supported: false,
-				URL:       fmt.Sprintf("%v/go.linux-amd64.tar.gz", b.DestinationURL),
-			},
-			{
-				Env: dockerversions.ArchEnv{
-					GOARCH: "arm64",
-					GOOS:   "linux",
-				},
-				SHA256:    strings.Repeat("0", 64),
-				Supported: false,
-				URL:       fmt.Sprintf("%v/go.linux-arm64.tar.gz", b.DestinationURL),
-			},
-			{
-				Env: dockerversions.ArchEnv{
-					GOARCH: "arm",
-					GOARM:  "6",
-					GOOS:   "linux",
-				},
-				SHA256:    strings.Repeat("0", 64),
-				Supported: false,
-				URL:       fmt.Sprintf("%v/go.linux-armv6l.tar.gz", b.DestinationURL),
-			},
-		},
-	}
+	for _, tt := range tests {
+		t.Run(tt, func(t *testing.T) {
+			dir := filepath.Join("testdata", tt)
 
-	got, err := b.CreateSummary()
-	if err != nil {
-		t.Errorf("CreateSummary() error is not wanted: %v", err)
-		return
-	}
-	if diff := deep.Equal(got, want); diff != nil {
-		for _, d := range diff {
-			t.Error(d)
-		}
+			binDir, binExists := tempExtractTxtar(t, filepath.Join(dir, "bin.txtar"))
+			srcDir, srcExists := tempExtractTxtar(t, filepath.Join(dir, "src.txtar"))
+			destManifestPath := filepath.Join(dir, "msGo.output.manifest.json")
+
+			// Set up state based on what exists in the testdata directory.
+			b := BuildResultsDirectoryInfo{
+				Branch:  "placeholder-branch",
+				BuildID: "placeholder-build-id",
+			}
+			if binExists {
+				b.ArtifactsDir = binDir
+			}
+			if srcExists {
+				b.SourceDir = srcDir
+			}
+			if _, err := os.Stat(destManifestPath); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					b.DestinationURL = "https://example.org"
+				} else {
+					t.Fatal(err)
+				}
+			} else {
+				b.DestinationManifest = destManifestPath
+			}
+
+			got, err := b.CreateSummary()
+			var resultData []byte
+			if err == nil {
+				resultData, err = json.MarshalIndent(got, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				resultData = []byte(err.Error())
+			}
+
+			goldentest.Check(t, "go test ./buildassets", filepath.Join(dir, "result.golden.txt"), string(resultData))
+		})
 	}
 }
 
@@ -98,4 +94,24 @@ func Test_getVersion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func tempExtractTxtar(t *testing.T, path string) (outDir string, ok bool) {
+	t.Helper()
+
+	tar, err := txtar.ParseFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false
+		}
+		t.Fatal(err)
+	}
+
+	td := t.TempDir()
+	for _, file := range tar.Files {
+		if err := os.WriteFile(filepath.Join(td, file.Name), file.Data, 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return td, true
 }

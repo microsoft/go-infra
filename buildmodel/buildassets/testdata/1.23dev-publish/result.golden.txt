@@ -1,0 +1,41 @@
+{
+  "branch": "placeholder-branch",
+  "buildId": "placeholder-build-id",
+  "version": "main-1",
+  "arches": [
+    {
+      "env": {
+        "GOARCH": "arm",
+        "GOARM": "6",
+        "GOOS": "linux"
+      },
+      "sha256": "11cb59a7da47abfdb8b88be7339d97ce1e9e0ca3ebd8e0fbdc1cfde73d547279",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/4f51/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "amd64",
+        "GOOS": "windows"
+      },
+      "sha256": "cd6a8dc304f80147155fb3aded2e714238a4a7f939fb57e47f4b75281e662555",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/704a/go1.23-0def9d5c-20240709.2.windows-amd64.zip"
+    },
+    {
+      "env": {
+        "GOARCH": "amd64",
+        "GOOS": "linux"
+      },
+      "sha256": "4d43335c30e564053b32a0f4489eeaf399d49fe5a201961a573e42234201e5d3",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c226/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz"
+    },
+    {
+      "env": {
+        "GOARCH": "arm64",
+        "GOOS": "linux"
+      },
+      "sha256": "4ff938e9b8bafe42809d441ec288679fb9759b34a5c4b162e0e4c335ecb4bcdd",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/cee0/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz"
+    }
+  ],
+  "goSrcURL": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/e035/go1.23-0def9d5c-20240709.2.src.tar.gz"
+}

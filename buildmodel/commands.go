@@ -54,10 +54,11 @@ func ParseBoundFlags(description string) {
 
 // BuildAssetJSONFlags is a list of flags to create a build asset JSON file.
 type BuildAssetJSONFlags struct {
-	artifactsDir   *string
-	branch         *string
-	destinationURL *string
-	sourceDir      *string
+	artifactsDir        *string
+	branch              *string
+	destinationURL      *string
+	destinationManifest *string
+	sourceDir           *string
 
 	output *string
 }
@@ -66,10 +67,11 @@ type BuildAssetJSONFlags struct {
 // them in the flag package so ParseBoundFlags will find them.
 func BindBuildAssetJSONFlags() *BuildAssetJSONFlags {
 	return &BuildAssetJSONFlags{
-		artifactsDir:   flag.String("artifacts-dir", "eng/artifacts/bin", "The path of the directory to scan for artifacts."),
-		branch:         flag.String("branch", "unknown", "The name of the branch that produced these artifacts."),
-		destinationURL: flag.String("destination-url", "https://example.org/default", "The base URL where all files in the source directory can be downloaded from."),
-		sourceDir:      flag.String("source-dir", "", "The path of the source code directory to scan for a VERSION file."),
+		artifactsDir:        flag.String("artifacts-dir", "eng/artifacts/bin", "The path of the directory to scan for artifacts."),
+		branch:              flag.String("branch", "unknown", "The name of the branch that produced these artifacts."),
+		destinationURL:      flag.String("destination-url", "https://example.org/default", "The base URL where all files in the source directory can be downloaded from, if one exists."),
+		destinationManifest: flag.String("destination-manifest-file", "", "The path of a manifest file that lists where each artifact has been published to. Fails if a file doesn't match up. Causes destinationURL to be ignored."),
+		sourceDir:           flag.String("source-dir", "", "The path of the source code directory to scan for a VERSION file."),
 
 		output: flag.String("o", "assets.json", "The path of the build asset JSON file to create."),
 	}
@@ -86,11 +88,12 @@ func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 	}
 
 	b := &buildassets.BuildResultsDirectoryInfo{
-		SourceDir:      *f.sourceDir,
-		ArtifactsDir:   *f.artifactsDir,
-		DestinationURL: *f.destinationURL,
-		Branch:         *f.branch,
-		BuildID:        buildID,
+		SourceDir:           *f.sourceDir,
+		ArtifactsDir:        *f.artifactsDir,
+		DestinationURL:      *f.destinationURL,
+		DestinationManifest: *f.destinationManifest,
+		Branch:              *f.branch,
+		BuildID:             buildID,
 	}
 
 	m, err := b.CreateSummary()
