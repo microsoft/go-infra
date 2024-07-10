@@ -56,8 +56,23 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Error(assets.GoVersion().Revision)
-	_ = assets
+	signaturesFilePath := filepath.Join("testdata", "update-azure-linux", "signatures.json")
+	signaturesFile, err := os.ReadFile(signaturesFilePath)
+	if err != nil {
+		t.Fatalf("Error reading spec file from path %s, error is:%s", signaturesFilePath, err)
+	}
+
+	updatedSignatureFile, err := updateSignatureFile(signaturesFile, "go1.22.4-20240604.2.src.tar.gz", path.Base(assets.GoSrcURL), assets.GoSrcHash)
+	if err != nil {
+		t.Errorf("Error updating CG Manifest file : %s", err)
+	}
+
+	updatedSignatureFile = append(updatedSignatureFile, '\n')
+
+	goldentest.Check(
+		t, "TestUpdateCGManifestFileContent ",
+		filepath.Join("testdata", "update-azure-linux", "updated_signatures.json"),
+		string(updatedSignatureFile))
 }
 
 func TestUpdateCGManifestFileContent(t *testing.T) {
