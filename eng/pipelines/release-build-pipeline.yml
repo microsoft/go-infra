@@ -181,7 +181,8 @@ extends:
                           -proj 'internal' \
                           -azdopat '$(System.AccessToken)' \
                           -set-azdo-variable poll3MicrosoftGoBuildID \
-                          p releaseVersion '${{ parameters.releaseVersion }}'
+                          p releaseVersion '${{ parameters.releaseVersion }}' \
+                          pOptional publishReleaseStudio true
                       displayName: 🚀 Run microsoft/go internal build
                     - template: ../steps/report.yml
                       parameters:
