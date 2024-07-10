@@ -39,7 +39,7 @@ Takes extra args defining the parameters and variables to queue the build with:
     without this parameter. This may be useful for backward compatibility.
 
   v <name> <value>
-    Pass a variable. A variable is a simple bag and has no validation.
+    Pass a variable. AzDO pipelines don't validate variables before running.
 `,
 		TakeArgsReason: "Parameters and variables to pass to the build.",
 		Handle:         handleBuildPipeline,
