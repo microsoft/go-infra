@@ -26,7 +26,7 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Error reading spec file from path %s, error is:%s", specFilepPath, err)
 	}
 
-	extractedGoFileVersion, err := extractGoArchiveNameFromSpecFile(string(specFile))
+	extractedGoFileVersion, err := extractGoArchiveNameFromSpecFile(specFile)
 	if err != nil {
 		t.Fatalf("Error extracting go archive name from spec file : %s", err)
 	}

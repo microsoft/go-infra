@@ -50,6 +50,21 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	golangSpecFileContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
+	if err != nil {
+		return err
+	}
+
+	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
+	if err != nil {
+		return err
+	}
+
+	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
+	if err != nil {
+		return err
+	}
+
 	// Validation (as described in previous response)
 	if assets.GoSrcURL == "" || assets.GoSrcHash == "" {
 		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcHash in assets.json")
@@ -60,17 +75,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, assets.GoSrcURL, path.Base(assets.GoSrcURL), assets.GoSrcHash)
-	if err != nil {
-		return err
-	}
-
-	golangSpecFileContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
-	if err != nil {
-		return err
-	}
-
-	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
+	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcHash)
 	if err != nil {
 		return err
 	}
@@ -84,9 +89,6 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-
-	// #todo
-	_, _, _ = golangSpecFileContent, cgManifestContent, golangSignaturesFileContent
 
 	return nil
 }
@@ -130,11 +132,11 @@ var (
 	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision  )(.+)`)
 )
 
-func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
-	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
+func extractGoArchiveNameFromSpecFile(specContent []byte) (string, error) {
+	matches := specFileGoFilenameRegex.FindStringSubmatch(string(specContent))
 
 	if len(matches) < 2 {
-		return "", fmt.Errorf("no match found")
+		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
 	}
 
 	return strings.TrimSpace(matches[2]), nil
