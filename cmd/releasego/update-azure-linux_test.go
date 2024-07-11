@@ -39,7 +39,7 @@ func TestUpdateSpecFileContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error updating Go archive name in spec file : %s", err)
 	}
-	updatedspecFile, err = updateGoRevisionInSpecFile(string(updatedspecFile), assets.GoVersion().Revision)
+	updatedspecFile, err = updateGoRevisionInSpecFile(updatedspecFile, assets.GoVersion().Revision)
 	if err != nil {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
