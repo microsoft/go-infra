@@ -90,6 +90,9 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	_ = golangSignaturesFileContent
+	_ = cgManifestContent
+
 	return nil
 }
 
