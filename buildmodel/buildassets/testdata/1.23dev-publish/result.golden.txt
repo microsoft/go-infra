@@ -37,5 +37,6 @@
       "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/cee0/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz"
     }
   ],
-  "goSrcURL": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/e035/go1.23-0def9d5c-20240709.2.src.tar.gz"
+  "goSrcURL": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/e035/go1.23-0def9d5c-20240709.2.src.tar.gz",
+  "goSrcHash": "e18be7a50671fa8fce652bf58cb5e0960b2ebcd064d526c7616274ad3799a1cf"
 }

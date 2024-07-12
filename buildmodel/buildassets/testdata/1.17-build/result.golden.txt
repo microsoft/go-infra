@@ -29,5 +29,6 @@
       "url": "https://example.org/go.linux-armv6l.tar.gz"
     }
   ],
-  "goSrcURL": ""
+  "goSrcURL": "",
+  "goSrcHash": ""
 }
