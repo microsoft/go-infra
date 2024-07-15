@@ -99,7 +99,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 	assets := new(buildassets.BuildAssets)
 
-	if err := stringutil.ReadJSONFile(assetFilePath, &assets); err != nil {
+	if err := stringutil.ReadJSONFile(assetFilePath, assets); err != nil {
 		return nil, fmt.Errorf("error loading build assets: %w", err)
 	}
 
