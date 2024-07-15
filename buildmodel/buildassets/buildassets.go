@@ -39,8 +39,8 @@ type BuildAssets struct {
 
 	// GoSrcURL is a URL pointing at a tar.gz archive of the pre-patched Go source code.
 	GoSrcURL string `json:"goSrcURL"`
-	// GoSrcHash is the SHA256 hash of the pre-patched Go source code tar.gz archive stored at GoSrcURL.
-	GoSrcHash string `json:"goSrcHash"`
+	// GoSrcSHA256 is the SHA256 hash of the pre-patched Go source code tar.gz archive stored at GoSrcURL.
+	GoSrcSHA256 string `json:"goSrcSHA256"`
 }
 
 // GetDockerRepoTargetBranch returns the Go Docker images repo branch that needs to be updated based
@@ -207,7 +207,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 	}
 
 	var goSrcURL string
-	var goSrcHash string
+	var goSrcSHA256 string
 
 	if b.ArtifactsDir != "" {
 		entries, err := os.ReadDir(b.ArtifactsDir)
@@ -238,7 +238,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				if err != nil {
 					return nil, fmt.Errorf("unable to read checksum file '%v': %w", fullPath, err)
 				}
-				goSrcHash = strings.Fields(string(fileContent))[0]
+				goSrcSHA256 = strings.Fields(string(fileContent))[0]
 
 				continue
 			}
@@ -317,12 +317,12 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 	})
 
 	return &BuildAssets{
-		Branch:    b.Branch,
-		BuildID:   b.BuildID,
-		Version:   goVersion + "-" + goRevision,
-		Arches:    arches,
-		GoSrcURL:  goSrcURL,
-		GoSrcHash: goSrcHash,
+		Branch:      b.Branch,
+		BuildID:     b.BuildID,
+		Version:     goVersion + "-" + goRevision,
+		Arches:      arches,
+		GoSrcURL:    goSrcURL,
+		GoSrcSHA256: goSrcSHA256,
 	}, nil
 }
 

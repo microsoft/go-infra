@@ -30,5 +30,5 @@
     }
   ],
   "goSrcURL": "",
-  "goSrcHash": ""
+  "goSrcSHA256": ""
 }

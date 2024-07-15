@@ -66,8 +66,8 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	// Validation (as described in previous response)
-	if assets.GoSrcURL == "" || assets.GoSrcHash == "" {
-		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcHash in assets.json")
+	if assets.GoSrcURL == "" || assets.GoSrcSHA256 == "" {
+		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
 	}
 
 	golangSignaturesFileContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSignaturesFilepath)
@@ -75,7 +75,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcHash)
+	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
 	if err != nil {
 		return err
 	}

@@ -62,7 +62,7 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 		t.Fatalf("Error reading spec file from path %s, error is:%s", signaturesFilePath, err)
 	}
 
-	updatedSignatureFile, err := updateSignatureFile(signaturesFile, "go1.22.4-20240604.2.src.tar.gz", path.Base(assets.GoSrcURL), assets.GoSrcHash)
+	updatedSignatureFile, err := updateSignatureFile(signaturesFile, "go1.22.4-20240604.2.src.tar.gz", path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
 	if err != nil {
 		t.Errorf("Error updating CG Manifest file : %s", err)
 	}
