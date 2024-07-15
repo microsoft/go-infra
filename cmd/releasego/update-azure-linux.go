@@ -109,15 +109,7 @@ func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, repo, branch, filePath string) ([]byte, error) {
 	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, branch, filePath)
 	if err != nil {
-		if errors.Is(err, githubutil.ErrNotExists) {
-			return nil, fmt.Errorf("file %q not found in repository %q on branch %q", filePath, repo, branch)
-		} else {
-			return nil, fmt.Errorf("failed to download file %q: %w", filePath, err)
-		}
-	}
-
-	if len(fileContent) == 0 {
-		return nil, fmt.Errorf("downloaded file %s is empty", filePath)
+		return nil, fmt.Errorf("failed to download file %q: %w", filePath, err)
 	}
 	return fileContent, nil
 }
@@ -162,6 +154,10 @@ func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string,
 }
 
 func updateSpecFile(buildAssets *buildassets.BuildAssets, signatureFileContent []byte) ([]byte, error) {
+	if len(signatureFileContent) == 0 {
+		return nil, fmt.Errorf("provided spec file content is empty")
+	}
+
 	content := string(signatureFileContent)
 
 	_ = content
@@ -175,6 +171,10 @@ type JSONSignature struct {
 }
 
 func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash string) ([]byte, error) {
+	if len(jsonData) == 0 {
+		return nil, fmt.Errorf("provided signature file data is empty")
+	}
+
 	var data JSONSignature
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return nil, err
@@ -215,6 +215,10 @@ type CGManifest struct {
 }
 
 func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
+	if len(cgManifestContent) == 0 {
+		return nil, fmt.Errorf("provided CG manifest content is empty")
+	}
+
 	var cgManifest CGManifest
 	if err := json.Unmarshal(cgManifestContent, &cgManifest); err != nil {
 		return nil, fmt.Errorf("failed to parse cgmanifest.json: %w", err)
