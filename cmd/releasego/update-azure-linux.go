@@ -110,11 +110,9 @@ func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, rep
 	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, branch, filePath)
 	if err != nil {
 		if errors.Is(err, githubutil.ErrNotExists) {
-			// Handle the specific case of the file not existing
-			return nil, fmt.Errorf("file '%s' not found in repository '%s' on branch '%s'", filePath, repo, branch)
+			return nil, fmt.Errorf("file %q not found in repository %q on branch %q", filePath, repo, branch)
 		} else {
-			// Handle other errors (network issues, authentication, etc.)
-			return nil, fmt.Errorf("failed to download file '%s': %w", filePath, err)
+			return nil, fmt.Errorf("failed to download file %q: %w", filePath, err)
 		}
 	}
 
