@@ -46,7 +46,7 @@ func TestUpdateSpecFileContent(t *testing.T) {
 
 	goldentest.Check(
 		t, "TestUpdateSpecFileContent ",
-		filepath.Join("testdata", "update-azure-linux", "golang_updated.spec"),
+		filepath.Join("testdata", "update-azure-linux", "updated_golang.golden.spec"),
 		updatedspecFile)
 }
 
@@ -71,7 +71,7 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 
 	goldentest.Check(
 		t, "TestUpdateCGManifestFileContent ",
-		filepath.Join("testdata", "update-azure-linux", "updated_signatures.json"),
+		filepath.Join("testdata", "update-azure-linux", "updated_signatures.golden.json"),
 		string(updatedSignatureFile))
 }
 
@@ -97,6 +97,6 @@ func TestUpdateCGManifestFileContent(t *testing.T) {
 
 	goldentest.Check(
 		t, "TestUpdateCGManifestFileContent ",
-		filepath.Join("testdata", "update-azure-linux", "cgmanifest_updated.json"),
+		filepath.Join("testdata", "update-azure-linux", "updated_cgmanifest.golden.json"),
 		string(updatedCgManifestFile))
 }
