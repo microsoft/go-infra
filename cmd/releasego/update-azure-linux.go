@@ -196,6 +196,8 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 		return nil, err
 	}
 
+	updatedJSON = append(updatedJSON, '\n') // Add a newline at the end
+
 	return updatedJSON, nil
 }
 
@@ -242,6 +244,8 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal updated cgmanifest.json: %w", err)
 	}
+
+	updatedCgManifestContent = append(updatedCgManifestContent, '\n') // Add a newline at the end
 
 	return updatedCgManifestContent, nil
 }

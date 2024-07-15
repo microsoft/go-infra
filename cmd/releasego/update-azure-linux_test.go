@@ -67,8 +67,6 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 		t.Errorf("Error updating CG Manifest file : %s", err)
 	}
 
-	updatedSignatureFile = append(updatedSignatureFile, '\n')
-
 	goldentest.Check(
 		t, "TestUpdateCGManifestFileContent ",
 		filepath.Join("testdata", "update-azure-linux", "updated_signatures.golden.json"),
@@ -91,9 +89,6 @@ func TestUpdateCGManifestFileContent(t *testing.T) {
 	if err != nil {
 		t.Errorf("Error updating CG Manifest file : %s", err)
 	}
-
-	// append a new line for fully matching the file
-	updatedCgManifestFile = append(updatedCgManifestFile, '\n')
 
 	goldentest.Check(
 		t, "TestUpdateCGManifestFileContent ",
