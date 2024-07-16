@@ -138,7 +138,7 @@ var (
 func extractGoArchiveNameFromSpecFile(specContent []byte) (string, error) {
 	matches := specFileGoFilenameRegex.FindStringSubmatch(string(specContent))
 
-	if len(matches) < 2 {
+	if matches == nil {
 		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
 	}
 
