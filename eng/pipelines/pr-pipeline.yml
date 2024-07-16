@@ -37,6 +37,15 @@ jobs:
           testResultsFiles: $(Build.StagingDirectory)/TestResults.xml
           publishRunAttachments: true
 
+      # If the failure was a mismatch with golden files, show the difference for easier diagnosis.
+      - script: go test ./... -update
+        displayName: Update golden test results
+        condition: failed()
+
+      - script: git diff
+        displayName: 🔍 Show golden file difference
+        condition: failed()
+
   - template: jobs/fuzz.yml
     parameters:
       name: TestFuzz1x
