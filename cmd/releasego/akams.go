@@ -9,12 +9,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"path"
+	"text/tabwriter"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/buildmodel/publishmanifest"
 	"github.com/microsoft/go-infra/internal/akams"
 	"github.com/microsoft/go-infra/internal/msal"
 	"github.com/microsoft/go-infra/stringutil"
@@ -39,6 +42,10 @@ Example:
 
 func handleAKAMS(p subcmd.ParseFunc) error {
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
+
+	buildAssetJSONPublishManifest := flag.String(
+		"build-asset-json-publish-manifest", "",
+		"The path of a publish manifest describing where the build asset JSON file is available.")
 
 	flag.StringVar(
 		&latestShortLinkPrefix,
@@ -83,7 +90,7 @@ func handleAKAMS(p subcmd.ParseFunc) error {
 		log.Fatal("No build asset JSON specified.\n")
 	}
 
-	if err := createAkaMSLinks(*buildAssetJSON); err != nil {
+	if err := createAkaMSLinks(*buildAssetJSON, *buildAssetJSONPublishManifest); err != nil {
 		log.Fatalf("error: %v\n", err)
 	}
 	return nil
@@ -100,7 +107,7 @@ var (
 	akaMSOwners              string
 )
 
-func createAkaMSLinks(assetFilePath string) error {
+func createAkaMSLinks(assetFilePath, assetManifestPath string) error {
 	ctx := context.Background()
 
 	var b buildassets.BuildAssets
@@ -108,7 +115,21 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 
-	linkPairs, err := createLinkPairs(b)
+	var assetJSONUrl string
+	if assetManifestPath != "" {
+		var m publishmanifest.Manifest
+		if err := stringutil.ReadJSONFile(assetManifestPath, &m); err != nil {
+			return fmt.Errorf("failed to read publish manifest: %v", err)
+		}
+		for _, p := range m.Published {
+			if p.Filename == "assets.json" {
+				assetJSONUrl = p.URL
+				break
+			}
+		}
+	}
+
+	linkPairs, err := createLinkPairs(b, assetJSONUrl)
 	if err != nil {
 		return err
 	}
@@ -131,6 +152,11 @@ func createAkaMSLinks(assetFilePath string) error {
 		return err
 	}
 	log.Printf("---- Links %v\n", string(payload))
+	log.Println("---- Summary")
+	if err := writeLinkPairTable(os.Stdout, linkPairs); err != nil {
+		return err
+	}
+	log.Println("----")
 
 	var transport *msal.ConfidentialCredentialTransport
 	// Prefer certificate if multiple authentication methods are provided.
@@ -169,7 +195,7 @@ type akaMSLinkPair struct {
 	Target string
 }
 
-func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
+func createLinkPairs(assets buildassets.BuildAssets, assetJSONUrl string) ([]akaMSLinkPair, error) {
 	v := assets.GoVersion()
 	// The partial versions that we want to link to a specific build.
 	// For example, 1.18-fips -> 1.18.2-1-fips.
@@ -181,32 +207,15 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 		v.Full(),
 	}
 
-	goSrcURLParts := strings.Split(assets.GoSrcURL, "/")
-	if len(goSrcURLParts) < 3 {
-		return nil, fmt.Errorf("unable to determine build number from %#q: not enough '/' segments to be an asset URL", assets.GoSrcURL)
-	}
-	buildNumber := goSrcURLParts[len(goSrcURLParts)-2]
-
-	urls := make([]string, 0, 3*(len(assets.Arches)+1))
-	for _, a := range assets.Arches {
-		urls = appendPathAndVerificationFilePaths(urls, a.URL)
-	}
-	urls = appendPathAndVerificationFilePaths(urls, assets.GoSrcURL)
-	// The assets.json is uploaded in the same virtual dir as src.
-	// Make an aka.ms URL for it.
-	urlBase := strings.Join(goSrcURLParts[:len(goSrcURLParts)-1], "/") + "/"
-	urls = append(urls, urlBase+"assets.json")
+	// Get list of all URLs to link to.
+	urls := appendReleaseURLs(nil, &assets, assetJSONUrl)
 
 	pairs := make([]akaMSLinkPair, 0, len(urls)*len(partial))
 
 	for _, p := range partial {
 		for _, u := range urls {
-			urlParts := strings.Split(u, "/")
-			if len(urlParts) < 3 {
-				return nil, fmt.Errorf("unable to determine short link for %#q: not enough '/' segments to be an asset URL", u)
-			}
-			filename := urlParts[len(urlParts)-1]
-			f, err := makeFloatingFilename(filename, buildNumber, p)
+			filename := path.Base(u)
+			f, err := makeFloatingFilename(filename, p)
 			if err != nil {
 				return nil, fmt.Errorf("unable to process URL %#q: %w", u, err)
 			}
@@ -221,14 +230,26 @@ func createLinkPairs(assets buildassets.BuildAssets) ([]akaMSLinkPair, error) {
 	return pairs, nil
 }
 
-func makeFloatingFilename(filename, buildNumber, floatVersion string) (string, error) {
+func writeLinkPairTable(w io.Writer, pairs []akaMSLinkPair) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 1, ' ', 0)
+	for _, l := range pairs {
+		fmt.Fprintf(tw, "%s\t->\t%s\n", l.Short, l.Target)
+	}
+	return tw.Flush()
+}
+
+func makeFloatingFilename(filename, floatVersion string) (string, error) {
 	// The assets.json filename has no version number in it, so we need to add one.
 	if filename == "assets.json" {
 		return "go" + floatVersion + "." + filename, nil
 	}
-	// The build number and all information before it is version-related and needs to be replaced.
-	if _, after, ok := strings.Cut(filename, buildNumber); ok {
-		return "go" + floatVersion + after, nil
+
+	_, platform, ext, ok := buildassets.CutToolsetFileParts(filename)
+	if !ok {
+		return "", fmt.Errorf("unable to find platform in filename %#q", filename)
 	}
-	return "", fmt.Errorf("unable to find buildNumber %#q in filename %#q", buildNumber, filename)
+
+	// This is a tar.gz or zip of a Go build. To make a floating filename, the version information
+	// needs to be removed, and the platform/target kept.
+	return "go" + floatVersion + "." + platform + ext, nil
 }
