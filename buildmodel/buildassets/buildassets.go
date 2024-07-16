@@ -117,10 +117,9 @@ func (b BuildAssets) GoVersion() *goversion.GoVersion {
 // archiving infra is stored in each release branch to make it local to the code it operates on and
 // less likely to unintentionally break, so some of that information is duplicated here.
 var (
-	archiveSuffixes     = []string{".tar.gz", ".zip"}
-	checksumSuffix      = ".sha256"
-	signatureSuffix     = ".sig"
-	sourceArchiveSuffix = ".src.tar.gz"
+	archiveSuffixes = []string{".tar.gz", ".zip"}
+	checksumSuffix  = ".sha256"
+	signatureSuffix = ".sig"
 )
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
