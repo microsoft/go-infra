@@ -20,7 +20,7 @@ var update = flag.Bool("update", false, "Update the golden files instead of fail
 
 func TestBuildAssets_UpdateVersions(t *testing.T) {
 	newArch := &dockerversions.Arch{
-		Env: dockerversions.ArchEnv{
+		Env: &dockerversions.ArchEnv{
 			GOARCH: "amd64",
 			GOOS:   "linux",
 		},
@@ -39,7 +39,7 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 				Revision: "",
 				Arches: map[string]*dockerversions.Arch{
 					"amd64": {
-						Env:       dockerversions.ArchEnv{},
+						Env:       &dockerversions.ArchEnv{},
 						SHA256:    "old-sha",
 						URL:       "old-url",
 						Supported: true,

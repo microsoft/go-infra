@@ -65,16 +65,38 @@ func (m *MajorMinorVersion) GoVersion() *goversion.GoVersion {
 
 // Arch points at the publicly accessible artifacts for a specific OS/arch.
 type Arch struct {
-	Env       ArchEnv `json:"env"`
-	SHA256    string  `json:"sha256"`
-	Supported bool    `json:"supported,omitempty"`
-	URL       string  `json:"url"`
+	// Env is the environment the artifact runs on, or nil if it's a source archive.
+	Env *ArchEnv `json:"env,omitempty"`
+
+	// SHA256 is the SHA256 checksum of the artifact as a hex string.
+	SHA256 string `json:"sha256"`
+
+	// Supported indicates this artifact should have a Docker image generated for it. The name
+	// "Supported" comes from upstream Go image infrastructure.
+	Supported bool `json:"supported,omitempty"`
+
+	// URL is a URL from which the artifact can be downloaded. The artifact may be a build of Go or
+	// a source tarball, determined by Env.
+	URL string `json:"url"`
+
+	// SHA256ChecksumURL is the URL of a file containing the SHA256 checksum in a format that works
+	// with "sha256sum -c" and similar tools.
+	//
+	// If not specified, the file can be reached by appending ".sha256" to the URL.
+	SHA256ChecksumURL string `json:"sha256ChecksumUrl,omitempty"`
+
+	// PGPSignatureURL is the URL of a PGP signature file for this artifact, commonly verified using
+	// the "gpg" tool.
+	//
+	// If not specified, the file can be reached by appending ".sig" to the URL.
+	PGPSignatureURL string `json:"pgpSignatureUrl,omitempty"`
 }
 
+// ArchEnv is the environment an artifact is expected to be useful in.
 type ArchEnv struct {
-	GOARCH string
-	GOARM  string `json:"GOARM,omitempty"`
-	GOOS   string
+	GOARCH string `json:",omitempty"`
+	GOARM  string `json:",omitempty"`
+	GOOS   string `json:",omitempty"`
 }
 
 // GoImageArchVersionSuffix is the string used in docker-library/golang and .NET Docker infrastructure to

@@ -9,7 +9,9 @@
         "GOOS": "linux"
       },
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://example.org/go.linux-amd64.tar.gz"
+      "url": "https://example.org/go.linux-amd64.tar.gz",
+      "sha256ChecksumUrl": "https://example.org/go.linux-amd64.tar.gz.sha256",
+      "pgpSignatureUrl": "https://example.org/go.linux-amd64.tar.gz.sig"
     },
     {
       "env": {
@@ -17,7 +19,9 @@
         "GOOS": "linux"
       },
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://example.org/go.linux-arm64.tar.gz"
+      "url": "https://example.org/go.linux-arm64.tar.gz",
+      "sha256ChecksumUrl": "https://example.org/go.linux-arm64.tar.gz.sha256",
+      "pgpSignatureUrl": "https://example.org/go.linux-arm64.tar.gz.sig"
     },
     {
       "env": {
@@ -26,7 +30,9 @@
         "GOOS": "linux"
       },
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://example.org/go.linux-armv6l.tar.gz"
+      "url": "https://example.org/go.linux-armv6l.tar.gz",
+      "sha256ChecksumUrl": "https://example.org/go.linux-armv6l.tar.gz.sha256",
+      "pgpSignatureUrl": "https://example.org/go.linux-armv6l.tar.gz.sig"
     }
   ],
   "goSrcURL": "",
