@@ -131,8 +131,8 @@ const (
 )
 
 var (
-	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename  )(.+)`)
-	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision  )(.+)`)
+	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename +)(.+)`)
+	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
 )
 
 func extractGoArchiveNameFromSpecFile(specContent []byte) (string, error) {
