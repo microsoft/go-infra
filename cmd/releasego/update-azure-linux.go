@@ -18,14 +18,17 @@ import (
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/tools/txtar"
 )
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
-		Name:        "update-azure-linux",
-		Summary:     "Update the Go spec files for Azure Linux.",
-		Description: " ",
-		Handle:      updateAzureLinux,
+		Name:    "update-azure-linux",
+		Summary: "Experimental: Update the Go spec files for Azure Linux and print the result without pushing.",
+		Description: `
+See https://github.com/microsoft/go-lab/issues/79
+`,
+		Handle: updateAzureLinux,
 	})
 }
 
@@ -90,8 +93,15 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	_ = golangSignaturesFileContent
-	_ = cgManifestContent
+	ar := txtar.Archive{
+		Comment: []byte("Bump version to " + assets.GoVersion().Full()),
+		Files: []txtar.File{
+			{Name: cgManifestFilepath, Data: cgManifestContent},
+			{Name: golangSignaturesFilepath, Data: golangSignaturesFileContent},
+			{Name: golangSpecFilepath, Data: golangSpecFileContent},
+		},
+	}
+	fmt.Println(string(txtar.Format(&ar)))
 
 	return nil
 }
@@ -162,7 +172,7 @@ func updateSpecFile(buildAssets *buildassets.BuildAssets, signatureFileContent [
 
 	_ = content
 
-	return nil, nil
+	return signatureFileContent, nil
 }
 
 // JSONSignature structure to map the provided JSON data
