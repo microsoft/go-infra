@@ -14,7 +14,7 @@
 %define __find_requires %{nil}
 Summary:        Go
 Name:           golang
-Version:        1.22.4
+Version:        1.23.0
 Release:        1%{?dist}
 License:        BSD-3-Clause
 Vendor:         Microsoft Corporation

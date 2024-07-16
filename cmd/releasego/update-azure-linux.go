@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
+	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 	"golang.org/x/tools/txtar"
@@ -134,6 +136,8 @@ const (
 var (
 	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename +)(.+)`)
 	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
+	specFileVersionRegex    = regexp.MustCompile(`(Version: +)(.+)`)
+	specFileReleaseRegex    = regexp.MustCompile(`(Release: +)(.+)(%\{\?dist\})`)
 )
 
 func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
@@ -164,12 +168,51 @@ func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string,
 	return updatedContent, nil
 }
 
-func updateSpecFile(buildAssets *buildassets.BuildAssets, specFileContent string) (string, error) {
+func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (string, error) {
 	if len(specFileContent) == 0 {
 		return "", fmt.Errorf("provided spec file content is empty")
 	}
 
-	_ = specFileContent
+	specFileContent, err := updateGoArchiveNameInSpecFile(specFileContent, path.Base(assets.GoSrcURL))
+	if err != nil {
+		return "", fmt.Errorf("error updating Go archive name in spec file: %w", err)
+	}
+	specFileContent, err = updateGoRevisionInSpecFile(specFileContent, assets.GoVersion().Revision)
+	if err != nil {
+		return "", fmt.Errorf("error updating Go revision in spec file: %w", err)
+	}
+
+	var oldVersion *goversion.GoVersion
+	if matches := specFileVersionRegex.FindStringSubmatch(specFileContent); matches == nil {
+		return "", fmt.Errorf("no Version declaration found in spec content")
+	} else {
+		oldVersion = goversion.New(matches[2])
+	}
+
+	var oldRelease int
+	if matches := specFileReleaseRegex.FindStringSubmatch(specFileContent); matches == nil {
+		return "", fmt.Errorf("no Release declaration found in spec content")
+	} else {
+		var err error
+		oldRelease, err = strconv.Atoi(matches[2])
+		if err != nil {
+			return "", fmt.Errorf("failed to parse Release number: %w", err)
+		}
+	}
+
+	newVersion := assets.GoVersion().MajorMinorPatch()
+	specFileContent = specFileVersionRegex.ReplaceAllString(specFileContent, "${1}"+newVersion)
+
+	// For servicing patches, increment release. Azure Linux may have incremented it manually for a
+	// Azure-Linux-specific fix, so this is independent of Microsoft Go releases. When updating to a
+	// new major/minor version (as semver refers to them), reset release to 1.
+	var newRelease int
+	if assets.GoVersion().MajorMinor() != oldVersion.MajorMinor() {
+		newRelease = 1
+	} else {
+		newRelease = oldRelease + 1
+	}
+	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+strconv.Itoa(newRelease)+"${3}")
 
 	return specFileContent, nil
 }

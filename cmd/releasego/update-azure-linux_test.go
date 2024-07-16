@@ -36,11 +36,7 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Expected extracted Go file version is not same as actual filename. Expected %s, returned %s", extractedGoFileVersion, "go1.22.4-20240604.2.src.tar.gz")
 	}
 
-	updatedspecFile, err := updateGoArchiveNameInSpecFile(specFileContent, path.Base(assets.GoSrcURL))
-	if err != nil {
-		t.Fatalf("Error updating Go archive name in spec file : %s", err)
-	}
-	updatedspecFile, err = updateGoRevisionInSpecFile(updatedspecFile, assets.GoVersion().Revision)
+	updatedSpecFile, err := updateSpecFile(assets, specFileContent)
 	if err != nil {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
@@ -48,7 +44,7 @@ func TestUpdateSpecFileContent(t *testing.T) {
 	goldentest.Check(
 		t, "TestUpdateSpecFileContent ",
 		filepath.Join("testdata", "update-azure-linux", "updated_golang.golden.spec"),
-		updatedspecFile)
+		updatedSpecFile)
 }
 
 func TestUpdateSignaturesFileContent(t *testing.T) {
