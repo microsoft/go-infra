@@ -4,23 +4,8 @@
 package publishmanifest
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-
-	"golang.org/x/text/encoding/unicode"
-	"golang.org/x/text/transform"
 )
-
-// Read reads a [Manifest] from r, which may begin with a BOM.
-func Read(r io.Reader) (*Manifest, error) {
-	r = transform.NewReader(r, unicode.BOMOverride(transform.Nop))
-	var m Manifest
-	if err := json.NewDecoder(r).Decode(&m); err != nil {
-		return nil, err
-	}
-	return &m, nil
-}
 
 // Manifest is a publish manifest file, written by DevDiv.MS.Go.Publishing.
 type Manifest struct {

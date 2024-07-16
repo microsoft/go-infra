@@ -149,6 +149,10 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 				if !arch.Supported {
 					continue
 				}
+				// Skip src.
+				if arch.Env == nil {
+					continue
+				}
 				// Skip platforms that don't match the current variant. v.Arches is actually a list
 				// of OS/ARCHes, not just architectures.
 				if arch.Env.GOOS != os {
@@ -169,7 +173,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 					}
 				}
 
-				p := makeOSArchPlatform(os, osVersion, &arch.Env)
+				p := makeOSArchPlatform(os, osVersion, arch.Env)
 				p.BuildArgs = buildArgs
 				p.Dockerfile = dockerfileDir
 				p.Tags = map[string]dockermanifest.Tag{
@@ -283,6 +287,10 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 	// Look through the asset arches, find an arch in the versions file that matches each asset,
 	// and update its info.
 	for _, arch := range assets.Arches {
+		// Skip src.
+		if arch.Env == nil {
+			continue
+		}
 		// Special case for arm artifacts: change it to arm32v7. We produce arm32v6 builds of Go
 		// but package them in arm/v7 (armhf) Docker images. The upstream Go official image repo
 		// does this in their versions.json file: there are v6 and v7 Dockerfile arches that
