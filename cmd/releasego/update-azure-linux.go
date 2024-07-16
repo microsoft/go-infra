@@ -53,11 +53,12 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSpecFileContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
+	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
 	if err != nil {
 		return err
 	}
 
+	golangSpecFileContent := string(golangSpecFileBytes)
 	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
 	if err != nil {
 		return err
@@ -73,22 +74,22 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
 	}
 
-	golangSignaturesFileContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSignaturesFilepath)
+	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSignaturesFilepath)
 	if err != nil {
 		return err
 	}
 
-	golangSignaturesFileContent, err = updateSignatureFile(golangSignaturesFileContent, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
+	golangSignaturesFileBytes, err = updateSignatureFile(golangSignaturesFileBytes, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
 	if err != nil {
 		return err
 	}
 
-	cgManifestContent, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", cgManifestFilepath)
+	cgManifestBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", cgManifestFilepath)
 	if err != nil {
 		return err
 	}
 
-	cgManifestContent, err = updateCGManifest(assets, cgManifestContent)
+	cgManifestBytes, err = updateCGManifest(assets, cgManifestBytes)
 	if err != nil {
 		return err
 	}
@@ -96,9 +97,9 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	ar := txtar.Archive{
 		Comment: []byte("Bump version to " + assets.GoVersion().Full()),
 		Files: []txtar.File{
-			{Name: cgManifestFilepath, Data: cgManifestContent},
-			{Name: golangSignaturesFilepath, Data: golangSignaturesFileContent},
-			{Name: golangSpecFilepath, Data: golangSpecFileContent},
+			{Name: cgManifestFilepath, Data: cgManifestBytes},
+			{Name: golangSignaturesFilepath, Data: golangSignaturesFileBytes},
+			{Name: golangSpecFilepath, Data: []byte(golangSpecFileContent)},
 		},
 	}
 	fmt.Println(string(txtar.Format(&ar)))
@@ -135,8 +136,8 @@ var (
 	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
 )
 
-func extractGoArchiveNameFromSpecFile(specContent []byte) (string, error) {
-	matches := specFileGoFilenameRegex.FindStringSubmatch(string(specContent))
+func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
+	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
 
 	if matches == nil {
 		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
@@ -163,16 +164,14 @@ func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string,
 	return updatedContent, nil
 }
 
-func updateSpecFile(buildAssets *buildassets.BuildAssets, signatureFileContent []byte) ([]byte, error) {
-	if len(signatureFileContent) == 0 {
-		return nil, fmt.Errorf("provided spec file content is empty")
+func updateSpecFile(buildAssets *buildassets.BuildAssets, specFileContent string) (string, error) {
+	if len(specFileContent) == 0 {
+		return "", fmt.Errorf("provided spec file content is empty")
 	}
 
-	content := string(signatureFileContent)
+	_ = specFileContent
 
-	_ = content
-
-	return signatureFileContent, nil
+	return specFileContent, nil
 }
 
 // JSONSignature structure to map the provided JSON data
