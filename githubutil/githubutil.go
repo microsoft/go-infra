@@ -17,6 +17,9 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// ErrNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
+var ErrNotExists = errors.New("file does not exist in the given repository and branch")
+
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	if pat == "" {
@@ -115,22 +118,41 @@ func FetchEachPage(f func(options github.ListOptions) (*github.Response, error))
 
 // UploadFile is a function that will upload a file to a given repository.
 func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
-	_, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
-		Message: &message,
-		Content: content,
-		Branch:  &branch,
+	err := Retry(func() error {
+		_, _, err := client.Repositories.CreateFile(ctx, owner, repo, path, &github.RepositoryContentFileOptions{
+			Message: &message,
+			Content: content,
+			Branch:  &branch,
+		})
+
+		return err
 	})
+
 	return err
 }
 
-// FileExists is a function that will check if a file exists in a given repository.
-func FileExists(ctx context.Context, client *github.Client, owner, repo, filePath string) (bool, error) {
-	_, _, resp, err := client.Repositories.GetContents(ctx, owner, repo, filePath, nil)
-	if err != nil {
+// DownloadFile downloads a file from a given repository.
+func DownloadFile(ctx context.Context, client *github.Client, owner, repo, branch, path string) ([]byte, error) {
+	var fileContent *github.RepositoryContent
+	var resp *github.Response
+	var err error
+
+	if err = Retry(func() error {
+		fileContent, _, resp, err = client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{
+			Ref: branch,
+		})
+		return err
+	}); err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return false, nil
+			return nil, ErrNotExists
 		}
-		return false, err
+		return nil, err
 	}
-	return true, nil
+
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(content), nil
 }
