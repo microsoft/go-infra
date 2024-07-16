@@ -151,6 +151,9 @@ func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
 }
 
 func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, error) {
+	if strings.Contains(newArchiveName, "$") {
+		return "", fmt.Errorf("new archive name %q contains unexpected $", newArchiveName)
+	}
 	if !specFileGoFilenameRegex.MatchString(specContent) {
 		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
 	}
@@ -160,6 +163,9 @@ func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, 
 }
 
 func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string, error) {
+	if strings.Contains(newRevisionVersion, "$") {
+		return "", fmt.Errorf("new revision version %q contains unexpected $", newRevisionVersion)
+	}
 	if !specFileRevisionRegex.MatchString(specContent) {
 		return "", fmt.Errorf("no Go revision version declaration found in spec content")
 	}
@@ -201,6 +207,9 @@ func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (st
 	}
 
 	newVersion := assets.GoVersion().MajorMinorPatch()
+	if strings.Contains(newVersion, "$") {
+		return "", fmt.Errorf("new version %q contains unexpected $", newVersion)
+	}
 	specFileContent = specFileVersionRegex.ReplaceAllString(specFileContent, "${1}"+newVersion)
 
 	// For servicing patches, increment release. Azure Linux may have incremented it manually for a
