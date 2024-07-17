@@ -20,6 +20,8 @@ var update = flag.Bool("update", false, "Update the golden files instead of fail
 // fail if it's incorrect. If "-update" is passed to the "go test" command, instead of failing, it
 // writes actual to goldenPath.
 func Check(t *testing.T, rerunCmd, goldenPath, actual string) {
+	t.Helper()
+
 	if *update {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), os.ModePerm); err != nil {
 			t.Fatal(err)

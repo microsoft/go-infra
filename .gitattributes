@@ -5,5 +5,8 @@
 *.sh text eol=lf
 # Always use LF for Go files to avoid CRLF issues with golangci-lint.
 *.go text eol=lf
-# Use LF for txtar files to avoid CR inputs to standard txtar library.
-*.txtar text eol=lf
+# Use LF for all testdata files to avoid CR affecting txtar, goldentest, etc.
+**/testdata/** text eol=lf
+# Use LF for all embedded markdown template files to avoid different results per
+# platform and mismatching tests.
+*.template.md text eol=lf
