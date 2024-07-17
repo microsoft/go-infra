@@ -38,6 +38,7 @@ jobs:
       # Release steps may need to download build asset JSONs. Set up variables.
       assetsDir: $(Pipeline.Workspace)/BuildAssets
       buildAssetJsonFile: $(assetsDir)/assets.json
+      publishManifestFile: $(assetsDir)/ReleaseStudioMetaManifest/msGo.output.manifest.json
       artifactsDir: $(Pipeline.Workspace)/Artifacts
 
       # ID of the internal build pipeline. May need to be queued.

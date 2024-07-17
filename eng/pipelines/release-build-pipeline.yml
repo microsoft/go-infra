@@ -253,16 +253,17 @@ extends:
                       path: $(assetsDir)
                   # Download built and signed binaries. These are already on blob storage, but steps in this
                   # pipeline will publish a subset of these as GitHub Release attachments.
-                  - task: DownloadPipelineArtifact@2
-                    displayName: Download binaries
-                    inputs:
-                      source: specific
-                      artifact: Binaries Signed
-                      project: internal
-                      pipeline: $(GoPipelineID)
-                      runVersion: specific
-                      runId: $(poll3MicrosoftGoBuildID)
-                      path: $(artifactsDir)
+                  - ${{ if eq(parameters.runGitHubRelease, true) }}:
+                    - task: DownloadPipelineArtifact@2
+                      displayName: Download binaries
+                      inputs:
+                        source: specific
+                        artifact: Binaries Signed
+                        project: internal
+                        pipeline: $(GoPipelineID)
+                        runVersion: specific
+                        runId: $(poll3MicrosoftGoBuildID)
+                        path: $(artifactsDir)
 
                   - script: |
                       releasego get-asset-version \
@@ -311,8 +312,16 @@ extends:
                           # Based on Arcade: https://github.com/dotnet/arcade/blob/7507f80c8db285bbc9939c1dff522a761cf4edc0/eng/publishing/v3/publish.yml#L125-L132
                           az keyvault secret show --vault-name EngKeyVault --name Redirection-UST-Client-NetCoreDeployment > $(Agent.TempDirectory)/akamsclientcert.json
 
+                          # Pass the manifest file path only if a file exists there. It is only
+                          # present if the assets.json file was published via Release Studio.
+                          manifestFile=
+                          if [ -f "$(publishManifestFile)" ]; then
+                            manifestFile="$(publishManifestFile)"
+                          fi
+
                           releasego akams \
                             -build-asset-json '$(buildAssetJsonFile)' \
+                            -build-asset-json-publish-manifest="$manifestFile" \
                             -prefix '$(VanityUrlPrefix)' \
                             -clientID '$(akams-client-id)' \
                             -clientCertVaultFile '$(Agent.TempDirectory)/akamsclientcert.json' \
