@@ -157,6 +157,9 @@ func extractPrerelease(part, prerelease *string) {
 	}
 }
 
+// GoVersions implements [sort.Interface] and sorts versions in descending order.
+// If Major, Minor, Patch, or Revision of any GoVersion in the slice can't be parsed by
+// [strconv.Atoi], the result of using this type is undefined.
 type GoVersions []*GoVersion
 
 func (versions GoVersions) Len() int      { return len(versions) }

@@ -194,7 +194,6 @@ func TestGoVersions_Sort(t *testing.T) {
 			sort.Sort(tt.versions)
 			for i, v := range tt.versions {
 				if *v != *tt.expected[i] {
-					t.Errorf(tt.name)
 					t.Errorf("expected %v at index %d, got %v", tt.expected[i].Original, i, v.Original)
 				}
 			}
