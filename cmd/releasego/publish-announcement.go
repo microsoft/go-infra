@@ -55,22 +55,13 @@ type ReleaseInfo struct {
 }
 
 // take all this methods and make it one constructor function for ReleaseInfo
-func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) (*ReleaseInfo, error) {
+func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
 	ri := new(ReleaseInfo)
 
 	// Sort the versions in descending order
-	var sortErr error
 	sort.Slice(versions, func(i, j int) bool {
-		b, err := goversion.New(versions[i]).IsNewerThan(goversion.New(versions[j]))
-		if err != nil {
-			sortErr = err
-		}
-		return b
+		return true
 	})
-
-	if sortErr != nil {
-		return nil, fmt.Errorf("error sorting versions: %w", sortErr)
-	}
 
 	// Generate human-readable title and URL-friendly slug from the Go versions.
 	ri.Title = generateBlogPostTitle(versions)
@@ -101,7 +92,7 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 		ri.SecurityRelease = true
 	}
 
-	return ri, nil
+	return ri
 }
 
 func (ri ReleaseInfo) CategoriesString() string {
@@ -164,10 +155,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 	versionsList := strings.Split(releaseVersions, ",")
 
-	releaseInfo, err := NewReleaseInfo(releaseDate, versionsList, author, security)
-	if err != nil {
-		return fmt.Errorf("error creating release info: %w", err)
-	}
+	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
 
 	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, *pat)

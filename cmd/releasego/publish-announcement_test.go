@@ -19,22 +19,14 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 		author   = "Test Author"
 	)
 
-	newInfo := func(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
-		ri, err := NewReleaseInfo(releaseDate, versions, author, security)
-		if err != nil {
-			t.Fatalf("NewReleaseInfo() error = %v", err)
-		}
-		return ri
-	}
-
 	tests := []struct {
 		name string
 		ri   *ReleaseInfo
 	}{
-		{"2024-06-04-real", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
-		{"2024-06-04-nonsecurity", newInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, false)},
-		{"only-one-branch", newInfo(testTime, []string{"1.22.8-3"}, author, true)},
-		{"three-branches", newInfo(testTime, []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}, author, true)},
+		{"2024-06-04-real", NewReleaseInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, true)},
+		{"2024-06-04-nonsecurity", NewReleaseInfo(testTime, []string{"1.22.4-1", "1.21.11-1"}, author, false)},
+		{"only-one-branch", NewReleaseInfo(testTime, []string{"1.22.8-3"}, author, true)},
+		{"three-branches", NewReleaseInfo(testTime, []string{"1.22.8-1", "1.23.1-1", "1.21.11-16"}, author, true)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
