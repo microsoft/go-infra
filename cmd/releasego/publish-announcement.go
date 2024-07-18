@@ -66,6 +66,12 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 	// Sort the versions in descending order
 	sort.Sort(goVersions)
 
+	// Recreate versions slice with sorted info.
+	versions = versions[:0]
+	for _, goVersion := range goVersions {
+		versions = append(versions, goVersion.Full())
+	}
+
 	// Generate human-readable title and URL-friendly slug from the Go versions.
 	ri.Title = generateBlogPostTitle(versions)
 	ri.Slug = generateSlug(ri.Title)
@@ -77,8 +83,8 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 	// Process each Go version, extracting release information and generating links.
 	for _, goVersion := range goVersions {
 		ri.Versions = append(ri.Versions, GoVersionData{
-			MSGoVersion:     "v" + goVersion.MajorMinorPatchPrereleaseRevision(),
-			MSGoVersionLink: createMSGoReleaseLinkFromVersion(goVersion.MajorMinorPatchPrereleaseRevision()),
+			MSGoVersion:     "v" + goVersion.Full(),
+			MSGoVersionLink: createMSGoReleaseLinkFromVersion(goVersion.Full()),
 			GoVersion:       goVersion.UpstreamFormatGitTag(),
 			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion.UpstreamFormatGitTag()),
 		})
