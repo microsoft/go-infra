@@ -157,39 +157,43 @@ func extractPrerelease(part, prerelease *string) {
 	}
 }
 
-// IsNewerThan compares two versions and returns true if the receiver is newer than the argument
-// version. The comparison is done by comparing the major, minor, patch, revision, prerelease and note parts in that
-// order. If all parts are equal, false is returned. It may return an error if a part is not an integer.
-func (v *GoVersion) IsNewerThan(other *GoVersion) (bool, error) {
-	cmp := func(a, b string) (bool, error) {
-		intA, err := strconv.ParseInt(a, 10, 64)
+type GoVersions []*GoVersion
+
+func (versions GoVersions) Len() int      { return len(versions) }
+func (versions GoVersions) Swap(i, j int) { versions[i], versions[j] = versions[j], versions[i] }
+func (versions GoVersions) Less(i, j int) bool {
+	less := func(a, b string) bool {
+		intA, err := strconv.Atoi(a)
 		if err != nil {
-			return false, err
+			return false
 		}
-		intB, err := strconv.ParseInt(b, 10, 64)
+
+		intB, err := strconv.Atoi(b)
 		if err != nil {
-			return false, err
+			return false
 		}
-		return intA > intB, nil
+		return intA > intB
 	}
 
-	if v.Major != other.Major {
-		return cmp(v.Major, other.Major)
+	current, next := versions[i], versions[j]
+
+	if current.Major != next.Major {
+		return less(current.Major, next.Major)
 	}
-	if v.Minor != other.Minor {
-		return cmp(v.Minor, other.Minor)
+	if current.Minor != next.Minor {
+		return less(current.Minor, next.Minor)
 	}
-	if v.Patch != other.Patch {
-		return cmp(v.Patch, other.Patch)
+	if current.Patch != next.Patch {
+		return less(current.Patch, next.Patch)
 	}
-	if v.Revision != other.Revision {
-		return cmp(v.Revision, other.Revision)
+	if current.Revision != next.Revision {
+		return less(current.Revision, next.Revision)
 	}
-	if v.Prerelease != other.Prerelease {
-		return v.Prerelease > other.Prerelease, nil
+	if current.Prerelease != next.Prerelease {
+		return current.Prerelease < next.Prerelease
 	}
-	if v.Note != other.Note {
-		return v.Note > other.Note, nil
+	if current.Note != next.Note {
+		return current.Note < next.Note
 	}
-	return false, nil
+	return false
 }

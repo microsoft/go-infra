@@ -57,11 +57,13 @@ type ReleaseInfo struct {
 // take all this methods and make it one constructor function for ReleaseInfo
 func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
 	ri := new(ReleaseInfo)
+	goVersions := make(goversion.GoVersions, 0)
+	for _, version := range versions {
+		goVersions = append(goVersions, goversion.New(version))
+	}
 
 	// Sort the versions in descending order
-	sort.Slice(versions, func(i, j int) bool {
-		return true
-	})
+	sort.Sort(goVersions)
 
 	// Generate human-readable title and URL-friendly slug from the Go versions.
 	ri.Title = generateBlogPostTitle(versions)
@@ -72,13 +74,12 @@ func NewReleaseInfo(releaseDate time.Time, versions []string, author string, sec
 	ri.Tags = []string{"go", "release"}
 
 	// Process each Go version, extracting release information and generating links.
-	for _, version := range versions {
-		goVersion := goversion.New(version).UpstreamFormatGitTag()
+	for _, goVersion := range goVersions {
 		ri.Versions = append(ri.Versions, GoVersionData{
-			MSGoVersion:     "v" + version,
-			MSGoVersionLink: createMSGoReleaseLinkFromVersion(version),
-			GoVersion:       goVersion,
-			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion),
+			MSGoVersion:     "v" + goVersion.MajorMinorPatchPrereleaseRevision(),
+			MSGoVersionLink: createMSGoReleaseLinkFromVersion(goVersion.MajorMinorPatchPrereleaseRevision()),
+			GoVersion:       goVersion.UpstreamFormatGitTag(),
+			GoVersionLink:   createGoReleaseLinkFromVersion(goVersion.UpstreamFormatGitTag()),
 		})
 	}
 
