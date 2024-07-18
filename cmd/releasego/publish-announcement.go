@@ -20,6 +20,7 @@ import (
 
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/internal/infrasort"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -57,7 +58,7 @@ type ReleaseInfo struct {
 // take all this methods and make it one constructor function for ReleaseInfo
 func NewReleaseInfo(releaseDate time.Time, versions []string, author string, security bool) *ReleaseInfo {
 	ri := new(ReleaseInfo)
-	goVersions := make(goversion.GoVersions, 0)
+	goVersions := make(infrasort.GoVersions, 0)
 	for _, version := range versions {
 		goVersions = append(goVersions, goversion.New(version))
 	}

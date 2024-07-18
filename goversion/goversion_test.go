@@ -4,7 +4,6 @@
 package goversion
 
 import (
-	"sort"
 	"testing"
 )
 
@@ -124,78 +123,6 @@ func TestGoVersion_UpstreamFormatGitTag(t *testing.T) {
 			v := New(tt.version)
 			if got := v.UpstreamFormatGitTag(); got != tt.want {
 				t.Errorf("UpstreamFormatGitTag() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGoVersions_Sort(t *testing.T) {
-	tests := []struct {
-		name     string
-		versions GoVersions
-		expected GoVersions
-	}{
-		{
-			name: "basic version sorting",
-			versions: GoVersions{
-				New("1.2.3"),
-				New("1.2.1"),
-				New("1.3.0"),
-				New("1.2.3-2"),
-				New("1.2.3-1"),
-			},
-			expected: GoVersions{
-				New("1.3.0"),
-				New("1.2.3-2"),
-				New("1.2.3"),
-				New("1.2.3-1"),
-				New("1.2.1"),
-			},
-		},
-		{
-			name: "version with prerelease and note",
-			versions: GoVersions{
-				New("1.2.3-beta"),
-				New("1.2.3-rc1"),
-				New("1.2.3-1-fips"),
-				New("1.2.3"),
-				New("1.2.3-2"),
-			},
-			expected: GoVersions{
-				New("1.2.3-2"),
-				New("1.2.3"),
-				New("1.2.3-beta"),
-				New("1.2.3-1-fips"),
-				New("1.2.3-rc1"),
-			},
-		},
-		{
-			name: "sorting with major and minor versions",
-			versions: GoVersions{
-				New("2.0.0"),
-				New("1.10.0"),
-				New("1.2.3"),
-				New("1.2.0"),
-				New("1.3.0"),
-			},
-			expected: GoVersions{
-				New("2.0.0"),
-				New("1.10.0"),
-				New("1.3.0"),
-				New("1.2.3"),
-				New("1.2.0"),
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Sort the versions
-			sort.Sort(tt.versions)
-			for i, v := range tt.versions {
-				if *v != *tt.expected[i] {
-					t.Errorf("expected %v at index %d, got %v", tt.expected[i].Original, i, v.Original)
-				}
 			}
 		})
 	}
