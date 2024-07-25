@@ -5,7 +5,7 @@ post_slug: go-1-22-8-3-microsoft-build-now-available
 categories: Microsoft for Go Developers, Security
 tags: go, release, security
 featured_image:
-summary: The Microsoft builds of the Go security patches released today, are now available for download.
+summary: A new set of Microsoft Go builds including security fixes is now available for download.
 ---
 
 A new set of Microsoft Go builds including security fixes is now [available for download](https://github.com/microsoft/go#download-and-install).

@@ -5,7 +5,9 @@ post_slug: {{.Slug}}
 categories: {{.CategoriesString}}
 tags: {{.TagsString}}
 featured_image:
-summary: The Microsoft builds of the Go security patches released today, are now available for download.
+summary: A new set of Microsoft Go builds
+{{- if .SecurityRelease }} including security fixes {{ else }} {{ end -}}
+is now available for download.
 ---
 
 A new set of Microsoft Go builds
