@@ -143,6 +143,18 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		}
 	}
 
+	pr, _, err := client.PullRequests.Create(ctx, owner, repo, &github.NewPullRequest{
+		Title: github.String("TODO"),
+		Head:  github.String("refs/heads/" + updateBranch),
+		Base:  github.String("refs/heads/" + baseBranch),
+		Body:  github.String("TODO"),
+	})
+	if err != nil {
+		return fmt.Errorf("Failed to create PR: %v", err)
+	}
+
+	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
+
 	return nil
 }
 
