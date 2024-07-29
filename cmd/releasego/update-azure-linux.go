@@ -20,7 +20,6 @@ import (
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
-	"golang.org/x/tools/txtar"
 )
 
 func init() {
@@ -36,7 +35,15 @@ See https://github.com/microsoft/go-lab/issues/79
 
 func updateAzureLinux(p subcmd.ParseFunc) error {
 	var buildAssetJSON string
+	var owner string
+	var repo string
+	var baseBranch string
+	var updateBranch string
 
+	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
+	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
+	flag.StringVar(&baseBranch, "base-branch", "3.0-dev", "The base branch to download files from.")
+	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
 	pat := githubutil.BindPATFlag()
 
@@ -96,15 +103,45 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	ar := txtar.Archive{
-		Comment: []byte("Bump version to " + assets.GoVersion().Full()),
-		Files: []txtar.File{
-			{Name: cgManifestFilepath, Data: cgManifestBytes},
-			{Name: golangSignaturesFilepath, Data: golangSignaturesFileBytes},
-			{Name: golangSpecFilepath, Data: []byte(golangSpecFileContent)},
-		},
+	ref, _, err := client.Git.GetRef(ctx, owner, repo, baseBranch)
+	if err != nil {
+		return fmt.Errorf("Failed to get ref: %v", err)
 	}
-	fmt.Println(string(txtar.Format(&ar)))
+
+	newRef := &github.Reference{
+		Ref:    github.String("refs/heads/" + updateBranch),
+		Object: &github.GitObject{SHA: ref.Object.SHA},
+	}
+
+	_, _, err = client.Git.CreateRef(ctx, owner, repo, newRef)
+	if err != nil {
+		return fmt.Errorf("Failed to create ref: %v", err)
+	}
+
+	updatedFiles := map[string][]byte{
+		golangSpecFilepath:       []byte(golangSpecFileContent),
+		golangSignaturesFilepath: golangSignaturesFileBytes,
+		cgManifestFilepath:       cgManifestBytes,
+	}
+
+	for filePath, newContent := range updatedFiles {
+		// Get the file to update
+		file, _, _, err := client.Repositories.GetContents(ctx, owner, repo, filePath, &github.RepositoryContentGetOptions{Ref: "refs/heads/" + updateBranch})
+		if err != nil {
+			return fmt.Errorf("Failed to get file %q: %v", filePath, err)
+		}
+
+		// Update the file
+		_, _, err = client.Repositories.UpdateFile(ctx, owner, repo, filePath, &github.RepositoryContentFileOptions{
+			Message: github.String("Bump version to " + assets.GoVersion().Full()),
+			Content: newContent,
+			SHA:     file.SHA,
+			Branch:  github.String("refs/heads/" + updateBranch),
+		})
+		if err != nil {
+			return fmt.Errorf("Failed to update file %q: %v", filePath, err)
+		}
+	}
 
 	return nil
 }
