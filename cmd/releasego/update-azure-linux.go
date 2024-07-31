@@ -44,7 +44,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
 	flag.StringVar(&baseBranch, "base-branch", "3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
-	flag.StringVar(&buildAssetJSON, "build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
+	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "[Required] The path of a build asset JSON file describing the Go build to update to.")
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
@@ -60,6 +60,10 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	assets, err := loadBuildAssets(buildAssetJSON)
 	if err != nil {
 		return err
+	}
+
+	if updateBranch == "" {
+		updateBranch = generateUpdateBranchNameFromAssets(assets)
 	}
 
 	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
@@ -109,12 +113,11 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	newRef := &github.Reference{
-		Ref:    github.String("refs/heads/" + updateBranch),
+		Ref:    github.String(updateBranch),
 		Object: &github.GitObject{SHA: ref.Object.SHA},
 	}
 
-	_, _, err = client.Git.CreateRef(ctx, owner, repo, newRef)
-	if err != nil {
+	if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
 		return fmt.Errorf("Failed to create ref: %v", err)
 	}
 
@@ -126,7 +129,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 	for filePath, newContent := range updatedFiles {
 		// Get the file to update
-		file, _, _, err := client.Repositories.GetContents(ctx, owner, repo, filePath, &github.RepositoryContentGetOptions{Ref: "refs/heads/" + updateBranch})
+		file, _, _, err := client.Repositories.GetContents(ctx, owner, repo, filePath, &github.RepositoryContentGetOptions{Ref: updateBranch})
 		if err != nil {
 			return fmt.Errorf("Failed to get file %q: %v", filePath, err)
 		}
@@ -136,7 +139,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			Message: github.String("Bump version to " + assets.GoVersion().Full()),
 			Content: newContent,
 			SHA:     file.SHA,
-			Branch:  github.String("refs/heads/" + updateBranch),
+			Branch:  github.String(updateBranch),
 		})
 		if err != nil {
 			return fmt.Errorf("Failed to update file %q: %v", filePath, err)
@@ -144,18 +147,37 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	pr, _, err := client.PullRequests.Create(ctx, owner, repo, &github.NewPullRequest{
-		Title: github.String("TODO"),
-		Head:  github.String("refs/heads/" + updateBranch),
-		Base:  github.String("refs/heads/" + baseBranch),
+		Title: github.String(generatePRTitleFromAssets(assets)),
+		Head:  github.String(updateBranch),
+		Base:  github.String(baseBranch),
 		Body:  github.String("TODO"),
 	})
 	if err != nil {
 		return fmt.Errorf("Failed to create PR: %v", err)
 	}
 
+	// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
+	// While GitHub provides a dedicated PullRequests API, it doesn't currently offer a method for adding labels directly to pull requests.
+	//
+	// Therefore, we use the Issues.AddLabelsToIssue method, passing the pull request's number (which is equivalent to its issue number)
+	// to apply the labels.
+	//
+	// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
+	if _, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"}); err != nil {
+		return fmt.Errorf("Error adding label to pull request: %w\n", err)
+	}
+
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
 
 	return nil
+}
+
+func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf("update-go-%s", assets.GoVersion().Full())
+}
+
+func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf("Bump Go Version to %s", assets.GoVersion().Full())
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
