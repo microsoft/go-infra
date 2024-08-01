@@ -153,7 +153,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		Body:  github.String("TODO"),
 	})
 	if err != nil {
-		return fmt.Errorf("Failed to create PR: %v", err)
+		return fmt.Errorf("failed to create PR: %v", err)
 	}
 
 	// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
@@ -164,7 +164,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	//
 	// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
 	if _, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"}); err != nil {
-		return fmt.Errorf("Error adding label to pull request: %w\n", err)
+		return fmt.Errorf("error adding label to pull request: %w\n", err)
 	}
 
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
