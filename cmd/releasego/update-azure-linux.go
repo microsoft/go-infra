@@ -42,7 +42,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
 	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
-	flag.StringVar(&baseBranch, "base-branch", "3.0-dev", "The base branch to download files from.")
+	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "[Required] The path of a build asset JSON file describing the Go build to update to.")
 	pat := githubutil.BindPATFlag()
@@ -66,7 +66,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		updateBranch = generateUpdateBranchNameFromAssets(assets)
 	}
 
-	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
+	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSpecFilepath)
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
 	}
 
-	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSignaturesFilepath)
+	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSignaturesFilepath)
 	if err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	cgManifestBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", cgManifestFilepath)
+	cgManifestBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, cgManifestFilepath)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 	ref, _, err := client.Git.GetRef(ctx, owner, repo, baseBranch)
 	if err != nil {
-		return fmt.Errorf("Failed to get ref: %v", err)
+		return fmt.Errorf("failed to get ref: %v", err)
 	}
 
 	newRef := &github.Reference{
@@ -173,7 +173,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 }
 
 func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf("update-go-%s", assets.GoVersion().Full())
+	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
 }
 
 func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
@@ -317,8 +317,8 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 		return nil, errors.New("old filename not found in signatures")
 	}
 
-	// Update the filename and hash in the map
-	delete(data.Signatures, oldFilename) // Remove the old entry
+	// Update the filename and hash in the mapß
+	delete(data.Signatures, oldFilename) // Remove theß old entry
 	// add new filename and hash
 	data.Signatures[newFilename] = newHash
 
