@@ -2,32 +2,32 @@
   "Registrations": [
     {
       "component": {
-        "type": "other",
         "other": {
+          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.23.0-2/go1.23.0-20240708.2.src.tar.gz",
           "name": "golang",
-          "version": "1.23.0",
-          "downloadUrl": "https://github.com/microsoft/go/releases/download/1.23.0-2/go1.23.0-20240708.2.src.tar.gz"
-        }
+          "version": "1.23.0"
+        },
+        "type": "other"
       }
     },
     {
       "component": {
-        "type": "other",
         "other": {
+          "downloadUrl": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.0.tar.gz",
           "name": "abseil-cpp",
-          "version": "20240116.0",
-          "downloadUrl": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.0.tar.gz"
-        }
+          "version": "20240116.0"
+        },
+        "type": "other"
       }
     },
     {
       "component": {
-        "type": "other",
         "other": {
+          "downloadUrl": "http://www.freedesktop.org/software/accountsservice/accountsservice-0.6.55.tar.xz",
           "name": "accountsservice",
-          "version": "0.6.55",
-          "downloadUrl": "http://www.freedesktop.org/software/accountsservice/accountsservice-0.6.55.tar.xz"
-        }
+          "version": "0.6.55"
+        },
+        "type": "other"
       }
     }
   ]
