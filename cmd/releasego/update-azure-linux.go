@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,12 +73,13 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	golangSpecFileContent := string(golangSpecFileBytes)
-	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
+
+	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
 	if err != nil {
 		return err
 	}
 
-	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
+	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
 	if err != nil {
 		return err
 	}
@@ -333,26 +335,26 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 	return updatedJSON, nil
 }
 
+type CGManifest struct {
+	Registrations []json.RawMessage `json:"Registrations"`
+	Version       int               `json:"Version"`
+}
+
 func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
 	if len(cgManifestContent) == 0 {
 		return nil, fmt.Errorf("provided CG manifest content is empty")
 	}
 
-	var cgManifest map[string]interface{}
+	var cgManifest CGManifest
 	if err := json.Unmarshal(cgManifestContent, &cgManifest); err != nil {
 		return nil, fmt.Errorf("failed to parse cgmanifest.json: %w", err)
 	}
 
-	registrations, ok := cgManifest["Registrations"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid 'Registrations' field in cgmanifest.json")
-	}
-
 	updated := false
-	for _, reg := range registrations {
-		registration, ok := reg.(map[string]interface{})
-		if !ok {
-			continue
+	for i, reg := range cgManifest.Registrations {
+		registration := make(map[string]interface{})
+		if err := json.Unmarshal(reg, &registration); err != nil {
+			return nil, fmt.Errorf("failed to parse registration in cgmanifest.json: %w", err)
 		}
 
 		component, ok := registration["component"].(map[string]interface{})
@@ -372,6 +374,15 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
 			)
+
+			buf := new(bytes.Buffer)
+			encoder := json.NewEncoder(buf)
+			encoder.SetEscapeHTML(false)
+			if err := encoder.Encode(registration); err != nil {
+				return nil, fmt.Errorf("failed to marshal updated registration in cgmanifest.json: %w", err)
+			}
+
+			cgManifest.Registrations[i] = buf.Bytes()
 			updated = true
 			break
 		}
@@ -382,12 +393,17 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	}
 
 	// Serialize the updated cgManifest back to JSON
-	updatedCgManifestContent, err := json.MarshalIndent(cgManifest, "", "  ") // Use indentation for readability
+	buf := new(bytes.Buffer)
+	encoder := json.NewEncoder(buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+
+	err := encoder.Encode(cgManifest) // Use indentation for readability
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal updated cgmanifest.json: %w", err)
 	}
 
-	updatedCgManifestContent = append(updatedCgManifestContent, '\n') // Add a newline at the end
+	buf.WriteByte('\n') // Add a newline at the end
 
-	return updatedCgManifestContent, nil
+	return buf.Bytes(), nil
 }
