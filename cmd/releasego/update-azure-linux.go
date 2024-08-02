@@ -333,36 +333,42 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 	return updatedJSON, nil
 }
 
-type CGManifest struct {
-	Registrations []struct {
-		Component struct {
-			Type  string `json:"type"`
-			Other struct {
-				Name        string `json:"name"`
-				Version     string `json:"version"`
-				DownloadURL string `json:"downloadUrl"`
-			} `json:"other"`
-		} `json:"component"`
-	} `json:"Registrations"`
-}
-
 func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
 	if len(cgManifestContent) == 0 {
 		return nil, fmt.Errorf("provided CG manifest content is empty")
 	}
 
-	var cgManifest CGManifest
+	var cgManifest map[string]interface{}
 	if err := json.Unmarshal(cgManifestContent, &cgManifest); err != nil {
 		return nil, fmt.Errorf("failed to parse cgmanifest.json: %w", err)
 	}
 
+	registrations, ok := cgManifest["Registrations"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid 'Registrations' field in cgmanifest.json")
+	}
+
 	updated := false
-	for i := range cgManifest.Registrations {
-		registration := &cgManifest.Registrations[i].Component.Other
-		if registration.Name == "golang" {
-			registration.Version = buildAssets.GoVersion().MajorMinorPatch()
-			registration.DownloadURL = fmt.Sprintf(
-				"https://github.com/microsoft/go/releases/download/%s/%s",
+	for _, reg := range registrations {
+		registration, ok := reg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		component, ok := registration["component"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		other, ok := component["other"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if name, ok := other["name"].(string); ok && name == "golang" {
+			other["version"] = buildAssets.GoVersion().MajorMinorPatch()
+			other["downloadUrl"] = fmt.Sprintf(
+				"https://github.com/microsoft/go/releases/download/v%s/%s",
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
 			)
