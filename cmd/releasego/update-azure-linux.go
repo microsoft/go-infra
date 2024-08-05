@@ -191,7 +191,7 @@ func GeneratePRDescription(upgradePipelineRunID, buddyBuildID string) string {
 	template := `Bump Go Version to 1.22.5-2
 Upgrade pipeline run -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 
-buddy build -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
+Buddy build -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 `
 	return fmt.Sprintf(template, upgradePipelineRunID, buddyBuildID)
 }
