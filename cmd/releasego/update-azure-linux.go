@@ -47,7 +47,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
 	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
-	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "[Required] The path of a build asset JSON file describing the Go build to update to.")
+	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
 	flag.StringVar(&buddyBuildID, "buddy-build-id", "", "The job ID for the buddy build in Azure DevOps")
 	flag.StringVar(&upgradePipelineRunID, "upgrade-pipeline-run-id", "", "The run ID for the Upgrade pipeline in Azure DevOps")
 
