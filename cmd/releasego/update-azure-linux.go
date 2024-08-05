@@ -40,12 +40,17 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	var repo string
 	var baseBranch string
 	var updateBranch string
+	var buddyBuildID string
+	var upgradePipelineRunID string
 
 	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
 	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
 	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "[Required] The path of a build asset JSON file describing the Go build to update to.")
+	flag.StringVar(&buddyBuildID, "buddy-build-id", "", "The job ID for the buddy build in Azure DevOps")
+	flag.StringVar(&upgradePipelineRunID, "upgrade-pipeline-run-id", "", "The run ID for the Upgrade pipeline in Azure DevOps")
+
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
@@ -152,7 +157,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		Title: github.String(generatePRTitleFromAssets(assets)),
 		Head:  github.String(updateBranch),
 		Base:  github.String(baseBranch),
-		Body:  github.String("TODO"),
+		Body:  github.String(GeneratePRDescription(upgradePipelineRunID, buddyBuildID)),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create PR: %v", err)
@@ -180,6 +185,15 @@ func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string 
 
 func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
 	return fmt.Sprintf("Bump Go Version to %s", assets.GoVersion().Full())
+}
+
+func GeneratePRDescription(upgradePipelineRunID, buddyBuildID string) string {
+	template := `Bump Go Version to 1.22.5-2
+Upgrade pipeline run -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
+
+buddy build -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
+`
+	return fmt.Sprintf(template, upgradePipelineRunID, buddyBuildID)
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
