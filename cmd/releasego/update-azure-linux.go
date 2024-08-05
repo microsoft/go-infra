@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -308,9 +309,24 @@ func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (st
 	} else {
 		newRelease = oldRelease + 1
 	}
+
 	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+strconv.Itoa(newRelease)+"${3}")
+	specFileContent = addChangelogToSpecFile(specFileContent, assets)
 
 	return specFileContent, nil
+}
+
+func addChangelogToSpecFile(specFile string, assets *buildassets.BuildAssets) string {
+	template := `%%changelog
+* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s
+- Bump version to %s
+`
+	t := time.Now() // Get the current time
+	formattedTime := t.Format("Mon Jan 02 2006")
+
+	changelog := fmt.Sprintf(template, formattedTime, assets.GoVersion().Full(), assets.GoVersion().Full())
+
+	return strings.Replace(specFile, "%changelog", changelog, 1)
 }
 
 // JSONSignature structure to map the provided JSON data
