@@ -334,7 +334,7 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 	}
 
 	// Update the filename and hash in the map
-	delete(data.Signatures, oldFilename) // Remove theß old entry
+	delete(data.Signatures, oldFilename) // Remove the old entry
 	// add new filename and hash
 	data.Signatures[newFilename] = newHash
 
