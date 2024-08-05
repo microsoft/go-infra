@@ -333,7 +333,7 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 		return nil, errors.New("old filename not found in signatures")
 	}
 
-	// Update the filename and hash in the mapß
+	// Update the filename and hash in the map
 	delete(data.Signatures, oldFilename) // Remove theß old entry
 	// add new filename and hash
 	data.Signatures[newFilename] = newHash
