@@ -40,6 +40,10 @@ parameters:
     displayName: Publish announcement details
     type: boolean
     default: true
+  - name: runGoImageVersionCheck
+    displayName: Check Go version in latest MAR images
+    type: boolean
+    default: true
 
   # Allow retrying a build starting at any of these points.
   - name: poll1MicrosoftGoImagesCommitHash
@@ -159,7 +163,7 @@ extends:
                         buildStatus: '?'
                         start: true
                         reason: queued build
-                    # Now we have poll2MicrosoftGoImagesBuildID 
+                    # Now we have poll2MicrosoftGoImagesBuildID
                     - script: |
                         releasego wait-build \
                           -id '$(poll2MicrosoftGoImagesBuildID)' \
@@ -168,14 +172,22 @@ extends:
                           -azdopat '$(System.AccessToken)'
                       displayName: ⌚ Wait for go-images build
                       timeoutInMinutes: 120
-                - script: |
-                    releasego publish-announcement \
-                      -author '${{ parameters.notify }}' \
-                      -versions '${{ join(',', parameters.releaseVersions) }}' \
-                      -security='${{ parameters.isSecurityRelease }}' \
-                      -pat '$(GitHubPAT)'
-                  displayName: Publishing announcement details
-                  
+
+                - ${{ if eq(parameters.runPublishAnnouncement, true) }}:
+                  - script: |
+                      releasego publish-announcement \
+                        -author '${{ parameters.notify }}' \
+                        -versions '${{ join(',', parameters.releaseVersions) }}' \
+                        -security='${{ parameters.isSecurityRelease }}' \
+                        -pat '$(GitHubPAT)'
+                    displayName: 📰 Publish announcement details
+
+                - ${{ if eq(parameters.runGoImageVersionCheck, true) }}:
+                  - script: |
+                      releasego wait-latest-mar-go-version \
+                        -versions '${{ join(',', parameters.releaseVersions) }}'
+                    displayName: 🌊 Check Go version in latest MAR images
+
                 - template: ../steps/report.yml
                   parameters:
                     releaseIssue: ${{ parameters.releaseIssue }}
