@@ -158,7 +158,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		Title: github.String(generatePRTitleFromAssets(assets)),
 		Head:  github.String(updateBranch),
 		Base:  github.String(baseBranch),
-		Body:  github.String(GeneratePRDescription(upgradePipelineRunID, buddyBuildID)),
+		Body:  github.String(GeneratePRDescription(upgradePipelineRunID, buddyBuildID, assets)),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create PR: %v", err)
@@ -188,13 +188,13 @@ func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
 	return fmt.Sprintf("Bump Go Version to %s", assets.GoVersion().Full())
 }
 
-func GeneratePRDescription(upgradePipelineRunID, buddyBuildID string) string {
-	template := `Bump Go Version to 1.22.5-2
+func GeneratePRDescription(upgradePipelineRunID, buddyBuildID string, assets *buildassets.BuildAssets) string {
+	template := `Bump Go Version to %s
 Upgrade pipeline run -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 
 Buddy build -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 `
-	return fmt.Sprintf(template, upgradePipelineRunID, buddyBuildID)
+	return fmt.Sprintf(template, assets.GoVersion().Full(), upgradePipelineRunID, buddyBuildID)
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
