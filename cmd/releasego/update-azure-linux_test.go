@@ -65,7 +65,7 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 	}
 
 	goldentest.Check(
-		t, "TestUpdateCGManifestFileContent ",
+		t, "TestUpdateSignaturesFileContent",
 		filepath.Join("testdata", "update-azure-linux", "updated_signatures.golden.json"),
 		string(updatedSignatureFile))
 }
