@@ -153,7 +153,7 @@ fi
 %{_bindir}/*
 
 %changelog
-* Mon Aug 05 2024 Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - 1.23.0-2
+* Thu Aug 08 2024 Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - 1.23.0-2
 - Bump version to 1.23.0-2
 
 * Tue Jun 04 2024 Davis Goodin <dagood@microsoft.com> - 1.22.4-1
