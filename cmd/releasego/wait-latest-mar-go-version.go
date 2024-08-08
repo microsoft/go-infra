@@ -38,8 +38,8 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 		"versions", "",
 		"[Required] A list of full or partial microsoft/go version numbers (major.minor.patch[-revision[-suffix]]). Separated by commas.")
 
-	timeout := flag.Duration("timeout", time.Minute*5, "Time to wait before giving up.")
-	pollDelay := flag.Duration("poll-delay", time.Second*10, "Time to wait between each poll attempt.")
+	timeout := flag.Duration("timeout", 5*time.Minute, "Time to wait before giving up.")
+	pollDelay := flag.Duration("poll-delay", 10*time.Second, "Time to wait between each poll attempt.")
 
 	if err := p(); err != nil {
 		return err
@@ -75,19 +75,22 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 	// Make our logs stand out from Docker's.
 	log.Default().SetPrefix("---- ")
 
-	start := time.Now()
-	end := start.Add(*timeout)
+	end := time.Now().Add(*timeout)
 
-	for {
+	for time.Now().Before(end) {
 		var missing bool
 
-		for _, tag := range checkers {
-			ok, err := tag()
+		for _, checker := range checkers {
+			ok, err := checker()
 			if err != nil {
 				return fmt.Errorf("unexpectedly failed check: %v", err)
 			}
 			if !ok {
 				missing = true
+				// When a checker doesn't find what it's looking for, keep running the remaining
+				// checkers. If this command times out, a dev will read the output to figure out
+				// what's happening. It may help them to see the status of all tags rather than
+				// just the first missing one.
 			}
 		}
 
@@ -98,8 +101,6 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 
 		log.Printf("Waiting %v before trying again...", *pollDelay)
 		time.Sleep(*pollDelay)
-		if time.Now().After(end) {
-			return fmt.Errorf("exceeded timeout (%v) waiting for versions", *timeout)
-		}
 	}
+	return fmt.Errorf("exceeded timeout (%v) waiting for versions", *timeout)
 }
