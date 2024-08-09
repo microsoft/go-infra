@@ -290,14 +290,8 @@ func (s *State) notificationPreamble() string {
 			}
 			return notification
 		case releaseImagesPipelineName:
-			return "Completed building all images! " +
-				"Before you [announce](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement), " +
-				"confirm the MAR/MCR images are updated using commands like these:\n\n" +
-				"```\n" +
-				"image=mcr.microsoft.com/oss/go/microsoft/golang:1-bullseye\n" +
-				"docker pull $image\n" +
-				"docker run -it --rm $image go version\n" +
-				"```\n"
+			return "Completed building all images!\n\n" +
+				"Next, [announce the release](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement).\n"
 		}
 	}
 	return ""
