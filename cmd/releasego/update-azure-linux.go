@@ -58,6 +58,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	start := time.Now()
 	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
@@ -85,7 +86,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
+	golangSpecFileContent, err = updateSpecFile(assets, start, golangSpecFileContent)
 	if err != nil {
 		return err
 	}
@@ -262,7 +263,7 @@ func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string,
 	return updatedContent, nil
 }
 
-func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (string, error) {
+func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, specFileContent string) (string, error) {
 	if len(specFileContent) == 0 {
 		return "", fmt.Errorf("provided spec file content is empty")
 	}
@@ -311,18 +312,17 @@ func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (st
 	}
 
 	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+strconv.Itoa(newRelease)+"${3}")
-	specFileContent = addChangelogToSpecFile(specFileContent, assets)
+	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets)
 
 	return specFileContent, nil
 }
 
-func addChangelogToSpecFile(specFile string, assets *buildassets.BuildAssets) string {
+func addChangelogToSpecFile(specFile string, changelogDate time.Time, assets *buildassets.BuildAssets) string {
 	template := `%%changelog
 * %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s
 - Bump version to %s
 `
-	t := time.Now() // Get the current time
-	formattedTime := t.Format("Mon Jan 02 2006")
+	formattedTime := changelogDate.Format("Mon Jan 02 2006")
 
 	changelog := fmt.Sprintf(template, formattedTime, assets.GoVersion().Full(), assets.GoVersion().Full())
 
@@ -432,8 +432,6 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal updated cgmanifest.json: %w", err)
 	}
-
-	buf.WriteByte('\n') // Add a newline at the end
 
 	return buf.Bytes(), nil
 }
