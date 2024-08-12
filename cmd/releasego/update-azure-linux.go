@@ -366,8 +366,19 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 }
 
 type CGManifest struct {
-	Registrations []json.RawMessage `json:"Registrations"`
-	Version       int               `json:"Version"`
+	Registrations []Registration `json:"Registrations"`
+	Version       int            `json:"Version"`
+}
+
+type Registration struct {
+	Component struct {
+		Type  string `json:"type"`
+		Other struct {
+			Name        string `json:"name"`
+			Version     string `json:"version"`
+			DownloadURL string `json:"downloadUrl"`
+		} `json:"other"`
+	} `json:"component"`
 }
 
 func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
@@ -382,37 +393,13 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 
 	updated := false
 	for i, reg := range cgManifest.Registrations {
-		registration := make(map[string]interface{})
-		if err := json.Unmarshal(reg, &registration); err != nil {
-			return nil, fmt.Errorf("failed to parse registration in cgmanifest.json: %w", err)
-		}
-
-		component, ok := registration["component"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		other, ok := component["other"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		if name, ok := other["name"].(string); ok && name == "golang" {
-			other["version"] = buildAssets.GoVersion().MajorMinorPatch()
-			other["downloadUrl"] = fmt.Sprintf(
+		if reg.Component.Other.Name == "golang" {
+			cgManifest.Registrations[i].Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
+			cgManifest.Registrations[i].Component.Other.DownloadURL = fmt.Sprintf(
 				"https://github.com/microsoft/go/releases/download/v%s/%s",
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
 			)
-
-			buf := new(bytes.Buffer)
-			encoder := json.NewEncoder(buf)
-			encoder.SetEscapeHTML(false)
-			if err := encoder.Encode(registration); err != nil {
-				return nil, fmt.Errorf("failed to marshal updated registration in cgmanifest.json: %w", err)
-			}
-
-			cgManifest.Registrations[i] = buf.Bytes()
 			updated = true
 			break
 		}
