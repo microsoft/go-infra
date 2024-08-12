@@ -145,7 +145,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 		// Update the file
 		_, _, err = client.Repositories.UpdateFile(ctx, owner, repo, filePath, &github.RepositoryContentFileOptions{
-			Message: github.String("Bump version to " + assets.GoVersion().Full()),
+			Message: github.String(generatePRTitleFromAssets(assets)),
 			Content: newContent,
 			SHA:     file.SHA,
 			Branch:  github.String(updateBranch),
