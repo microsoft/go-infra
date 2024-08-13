@@ -36,20 +36,20 @@ See https://github.com/microsoft/go-lab/issues/79
 }
 
 func updateAzureLinux(p subcmd.ParseFunc) error {
+	var baseBranch string
+	var buddyBuildID string
 	var buildAssetJSON string
 	var owner string
 	var repo string
-	var baseBranch string
 	var updateBranch string
-	var buddyBuildID string
 	var upgradePipelineRunID string
 
+	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
+	flag.StringVar(&buddyBuildID, "buddy-build-id", "", "The job ID for the buddy build in Azure DevOps")
+	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
 	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
 	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
-	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
-	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
-	flag.StringVar(&buddyBuildID, "buddy-build-id", "", "The job ID for the buddy build in Azure DevOps")
 	flag.StringVar(&upgradePipelineRunID, "upgrade-pipeline-run-id", "", "The run ID for the Upgrade pipeline in Azure DevOps")
 
 	pat := githubutil.BindPATFlag()
@@ -151,7 +151,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			Branch:  github.String(updateBranch),
 		})
 		if err != nil {
-			return fmt.Errorf("Failed to update file %q: %v", filePath, err)
+			return fmt.Errorf("failed to update file %q: %v", filePath, err)
 		}
 	}
 
@@ -190,12 +190,12 @@ func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
 }
 
 func GeneratePRDescription(upgradePipelineRunID, buddyBuildID string, assets *buildassets.BuildAssets) string {
-	template := `Bump Go Version to %s
+	const format = `Bump Go Version to %s
 Upgrade pipeline run -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 
 Buddy build -> https://dev.azure.com/mariner-org/mariner/_build/results?buildId=%s&view=results
 `
-	return fmt.Sprintf(template, assets.GoVersion().Full(), upgradePipelineRunID, buddyBuildID)
+	return fmt.Sprintf(format, assets.GoVersion().Full(), upgradePipelineRunID, buddyBuildID)
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
