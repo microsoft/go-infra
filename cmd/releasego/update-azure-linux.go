@@ -392,10 +392,11 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	}
 
 	updated := false
-	for i, reg := range cgManifest.Registrations {
+	for i := range cgManifest.Registrations {
+		reg := &cgManifest.Registrations[i]
 		if reg.Component.Other.Name == "golang" {
-			cgManifest.Registrations[i].Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
-			cgManifest.Registrations[i].Component.Other.DownloadURL = fmt.Sprintf(
+			reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
+			reg.Component.Other.DownloadURL = fmt.Sprintf(
 				"https://github.com/microsoft/go/releases/download/v%s/%s",
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
