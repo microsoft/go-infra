@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
@@ -36,7 +37,12 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Expected extracted Go file version is not same as actual filename. Expected %s, returned %s", extractedGoFileVersion, "go1.22.4-20240604.2.src.tar.gz")
 	}
 
-	updatedSpecFile, err := updateSpecFile(assets, specFileContent)
+	changelogTime, err := time.Parse("2006-01-02", "2024-08-12")
+	if err != nil {
+		t.Fatalf("Error parsing changelog time : %s", err)
+	}
+
+	updatedSpecFile, err := updateSpecFile(assets, changelogTime, specFileContent)
 	if err != nil {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
@@ -65,7 +71,7 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 	}
 
 	goldentest.Check(
-		t, "TestUpdateCGManifestFileContent ",
+		t, "TestUpdateSignaturesFileContent",
 		filepath.Join("testdata", "update-azure-linux", "updated_signatures.golden.json"),
 		string(updatedSignatureFile))
 }

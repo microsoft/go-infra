@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -20,7 +22,6 @@ import (
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
-	"golang.org/x/tools/txtar"
 )
 
 func init() {
@@ -35,15 +36,25 @@ See https://github.com/microsoft/go-lab/issues/79
 }
 
 func updateAzureLinux(p subcmd.ParseFunc) error {
+	var baseBranch string
 	var buildAssetJSON string
+	var owner string
+	var repo string
+	var updateBranch string
 
-	flag.StringVar(&buildAssetJSON, "build-asset-json", "", "[Required] The path of a build asset JSON file describing the Go build to update to.")
+	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
+	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
+	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
+	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
+	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
+
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
 		return err
 	}
 
+	start := time.Now()
 	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, *pat)
 	if err != nil {
@@ -55,18 +66,23 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSpecFilepath)
+	if updateBranch == "" {
+		updateBranch = generateUpdateBranchNameFromAssets(assets)
+	}
+
+	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSpecFilepath)
 	if err != nil {
 		return err
 	}
 
 	golangSpecFileContent := string(golangSpecFileBytes)
-	golangSpecFileContent, err = updateSpecFile(assets, golangSpecFileContent)
+
+	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
 	if err != nil {
 		return err
 	}
 
-	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
+	golangSpecFileContent, err = updateSpecFile(assets, start, golangSpecFileContent)
 	if err != nil {
 		return err
 	}
@@ -76,7 +92,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
 	}
 
-	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", golangSignaturesFilepath)
+	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSignaturesFilepath)
 	if err != nil {
 		return err
 	}
@@ -86,7 +102,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	cgManifestBytes, err := downloadFileFromRepo(ctx, client, "microsoft", "azurelinux", "3.0-dev", cgManifestFilepath)
+	cgManifestBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, cgManifestFilepath)
 	if err != nil {
 		return err
 	}
@@ -96,17 +112,82 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	ar := txtar.Archive{
-		Comment: []byte("Bump version to " + assets.GoVersion().Full()),
-		Files: []txtar.File{
-			{Name: cgManifestFilepath, Data: cgManifestBytes},
-			{Name: golangSignaturesFilepath, Data: golangSignaturesFileBytes},
-			{Name: golangSpecFilepath, Data: []byte(golangSpecFileContent)},
-		},
+	ref, _, err := client.Git.GetRef(ctx, owner, repo, baseBranch)
+	if err != nil {
+		return fmt.Errorf("failed to get ref: %v", err)
 	}
-	fmt.Println(string(txtar.Format(&ar)))
+
+	newRef := &github.Reference{
+		Ref:    github.String(updateBranch),
+		Object: &github.GitObject{SHA: ref.Object.SHA},
+	}
+
+	if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
+		return fmt.Errorf("Failed to create ref: %v", err)
+	}
+
+	updatedFiles := map[string][]byte{
+		golangSpecFilepath:       []byte(golangSpecFileContent),
+		golangSignaturesFilepath: golangSignaturesFileBytes,
+		cgManifestFilepath:       cgManifestBytes,
+	}
+
+	for filePath, newContent := range updatedFiles {
+		// Get the file to update
+		file, _, _, err := client.Repositories.GetContents(ctx, owner, repo, filePath, &github.RepositoryContentGetOptions{Ref: updateBranch})
+		if err != nil {
+			return fmt.Errorf("Failed to get file %q: %v", filePath, err)
+		}
+
+		// Update the file
+		_, _, err = client.Repositories.UpdateFile(ctx, owner, repo, filePath, &github.RepositoryContentFileOptions{
+			Message: github.String(generatePRTitleFromAssets(assets)),
+			Content: newContent,
+			SHA:     file.SHA,
+			Branch:  github.String(updateBranch),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to update file %q: %v", filePath, err)
+		}
+	}
+
+	pr, _, err := client.PullRequests.Create(ctx, owner, repo, &github.NewPullRequest{
+		Title: github.String(generatePRTitleFromAssets(assets)),
+		Head:  github.String(updateBranch),
+		Base:  github.String(baseBranch),
+		Body:  github.String(GeneratePRDescription(assets)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create PR: %v", err)
+	}
+
+	// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
+	// While GitHub provides a dedicated PullRequests API, it doesn't currently offer a method for adding labels directly to pull requests.
+	//
+	// Therefore, we use the Issues.AddLabelsToIssue method, passing the pull request's number (which is equivalent to its issue number)
+	// to apply the labels.
+	//
+	// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
+	if _, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"}); err != nil {
+		return fmt.Errorf("error adding label to pull request: %w\n", err)
+	}
+
+	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
 
 	return nil
+}
+
+func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
+}
+
+func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf("Bump Go Version to %s", assets.GoVersion().Full())
+}
+
+func GeneratePRDescription(assets *buildassets.BuildAssets) string {
+	const format = "Bump Go Version to %s"
+	return fmt.Sprintf(format, assets.GoVersion().Full())
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
@@ -174,7 +255,7 @@ func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string,
 	return updatedContent, nil
 }
 
-func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (string, error) {
+func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, specFileContent string) (string, error) {
 	if len(specFileContent) == 0 {
 		return "", fmt.Errorf("provided spec file content is empty")
 	}
@@ -221,9 +302,23 @@ func updateSpecFile(assets *buildassets.BuildAssets, specFileContent string) (st
 	} else {
 		newRelease = oldRelease + 1
 	}
+
 	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+strconv.Itoa(newRelease)+"${3}")
+	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets)
 
 	return specFileContent, nil
+}
+
+func addChangelogToSpecFile(specFile string, changelogDate time.Time, assets *buildassets.BuildAssets) string {
+	template := `%%changelog
+* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s
+- Bump version to %s
+`
+	formattedTime := changelogDate.Format("Mon Jan 02 2006")
+
+	changelog := fmt.Sprintf(template, formattedTime, assets.GoVersion().Full(), assets.GoVersion().Full())
+
+	return strings.Replace(specFile, "%changelog", changelog, 1)
 }
 
 // JSONSignature structure to map the provided JSON data
@@ -263,16 +358,19 @@ func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash stri
 }
 
 type CGManifest struct {
-	Registrations []struct {
-		Component struct {
-			Type  string `json:"type"`
-			Other struct {
-				Name        string `json:"name"`
-				Version     string `json:"version"`
-				DownloadURL string `json:"downloadUrl"`
-			} `json:"other"`
-		} `json:"component"`
-	} `json:"Registrations"`
+	Registrations []Registration `json:"Registrations"`
+	Version       int            `json:"Version"`
+}
+
+type Registration struct {
+	Component struct {
+		Type  string `json:"type"`
+		Other struct {
+			Name        string `json:"name"`
+			Version     string `json:"version"`
+			DownloadURL string `json:"downloadUrl"`
+		} `json:"other"`
+	} `json:"component"`
 }
 
 func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
@@ -287,11 +385,11 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 
 	updated := false
 	for i := range cgManifest.Registrations {
-		registration := &cgManifest.Registrations[i].Component.Other
-		if registration.Name == "golang" {
-			registration.Version = buildAssets.GoVersion().MajorMinorPatch()
-			registration.DownloadURL = fmt.Sprintf(
-				"https://github.com/microsoft/go/releases/download/%s/%s",
+		reg := &cgManifest.Registrations[i]
+		if reg.Component.Other.Name == "golang" {
+			reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
+			reg.Component.Other.DownloadURL = fmt.Sprintf(
+				"https://github.com/microsoft/go/releases/download/v%s/%s",
 				buildAssets.GoVersion().Full(),
 				path.Base(buildAssets.GoSrcURL),
 			)
@@ -305,12 +403,15 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	}
 
 	// Serialize the updated cgManifest back to JSON
-	updatedCgManifestContent, err := json.MarshalIndent(cgManifest, "", "  ") // Use indentation for readability
+	buf := new(bytes.Buffer)
+	encoder := json.NewEncoder(buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+
+	err := encoder.Encode(cgManifest) // Use indentation for readability
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal updated cgmanifest.json: %w", err)
 	}
 
-	updatedCgManifestContent = append(updatedCgManifestContent, '\n') // Add a newline at the end
-
-	return updatedCgManifestContent, nil
+	return buf.Bytes(), nil
 }
