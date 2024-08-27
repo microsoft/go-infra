@@ -3,13 +3,6 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
-  - name: releaseVersions
-    displayName: >
-      List of versions to release. Include Microsoft revision suffix (-1) and boring/FIPS suffix
-      (-fips) if they apply. Write in YAML format: write one version number per line with '-' and a
-      space at the beginning of each line.
-    type: object
-
   # If someone's manually queueing this build, let them skip the approval stage. It takes time to
   # acquire a serverless agent to present the approval step, so the dev has to pay attention and
   # catch it. Instead, let them approve it ahead of time by skipping it. The default is always used
@@ -21,16 +14,8 @@ parameters:
 
   # Allow disabling specific parts of the internal build release. These can be used to re-run
   # specific parts of a release if necessary, e.g. if a step silently failed.
-  - name: runMirrorPipeline
-    displayName: Remotely trigger mirror pipeline
-    type: boolean
-    default: true
   - name: runCreatePullRequest
     displayName: Create Pull Request on Azure Linux repo
-    type: boolean
-    default: true
-  - name: runBuddyBuildPipeline
-    displayName: Remotely trigger buddy build pipeline
     type: boolean
     default: true
 
@@ -46,8 +31,6 @@ variables:
   - group: Microsoft-GoLang-bot
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
-  - name: SourceTarballPublishingPipelineID
-    value: '2284'
   - name: assetJsonPath
     value: $(Pipeline.Workspace)/build/BuildAssets/assets.json
 resources:
@@ -98,48 +81,9 @@ extends:
                 - download: build
                   artifact: BuildAssets
 
-                - ${{ if eq(parameters.runMirrorPipeline, true) }}:
-                  - script: |
-                      releasego build-pipeline \
-                        -id '$(SourceTarballPublishingPipelineID)' \
-                        -org 'https://dev.azure.com/mariner-org/' \
-                        -proj 'mariner' \
-                        -azdopat '$(System.AccessToken)' \
-                        -set-azdo-variable poll2SourceTarballPublishingBuildID \
-                        p fileName
-                        p tarballUrl
-                        # TODO
-                    displayName: 🚀 Start go-images build/publish
-                  - template: ../steps/report.yml
-                    parameters:
-                      releaseIssueß: ${{ parameters.releaseIssue }}
-                      condition: succeeded()
-                      buildPipeline: Source Tarball Publishing
-                      buildID: $(poll2SourceTarballPublishingBuildID)
-                      buildStatus: '?'
-                      start: true
-                      reason: queued build
-                  # Now we have poll2SourceTarballPublishingBuildID
-                  - script: |
-                      releasego wait-build \
-                        -id '$(poll2SourceTarballPublishingBuildID)' \
-                        -org 'https://dev.azure.com/mariner-org/' \
-                        -proj 'mariner' \
-                        -azdopat '$(System.AccessToken)'
-                    displayName: ⌚ Wait for Azure Linux Source Tarball Publishing
-                    timeoutInMinutes: 120
-
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
                   - script: |
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)'
                     displayName: 📰 Publish announcement details
 
-                - template: ../steps/report.yml
-                  parameters:
-                    releaseIssue: ${{ parameters.releaseIssue }}
-                    condition: succeeded()
-                    buildPipeline: Source Tarball Publishing
-                    buildID: $(poll2SourceTarballPublishingBuildID)
-                    buildStatus: Succeeded
-                    reason: completed internal build
