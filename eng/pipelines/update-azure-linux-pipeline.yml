@@ -24,6 +24,10 @@ parameters:
     displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
     type: string
 
+  - name: pipelineBuildID
+    displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
+    type: string
+    default: '2516760' # TODO: Remove default value
 trigger: none
 pr: none
 
@@ -78,12 +82,22 @@ extends:
                 # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
                 # retry build will have a non-nil value in one of these parameters. Only the value of the last
                 # step's parameter matters.
-                - download: build
-                  artifact: BuildAssets
+                # Download build asset JSON from completed internal build to update Azure Linux specfiles with. 
+                - task: DownloadPipelineArtifact@2 
+                  displayName: Download Build Asset JSON 
+                  inputs: 
+                    source: specific 
+                    artifact: BuildAssets 
+                    project: internal 
+                    pipeline: $(GoPipelineID) 
+                    runVersion: specific 
+                    runId: $(parameters.pipelineBuildID) 
+                    path: $(assetJsonPath) 
 
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
                   - script: |
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)'
+                        -build-asset-json '$(assetJsonPath)'
                     displayName: 📰 Publish announcement details
 
