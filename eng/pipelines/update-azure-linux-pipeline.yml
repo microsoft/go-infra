@@ -91,7 +91,7 @@ extends:
                     project: internal 
                     pipeline: $(GoPipelineID) 
                     runVersion: specific 
-                    runId: $(parameters.pipelineBuildID) 
+                    runId: ${{ parameters.pipelineBuildID }}
                     path: $(assetJsonPath) 
 
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
