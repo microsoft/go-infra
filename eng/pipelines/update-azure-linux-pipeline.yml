@@ -65,7 +65,6 @@ extends:
         jobs:
           - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
-              retryInstructionsFlags: '-preapproval'
               steps:
                 # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
                 # retry build will have a non-nil value in one of these parameters. Only the value of the last
