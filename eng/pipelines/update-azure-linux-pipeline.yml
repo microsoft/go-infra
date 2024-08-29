@@ -27,7 +27,7 @@ parameters:
   - name: pipelineBuildID
     displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
     type: string
-    default: '2516760' # TODO: Remove default value
+    default: '2515771' # TODO: Remove default value
 trigger: none
 pr: none
 
@@ -35,8 +35,6 @@ variables:
   - group: Microsoft-GoLang-bot
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
-  - name: assetJsonPath
-    value: $(Pipeline.Workspace)/build/BuildAssets/assets.json
 resources:
   repositories:
     - repository: 1ESPipelineTemplates
@@ -98,6 +96,6 @@ extends:
                   - script: |
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)'
-                        -build-asset-json '$(assetJsonPath)'
+                        -build-asset-json '$(buildAssetJsonFile)'
                     displayName: 📰 Publish announcement details
 
