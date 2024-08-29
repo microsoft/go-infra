@@ -3,15 +3,6 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
-  # If someone's manually queueing this build, let them skip the approval stage. It takes time to
-  # acquire a serverless agent to present the approval step, so the dev has to pay attention and
-  # catch it. Instead, let them approve it ahead of time by skipping it. The default is always used
-  # by automation, so this is only used for dev builds and retries.
-  - name: approveAheadOfTime
-    displayName: Approve right now, skipping the approval stage.
-    type: boolean
-    default: false
-
   # Allow disabling specific parts of the internal build release. These can be used to re-run
   # specific parts of a release if necessary, e.g. if a step silently failed.
   - name: runCreatePullRequest
@@ -57,19 +48,18 @@ extends:
         configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
 
     stages:
-      - ${{ if eq(parameters.approveAheadOfTime, false) }}:
-        - stage: WaitForApproval
-          jobs:
-            - job: Approve
-              pool: server
-              timeoutInMinutes: 1440 # 1 day
-              steps:
-                - task: ManualValidation@0
-                  inputs:
-                    instructions: >
-                      Once the microsoft/go build is complete, approve this step to automatically update 
-                      the Azure Linux specfiles and create a pull request.
-                    onTimeout: 'reject'
+      - stage: WaitForApproval
+        jobs:
+          - job: Approve
+            pool: server
+            timeoutInMinutes: 1440 # 1 day
+            steps:
+              - task: ManualValidation@0
+                inputs:
+                  instructions: >
+                    Once the microsoft/go build is complete, approve this step to automatically update 
+                    the Azure Linux specfiles and create a pull request.
+                  onTimeout: 'reject'
 
       - stage: Release
         jobs:
@@ -97,5 +87,5 @@ extends:
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)'
                         -build-asset-json '$(buildAssetJsonFile)'
-                    displayName: 📰 Publish announcement details
+                    displayName: Create Pull Request to Update Azure Linux Specfiles
 
