@@ -18,7 +18,7 @@ parameters:
   - name: pipelineBuildID
     displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
     type: string
-    default: '2515771' # TODO: Remove default value
+
 trigger: none
 pr: none
 
