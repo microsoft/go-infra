@@ -48,27 +48,11 @@ extends:
         configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
 
     stages:
-      - stage: WaitForApproval
-        jobs:
-          - job: Approve
-            pool: server
-            timeoutInMinutes: 1440 # 1 day
-            steps:
-              - task: ManualValidation@0
-                inputs:
-                  instructions: >
-                    Once the microsoft/go build is complete, approve this step to automatically update 
-                    the Azure Linux specfiles and create a pull request.
-                  onTimeout: 'reject'
-
       - stage: Release
         jobs:
           - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
               steps:
-                # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
-                # retry build will have a non-nil value in one of these parameters. Only the value of the last
-                # step's parameter matters.
                 # Download build asset JSON from completed internal build to update Azure Linux specfiles with. 
                 - task: DownloadPipelineArtifact@2 
                   displayName: Download Build Asset JSON 
