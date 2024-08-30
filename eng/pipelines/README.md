@@ -29,5 +29,5 @@ Internal release pipelines (see [release process docs](/docs/release-process)):
   * 🚀 internal [`microsoft-go-infra-release-go-images`](https://dev.azure.com/dnceng/internal/_build?definitionId=1151)
 * (4) [`release-innerloop-pipeline.yml`](release-innerloop-pipeline.yml)
   * 🚀 internal [`microsoft-go-infra-release-innerloop`](https://dev.azure.com/dnceng/internal/_build?definitionId=1348)
-* (5) [`update-azure-linux-pipeline.yml](update-azure-linux-pipeline.yml)
+* (5) [`update-azure-linux-pipeline.yml`](update-azure-linux-pipeline.yml)
   * 🚀 internal [`microsoft-go-update-azure-linux`](https://dev.azure.com/dnceng/internal/_build?definitionId=1405)
