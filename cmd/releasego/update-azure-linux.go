@@ -364,8 +364,9 @@ type CGManifest struct {
 
 type Registration struct {
 	Component struct {
-		Type  string `json:"type"`
-		Other struct {
+		Type    string `json:"type"`
+		Comment string `json:"comment,omitempty"`
+		Other   struct {
 			Name        string `json:"name"`
 			Version     string `json:"version"`
 			DownloadURL string `json:"downloadUrl"`
