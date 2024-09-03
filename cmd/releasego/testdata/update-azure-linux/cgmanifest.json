@@ -23,6 +23,7 @@
       {
         "component": {
           "type": "other",
+          "comment": "This is a comment2",
           "other": {
             "name": "accountsservice",
             "version": "0.6.55",
