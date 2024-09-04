@@ -32,7 +32,7 @@ parameters:
   - name: updateBranch
     displayName: 'Branch to update'
     type: string
-    default: ''
+    default: nil
 
 trigger: none
 pr: none
