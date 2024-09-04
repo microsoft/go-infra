@@ -66,7 +66,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if updateBranch == "" {
+	if updateBranch == "nil" || updateBranch == "" {
 		updateBranch = generateUpdateBranchNameFromAssets(assets)
 	}
 

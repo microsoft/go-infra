@@ -1,0 +1,92 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
+parameters:
+  # Allow disabling specific parts of the internal build release. These can be used to re-run
+  # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runCreatePullRequest
+    displayName: Create Pull Request on Azure Linux repo
+    type: boolean
+    default: true
+
+  # This parameter intentionally has no default: see release-go-pipeline.yml
+  - name: goReleaseConfigVariableGroup
+    displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
+    type: string
+
+  - name: pipelineBuildID
+    displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
+    type: string
+
+  - name: owner
+    displayName: 'GitHub repository owner'
+    type: string
+    default: 'microsoft'
+
+  - name: repo
+    displayName: 'GitHub repository name'
+    type: string
+    default: 'azurelinux'
+
+  - name: updateBranch
+    displayName: 'Branch to update'
+    type: string
+    default: nil
+
+trigger: none
+pr: none
+
+variables:
+  - group: Microsoft-GoLang-bot
+  # Import config group. This may direct the build to use secrets from the other groups.
+  - group: ${{ parameters.goReleaseConfigVariableGroup }}
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-ubuntu-2004
+        os: linux
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
+      tsa:
+        enabled: true
+        configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
+
+    stages:
+      - stage: Release
+        jobs:
+          - template: /eng/pipelines/jobs/releasego.yml@self
+            parameters:
+              steps:
+                # Download build asset JSON from completed internal build to update Azure Linux specfiles with. 
+                - task: DownloadPipelineArtifact@2 
+                  displayName: Download Build Asset JSON 
+                  inputs: 
+                    source: specific 
+                    artifact: BuildAssets 
+                    project: internal 
+                    pipeline: $(GoPipelineID) 
+                    runVersion: specific 
+                    runId: ${{ parameters.pipelineBuildID }}
+                    path: $(assetsDir)
+
+                - ${{ if eq(parameters.runCreatePullRequest, true) }}:
+                  - script: |
+                      releasego update-azure-linux \
+                        -pat '$(GitHubPAT)' \
+                        -build-asset-json $(buildAssetJsonFile) \
+                        -owner ${{ parameters.owner }} \
+                        -repo ${{ parameters.repo }} \
+                        -update-branch ${{ parameters.updateBranch }}
+                    displayName: Create Pull Request to Update Azure Linux Specfiles
+
