@@ -19,6 +19,21 @@ parameters:
     displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
     type: string
 
+  - name: owner
+    displayName: 'GitHub repository owner'
+    type: string
+    default: 'microsoft'
+
+  - name: repo
+    displayName: 'GitHub repository name'
+    type: string
+    default: 'azurelinux'
+
+  - name: updateBranch
+    displayName: 'Branch to update'
+    type: string
+    default: ''
+
 trigger: none
 pr: none
 
@@ -70,5 +85,8 @@ extends:
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)'
                         -build-asset-json '$(buildAssetJsonFile)'
+                        -owner '$(owner)'
+                        -repo '$(repo)'
+                        -update-branch '$(updateBranch)'
                     displayName: Create Pull Request to Update Azure Linux Specfiles
 
