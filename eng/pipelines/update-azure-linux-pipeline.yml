@@ -83,10 +83,10 @@ extends:
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
                   - script: |
                       releasego update-azure-linux \
-                        -pat '$(GitHubPAT)'
-                        -build-asset-json '$(buildAssetJsonFile)'
-                        -owner '$(owner)'
-                        -repo '$(repo)'
-                        -update-branch '$(updateBranch)'
+                        -pat '$(GitHubPAT)' \
+                        -build-asset-json $(buildAssetJsonFile) \
+                        -owner ${{ parameters.owner }} \
+                        -repo ${{ parameters.repo }} \
+                        -update-branch ${{ parameters.updateBranch }}
                     displayName: Create Pull Request to Update Azure Linux Specfiles
 
