@@ -276,34 +276,20 @@ func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, sp
 		oldVersion = goversion.New(matches[2])
 	}
 
-	var oldRelease int
+	var oldRelease string
 	if matches := specFileReleaseRegex.FindStringSubmatch(specFileContent); matches == nil {
 		return "", fmt.Errorf("no Release declaration found in spec content")
 	} else {
-		var err error
-		oldRelease, err = strconv.Atoi(matches[2])
-		if err != nil {
-			return "", fmt.Errorf("failed to parse Release number: %w", err)
-		}
+		oldRelease = matches[2]
 	}
 
-	newVersion := assets.GoVersion().MajorMinorPatch()
-	if strings.Contains(newVersion, "$") {
-		return "", fmt.Errorf("new version %q contains unexpected $", newVersion)
+	newVersion, newRelease, err := updateSpecVersion(assets, oldVersion, oldRelease)
+	if err != nil {
+		return "", err
 	}
+
 	specFileContent = specFileVersionRegex.ReplaceAllString(specFileContent, "${1}"+newVersion)
-
-	// For servicing patches, increment release. Azure Linux may have incremented it manually for a
-	// Azure-Linux-specific fix, so this is independent of Microsoft Go releases. When updating to a
-	// new major/minor version (as semver refers to them), reset release to 1.
-	var newRelease int
-	if assets.GoVersion().MajorMinor() != oldVersion.MajorMinor() {
-		newRelease = 1
-	} else {
-		newRelease = oldRelease + 1
-	}
-
-	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+strconv.Itoa(newRelease)+"${3}")
+	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+newRelease+"${3}")
 	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets)
 
 	return specFileContent, nil
@@ -415,4 +401,32 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	}
 
 	return buf.Bytes(), nil
+}
+
+func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.GoVersion, oldRelease string) (version, release string, err error) {
+	oldReleaseInt, err := strconv.Atoi(oldRelease)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse old Release number: %w", err)
+	}
+
+	newVersion := assets.GoVersion().MajorMinorPatch()
+	if strings.Contains(newVersion, "$") {
+		return "", "", fmt.Errorf("new version %q contains unexpected $", newVersion)
+	}
+
+	// Decide on the new Azure Linux golang package release number.
+	//
+	// We don't use assets.GoVersion().Revision because Azure Linux may have incremented the
+	// release version manually for an Azure-Linux-specific fix.
+	var newRelease int
+	if assets.GoVersion().MajorMinorPatch() != oldVersion.MajorMinorPatch() {
+		// When updating to a new upstream Go version, reset release number to 1.
+		newRelease = 1
+	} else {
+		// When the upstream Go version didn't change, increment the release number. This means
+		// there has been a patch specific to Microsoft Go.
+		newRelease = oldReleaseInt + 1
+	}
+
+	return newVersion, strconv.Itoa(newRelease), nil
 }
