@@ -105,39 +105,38 @@ func TestUpdateSpecVersion(t *testing.T) {
 	type args struct {
 		newGoVersion string
 		oldVersion   string
-		oldRelease   string
+		oldRelease   int
 	}
 	tests := []struct {
 		name        string
 		args        args
 		wantVersion string
 		wantRelease string
-		wantErr     bool
 	}{
 		{
 			"patch",
-			args{"1.22.4-1", "1.22.3", "1"},
-			"1.22.4", "1", false,
+			args{"1.22.4-1", "1.22.3", 1},
+			"1.22.4", "1",
 		},
 		{
 			"patch-modified-package",
-			args{"1.22.4-1", "1.22.3", "2"},
-			"1.22.4", "1", false,
+			args{"1.22.4-1", "1.22.3", 2},
+			"1.22.4", "1",
 		},
 		{
 			"patch-msft-go-release",
-			args{"1.22.3-2", "1.22.3", "1"},
-			"1.22.3", "2", false,
+			args{"1.22.3-2", "1.22.3", 1},
+			"1.22.3", "2",
 		},
 		{
 			"patch-msft-go-release-modified",
-			args{"1.22.3-2", "1.22.3", "4"},
-			"1.22.3", "5", false,
+			args{"1.22.3-2", "1.22.3", 4},
+			"1.22.3", "5",
 		},
 		{
 			"go-major",
-			args{"1.23.0-1", "1.22.8", "1"},
-			"1.23.0", "1", false,
+			args{"1.23.0-1", "1.22.8", 1},
+			"1.23.0", "1",
 		},
 	}
 	for _, tt := range tests {
@@ -145,15 +144,11 @@ func TestUpdateSpecVersion(t *testing.T) {
 			assets := &buildassets.BuildAssets{
 				Version: tt.args.newGoVersion,
 			}
-			gotVersion, gotRelease, err := updateSpecVersion(
+			gotVersion, gotRelease := updateSpecVersion(
 				assets,
 				goversion.New(tt.args.oldVersion),
 				tt.args.oldRelease,
 			)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("updateSpecVersion() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
 			if gotVersion != tt.wantVersion {
 				t.Errorf("updateSpecVersion() gotVersion = %v, want %v", gotVersion, tt.wantVersion)
 			}

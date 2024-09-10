@@ -214,12 +214,43 @@ const (
 	cgManifestFilepath       = "cgmanifest.json"
 )
 
-var (
-	specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename +)(.+)`)
-	specFileRevisionRegex   = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
-	specFileVersionRegex    = regexp.MustCompile(`(Version: +)(.+)`)
-	specFileReleaseRegex    = regexp.MustCompile(`(Release: +)(.+)(%\{\?dist\})`)
-)
+var specFileVersionRegex = regexp.MustCompile(`(Version: +)(.+)`)
+
+func extractVersionFromSpecFile(content string) (*goversion.GoVersion, error) {
+	matches := specFileVersionRegex.FindStringSubmatch(content)
+	if matches == nil {
+		return nil, fmt.Errorf("no Version declaration found in spec content")
+	}
+	return goversion.New(matches[2]), nil
+}
+
+func updateVersionInSpecFile(content string, newVersion string) string {
+	return specFileVersionRegex.ReplaceAllString(
+		content,
+		"${1}"+escapeRegexReplacementValue(newVersion))
+}
+
+var specFileReleaseRegex = regexp.MustCompile(`(Release: +)(.+)(%\{\?dist\})`)
+
+func extractReleaseFromSpecFile(content string) (int, error) {
+	matches := specFileReleaseRegex.FindStringSubmatch(content)
+	if matches == nil {
+		return 0, fmt.Errorf("no Release declaration found in spec content")
+	}
+	releaseInt, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse old Release number: %v", err)
+	}
+	return releaseInt, nil
+}
+
+func updateReleaseInSpecFile(content string, newRelease string) string {
+	return specFileReleaseRegex.ReplaceAllString(
+		content,
+		"${1}"+escapeRegexReplacementValue(newRelease)+"${3}")
+}
+
+var specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename +)(.+)`)
 
 func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
 	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
@@ -232,27 +263,25 @@ func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
 }
 
 func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, error) {
-	if strings.Contains(newArchiveName, "$") {
-		return "", fmt.Errorf("new archive name %q contains unexpected $", newArchiveName)
-	}
 	if !specFileGoFilenameRegex.MatchString(specContent) {
 		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
 	}
-
-	updatedContent := specFileGoFilenameRegex.ReplaceAllString(specContent, "${1}"+newArchiveName)
-	return updatedContent, nil
+	return specFileGoFilenameRegex.ReplaceAllString(
+		specContent,
+		"${1}"+escapeRegexReplacementValue(newArchiveName),
+	), nil
 }
 
+var specFileRevisionRegex = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
+
 func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string, error) {
-	if strings.Contains(newRevisionVersion, "$") {
-		return "", fmt.Errorf("new revision version %q contains unexpected $", newRevisionVersion)
-	}
 	if !specFileRevisionRegex.MatchString(specContent) {
 		return "", fmt.Errorf("no Go revision version declaration found in spec content")
 	}
-
-	updatedContent := specFileRevisionRegex.ReplaceAllString(specContent, "${1}"+newRevisionVersion)
-	return updatedContent, nil
+	return specFileRevisionRegex.ReplaceAllString(
+		specContent,
+		"${1}"+escapeRegexReplacementValue(newRevisionVersion),
+	), nil
 }
 
 func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, specFileContent string) (string, error) {
@@ -260,7 +289,20 @@ func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, sp
 		return "", fmt.Errorf("provided spec file content is empty")
 	}
 
-	specFileContent, err := updateGoArchiveNameInSpecFile(specFileContent, path.Base(assets.GoSrcURL))
+	// Gather the old spec file data we need to make the updated one.
+	oldVersion, err := extractVersionFromSpecFile(specFileContent)
+	if err != nil {
+		return "", err
+	}
+	oldRelease, err := extractReleaseFromSpecFile(specFileContent)
+	if err != nil {
+		return "", err
+	}
+
+	newVersion, newRelease := updateSpecVersion(assets, oldVersion, oldRelease)
+
+	// Perform updates with a series of replacements.
+	specFileContent, err = updateGoArchiveNameInSpecFile(specFileContent, path.Base(assets.GoSrcURL))
 	if err != nil {
 		return "", fmt.Errorf("error updating Go archive name in spec file: %w", err)
 	}
@@ -268,28 +310,8 @@ func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, sp
 	if err != nil {
 		return "", fmt.Errorf("error updating Go revision in spec file: %w", err)
 	}
-
-	var oldVersion *goversion.GoVersion
-	if matches := specFileVersionRegex.FindStringSubmatch(specFileContent); matches == nil {
-		return "", fmt.Errorf("no Version declaration found in spec content")
-	} else {
-		oldVersion = goversion.New(matches[2])
-	}
-
-	var oldRelease string
-	if matches := specFileReleaseRegex.FindStringSubmatch(specFileContent); matches == nil {
-		return "", fmt.Errorf("no Release declaration found in spec content")
-	} else {
-		oldRelease = matches[2]
-	}
-
-	newVersion, newRelease, err := updateSpecVersion(assets, oldVersion, oldRelease)
-	if err != nil {
-		return "", err
-	}
-
-	specFileContent = specFileVersionRegex.ReplaceAllString(specFileContent, "${1}"+newVersion)
-	specFileContent = specFileReleaseRegex.ReplaceAllString(specFileContent, "${1}"+newRelease+"${3}")
+	specFileContent = updateVersionInSpecFile(specFileContent, newVersion)
+	specFileContent = updateReleaseInSpecFile(specFileContent, newRelease)
 	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets)
 
 	return specFileContent, nil
@@ -403,17 +425,7 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	return buf.Bytes(), nil
 }
 
-func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.GoVersion, oldRelease string) (version, release string, err error) {
-	oldReleaseInt, err := strconv.Atoi(oldRelease)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to parse old Release number: %w", err)
-	}
-
-	newVersion := assets.GoVersion().MajorMinorPatch()
-	if strings.Contains(newVersion, "$") {
-		return "", "", fmt.Errorf("new version %q contains unexpected $", newVersion)
-	}
-
+func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.GoVersion, oldRelease int) (version, release string) {
 	// Decide on the new Azure Linux golang package release number.
 	//
 	// We don't use assets.GoVersion().Revision because Azure Linux may have incremented the
@@ -425,8 +437,18 @@ func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.Go
 	} else {
 		// When the upstream Go version didn't change, increment the release number. This means
 		// there has been a patch specific to Microsoft Go.
-		newRelease = oldReleaseInt + 1
+		newRelease = oldRelease + 1
 	}
 
-	return newVersion, strconv.Itoa(newRelease), nil
+	return assets.GoVersion().MajorMinorPatch(), strconv.Itoa(newRelease)
+}
+
+// escapeRegexReplacementValue returns s where all "$" signs are replaced with with "$$" for the
+// purposes of passing the result to ReplaceAllString. Use this to make sure a replacement value
+// doesn't get interpreted as part of a regex replacement pattern in [Regexp.Expand].
+//
+// As of writing, we don't expect "$" in the replacement values. However, it's easy to handle, and
+// it's cleaner than rejecting "$" and propagating an error.
+func escapeRegexReplacementValue(s string) string {
+	return strings.ReplaceAll(s, "$", "$$")
 }
