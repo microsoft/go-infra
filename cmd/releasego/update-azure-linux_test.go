@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/goldentest"
+	"github.com/microsoft/go-infra/goversion"
 )
 
 var assetsJsonPath = filepath.Join("testdata", "update-azure-linux", "assets.json")
@@ -97,4 +99,67 @@ func TestUpdateCGManifestFileContent(t *testing.T) {
 		t, "TestUpdateCGManifestFileContent ",
 		filepath.Join("testdata", "update-azure-linux", "updated_cgmanifest.golden.json"),
 		string(updatedCgManifestFile))
+}
+
+func TestUpdateSpecVersion(t *testing.T) {
+	type args struct {
+		newGoVersion string
+		oldVersion   string
+		oldRelease   string
+	}
+	tests := []struct {
+		name        string
+		args        args
+		wantVersion string
+		wantRelease string
+		wantErr     bool
+	}{
+		{
+			"patch",
+			args{"1.22.4-1", "1.22.3", "1"},
+			"1.22.4", "1", false,
+		},
+		{
+			"patch-modified-package",
+			args{"1.22.4-1", "1.22.3", "2"},
+			"1.22.4", "1", false,
+		},
+		{
+			"patch-msft-go-release",
+			args{"1.22.3-2", "1.22.3", "1"},
+			"1.22.3", "2", false,
+		},
+		{
+			"patch-msft-go-release-modified",
+			args{"1.22.3-2", "1.22.3", "4"},
+			"1.22.3", "5", false,
+		},
+		{
+			"go-major",
+			args{"1.23.0-1", "1.22.8", "1"},
+			"1.23.0", "1", false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assets := &buildassets.BuildAssets{
+				Version: tt.args.newGoVersion,
+			}
+			gotVersion, gotRelease, err := updateSpecVersion(
+				assets,
+				goversion.New(tt.args.oldVersion),
+				tt.args.oldRelease,
+			)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("updateSpecVersion() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if gotVersion != tt.wantVersion {
+				t.Errorf("updateSpecVersion() gotVersion = %v, want %v", gotVersion, tt.wantVersion)
+			}
+			if gotRelease != tt.wantRelease {
+				t.Errorf("updateSpecVersion() gotRelease = %v, want %v", gotRelease, tt.wantRelease)
+			}
+		})
+	}
 }
