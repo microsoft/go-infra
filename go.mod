@@ -3,7 +3,7 @@
 
 module github.com/microsoft/go-infra
 
-go 1.18
+go 1.22.0
 
 require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2
@@ -11,7 +11,7 @@ require (
 	github.com/google/go-github v17.0.0+incompatible
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	golang.org/x/crypto v0.27.0
-	golang.org/x/mod v0.20.0
+	golang.org/x/mod v0.21.0
 	golang.org/x/oauth2 v0.23.0
 	golang.org/x/text v0.18.0
 	golang.org/x/tools v0.24.0
