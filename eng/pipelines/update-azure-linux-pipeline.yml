@@ -54,8 +54,8 @@ extends:
     sdl:
       sourceAnalysisPool:
         name: NetCore1ESPool-Svc-Internal
-        image: 1es-ubuntu-2004
-        os: linux
+        image: 1es-windows-2022
+        os: windows
       suppression:
         suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
       tsa:
