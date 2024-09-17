@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
@@ -27,9 +27,12 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "update-azure-linux",
-		Summary: "Experimental: Update the Go spec files for Azure Linux and print the result without pushing.",
+		Summary: "Create a GitHub PR that updates the Go spec files for Azure Linux.",
 		Description: `
-See https://github.com/microsoft/go-lab/issues/79
+Updates the golang package spec file in [upstream]/[repo] to build the version of Go specified in
+the provided build asset JSON file. If [upstream] and [owner] differ, the PR will be created in a
+fork of the Azure Linux repo under [owner]. If [owner] user doesn't already have an Azure Linux
+fork, it is created.
 `,
 		Handle: updateAzureLinux,
 	})
@@ -38,14 +41,16 @@ See https://github.com/microsoft/go-lab/issues/79
 func updateAzureLinux(p subcmd.ParseFunc) error {
 	var baseBranch string
 	var buildAssetJSON string
+	var upstream string
 	var owner string
 	var repo string
 	var updateBranch string
 
 	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
-	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
-	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
+	flag.StringVar(&upstream, "upstream", "microsoft", "The owner of the Azure Linux repository.")
+	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository to create the dev branch in.")
+	flag.StringVar(&repo, "repo", "azurelinux", "The upstream repository name to update.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 
 	pat := githubutil.BindPATFlag()
