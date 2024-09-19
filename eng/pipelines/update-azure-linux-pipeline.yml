@@ -19,13 +19,18 @@ parameters:
     displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
     type: string
 
+  - name: upstream
+    displayName: 'Azure Linux repository owner'
+    type: string
+    default: 'microsoft'
+
   - name: owner
-    displayName: 'GitHub repository owner'
+    displayName: 'Dev branch repository owner'
     type: string
     default: 'microsoft'
 
   - name: repo
-    displayName: 'GitHub repository name'
+    displayName: 'Azure Linux GitHub repository name'
     type: string
     default: 'azurelinux'
 
@@ -85,6 +90,7 @@ extends:
                       releasego update-azure-linux \
                         -pat '$(GitHubPAT)' \
                         -build-asset-json $(buildAssetJsonFile) \
+                        -upstream ${{ parameters.upstream }} \
                         -owner ${{ parameters.owner }} \
                         -repo ${{ parameters.repo }} \
                         -update-branch ${{ parameters.updateBranch }}
