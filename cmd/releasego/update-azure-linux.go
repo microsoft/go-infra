@@ -130,12 +130,12 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		// working on, making sure our PR won't revert an unfortunately-timed upstream merge.
 		upstreamRef, _, err := client.Git.GetRef(ctx, upstream, repo, baseBranch)
 		if err != nil {
-			return fmt.Errorf("failed to get ref %v: %v", baseBranch, err)
+			return fmt.Errorf("failed to get ref %v: %w", baseBranch, err)
 		}
 		upstreamCommitSHA := upstreamRef.Object.GetSHA()
 		upstreamCommit, _, err := client.Git.GetCommit(ctx, upstream, repo, upstreamCommitSHA)
 		if err != nil {
-			return fmt.Errorf("failed to get commit %v: %v", upstreamCommitSHA, err)
+			return fmt.Errorf("failed to get commit %v: %w", upstreamCommitSHA, err)
 		}
 
 		golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, golangSpecFilepath)
@@ -217,7 +217,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			Object: &github.GitObject{SHA: createCommit.SHA},
 		}
 		if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
-			return fmt.Errorf("failed to create ref: %v", err)
+			return fmt.Errorf("failed to create ref: %w", err)
 		}
 		// Now that we've created the ref, we can't retry: the name is taken.
 		// This retry loop is over.
@@ -241,7 +241,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			Draft: github.Bool(true),
 		})
 		if err != nil {
-			return fmt.Errorf("failed to create PR: %v", err)
+			return fmt.Errorf("failed to create PR: %w", err)
 		}
 		// We can't create the PR again (one per ref), so this retry loop is over.
 		return nil
