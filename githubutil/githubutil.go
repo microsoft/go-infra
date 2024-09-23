@@ -17,8 +17,13 @@ import (
 	"golang.org/x/oauth2"
 )
 
-// ErrNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
-var ErrNotExists = errors.New("file does not exist in the given repository and branch")
+// Types of error that may be returned from the GitHub API that the caller may want to handle.
+var (
+	// ErrFileNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
+	ErrFileNotExists = errors.New("file does not exist in the given repository and branch")
+	// ErrRepositoryNotExists indicates that the requested repository does not exist.
+	ErrRepositoryNotExists = errors.New("repository does not exist")
+)
 
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
@@ -144,7 +149,7 @@ func DownloadFile(ctx context.Context, client *github.Client, owner, repo, ref, 
 		return err
 	}); err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, ErrNotExists
+			return nil, ErrFileNotExists
 		}
 		return nil, err
 	}
@@ -178,12 +183,8 @@ func FullyCreateFork(ctx context.Context, client *github.Client, upstreamOwner, 
 	}
 
 	// Make sure the fork is done being created by getting the full info.
-	if err := Retry(func() error {
-		log.Printf("Checking for full fork information...\n")
-		var err error
-		fork, _, err = client.Repositories.Get(ctx, *fork.Owner.Login, *fork.Name)
-		return err
-	}); err != nil {
+	fork, err := FetchRepository(ctx, client, *fork.Owner.Login, *fork.Name)
+	if err != nil {
 		return nil, err
 	}
 
@@ -211,10 +212,9 @@ func PATScopes(ctx context.Context, client *github.Client) ([]string, error) {
 	return scopes, nil
 }
 
-// FetchRepositoryOrNil fetches a repository from GitHub, or returns nil if it doesn't exist.
-// Returning nil simplifies error handling for the caller if it's expected that the repository may
-// not exist. Retries the request if necessary.
-func FetchRepositoryOrNil(ctx context.Context, client *github.Client, owner, repo string) (*github.Repository, error) {
+// FetchRepository fetches a repository from GitHub or returns an error. If the GitHub API error
+// matches one of the errors defined in this package, it is wrapped. Retries if necessary.
+func FetchRepository(ctx context.Context, client *github.Client, owner, repo string) (*github.Repository, error) {
 	var repository *github.Repository
 
 	if err := Retry(func() error {
@@ -228,8 +228,7 @@ func FetchRepositoryOrNil(ctx context.Context, client *github.Client, owner, rep
 	}); err != nil {
 		var errResponse *github.ErrorResponse
 		if errors.As(err, &errResponse) && errResponse.Response.StatusCode == http.StatusNotFound {
-			log.Printf("Repository %v/%v not found.\n", owner, repo)
-			return nil, nil
+			return nil, fmt.Errorf("%w: %v/%v", ErrRepositoryNotExists, owner, repo)
 		}
 		return nil, err
 	}

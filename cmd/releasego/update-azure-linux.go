@@ -98,14 +98,16 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return fmt.Errorf("the PAT must have 'workflow' scope, but not found in list: %v", patScopes)
 		}
 
-		// Check if fork already exists, or create it.
-		forkRepo, err := githubutil.FetchRepositoryOrNil(ctx, client, owner, repo)
+		// Get full details about the fork.
+		forkRepo, err := githubutil.FetchRepository(ctx, client, owner, repo)
 		if err != nil {
-			return err
-		}
-		if forkRepo == nil {
-			forkRepo, err = githubutil.FullyCreateFork(ctx, client, upstream, repo)
-			if err != nil {
+			if errors.Is(err, githubutil.ErrRepositoryNotExists) {
+				// Fork doesn't exist. Try to create it and get the full details.
+				forkRepo, err = githubutil.FullyCreateFork(ctx, client, upstream, repo)
+				if err != nil {
+					return err
+				}
+			} else {
 				return err
 			}
 		}
