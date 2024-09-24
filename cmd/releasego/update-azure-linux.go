@@ -312,19 +312,23 @@ func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, sp
 	}
 	specFileContent = updateVersionInSpecFile(specFileContent, newVersion)
 	specFileContent = updateReleaseInSpecFile(specFileContent, newRelease)
-	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets)
+	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets, newVersion, newRelease)
 
 	return specFileContent, nil
 }
 
-func addChangelogToSpecFile(specFile string, changelogDate time.Time, assets *buildassets.BuildAssets) string {
-	template := `%%changelog
-* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s
+func addChangelogToSpecFile(specFile string, changelogDate time.Time, assets *buildassets.BuildAssets, newVersion, newRelease string) string {
+	const template = `%%changelog
+* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s-%s
 - Bump version to %s
 `
 	formattedTime := changelogDate.Format("Mon Jan 02 2006")
 
-	changelog := fmt.Sprintf(template, formattedTime, assets.GoVersion().Full(), assets.GoVersion().Full())
+	changelog := fmt.Sprintf(
+		template,
+		formattedTime,
+		newVersion, newRelease,
+		assets.GoVersion().Full())
 
 	return strings.Replace(specFile, "%changelog", changelog, 1)
 }
