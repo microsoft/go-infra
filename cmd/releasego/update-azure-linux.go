@@ -52,6 +52,11 @@ modified any GitHub workflows.
 	})
 }
 
+const (
+	AzureLinuxBuddyBuildURL           = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2190"
+	AzureLinuxSourceTarballPublishURL = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2284"
+)
+
 func updateAzureLinux(p subcmd.ParseFunc) error {
 	var (
 		buildAssetJSON string
@@ -301,38 +306,38 @@ func generatePRTitleFromAssets(assets *buildassets.BuildAssets, security bool) s
 }
 
 func GeneratePRDescription(assets *buildassets.BuildAssets, security bool, notify string, prNumber int) string {
-	// Use a builder for readability. Use fmt.Fprintf in situations when it would be hard to read
-	// if we only used the builder's APIs, e.g. when there's unusual surrounding punctuation.
-	// Ignore Fprintf errors because they're acting upon a simple builder.
+	// Use calls to fmt.Fprint* family for readability with consistency.
+	// Ignore errors because they're acting upon a simple builder.
 	var b strings.Builder
-	b.WriteString("Hi! 👋 I'm the Microsoft Go team's bot. This is an automated pull request I generated to bump the Go version to ")
+	fmt.Fprint(&b, "Hi! 👋 I'm the Microsoft Go team's bot. This is an automated pull request I generated to bump the Go version to ")
 	fmt.Fprintf(&b, "[%s](%s).\n\n", assets.GoVersion().Full(), githubReleaseURL(assets))
 
 	if security {
-		b.WriteString("**This update contains security fixes.**\n\n")
+		fmt.Fprint(&b, "**This update contains security fixes.**\n\n")
 	}
 
-	b.WriteString("I'm not able to run the Azure Linux pipelines yet, so the Microsoft Go release runner will need to finalize this PR.")
+	fmt.Fprint(&b, "I'm not able to run the Azure Linux pipelines yet, so the Microsoft Go release runner will need to finalize this PR.")
 	if notify != "" && notify != "ghost" {
 		fmt.Fprintf(&b, " @%s", notify)
 	}
-	b.WriteString("\n\n")
-	b.WriteString("Finalization steps:\n")
+	fmt.Fprint(&b, "\n\n")
+	fmt.Fprint(&b, "Finalization steps:\n")
 
-	b.WriteString("- Trigger [Source Tarball Publishing](https://dev.azure.com/mariner-org/mariner/_build?definitionId=2284) with ")
+	fmt.Fprintf(&b, "- Trigger [Source Tarball Publishing](%s) with ", AzureLinuxSourceTarballPublishURL)
 	fmt.Fprintf(&b, "Full Name `%s` and URL `%s`\n", path.Base(assets.GoSrcURL), githubReleaseDownloadURL(assets))
 
 	pullField := "PR-XXXX" // Understandable placeholder in case the body update fails.
 	if prNumber != 0 {
 		pullField = fmt.Sprintf("PR-%v", prNumber)
 	}
-	b.WriteString("- Trigger [the Buddy Build](https://dev.azure.com/mariner-org/mariner/_build?definitionId=2190) with ")
-	fmt.Fprintf(&b, "`%s` and core spec `golang`", pullField)
-	b.WriteString(" then post a PR comment with the URL of the triggered build.\n")
 
-	b.WriteString("- Mark this draft PR as ready for review.\n")
+	fmt.Fprintf(&b, "- Trigger [the Buddy Build](%s) with ", AzureLinuxBuddyBuildURL)
+	fmt.Fprintf(&b, "`%s` and core spec `golang` ", pullField)
+	fmt.Fprint(&b, "then post a PR comment with the URL of the triggered build.\n")
 
-	b.WriteString("\nThanks!\n")
+	fmt.Fprint(&b, "- Mark this draft PR as ready for review.\n")
+
+	fmt.Fprint(&b, "\nThanks!\n")
 	return b.String()
 }
 
