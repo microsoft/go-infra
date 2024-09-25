@@ -34,7 +34,7 @@ func handleCheckLimits(p subcmd.ParseFunc) error {
 	}
 
 	return githubutil.Retry(func() error {
-		limits, _, err := client.RateLimits(ctx)
+		limits, _, err := client.RateLimit.Get(ctx)
 		if err != nil {
 			return err
 		}

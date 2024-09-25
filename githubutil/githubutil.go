@@ -13,12 +13,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v65/github"
 	"golang.org/x/oauth2"
 )
 
-// ErrNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
-var ErrNotExists = errors.New("file does not exist in the given repository and branch")
+// Types of error that may be returned from the GitHub API that the caller may want to handle.
+var (
+	// ErrFileNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
+	ErrFileNotExists = errors.New("file does not exist in the given repository and branch")
+	// ErrRepositoryNotExists indicates that the requested repository does not exist.
+	ErrRepositoryNotExists = errors.New("repository does not exist")
+)
 
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
@@ -132,19 +137,19 @@ func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch,
 }
 
 // DownloadFile downloads a file from a given repository.
-func DownloadFile(ctx context.Context, client *github.Client, owner, repo, branch, path string) ([]byte, error) {
+func DownloadFile(ctx context.Context, client *github.Client, owner, repo, ref, path string) ([]byte, error) {
 	var fileContent *github.RepositoryContent
 	var resp *github.Response
 	var err error
 
 	if err = Retry(func() error {
 		fileContent, _, resp, err = client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{
-			Ref: branch,
+			Ref: ref,
 		})
 		return err
 	}); err != nil {
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, ErrNotExists
+			return nil, ErrFileNotExists
 		}
 		return nil, err
 	}
@@ -156,3 +161,86 @@ func DownloadFile(ctx context.Context, client *github.Client, owner, repo, branc
 
 	return []byte(content), nil
 }
+
+// FullyCreateFork creates a fork of the given repository under the PAT owner's account, waits for
+// the fork to be fully created, and returns its full information.
+func FullyCreateFork(ctx context.Context, client *github.Client, upstreamOwner, repo string) (*github.Repository, error) {
+	var fork *github.Repository
+
+	if err := Retry(func() error {
+		log.Printf("Creating fork of %v/%v...\n", upstreamOwner, repo)
+		var err error
+		fork, _, err = client.Repositories.CreateFork(ctx, upstreamOwner, repo, &github.RepositoryCreateForkOptions{
+			DefaultBranchOnly: true,
+		})
+		var acceptedError *github.AcceptedError
+		if errors.As(err, &acceptedError) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		return nil, err
+	}
+
+	// Make sure the fork is done being created by getting the full info.
+	fork, err := FetchRepository(ctx, client, *fork.Owner.Login, *fork.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return fork, nil
+}
+
+// PATScopes gets the scopes of the client's PAT by reading a simple API call's response headers.
+func PATScopes(ctx context.Context, client *github.Client) ([]string, error) {
+	var scopes []string
+
+	if err := Retry(func() error {
+		log.Printf("Fetching PAT scopes...\n")
+		_, resp, err := client.Meta.Get(ctx)
+		if err != nil {
+			return err
+		}
+		for _, s := range strings.Split(resp.Header.Get("X-OAuth-Scopes"), ",") {
+			scopes = append(scopes, strings.TrimSpace(s))
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return scopes, nil
+}
+
+// FetchRepository fetches a repository from GitHub or returns an error. If the GitHub API error
+// matches one of the errors defined in this package, it is wrapped. Retries if necessary.
+func FetchRepository(ctx context.Context, client *github.Client, owner, repo string) (*github.Repository, error) {
+	var repository *github.Repository
+
+	if err := Retry(func() error {
+		log.Printf("Fetching repository %v/%v...\n", owner, repo)
+		r, _, err := client.Repositories.Get(ctx, owner, repo)
+		if err != nil {
+			return err
+		}
+		repository = r
+		return nil
+	}); err != nil {
+		var errResponse *github.ErrorResponse
+		if errors.As(err, &errResponse) && errResponse.Response.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %v/%v", ErrRepositoryNotExists, owner, repo)
+		}
+		return nil, err
+	}
+
+	return repository, nil
+}
+
+// Git tree entry mode constants defined by https://docs.github.com/en/rest/git/trees?apiVersion=2022-11-28#create-a-tree--parameters
+const (
+	TreeModeFile       = "100644"
+	TreeModeExecutable = "100755"
+	TreeModeDir        = "040000"
+	TreeModeSubmodule  = "160000"
+	TreeModeGitlink    = "120000"
+)

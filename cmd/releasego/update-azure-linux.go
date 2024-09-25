@@ -10,13 +10,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/go-github/github"
+	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
@@ -27,9 +29,24 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "update-azure-linux",
-		Summary: "Experimental: Update the Go spec files for Azure Linux and print the result without pushing.",
+		Summary: "Create a GitHub PR that updates the Go spec files for Azure Linux.",
 		Description: `
-See https://github.com/microsoft/go-lab/issues/79
+Updates the golang package spec file in the Azure Linux GitHub repository to build the version of
+Go specified in the provided build asset JSON file. Creates a branch in [owner]/[repo] and submits
+the PR to [upstream]/[repo].
+
+If [owner]/[repo] doesn't exist, tries to create the fork in the account associated with the PAT.
+
+Fork creation assumes [owner] matches the PAT user. If the created fork doesn't match
+[owner]/[repo], the command fails.
+
+If the user already has a fork of the repo with a different name, fork creation may fail. For
+example, if the fork was created before the cbl-mariner repository was renamed to azurelinux, it
+may still have the old name.
+
+Note: the PAT must have "repo" scope, and if using a fork, it must also have "workflow" scope.
+Otherwise, GitHub will return "404" when attempting to update the fork if the upstream repo has
+modified any GitHub workflows.
 `,
 		Handle: updateAzureLinux,
 	})
@@ -38,14 +55,16 @@ See https://github.com/microsoft/go-lab/issues/79
 func updateAzureLinux(p subcmd.ParseFunc) error {
 	var baseBranch string
 	var buildAssetJSON string
+	var upstream string
 	var owner string
 	var repo string
 	var updateBranch string
 
 	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
-	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository.")
-	flag.StringVar(&repo, "repo", "azurelinux", "The repository to update.")
+	flag.StringVar(&upstream, "upstream", "microsoft", "The owner of the Azure Linux repository.")
+	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository to create the dev branch in.")
+	flag.StringVar(&repo, "repo", "azurelinux", "The upstream repository name to update.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 
 	pat := githubutil.BindPATFlag()
@@ -61,6 +80,40 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	// Set custom user agent to help GitHub identify the bot if necessary.
+	client.UserAgent = "microsoft/go-infra update-azure-linux"
+
+	// Check that the PAT has the necessary scopes.
+	patScopes, err := githubutil.PATScopes(ctx, client)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(patScopes, "repo") {
+		return fmt.Errorf("the PAT must have 'repo' scope, but not found in list: %v", patScopes)
+	}
+
+	if upstream != owner {
+		// Submitting PR via fork. Try to make sure it'll work.
+		if !slices.Contains(patScopes, "workflow") {
+			return fmt.Errorf("the PAT must have 'workflow' scope, but not found in list: %v", patScopes)
+		}
+
+		// Get full details about the fork.
+		forkRepo, err := githubutil.FetchRepository(ctx, client, owner, repo)
+		if err != nil {
+			if errors.Is(err, githubutil.ErrRepositoryNotExists) {
+				// Fork doesn't exist. Try to create it and get the full details.
+				forkRepo, err = githubutil.FullyCreateFork(ctx, client, upstream, repo)
+				if err != nil {
+					return err
+				}
+			} else {
+				return err
+			}
+		}
+		log.Printf("Submitting PR via owner's fork: %s\n", forkRepo.GetHTMLURL())
+	}
+
 	assets, err := loadBuildAssets(buildAssetJSON)
 	if err != nil {
 		return err
@@ -70,109 +123,149 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		updateBranch = generateUpdateBranchNameFromAssets(assets)
 	}
 
-	golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSpecFilepath)
-	if err != nil {
-		return err
-	}
-
-	golangSpecFileContent := string(golangSpecFileBytes)
-
-	prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
-	if err != nil {
-		return err
-	}
-
-	golangSpecFileContent, err = updateSpecFile(assets, start, golangSpecFileContent)
-	if err != nil {
-		return err
-	}
-
-	// Validation (as described in previous response)
-	if assets.GoSrcURL == "" || assets.GoSrcSHA256 == "" {
-		return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
-	}
-
-	golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, golangSignaturesFilepath)
-	if err != nil {
-		return err
-	}
-
-	golangSignaturesFileBytes, err = updateSignatureFile(golangSignaturesFileBytes, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
-	if err != nil {
-		return err
-	}
-
-	cgManifestBytes, err := downloadFileFromRepo(ctx, client, owner, repo, baseBranch, cgManifestFilepath)
-	if err != nil {
-		return err
-	}
-
-	cgManifestBytes, err = updateCGManifest(assets, cgManifestBytes)
-	if err != nil {
-		return err
-	}
-
-	ref, _, err := client.Git.GetRef(ctx, owner, repo, baseBranch)
-	if err != nil {
-		return fmt.Errorf("failed to get ref: %v", err)
-	}
-
-	newRef := &github.Reference{
-		Ref:    github.String(updateBranch),
-		Object: &github.GitObject{SHA: ref.Object.SHA},
-	}
-
-	if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
-		return fmt.Errorf("Failed to create ref: %v", err)
-	}
-
-	updatedFiles := map[string][]byte{
-		golangSpecFilepath:       []byte(golangSpecFileContent),
-		golangSignaturesFilepath: golangSignaturesFileBytes,
-		cgManifestFilepath:       cgManifestBytes,
-	}
-
-	for filePath, newContent := range updatedFiles {
-		// Get the file to update
-		file, _, _, err := client.Repositories.GetContents(ctx, owner, repo, filePath, &github.RepositoryContentGetOptions{Ref: updateBranch})
+	// If anything fails here, retry from the beginning to use a fresh base commit.
+	// Some individual steps also have their own retries; this is fine.
+	if err := githubutil.Retry(func() error {
+		// Find details about the state of the upstream base branch. This pins the commit that we're
+		// working on, making sure our PR won't revert an unfortunately-timed upstream merge.
+		upstreamRef, _, err := client.Git.GetRef(ctx, upstream, repo, baseBranch)
 		if err != nil {
-			return fmt.Errorf("Failed to get file %q: %v", filePath, err)
+			return fmt.Errorf("failed to get ref %v: %w", baseBranch, err)
+		}
+		upstreamCommitSHA := upstreamRef.Object.GetSHA()
+		upstreamCommit, _, err := client.Git.GetCommit(ctx, upstream, repo, upstreamCommitSHA)
+		if err != nil {
+			return fmt.Errorf("failed to get commit %v: %w", upstreamCommitSHA, err)
 		}
 
-		// Update the file
-		_, _, err = client.Repositories.UpdateFile(ctx, owner, repo, filePath, &github.RepositoryContentFileOptions{
+		golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, golangSpecFilepath)
+		if err != nil {
+			return err
+		}
+
+		golangSpecFileContent := string(golangSpecFileBytes)
+
+		prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
+		if err != nil {
+			return err
+		}
+
+		golangSpecFileContent, err = updateSpecFile(assets, start, golangSpecFileContent)
+		if err != nil {
+			return err
+		}
+
+		// Validation (as described in previous response)
+		if assets.GoSrcURL == "" || assets.GoSrcSHA256 == "" {
+			return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
+		}
+
+		golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, golangSignaturesFilepath)
+		if err != nil {
+			return err
+		}
+
+		golangSignaturesFileBytes, err = updateSignatureFile(golangSignaturesFileBytes, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
+		if err != nil {
+			return err
+		}
+
+		cgManifestBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, cgManifestFilepath)
+		if err != nil {
+			return err
+		}
+
+		cgManifestBytes, err = updateCGManifest(assets, cgManifestBytes)
+		if err != nil {
+			return err
+		}
+
+		tree := []*github.TreeEntry{
+			{
+				Path:    github.String(golangSpecFilepath),
+				Content: &golangSpecFileContent,
+				Mode:    github.String(githubutil.TreeModeFile),
+			},
+			{
+				Path:    github.String(golangSignaturesFilepath),
+				Content: github.String(string(golangSignaturesFileBytes)),
+				Mode:    github.String(githubutil.TreeModeFile),
+			},
+			{
+				Path:    github.String(cgManifestFilepath),
+				Content: github.String(string(cgManifestBytes)),
+				Mode:    github.String(githubutil.TreeModeFile),
+			},
+		}
+
+		createTree, _, err := client.Git.CreateTree(ctx, owner, repo, upstreamCommit.Tree.GetSHA(), tree)
+		if err != nil {
+			return err
+		}
+
+		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, &github.Commit{
 			Message: github.String(generatePRTitleFromAssets(assets)),
-			Content: newContent,
-			SHA:     file.SHA,
-			Branch:  github.String(updateBranch),
+			Parents: []*github.Commit{upstreamCommit},
+			Tree:    createTree,
+		}, &github.CreateCommitOptions{})
+		if err != nil {
+			return err
+		}
+
+		newRef := &github.Reference{
+			Ref:    github.String(updateBranch),
+			Object: &github.GitObject{SHA: createCommit.SHA},
+		}
+		if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
+			return fmt.Errorf("failed to create ref: %w", err)
+		}
+		// Now that we've created the ref, we can't retry: the name is taken.
+		// This retry loop is over.
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	var pr *github.PullRequest
+
+	if err := githubutil.Retry(func() error {
+		prHead := updateBranch
+		if owner != upstream {
+			prHead = owner + ":" + updateBranch
+		}
+		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, &github.NewPullRequest{
+			Title: github.String(generatePRTitleFromAssets(assets)),
+			Head:  &prHead,
+			Base:  github.String(baseBranch),
+			Body:  github.String(GeneratePRDescription(assets)),
+			Draft: github.Bool(true),
 		})
 		if err != nil {
-			return fmt.Errorf("failed to update file %q: %v", filePath, err)
+			return fmt.Errorf("failed to create PR: %w", err)
 		}
-	}
-
-	pr, _, err := client.PullRequests.Create(ctx, owner, repo, &github.NewPullRequest{
-		Title: github.String(generatePRTitleFromAssets(assets)),
-		Head:  github.String(updateBranch),
-		Base:  github.String(baseBranch),
-		Body:  github.String(GeneratePRDescription(assets)),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create PR: %v", err)
-	}
-
-	// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
-	// While GitHub provides a dedicated PullRequests API, it doesn't currently offer a method for adding labels directly to pull requests.
-	//
-	// Therefore, we use the Issues.AddLabelsToIssue method, passing the pull request's number (which is equivalent to its issue number)
-	// to apply the labels.
-	//
-	// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
-	if _, _, err := client.Issues.AddLabelsToIssue(ctx, owner, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"}); err != nil {
-		return fmt.Errorf("error adding label to pull request: %w\n", err)
+		// We can't create the PR again (one per ref), so this retry loop is over.
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
+
+	if err := githubutil.Retry(func() error {
+		// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
+		// While GitHub provides a dedicated PullRequests API, it doesn't currently offer a method for adding labels directly to pull requests.
+		//
+		// Therefore, we use the Issues.AddLabelsToIssue method, passing the pull request's number (which is equivalent to its issue number)
+		// to apply the labels.
+		//
+		// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
+		_, _, err := client.Issues.AddLabelsToIssue(ctx, upstream, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"})
+		return err
+	}); err != nil {
+		return fmt.Errorf("error adding label to pull request: %w\n", err)
+	}
+
+	fmt.Printf("Added labels to pull request.\n")
 
 	return nil
 }
@@ -200,8 +293,8 @@ func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 	return assets, nil
 }
 
-func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, repo, branch, filePath string) ([]byte, error) {
-	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, branch, filePath)
+func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, repo, ref, filePath string) ([]byte, error) {
+	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, ref, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download file %q: %w", filePath, err)
 	}
