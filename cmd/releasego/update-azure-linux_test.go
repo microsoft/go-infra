@@ -158,3 +158,36 @@ func TestUpdateSpecVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestPRBody(t *testing.T) {
+	assets, err := loadBuildAssets(assetsJsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type args struct {
+		security bool
+		notify   string
+		prNumber int
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{"essential", args{false, "a-go-developer", 0}},
+		{"security", args{true, "a-go-developer", 0}},
+		{"no-dev", args{false, "", 0}},
+		{"pr-number", args{false, "a-go-developer", 1234}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generatePRTitleFromAssets(assets, tt.args.security)
+			got += "\n\n---\n\n"
+			got += GeneratePRDescription(assets, tt.args.security, tt.args.notify, tt.args.prNumber)
+			goldentest.Check(
+				t, "go test ./cmd/releasego -run "+t.Name(),
+				filepath.Join("testdata", "update-azure-linux", "pr", "pr-description-"+tt.name+".golden.md"),
+				got)
+		})
+	}
+}

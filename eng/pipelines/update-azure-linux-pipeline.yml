@@ -39,6 +39,23 @@ parameters:
     type: string
     default: nil
 
+  - name: notify
+    displayName: >
+      A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
+      include '@' below. 'ghost' notifies nobody.
+    type: string
+    default: ghost
+
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
+
 trigger: none
 pr: none
 
@@ -70,6 +87,10 @@ extends:
     stages:
       - stage: Release
         jobs:
+          # Validation for complex inputs.
+          - ${{ if not(in(parameters.isSecurityRelease, 'True', 'False')) }}:
+            - 'Cancelled run. Please pick an option to indicate whether or not this is a security release.': error
+
           - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
               steps:
@@ -93,6 +114,8 @@ extends:
                         -upstream ${{ parameters.upstream }} \
                         -owner ${{ parameters.owner }} \
                         -repo ${{ parameters.repo }} \
-                        -update-branch ${{ parameters.updateBranch }}
+                        -update-branch ${{ parameters.updateBranch }} \
+                        -notify ${{ parameters.notify }} \
+                        -security=${{ parameters.isSecurityRelease }}
                     displayName: Create Pull Request to Update Azure Linux Specfiles
 

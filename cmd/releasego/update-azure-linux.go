@@ -52,20 +52,30 @@ modified any GitHub workflows.
 	})
 }
 
-func updateAzureLinux(p subcmd.ParseFunc) error {
-	var baseBranch string
-	var buildAssetJSON string
-	var upstream string
-	var owner string
-	var repo string
-	var updateBranch string
+const (
+	AzureLinuxBuddyBuildURL           = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2190"
+	AzureLinuxSourceTarballPublishURL = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2284"
+)
 
-	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
+func updateAzureLinux(p subcmd.ParseFunc) error {
+	var (
+		buildAssetJSON string
+		upstream       string
+		owner          string
+		repo           string
+		baseBranch     string
+		updateBranch   string
+		notify         string
+		security       bool
+	)
 	flag.StringVar(&buildAssetJSON, "build-asset-json", "assets.json", "The path of a build asset JSON file describing the Go build to update to.")
 	flag.StringVar(&upstream, "upstream", "microsoft", "The owner of the Azure Linux repository.")
 	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository to create the dev branch in.")
 	flag.StringVar(&repo, "repo", "azurelinux", "The upstream repository name to update.")
+	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
+	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
+	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
 	pat := githubutil.BindPATFlag()
 
@@ -204,7 +214,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		}
 
 		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, &github.Commit{
-			Message: github.String(generatePRTitleFromAssets(assets)),
+			Message: github.String(generatePRTitleFromAssets(assets, security)),
 			Parents: []*github.Commit{upstreamCommit},
 			Tree:    createTree,
 		}, &github.CreateCommitOptions{})
@@ -234,10 +244,11 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			prHead = owner + ":" + updateBranch
 		}
 		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, &github.NewPullRequest{
-			Title: github.String(generatePRTitleFromAssets(assets)),
+			Title: github.String(generatePRTitleFromAssets(assets, security)),
 			Head:  &prHead,
 			Base:  github.String(baseBranch),
-			Body:  github.String(GeneratePRDescription(assets)),
+			// We don't know the PR number yet, so pass 0 to use a placeholder.
+			Body:  github.String(GeneratePRDescription(assets, security, notify, 0)),
 			Draft: github.Bool(true),
 		})
 		if err != nil {
@@ -247,6 +258,16 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	// Update the PR description with the PR number.
+	if err := githubutil.Retry(func() error {
+		_, _, err := client.PullRequests.Edit(ctx, upstream, repo, pr.GetNumber(), &github.PullRequest{
+			Body: github.String(GeneratePRDescription(assets, security, notify, pr.GetNumber())),
+		})
+		return err
+	}); err != nil {
+		return fmt.Errorf("failed to update pull request description: %w\n", err)
 	}
 
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
@@ -274,13 +295,50 @@ func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string 
 	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
 }
 
-func generatePRTitleFromAssets(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf("Bump Go Version to %s", assets.GoVersion().Full())
+func generatePRTitleFromAssets(assets *buildassets.BuildAssets, security bool) string {
+	var b strings.Builder
+	if security {
+		b.WriteString("(security) ")
+	}
+	b.WriteString("golang: bump Go version to ")
+	b.WriteString(assets.GoVersion().Full())
+	return b.String()
 }
 
-func GeneratePRDescription(assets *buildassets.BuildAssets) string {
-	const format = "Bump Go Version to %s"
-	return fmt.Sprintf(format, assets.GoVersion().Full())
+func GeneratePRDescription(assets *buildassets.BuildAssets, security bool, notify string, prNumber int) string {
+	// Use calls to fmt.Fprint* family for readability with consistency.
+	// Ignore errors because they're acting upon a simple builder.
+	var b strings.Builder
+	fmt.Fprint(&b, "Hi! 👋 I'm the Microsoft Go team's bot. This is an automated pull request I generated to bump the Go version to ")
+	fmt.Fprintf(&b, "[%s](%s).\n\n", assets.GoVersion().Full(), githubReleaseURL(assets))
+
+	if security {
+		fmt.Fprint(&b, "**This update contains security fixes.**\n\n")
+	}
+
+	fmt.Fprint(&b, "I'm not able to run the Azure Linux pipelines yet, so the Microsoft Go release runner will need to finalize this PR.")
+	if notify != "" && notify != "ghost" {
+		fmt.Fprintf(&b, " @%s", notify)
+	}
+	fmt.Fprint(&b, "\n\n")
+	fmt.Fprint(&b, "Finalization steps:\n")
+
+	fmt.Fprintf(&b, "- Trigger [Source Tarball Publishing](%s) with ", AzureLinuxSourceTarballPublishURL)
+	fmt.Fprintf(&b, "Full Name `%s` and URL `%s`\n", path.Base(assets.GoSrcURL), githubReleaseDownloadURL(assets))
+
+	pullField := "PR-XXXX" // Understandable placeholder in case the body update fails.
+	if prNumber != 0 {
+		pullField = fmt.Sprintf("PR-%v", prNumber)
+	}
+
+	fmt.Fprintf(&b, "- Trigger [the Buddy Build](%s) with ", AzureLinuxBuddyBuildURL)
+	fmt.Fprintf(&b, "`%s` and core spec `golang` ", pullField)
+	fmt.Fprint(&b, "then post a PR comment with the URL of the triggered build.\n")
+
+	fmt.Fprint(&b, "- Mark this draft PR as ready for review.\n")
+
+	fmt.Fprint(&b, "\nThanks!\n")
+	return b.String()
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
@@ -494,11 +552,7 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 		reg := &cgManifest.Registrations[i]
 		if reg.Component.Other.Name == "golang" {
 			reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
-			reg.Component.Other.DownloadURL = fmt.Sprintf(
-				"https://github.com/microsoft/go/releases/download/v%s/%s",
-				buildAssets.GoVersion().Full(),
-				path.Base(buildAssets.GoSrcURL),
-			)
+			reg.Component.Other.DownloadURL = githubReleaseDownloadURL(buildAssets)
 			updated = true
 			break
 		}
@@ -520,6 +574,21 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	}
 
 	return buf.Bytes(), nil
+}
+
+func githubReleaseURL(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf(
+		"https://github.com/microsoft/go/releases/tag/v%s",
+		assets.GoVersion().Full(),
+	)
+}
+
+func githubReleaseDownloadURL(assets *buildassets.BuildAssets) string {
+	return fmt.Sprintf(
+		"https://github.com/microsoft/go/releases/download/v%s/%s",
+		assets.GoVersion().Full(),
+		path.Base(assets.GoSrcURL),
+	)
 }
 
 func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.GoVersion, oldRelease int) (version, release string) {
