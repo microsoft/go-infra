@@ -283,10 +283,12 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		_, _, err := client.Issues.AddLabelsToIssue(ctx, upstream, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"})
 		return err
 	}); err != nil {
-		return fmt.Errorf("error adding label to pull request: %w\n", err)
+		// Labeling may require giving an unjustified amount of permission to the bot.
+		// It's ok if the PAT is not permitted to do this: count it as success.
+		fmt.Printf("Unable to add label to pull request: %v\n", err)
+	} else {
+		fmt.Printf("Added labels to pull request.\n")
 	}
-
-	fmt.Printf("Added labels to pull request.\n")
 
 	return nil
 }
@@ -320,21 +322,30 @@ func GeneratePRDescription(assets *buildassets.BuildAssets, security bool, notif
 	if notify != "" && notify != "ghost" {
 		fmt.Fprintf(&b, " @%s", notify)
 	}
-	fmt.Fprint(&b, "\n\n")
-	fmt.Fprint(&b, "Finalization steps:\n")
+	fmt.Fprint(&b, "\n\nFinalization steps:\n")
 
-	fmt.Fprintf(&b, "- Trigger [Source Tarball Publishing](%s) with ", AzureLinuxSourceTarballPublishURL)
-	fmt.Fprintf(&b, "Full Name `%s` and URL `%s`\n", path.Base(assets.GoSrcURL), githubReleaseDownloadURL(assets))
-
-	pullField := "PR-XXXX" // Understandable placeholder in case the body update fails.
-	if prNumber != 0 {
-		pullField = fmt.Sprintf("PR-%v", prNumber)
+	printCopiableOption := func(name, value string) {
+		fmt.Fprintf(&b, "  %s:  \n", name)
+		fmt.Fprint(&b, "  ```\n")
+		fmt.Fprintf(&b, "  %s\n", value)
+		fmt.Fprint(&b, "  ```\n")
 	}
 
-	fmt.Fprintf(&b, "- Trigger [the Buddy Build](%s) with ", AzureLinuxBuddyBuildURL)
-	fmt.Fprintf(&b, "`%s` and core spec `golang` ", pullField)
-	fmt.Fprint(&b, "then post a PR comment with the URL of the triggered build.\n")
+	fmt.Fprintf(&b, "- Trigger [Source Tarball Publishing](%s) with:  \n", AzureLinuxSourceTarballPublishURL)
+	printCopiableOption("Full Name", path.Base(assets.GoSrcURL))
+	printCopiableOption("URL", githubReleaseDownloadURL(assets))
 
+	fmt.Fprintf(&b, "- Trigger [the Buddy Build](%s) with:  \n", AzureLinuxBuddyBuildURL)
+	if prNumber == 0 {
+		// If we aren't able to update the PR later to put the PR number in, at least leave
+		// instructions the release runner can follow.
+		fmt.Fprint(&b, "  First field: `PR-` then the number of this PR.  \n")
+	} else {
+		printCopiableOption("First field", fmt.Sprintf("PR-%v", prNumber))
+	}
+	printCopiableOption("Core spec", "golang")
+
+	fmt.Fprint(&b, "- Post a PR comment with the URL of the triggered Buddy Build.\n")
 	fmt.Fprint(&b, "- Mark this draft PR as ready for review.\n")
 
 	fmt.Fprint(&b, "\nThanks!\n")
