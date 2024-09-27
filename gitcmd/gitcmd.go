@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/executil"
@@ -130,6 +131,26 @@ func RevParse(dir, rev string) (string, error) {
 // Show runs "git show <spec>" and returns the content.
 func Show(dir, rev string) (string, error) {
 	return CombinedOutput(dir, "show", rev)
+}
+
+// ShowQuietPretty runs "git show" with the given format and revision and returns the result.
+// See https://git-scm.com/docs/git-show#_pretty_formats
+func ShowQuietPretty(dir, format, rev string) (string, error) {
+	return CombinedOutput(dir, "show", "--quiet", "--pretty=format:"+format, strings.TrimSpace(rev))
+}
+
+// FetchRefCommit effectively runs "git fetch <remote> <ref>" and returns the commit hash.
+func FetchRefCommit(dir, remote, ref string) (string, error) {
+	output, err := executil.CombinedOutput(executil.Dir(dir, "git", "fetch", remote, "--porcelain", ref))
+	if err != nil {
+		return "", err
+	}
+	// https://git-scm.com/docs/git-fetch#_output
+	fields := strings.Fields(output)
+	if len(fields) != 4 {
+		return "", fmt.Errorf("unexpected number of fields in fetch output: %q", output)
+	}
+	return fields[2], nil
 }
 
 // Run runs "git <args>" in the given directory, showing the command to the user in logs for
