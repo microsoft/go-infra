@@ -234,16 +234,16 @@ func MakePRs(f *Flags) error {
 	return nil
 }
 
-// changedBranch stores the refs that have changes that need to be submitted in a PR, and the diff
-// of files being changed in the PR for use in the PR body.
+// changedBranch is the state of a specific branch that is being changed by the sync process.
+// Some of the sync process is shared between branches (for performance), and some is per-branch.
 type changedBranch struct {
-	Refs    *gitpr.SyncPRRefSet
-	Diff    string
-	PRTitle string
-	PRBody  string
+	Refs       *gitpr.SyncPRRefSet
+	PRRequest  *gitpr.GitHubRequest
+	ExistingPR *gitpr.ExistingPR
 
-	// Result is a pointer to the SyncResult to update with PR info once a PR is submitted for this
-	// changed branch.
+	SkipReason string
+
+	// Result contains this branch's [SyncResult] once a PR is submitted/updated.
 	Result *SyncResult
 }
 
@@ -416,6 +416,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		}
 	}
 
+	// Parse the URLs involved in the PR to get segment information.
+	parsedPRTargetRemote, err := gitpr.ParseRemoteURL(entry.Target)
+	if err != nil {
+		return nil, err
+	}
+	parsedPRHeadRemote, err := gitpr.ParseRemoteURL(entry.PRBranchStorageRepo())
+	if err != nil {
+		return nil, err
+	}
+
 	// Track the sync results. In this first section, we figure out the result's Commit value. In
 	// the second section, a PR is created if the Commit doesn't exist in the target, and we update
 	// the result struct to include that info.
@@ -432,14 +442,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			return nil, err
 		}
 
-		c := changedBranch{
-			Refs: b,
-			PRBody: "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
-				"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
-				"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md).",
+		changedBranches = append(changedBranches, changedBranch{
+			Refs:   b,
 			Result: &results[i],
-		}
-		var commitMessage string
+		})
+		c := &changedBranches[len(changedBranches)-1]
+
+		prBody := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
+			"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
+			"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
+		var prTitle, commitMessage string
 
 		if entry.SubmoduleTarget == "" {
 			// This is not a submodule update, so merge with the upstream repository.
@@ -460,8 +472,8 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 					return nil, err
 				}
 			}
-			c.PRTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
-			c.PRBody += fmt.Sprintf(
+			prTitle = fmt.Sprintf("Merge upstream %#q into %#q", b.UpstreamName, b.Name)
+			prBody += fmt.Sprintf(
 				"\n\nThis PR merges %#q into %#q.\n\nIf PR validation fails and you need to fix up the PR, make sure to use a merge commit, not a squash or rebase!",
 				c.Refs.UpstreamName, c.Refs.Name,
 			)
@@ -589,7 +601,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			}
 			snippet := createCommitMessageSnippet(upstreamCommitMessage)
 
-			c.PRTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
+			prTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
 			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 		}
 
@@ -604,7 +616,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			}
 		} else {
 			// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
-			fmt.Printf("---- No changes to sync for %v. Skipping.\n", b.Name)
+			c.SkipReason = "No changes to sync"
 
 			// Save the current commit in the result struct. This lets the caller know exactly what
 			// commit was found to be up to date, to avoid racing with other changes being merged
@@ -660,20 +672,78 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				diffLines.WriteString(diffLineScanner.Text())
 				diffLines.WriteString("\n")
 			}
-			c.Diff = diffLines.String()
+			diffString := diffLines.String()
 
-			if c.Diff != "" {
-				c.PRBody += fmt.Sprintf(
+			if diffString != "" {
+				prBody += fmt.Sprintf(
 					"\n\n"+
 						"<details><summary>Click on this text to view the file difference between this branch and upstream.</summary>\n\n"+
 						"```\n%v\n```"+
 						"\n\n</details>",
-					c.Diff,
+					diffString,
 				)
 			}
 		}
 
-		changedBranches = append(changedBranches, c)
+		c.PRRequest = c.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), prTitle, prBody)
+
+		switch {
+		case *f.DryRun:
+			c.SkipReason = "Dry run"
+
+		case *f.GitHubUser == "":
+			c.SkipReason = "github-user not provided"
+		case *f.GitHubPAT == "":
+			c.SkipReason = "github-pat not provided"
+
+		case *f.GitHubPATReviewer == "":
+			// In theory, if we have githubPAT but no reviewer, we can submit the PR but skip
+			// reviewing it/enabling auto-merge. However, this doesn't seem very useful, so it isn't
+			// implemented.
+			c.SkipReason = "github-pat-reviewer not provided"
+		}
+		if c.SkipReason != "" {
+			continue
+		}
+
+		c.ExistingPR, err = gitpr.FindExistingPR(
+			c.PRRequest,
+			parsedPRHeadRemote,
+			parsedPRTargetRemote,
+			c.Refs.PRBranch(),
+			*f.GitHubUser,
+			*f.GitHubPAT)
+		if err != nil {
+			return nil, err
+		}
+		if c.ExistingPR != nil {
+			// If the PR already exists, we need to check if anyone else has pushed changes to the
+			// branch to make sure we don't overwrite them.
+			remoteCommit, err := gitcmd.FetchRefCommit(
+				dir,
+				auther.InsertAuth(entry.PRBranchStorageRepo()),
+				"refs/heads/"+c.Refs.PRBranch())
+			if err != nil {
+				return nil, err
+			}
+			myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.Result.Commit)
+			if err != nil {
+				return nil, err
+			}
+			remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", remoteCommit)
+			if err != nil {
+				return nil, err
+			}
+
+			if myAuthorEmail != remoteAuthorEmail {
+				c.SkipReason = "PR already exists, but my author name (" +
+					myAuthorEmail +
+					") is different from the author of the remote commit (" +
+					remoteAuthorEmail +
+					"). Skipping PR submission."
+			}
+		}
+
 	}
 
 	if len(changedBranches) == 0 {
@@ -703,10 +773,15 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	// simple and makes the PR flow simple.
 	mergePushRefspecs := make([]string, 0, len(changedBranches))
 	for _, b := range changedBranches {
+		if b.SkipReason != "" {
+			continue
+		}
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
 	}
-	if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), true, mergePushRefspecs)); err != nil {
-		return nil, err
+	if len(mergePushRefspecs) > 0 {
+		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), true, mergePushRefspecs)); err != nil {
+			return nil, err
+		}
 	}
 
 	// All Git operations are complete! Next, ensure there's a GitHub PR for each auto-merge branch.
@@ -715,42 +790,13 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	// specific branch.
 	var prFailed bool
 
-	// Parse the URLs involved in the PR to get segment information.
-	parsedPRTargetRemote, err := gitpr.ParseRemoteURL(entry.Target)
-	if err != nil {
-		return nil, err
-	}
-	parsedPRHeadRemote, err := gitpr.ParseRemoteURL(entry.PRBranchStorageRepo())
-	if err != nil {
-		return nil, err
-	}
-
 	for _, b := range changedBranches {
 		prFlowDescription := fmt.Sprintf("%v -> %v", b.Refs.UpstreamName, b.Refs.PRBranch())
 
 		fmt.Printf("---- %s: Checking if PR should be submitted.\n", prFlowDescription)
-		fmt.Printf("---- PR Title: %s\n", b.PRTitle)
-		fmt.Printf("---- PR Body:\n%s\n", b.PRBody)
 
-		var skipReason string
-		switch {
-		case *f.DryRun:
-			skipReason = "Dry run"
-
-		case *f.GitHubUser == "":
-			skipReason = "github-user not provided"
-		case *f.GitHubPAT == "":
-			skipReason = "github-pat not provided"
-
-		case *f.GitHubPATReviewer == "":
-			// In theory, if we have githubPAT but no reviewer, we can submit the PR but skip
-			// reviewing it/enabling auto-merge. However, this doesn't seem very useful, so it isn't
-			// implemented.
-			skipReason = "github-pat-reviewer not provided"
-		}
-
-		if skipReason != "" {
-			fmt.Printf("---- %s: skipping submitting PR for %v\n", skipReason, prFlowDescription)
+		if b.SkipReason != "" {
+			fmt.Printf("---- %s: skipping submitting PR: %s\n", prFlowDescription, b.SkipReason)
 			continue
 		}
 
@@ -761,36 +807,26 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		// capture vars from the 'main()' scope rather than making them global or explicitly passing
 		// each one into a named function.
 		err := func() error {
-			fmt.Printf("---- PR for %v: Submitting...\n", prFlowDescription)
-
-			request := b.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), b.PRTitle, b.PRBody)
+			fmt.Printf("---- %s: submitting PR...\n", prFlowDescription)
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
-			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), request, *f.GitHubPAT)
+			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), b.PRRequest, *f.GitHubPAT)
 			fmt.Printf("%+v\n", pr)
 			if err != nil {
 				return err
 			}
 
 			if pr.AlreadyExists {
-				fmt.Println("---- A PR already exists. Attempting to find it...")
-				existingPR, err := gitpr.FindExistingPR(
-					request,
-					parsedPRHeadRemote,
-					parsedPRTargetRemote,
-					b.Refs.PRBranch(),
-					*f.GitHubUser,
-					*f.GitHubPAT)
-				if err != nil {
-					return err
+				if b.ExistingPR == nil {
+					return fmt.Errorf("unable to submit PR because PR already exists, but no existing PR was found")
 				}
-				if pr == nil {
-					return fmt.Errorf("no PR found")
-				}
-				pr.NodeID = existingPR.ID
-				pr.Number = existingPR.Number
+				pr.NodeID = b.ExistingPR.ID
+				pr.Number = b.ExistingPR.Number
 			} else {
+				if b.ExistingPR != nil {
+					return fmt.Errorf("submitted a fresh PR, but failure was expected because an existing PR was found")
+				}
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 
 				fmt.Printf("---- Approving with reviewer account...\n")

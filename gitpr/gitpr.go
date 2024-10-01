@@ -168,6 +168,10 @@ func (r Remote) GetOwner() string {
 	return r.GetOwnerRepo()[0]
 }
 
+func (r Remote) GetRepo() string {
+	return r.GetOwnerRepo()[1]
+}
+
 func (r Remote) GetOwnerSlashRepo() string {
 	return strings.Join(r.GetOwnerRepo(), "/")
 }
