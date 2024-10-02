@@ -27,7 +27,7 @@ parameters:
   - name: owner
     displayName: 'Dev branch repository owner'
     type: string
-    default: 'microsoft'
+    default: 'microsoft-golang-bot'
 
   - name: repo
     displayName: 'Azure Linux GitHub repository name'
