@@ -812,18 +812,20 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
 			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), b.PRRequest, *f.GitHubPAT)
-			fmt.Printf("%+v\n", pr)
 			if err != nil {
-				return err
-			}
-
-			if pr.AlreadyExists {
-				if b.ExistingPR == nil {
-					return fmt.Errorf("unable to submit PR because PR already exists, but no existing PR was found")
+				if errors.Is(err, gitpr.ErrPRAlreadyExists) {
+					if b.ExistingPR == nil {
+						return fmt.Errorf("unable to submit PR because PR already exists, but no existing PR was found")
+					}
+					pr = &gitpr.GitHubResponse{
+						NodeID: b.ExistingPR.ID,
+						Number: b.ExistingPR.Number,
+					}
+				} else {
+					return err
 				}
-				pr.NodeID = b.ExistingPR.ID
-				pr.Number = b.ExistingPR.Number
 			} else {
+				fmt.Printf("%+v\n", pr)
 				if b.ExistingPR != nil {
 					return fmt.Errorf("submitted a fresh PR, but failure was expected because an existing PR was found")
 				}
