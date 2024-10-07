@@ -6,6 +6,7 @@ package gitpr
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,9 @@ import (
 var client = http.Client{
 	Timeout: time.Second * 30,
 }
+
+// ErrPRAlreadyExists is returned when a PR already exists for the given branch.
+var ErrPRAlreadyExists = errors.New("PR already exists")
 
 // PRRefSet contains information about an automatic PR branch and calculates the set of refs that
 // would correspond to that PR.
@@ -249,27 +253,21 @@ type GitHubRequest struct {
 	Draft               bool   `json:"draft"`
 }
 
-// GitHubResponse is a PR creation response from GitHub. It may represent success or failure.
+// GitHubResponse is a successful PR creation response from GitHub.
 type GitHubResponse struct {
 	// GitHub success response:
 	HTMLURL string `json:"html_url"`
 	NodeID  string `json:"node_id"`
 	Number  int    `json:"number"`
-
-	// GitHub failure response:
-	Message string               `json:"message"`
-	Errors  []GitHubRequestError `json:"errors"`
-
-	// AlreadyExists is set to true if the error message says the PR exists. Otherwise, false. For
-	// our purposes, a GitHub failure response that indicates a PR already exists is not an error.
-	AlreadyExists bool
 }
 
 type GitHubRequestError struct {
 	Message string `json:"message"`
 }
 
-func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response *GitHubResponse, err error) {
+// PostGitHub creates a PR on GitHub using pat for the given owner/repo and request details.
+// If the PR already exists, returns a wrapped [ErrPRAlreadyExists].
+func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (*GitHubResponse, error) {
 	prSubmitContent, err := json.MarshalIndent(request, "", "")
 	if err != nil {
 		return nil, err
@@ -282,8 +280,13 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response 
 	}
 	httpRequest.SetBasicAuth("", pat)
 
-	response = &GitHubResponse{}
-	statusCode, err := sendJSONRequest(httpRequest, response)
+	var response struct {
+		GitHubResponse
+		// GitHub failure response:
+		Message string               `json:"message"`
+		Errors  []GitHubRequestError `json:"errors"`
+	}
+	statusCode, err := sendJSONRequest(httpRequest, &response)
 	if err != nil {
 		return nil, err
 	}
@@ -310,21 +313,19 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (response 
 		*/
 		for _, e := range response.Errors {
 			if strings.HasPrefix(e.Message, "A pull request already exists for ") {
-				response.AlreadyExists = true
+				return nil, fmt.Errorf("%w: response message %q", ErrPRAlreadyExists, e.Message)
 			}
 		}
-		if !response.AlreadyExists {
-			err = fmt.Errorf(
-				"response code %v may indicate PR already exists, but the error message is not recognized: %v",
-				statusCode,
-				response.Errors,
-			)
-		}
+		return nil, fmt.Errorf(
+			"response code %v may indicate PR already exists, but the error message is not recognized: %v",
+			statusCode,
+			response.Errors,
+		)
 
 	default:
-		err = fmt.Errorf("unexpected http status code: %v", statusCode)
+		return nil, fmt.Errorf("unexpected http status code: %v", statusCode)
 	}
-	return response, err
+	return &response.GitHubResponse, nil
 }
 
 func QueryGraphQL(pat string, query string, variables map[string]interface{}, result interface{}) error {
