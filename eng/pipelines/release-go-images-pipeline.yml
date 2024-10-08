@@ -143,7 +143,7 @@ extends:
                           -proj 'internal' \
                           -azdopat '$(System.AccessToken)'
                       displayName: ⌚ Wait for internal mirror
-                      timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+                      timeoutInMinutes: 16 # See https://github.com/microsoft/go-lab/issues/124
                     - script: |
                         releasego build-pipeline \
                           -commit '$(poll1MicrosoftGoImagesCommitHash)' \

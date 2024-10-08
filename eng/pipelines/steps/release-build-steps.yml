@@ -61,7 +61,7 @@ steps:
           -proj 'internal' \
           -azdopat '$(System.AccessToken)'
       displayName: ⌚ Wait for internal mirror
-      timeoutInMinutes: 15 # This should be very quick, and a dev can easily fix it.
+      timeoutInMinutes: 16 # See https://github.com/microsoft/go-lab/issues/124
 
     # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
     # default Branch is "microsoft/main". So, we need to figure out the release branch name
