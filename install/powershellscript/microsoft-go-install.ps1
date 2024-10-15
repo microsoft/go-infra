@@ -800,6 +800,10 @@ function Prepare-Install-Directory {
     New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 }
 
+# This marker is used by microsoft/go-infra tests to insert function redeclarations for testing.
+# This allows offline testing without adding additional complexity that is only used for tests.
+# [END OF FUNCTIONS]
+
 if ($Help) {
     Get-Help $PSCommandPath -Examples
     exit
