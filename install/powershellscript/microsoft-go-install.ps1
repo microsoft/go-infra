@@ -476,16 +476,6 @@ function Get-Absolute-Path([string]$RelativeOrAbsolutePath) {
     return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RelativeOrAbsolutePath)
 }
 
-function Get-Path-Prefix-With-Version($path) {
-    # example path with regex: shared/1.0.0-beta-12345/somepath
-    $match = [regex]::match($path, "/\d+\.\d+[^/]+/")
-    if ($match.Success) {
-        return $entry.FullName.Substring(0, $match.Index + $match.Length)
-    }
-
-    return $null
-}
-
 function Extract-Zip([string]$ArchivePath, [string]$OutPath) {
     Say-Invocation $MyInvocation
 
