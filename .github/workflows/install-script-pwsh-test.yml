@@ -1,0 +1,38 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# This job tests that the install script in PowerShell works as expected when
+# actually downloading Microsoft Go, not only the unit tests.
+
+name: install-script-pwsh-test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - windows-2019
+          - ubuntu-latest
+          - ubuntu-20.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Intentionally get upstream Go. This allows us to run install script
+      # tests and see results even if the Microsoft Go install process breaks.
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version: stable
+
+      - name: Checkout repository
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+
+      - name: Test with download
+        run: |
+          go test -v ./install/... -download
