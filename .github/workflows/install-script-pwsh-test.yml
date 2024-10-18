@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 # This job tests that the install script in PowerShell works as expected when
-# actually downloading Microsoft Go, not only the unit tests.
+# actually downloading Microsoft Go, not only just running the unit tests.
 
 name: install-script-pwsh-test
 
