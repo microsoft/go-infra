@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package powershellscript_test
+package powershell_test
 
 import (
 	"encoding/json"
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/go-infra/install/powershellscript"
+	"github.com/microsoft/go-infra/goinstallscript/powershell"
 )
 
 var download = flag.Bool(
@@ -26,12 +26,12 @@ const endOfFunctionsMarker = "# [END OF FUNCTIONS]"
 // makeTestFile creates a file in a temporary directory where some content has been inserted after the "end of functions" marker.
 func makeTestFile(t *testing.T, postFuncContent string) string {
 	t.Helper()
-	before, after, ok := strings.Cut(powershellscript.Content, endOfFunctionsMarker)
+	before, after, ok := strings.Cut(powershell.Content, endOfFunctionsMarker)
 	if !ok {
 		t.Fatal("missing # [END OF FUNCTIONS] in powershellscript.Content")
 	}
 	content := before + "\n" + endOfFunctionsMarker + "\n" + postFuncContent + "\n" + after
-	p := filepath.Join(t.TempDir(), powershellscript.Name)
+	p := filepath.Join(t.TempDir(), powershell.Name)
 	if err := os.WriteFile(p, []byte(content), 0o777); err != nil {
 		t.Fatal(err)
 	}

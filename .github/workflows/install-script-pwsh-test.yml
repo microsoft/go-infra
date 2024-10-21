@@ -35,4 +35,5 @@ jobs:
 
       - name: Test with download
         run: |
-          go test -v ./install/... -download
+          cd goinstallscript
+          go test -v ./... -download

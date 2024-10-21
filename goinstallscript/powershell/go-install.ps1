@@ -74,10 +74,10 @@
 .PARAMETER Verbose
     Displays diagnostics information.
 .EXAMPLE
-    microsoft-go-install.ps1
+    go-install.ps1
     Installs the latest released Microsoft Go version.
 .EXAMPLE
-    microsoft-go-install.ps1 -Version Previous
+    go-install.ps1 -Version Previous
     Installs the latest version of the previous major (1.X) version of Microsoft Go.
 #>
 [cmdletbinding()]
@@ -106,21 +106,21 @@ $MicrosoftGoInstallScriptVersion = "0.0.1"
 
 function Say($str) {
     try {
-        Write-Host "microsoft-go-install: $str"
+        Write-Host "go-install: $str"
     }
     catch {
         # Some platforms cannot utilize Write-Host (Azure Functions, for instance). Fall back to Write-Output
-        Write-Output "microsoft-go-install: $str"
+        Write-Output "go-install: $str"
     }
 }
 
 function Say-Warning($str) {
     try {
-        Write-Warning "microsoft-go-install: $str"
+        Write-Warning "go-install: $str"
     }
     catch {
         # Some platforms cannot utilize Write-Warning (Azure Functions, for instance). Fall back to Write-Output
-        Write-Output "microsoft-go-install: Warning: $str"
+        Write-Output "go-install: Warning: $str"
     }
 }
 
@@ -129,20 +129,20 @@ function Say-Warning($str) {
 function Say-Error($str) {
     try {
         # Write-Error is quite oververbose for the purpose of the function, let's write one line with error style settings.
-        $Host.UI.WriteErrorLine("microsoft-go-install: $str")
+        $Host.UI.WriteErrorLine("go-install: $str")
     }
     catch {
-        Write-Output "microsoft-go-install: Error: $str"
+        Write-Output "go-install: Error: $str"
     }
 }
 
 function Say-Verbose($str) {
     try {
-        Write-Verbose "microsoft-go-install: $str"
+        Write-Verbose "go-install: $str"
     }
     catch {
         # Some platforms cannot utilize Write-Verbose (Azure Functions, for instance). Fall back to Write-Output
-        Write-Output "microsoft-go-install: $str"
+        Write-Output "go-install: $str"
     }
 }
 
