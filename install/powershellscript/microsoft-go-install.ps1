@@ -23,6 +23,7 @@
           examples: go1.18.0, go1.23.1
     - 4-part version in format go1.A.B-C - a specific revision of Microsoft Go, immutable.
           examples: go1.18.0-1, go1.23.1-3
+    Microsoft Go doesn't publish prereleases, so they are not available.
 .PARAMETER InstallDir
     Path to where to install Microsoft Go. Note that if a directory is given, GOROOT is placed
     directly in that directory.
