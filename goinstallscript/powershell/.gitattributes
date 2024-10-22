@@ -1,0 +1,2 @@
+# Always use LF when checking out the install script to match "go install" behavior.
+go-install.ps1 text eol=lf
