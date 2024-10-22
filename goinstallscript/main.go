@@ -4,19 +4,13 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
+	"strings"
 
 	"github.com/microsoft/go-infra/goinstallscript/powershell"
 )
-
-// scriptEmitPackage is a Go package that emits the PowerShell script content. The goinstallscript
-// command runs this package as indirection rather than directly using powershell.Content. This
-// allows a single build of goinstallscript to be used to install multiple versions of the script.
-const scriptEmitPackage = "github.com/microsoft/go-infra/goinstallscript/powershell/print"
 
 func main() {
 	if err := run(); err != nil {
@@ -43,44 +37,28 @@ func run() error {
 		return nil
 	}
 
-	content, err := getScriptContent()
-	if err != nil {
-		return err
-	}
-
 	if *check {
-		return runCheck(*name, content)
+		return runCheck(*name)
 	}
 
-	if err := os.WriteFile(*name, []byte(content), 0o777); err != nil {
+	if err := os.WriteFile(*name, []byte(powershell.Content), 0o777); err != nil {
 		return err
 	}
 	fmt.Println("Created " + *name)
 	return nil
 }
 
-func getScriptContent() ([]byte, error) {
-	fmt.Println("Running " + scriptEmitPackage + " in the context of the current directory (current Go module) to retrieve PowerShell script content...")
-	cmd := exec.Command("go", "run", scriptEmitPackage)
-	content, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("error running %v: %v; output:\n---\n%s\n---", cmd, err, content)
-	}
-	return content, err
-}
-
-func runCheck(name string, content []byte) error {
-	fmt.Println("Checking " + name + " file content to see if it's up to date...")
+func runCheck(name string) error {
 	existing, err := os.ReadFile(name)
 	if err != nil {
 		return err
 	}
-	if bytes.Equal(existing, content) {
+	if string(existing) == powershell.Content {
 		fmt.Println("Check ok: " + name + " file matches expected content.")
 		return nil
 	}
 	// Accept CRLF as well. The user might be using autocrlf on Windows.
-	if bytes.Equal(bytes.ReplaceAll(existing, []byte("\r\n"), []byte("\n")), content) {
+	if strings.ReplaceAll(string(existing), "\r\n", "\n") == powershell.Content {
 		fmt.Println("Check ok: " + name + " file contains CRLF line endings but otherwise matches expected content.")
 		return nil
 	}

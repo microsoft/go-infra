@@ -59,10 +59,24 @@ In your Go module, run:
 
 ```
 go get github.com/microsoft/go-infra/goinstallscript@latest
-go install github.com/microsoft/go-infra/goinstallscript
 ```
 
-Add a `tools/tools.go` file to your module to pin the version of `goinstallscript` and prevent `go mod tidy` from removing it:
+Then, in the directory of your choice inside your module, run:
+
+```
+go run github.com/microsoft/go-infra/goinstallscript
+```
+
+Pass `-h` for more information about the parameters and defaults.
+
+> [!NOTE]
+> It is not recommended to use `go install` to install the `goinstallscript` command.
+> The PowerShell script's content is embedded in the binary, so running an old build of `goinstallscript` may create a file with an unexpected version of the script.
+>
+> By using `go run`, you ensure the script always matches the expected version in the `go.mod` dependency.
+
+One more step is needed to prevent `go mod tidy` from removing the new dependency from your `go.mod` file.
+Add a `tools/tools.go` file to your module with the following content:
 
 ```go
 //go:build tools
@@ -70,7 +84,7 @@ Add a `tools/tools.go` file to your module to pin the version of `goinstallscrip
 package tools
 
 import (
-    _ "github.com/microsoft/go-infra/goinstallscript"
+	_ "github.com/microsoft/go-infra/goinstallscript/powershell"
 )
 ```
 
@@ -80,27 +94,13 @@ import (
 >
 > If you already have a file that serves this purpose for other tools, you can add the import to that file instead.
 
-Then, in the directory of your choice inside your module, run:
-
-```
-goinstallscript
-```
-
-See `goinstallscript -h` for more information about the parameters and defaults.
-
 ### Updating the script using `goinstallscript`
 
 > [!NOTE]
 > It isn't necessary to update the script to get new builds of the Microsoft Go toolset.
 > Updates to the script are rare, and only occur when the lookup or download processes themselves change.
 
-To update the script, run this in the directory where the script is stored:
-
-```
-go get github.com/microsoft/go-infra/install/powershellscript/cmd/goinstallscript@latest
-go mod tidy
-goinstallscript
-```
+To update the script, run the `go get` and `go run` commands again in the directory where the script is stored.
 
 ### Set up a CI test to ensure the script is up to date
 
@@ -111,7 +111,7 @@ The script isn't integrated directly with dependabot, so it's necessary to add a
 This is done by adding a CI step that runs the following command in the directory where the script is stored:
 
 ```
-go run github.com/microsoft/go-infra/install/powershellscript/cmd/goinstallscript -check
+go run github.com/microsoft/go-infra/goinstallscript -check
 ```
 
 The CI step will fail if the script is not up to date because the command returns a nonzero exit code.
@@ -119,11 +119,4 @@ The CI step will fail if the script is not up to date because the command return
 ### Reacting to a `-check` failure
 
 If the CI step fails, the script is out of date.
-Check out the dependabot branch and run the `goinstallscript` command again to overwrite the script content with the updated version:
-
-```
-goinstallscript
-```
-
-If something goes wrong, consider reinstalling `goinstallscript` to match the version used in CI.
-This utility command is expected to change infrequently, like the script itself.
+Check out the dependabot branch and use the `go run` command again to overwrite the script content with the updated version.
