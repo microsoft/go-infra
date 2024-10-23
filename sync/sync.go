@@ -29,6 +29,7 @@ type Flags struct {
 	GitHubUser        *string
 	GitHubPAT         *string
 	GitHubPATReviewer *string
+	AutoMerge         *bool
 
 	AzDODncengPAT *string
 
@@ -51,6 +52,7 @@ func BindFlags(workingDirectory string) *Flags {
 		GitHubUser:        flag.String("github-user", "", "Use this github user to submit pull requests."),
 		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		GitHubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
+		AutoMerge:         flag.Bool("auto-merge", true, "Automatically approve the PR and turn on auto-merge. Requires github-pat-reviewer."),
 
 		AzDODncengPAT: flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs."),
 
@@ -831,15 +833,19 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 
-				fmt.Printf("---- Approving with reviewer account...\n")
-				if err = gitpr.ApprovePR(pr.NodeID, *f.GitHubPATReviewer); err != nil {
-					return err
+				if *f.AutoMerge {
+					fmt.Printf("---- Approving with reviewer account...\n")
+					if err = gitpr.ApprovePR(pr.NodeID, *f.GitHubPATReviewer); err != nil {
+						return err
+					}
 				}
 			}
 
-			fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-			if err = gitpr.EnablePRAutoMerge(pr.NodeID, *f.GitHubPATReviewer); err != nil {
-				return err
+			if *f.AutoMerge {
+				fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
+				if err = gitpr.EnablePRAutoMerge(pr.NodeID, *f.GitHubPATReviewer); err != nil {
+					return err
+				}
 			}
 
 			fmt.Printf("---- PR for %v: Done.\n", prFlowDescription)
