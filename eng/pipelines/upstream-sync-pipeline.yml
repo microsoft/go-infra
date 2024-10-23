@@ -59,6 +59,6 @@ extends:
                     -github-user microsoft-golang-bot `
                     -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
                     -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
-                    -auto-merge false `
+                    -auto-merge=false `
                     -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
                 displayName: Sync
