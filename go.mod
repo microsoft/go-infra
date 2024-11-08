@@ -11,7 +11,7 @@ require (
 	github.com/google/go-github/v65 v65.0.0
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	golang.org/x/crypto v0.28.0
-	golang.org/x/mod v0.21.0
+	golang.org/x/mod v0.22.0
 	golang.org/x/oauth2 v0.24.0
 	golang.org/x/text v0.19.0
 	golang.org/x/tools v0.26.0
