@@ -14,7 +14,7 @@ require (
 	golang.org/x/mod v0.22.0
 	golang.org/x/oauth2 v0.24.0
 	golang.org/x/text v0.20.0
-	golang.org/x/tools v0.26.0
+	golang.org/x/tools v0.27.0
 )
 
 require (
