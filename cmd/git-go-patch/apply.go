@@ -28,6 +28,9 @@ later to create patch files after adding more commits, or altering the patch com
 
 apply uses "git am", internally. If patches fail to apply, use "git am" inside the submodule to
 resolve and continue the patch application process.
+
+To review patch changes, use "-before" and "-after" flags to set up state within the submodule to
+prepare it for the "git go-patch stage-diff" command.
 ` + repoRootSearchDescription,
 		Handle: handleApply,
 	})
@@ -40,6 +43,12 @@ func handleApply(p subcmd.ParseFunc) error {
 		false,
 		"Skip the submodule refresh (reset, clean, checkout) that happens before applying patches.\n"+
 			"This may be useful for advanced workflows.")
+
+	b := flag.String(
+		"b", "",
+		"After applying patches, create or reset the named branch in the submodule and check it out.")
+	before := flag.Bool("before", false, "Applies '-b "+stageDiffBeforeBranch+"' for use with stage-diff subcommand.")
+	after := flag.Bool("after", false, "Applies '-b "+stageDiffAfterBranch+"' for use with stage-diff subcommand.")
 
 	if err := p(); err != nil {
 		return err
@@ -62,6 +71,13 @@ func handleApply(p subcmd.ParseFunc) error {
 		if err := submodule.Reset(rootDir, goDir, *force); err != nil {
 			return err
 		}
+	}
+
+	if *before {
+		*b = stageDiffBeforeBranch
+	}
+	if *after {
+		*b = stageDiffAfterBranch
 	}
 
 	prePatchHead, err := getCurrentCommit(goDir)
@@ -90,6 +106,12 @@ func handleApply(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	if *b != "" {
+		if err := createBranch(goDir, *b); err != nil {
+			return err
+		}
+	}
+
 	// Record the post-patch commit.
 	return writeStatusFiles(postPatchHead, config.FullPostPatchStatusFilePath())
 }
@@ -99,6 +121,12 @@ func writeStatusFiles(commit string, file string) error {
 	// "\\", making the path harder to paste and use elsewhere.
 	fmt.Printf("Writing commit to '%v' for use by 'extract' later: %v\n", file, commit)
 	return os.WriteFile(file, []byte(commit), os.ModePerm)
+}
+
+func createBranch(goDir, branch string) error {
+	cmd := exec.Command("git", "checkout", "-B", branch)
+	cmd.Dir = goDir
+	return executil.Run(cmd)
 }
 
 func getCurrentCommit(goDir string) (string, error) {
