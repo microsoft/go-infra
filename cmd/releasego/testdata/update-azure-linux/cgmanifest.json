@@ -1,35 +1,45 @@
 {
   "Registrations": [
-      {
-        "component": {
-          "type": "other",
-          "other": {
-            "name": "golang",
-            "version": "1.22.3",
-            "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.22.3-1/go1.22.3-20240507.3.src.tar.gz"
-          }
-        }
-      },
-      {
-        "component": {
-          "type": "other",
-          "other": {
-            "name": "abseil-cpp",
-            "version": "20240116.0",
-            "downloadUrl": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.0.tar.gz"
-          }
-        }
-      },
-      {
-        "component": {
-          "type": "other",
-          "comment": "This is a comment2",
-          "other": {
-            "name": "accountsservice",
-            "version": "0.6.55",
-            "downloadUrl": "http://www.freedesktop.org/software/accountsservice/accountsservice-0.6.55.tar.xz"
-          }
+    {
+      "component": {
+        "type": "other",
+        "other": {
+          "name": "golang",
+          "version": "1.22.2",
+          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.22.3-1/go1.22.3-20240507.3.src.tar.gz"
         }
       }
+    },
+    {
+      "component": {
+        "type": "other",
+        "other": {
+          "name": "golang",
+          "version": "1.23.0",
+          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.22.3-1/go1.22.3-20240507.3.src.tar.gz"
+        }
+      }
+    },
+    {
+      "component": {
+        "type": "other",
+        "other": {
+          "name": "abseil-cpp",
+          "version": "20240116.0",
+          "downloadUrl": "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.0.tar.gz"
+        }
+      }
+    },
+    {
+      "component": {
+        "type": "other",
+        "comment": "This is a comment2",
+        "other": {
+          "name": "accountsservice",
+          "version": "0.6.55",
+          "downloadUrl": "http://www.freedesktop.org/software/accountsservice/accountsservice-0.6.55.tar.xz"
+        }
+      }
+    }
   ]
 }
