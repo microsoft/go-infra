@@ -1,10 +1,8 @@
-(security) golang: bump Go version to 1.23.3-2
+golang: bump Go version to 1.23.3-2
 
 ---
 
 Hi! 👋 I'm the Microsoft Go team's bot. This is an automated pull request I generated to bump the Go version to [1.23.3-2](https://github.com/microsoft/go/releases/tag/v1.23.3-2).
-
-**This update contains security fixes.**
 
 I'm not able to run the Azure Linux pipelines yet, so the Microsoft Go release runner will need to finalize this PR. @a-go-developer
 
@@ -22,7 +20,7 @@ Finalization steps:
   First field: `PR-` then the number of this PR.  
   Core spec:  
   ```
-  golang
+  golang-1.23
   ```
 - Post a PR comment with the URL of the triggered Buddy Build.
 - Mark this draft PR as ready for review.

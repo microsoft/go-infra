@@ -35,9 +35,14 @@ parameters:
     default: 'azurelinux'
 
   - name: updateBranch
-    displayName: 'Branch to update'
+    displayName: 'Branch to update (include "refs/heads/" prefix if specified) or nil to automatically choose a name'
     type: string
     default: nil
+
+  - name: latestMajor
+    displayName: 'This is the latest major version, so update "golang.spec" instead of "golang-1.<N>.spec"'
+    type: boolean
+    default: true
 
   - name: notify
     displayName: >
@@ -115,6 +120,7 @@ extends:
                         -owner ${{ parameters.owner }} \
                         -repo ${{ parameters.repo }} \
                         -update-branch ${{ parameters.updateBranch }} \
+                        -latest-major=${{ parameters.latestMajor }} \
                         -notify ${{ parameters.notify }} \
                         -security=${{ parameters.isSecurityRelease }}
                     displayName: Create Pull Request to Update Azure Linux Specfiles

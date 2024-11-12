@@ -65,6 +65,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		repo           string
 		baseBranch     string
 		updateBranch   string
+		latestMajor    bool
 		notify         string
 		security       bool
 	)
@@ -74,6 +75,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&repo, "repo", "azurelinux", "The upstream repository name to update.")
 	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
+	flag.BoolVar(&latestMajor, "latest-major", false, "This is the latest major version, so update 'golang.spec' instead of 'golang-1.<N>.spec'.")
 	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
 	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
@@ -148,7 +150,8 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return fmt.Errorf("failed to get commit %v: %w", upstreamCommitSHA, err)
 		}
 
-		golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, golangSpecFilepath)
+		specPath := golangSpecFilepath(assets, latestMajor)
+		golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, specPath)
 		if err != nil {
 			return err
 		}
@@ -170,7 +173,8 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
 		}
 
-		golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, golangSignaturesFilepath)
+		signaturesPath := golangSignaturesFilepath(assets, latestMajor)
+		golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, signaturesPath)
 		if err != nil {
 			return err
 		}
@@ -192,12 +196,12 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 		tree := []*github.TreeEntry{
 			{
-				Path:    github.String(golangSpecFilepath),
+				Path:    github.String(specPath),
 				Content: &golangSpecFileContent,
 				Mode:    github.String(githubutil.TreeModeFile),
 			},
 			{
-				Path:    github.String(golangSignaturesFilepath),
+				Path:    github.String(signaturesPath),
 				Content: github.String(string(golangSignaturesFileBytes)),
 				Mode:    github.String(githubutil.TreeModeFile),
 			},
@@ -248,7 +252,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			Head:  &prHead,
 			Base:  github.String(baseBranch),
 			// We don't know the PR number yet, so pass 0 to use a placeholder.
-			Body:  github.String(GeneratePRDescription(assets, security, notify, 0)),
+			Body:  github.String(GeneratePRDescription(assets, latestMajor, security, notify, 0)),
 			Draft: github.Bool(true),
 		})
 		if err != nil {
@@ -263,7 +267,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	// Update the PR description with the PR number.
 	if err := githubutil.Retry(func() error {
 		_, _, err := client.PullRequests.Edit(ctx, upstream, repo, pr.GetNumber(), &github.PullRequest{
-			Body: github.String(GeneratePRDescription(assets, security, notify, pr.GetNumber())),
+			Body: github.String(GeneratePRDescription(assets, latestMajor, security, notify, pr.GetNumber())),
 		})
 		return err
 	}); err != nil {
@@ -307,7 +311,7 @@ func generatePRTitleFromAssets(assets *buildassets.BuildAssets, security bool) s
 	return b.String()
 }
 
-func GeneratePRDescription(assets *buildassets.BuildAssets, security bool, notify string, prNumber int) string {
+func GeneratePRDescription(assets *buildassets.BuildAssets, latestMajor, security bool, notify string, prNumber int) string {
 	// Use calls to fmt.Fprint* family for readability with consistency.
 	// Ignore errors because they're acting upon a simple builder.
 	var b strings.Builder
@@ -343,7 +347,8 @@ func GeneratePRDescription(assets *buildassets.BuildAssets, security bool, notif
 	} else {
 		printCopiableOption("First field", fmt.Sprintf("PR-%v", prNumber))
 	}
-	printCopiableOption("Core spec", "golang")
+
+	printCopiableOption("Core spec", golangSpecName(assets, latestMajor))
 
 	fmt.Fprint(&b, "- Post a PR comment with the URL of the triggered Buddy Build.\n")
 	fmt.Fprint(&b, "- Mark this draft PR as ready for review.\n")
@@ -370,11 +375,22 @@ func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, rep
 	return fileContent, nil
 }
 
-const (
-	golangSignaturesFilepath = "SPECS/golang/golang.signatures.json"
-	golangSpecFilepath       = "SPECS/golang/golang.spec"
-	cgManifestFilepath       = "cgmanifest.json"
-)
+func golangSignaturesFilepath(assets *buildassets.BuildAssets, latestMajor bool) string {
+	return "SPECS/golang/" + golangSpecName(assets, latestMajor) + ".signatures.json"
+}
+
+func golangSpecFilepath(assets *buildassets.BuildAssets, latestMajor bool) string {
+	return "SPECS/golang/" + golangSpecName(assets, latestMajor) + ".spec"
+}
+
+func golangSpecName(assets *buildassets.BuildAssets, latestMajor bool) string {
+	if latestMajor {
+		return "golang"
+	}
+	return "golang-" + assets.GoVersion().MajorMinor()
+}
+
+const cgManifestFilepath = "cgmanifest.json"
 
 var specFileVersionRegex = regexp.MustCompile(`(Version: +)(.+)`)
 
@@ -561,12 +577,18 @@ func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []
 	updated := false
 	for i := range cgManifest.Registrations {
 		reg := &cgManifest.Registrations[i]
-		if reg.Component.Other.Name == "golang" {
-			reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
-			reg.Component.Other.DownloadURL = githubReleaseDownloadURL(buildAssets)
-			updated = true
-			break
+		if reg.Component.Other.Name != "golang" {
+			continue
 		}
+		// Azure Linux maintains two major versions. Only update this one.
+		regVersion := goversion.New(reg.Component.Other.Version)
+		if regVersion.MajorMinor() != buildAssets.GoVersion().MajorMinor() {
+			continue
+		}
+		reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
+		reg.Component.Other.DownloadURL = githubReleaseDownloadURL(buildAssets)
+		updated = true
+		break
 	}
 
 	if !updated {

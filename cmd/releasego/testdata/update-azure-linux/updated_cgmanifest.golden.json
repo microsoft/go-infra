@@ -5,8 +5,18 @@
         "type": "other",
         "other": {
           "name": "golang",
-          "version": "1.23.0",
-          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.23.0-2/go1.23.0-20240708.2.src.tar.gz"
+          "version": "1.22.2",
+          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.22.2-1/go1.22.2-20240225.5.src.tar.gz"
+        }
+      }
+    },
+    {
+      "component": {
+        "type": "other",
+        "other": {
+          "name": "golang",
+          "version": "1.23.3",
+          "downloadUrl": "https://github.com/microsoft/go/releases/download/v1.23.3-2/go1.23.3-20240708.2.src.tar.gz"
         }
       }
     },
