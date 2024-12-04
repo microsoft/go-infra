@@ -78,3 +78,31 @@ func TestGoReleaseVersionLink(t *testing.T) {
 		t.Errorf("expected the release link to be %q, but got %q", expected, result)
 	}
 }
+
+func TestGenerateBlogFilePath(t *testing.T) {
+	tests := []struct {
+		releaseDate time.Time
+		slug        string
+		expected    string
+	}{
+		{
+			releaseDate: time.Date(2024, 2, 4, 0, 0, 0, 0, time.UTC),
+			slug:        "go-release-1-21-7-1-and-1-20-14-1",
+			expected:    "2024/02-February/go-release-1-21-7-1-and-1-20-14-1.md",
+		},
+		{
+			releaseDate: time.Date(2024, 12, 25, 0, 0, 0, 0, time.UTC),
+			slug:        "go",
+			expected:    "2024/12-December/go.md",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.slug, func(t *testing.T) {
+			got := generateBlogFilePath(tt.releaseDate, tt.slug)
+			if got != tt.expected {
+				t.Errorf("generateBlogFilePath(%v, %q) = %q; want %q", tt.releaseDate, tt.slug, got, tt.expected)
+			}
+		})
+	}
+}
