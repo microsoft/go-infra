@@ -46,7 +46,7 @@ steps:
           -pat '$(GitHubPAT)' \
           -set-azdo-variable poll2MicrosoftGoCommitHash
       displayName: ⌚ Get sync PR merged commit hash
-      timeoutInMinutes: 60
+      timeoutInMinutes: 90
       # If no PR is required, then poll2MicrosoftGoCommitHash is already set and we can move on.
       condition: and(succeeded(), ne(variables.poll1MicrosoftGoPRNumber, 'nil'))
 
@@ -140,7 +140,7 @@ steps:
           -proj 'internal' \
           -azdopat '$(System.AccessToken)'
       displayName: ⌚ Wait for internal build
-      timeoutInMinutes: 120
+      timeoutInMinutes: 180
 
     - template: ../steps/report.yml
       parameters:
