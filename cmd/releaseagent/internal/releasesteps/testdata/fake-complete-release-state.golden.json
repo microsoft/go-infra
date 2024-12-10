@@ -1,0 +1,40 @@
+{
+  "InputChecksum": 3437148890,
+  "Day": {
+    "ReleaseIssue": 42,
+    "GoImagesCommit": "abcdef-images-with-versions",
+    "GoImagesOfficialBuildID": "12345-running-pipeline",
+    "AnnouncementWritten": true,
+    "MARVersionChecked": true
+  },
+  "Versions": {
+    "1.22.10-1": {
+      "UpdatePR": 1234,
+      "Commit": "abcdef-merged-commit",
+      "OfficialBuildID": "12345-running-pipeline",
+      "InnerloopBuildID": "12345-running-pipeline",
+      "ImageUpdatePR": 50,
+      "ImagesUpdated": true,
+      "GitHubTag": "v1.22.10-1",
+      "GitHubRelease": "v1.22.10-1",
+      "AkaMSBuildID": "12345-running-pipeline",
+      "AkaMSUpdated": true,
+      "AzureLinuxUpdateBuildID": "12345-running-pipeline",
+      "AzureLinuxPRSubmitted": true
+    },
+    "1.23.4-1": {
+      "UpdatePR": 1234,
+      "Commit": "abcdef-merged-commit",
+      "OfficialBuildID": "12345-running-pipeline",
+      "InnerloopBuildID": "12345-running-pipeline",
+      "ImageUpdatePR": 50,
+      "ImagesUpdated": true,
+      "GitHubTag": "v1.23.4-1",
+      "GitHubRelease": "v1.23.4-1",
+      "AkaMSBuildID": "12345-running-pipeline",
+      "AkaMSUpdated": true,
+      "AzureLinuxUpdateBuildID": "12345-running-pipeline",
+      "AzureLinuxPRSubmitted": true
+    }
+  }
+}
