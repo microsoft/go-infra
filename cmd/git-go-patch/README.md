@@ -98,17 +98,20 @@ The error may look like this:
 error: patch failed: src/[...].go:329
 ```
 
-To fix this, follow the process to make changes to a patch file. While running `git go-patch apply`, you will see the patch failure error appear, with extra instructions about how to use `git am` to resolve it. Then:
+To fix this, follow the first two steps of the process to make changes to a patch file.
+While running `git go-patch apply`, you will see the patch failure error appear, with extra instructions about how to use `git am` to resolve it.
+Then:
 
 1. Make sure your terminal is inside the submodule.
 1. Resolve the conflict. There are several ways:
    1. Run `git am -3`. This performs a 3-way merge, and leaves merge conflict markers in the files for manual or tool-assisted fixing.
    1. Run `git am --reject`. This creates a `.rej` file for each file that couldn't be patched, containing the failed chunks for you to apply manually.
+   1. Use your IDE, Git GUI, or another graphical merge tool to resolve the conflict. An `am` conflict behaves much like a `merge` conflict.
    1. Redo the change from scratch.
    1. See [`git am` documentation](https://git-scm.com/docs/git-am) for more information.
 1. Stage your fixes.
 1. Run `git am --continue` to create the fixed-up commit.
-1. If there are more conflicts, go back to step 2.
+1. If there are more conflicts, go back to step 2. (The `git am --continue` command will tell you.)
 1. Run `git go-patch extract` to save the fixes to your repository's patch files.
 
 When creating a commit with the fixed patch files, make sure not to include the submodule change.
@@ -121,7 +124,7 @@ The next dev to work on resolution can then check out the WIP branch and run `gi
 
 ## Init submodule and apply patches with a fresh clone
 
-`git go-patch apply` understands how to set up a repo's submodules, so you can use it to make it easy for a dev to look at your fork's modifications after a fresh clone:
+`git go-patch apply` understands how to set up the patched submodule, so there's no need to run `git submodule [...]` commands after a fresh clone or checkout:
 
 ```sh
 git clone https://example.org/my/project proj
@@ -130,7 +133,8 @@ git go-patch apply
 # Proj and proj's submodule are now ready to examine.
 ```
 
-However, in build scripts, you may want to use traditional Git commands to avoid the dependency on our tool in production environments. We suggest:
+However, in build scripts, you may want to use traditional Git commands to avoid the dependency on the `git-go-patch` tool in production environments.
+We suggest:
 
 ```
 git submodule update --init --recursive
