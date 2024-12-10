@@ -20,6 +20,7 @@ First, use Go to build and install the command:
 go install github.com/microsoft/go-infra/cmd/git-go-patch@latest
 ```
 
+> [!NOTE]
 > Make sure `git-go-patch` is accessible in your shell's `PATH` variable. You may need to add `$GOPATH/bin` to your `PATH`. Use `go env GOPATH` to locate it.
 
 Then, run the command to see the help documentation:
@@ -28,7 +29,8 @@ Then, run the command to see the help documentation:
 git go-patch -h
 ```
 
-> `git` detects that our `git-go-patch` executable starts with `git-` and makes it available as `git go-patch`. The program still works if you call it with its real name, but we think it's easier to remember and type something that looks like a `git` subcommand.
+> [!NOTE]
+> [`git` detects](https://git.github.io/htmldocs/howto/new-command.html) that our `git-go-patch` executable starts with `git-` and makes it available as `git go-patch`. The program still works if you call it with its real name, but we think it's easier to remember and type something that looks like a `git` subcommand.
 
 # Subcommands
 
@@ -39,19 +41,20 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 1. Open a terminal anywhere within the repository containing the patch files or the submodule.
 1. Use `git go-patch apply` to apply patches onto the submodule as a series of commits.
 1. Navigate into the submodule.
-1. Edit the commits as desired.
-   * Commit-then-rebase workflow:
+1. Edit the commits as desired. We recommend using an **interactive rebase** ([Pro Git guide](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History#_changing_multiple)) ([Git docs](https://git-scm.com/docs/git-rebase#_interactive_mode)) started by `git go-patch rebase`. A few recommended editing workflows are:
+   * Commit-then-rebase:
      1. Make some changes in the submodule and create commits.
-     1. Use `git go-patch rebase` to start an interactive rebase.
-        1. Reorder the list to put each of your commits under the patch file that it applies to.
-        1. For each commit, choose `squash` if you want to edit the commit message or `fixup` if you don't. Use `pick` if you want to create a new patch file. (All of the built-in `rebase` options work, but these are the most common.)
-        1. The `git` command displays information about how to continue and finish the rebase.
+     1. Use `git go-patch rebase` to start an interactive rebase of the commits that include the patch changes and your changes.
+        * This command runs `git rebase -i` with with the necessary base commit.
+        * Reorder the list to put each of your commits under the patch file that it applies to.
+        * For each commit, choose `squash` if you want to edit the commit message or `fixup` if you don't. Use `pick` if you want to create a new patch file.
+     1. Follow the usual interactive rebase process.
    * Interactive rebase `edit`:
      * Useful if you have an exact change in mind or your commits would hit rebase conflicts.
      1. Use `git go-patch rebase` to start an interactive rebase before you've made any changes.
      1. Mark commits to edit with `edit` and save/close the file to continue.
-     1. When the rebase process stops at a commit, make your changes, use `git commit --amend` to edit the commit, and `git rebase --continue` to move on.
-   * Other `git rebase` features like `git commit --fixup={commit}` also work as expected.
+     1. When the rebase process stops at a commit, make your changes, use `git commit --amend` to edit the commit, then `git rebase --continue` to move on.
+   * Other `git rebase` features like [`git commit --fixup={commit}`](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt---fixupamendrewordltcommitgt) also work as expected.
 1. Use `git go-patch extract` to rewrite the patch files based on the changes in the submodule.
 
 ### Recovering from a bad rebase
@@ -59,14 +62,14 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 It's possible to accidentally squash a commit into the wrong patch file during a rebase.
 This makes the change show up in the wrong patch file.
 To fix this, sometimes it's simplest to start from scratch and copy changes back in manually.
-However, many general `rebase` recovery methods will work.
+However, many [general history rewriting methods](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History) will work.
 Here are a few strategies:
 
 #### Go back to the pre-rebase commit in the submodule
 
 You might be able to go back to the pre-rebase commit and try the `rebase` again.
-The original commit might be in your terminal history.
-Also, try `git reflog` in the submodule.
+The original commit might be in your terminal history: many commands log the commit hashes they operate on.
+Or, try `git reflog` in the submodule to [recover the commit hash](https://git-scm.com/book/en/v2/Git-Internals-Maintenance-and-Data-Recovery#_data_recovery).
 
 If you anticipate a challenging rebase, you can also preemptively create a temporary branch in the submodule or note down the commit hash before starting the rebase.
 This way, you know for sure that you can get back to a known state if it goes wrong.
@@ -79,9 +82,11 @@ Then, you can create new commits to try the rebase again.
 1. In the submodule, `git checkout -B bad` to save your current state as the branch `bad`.
 1. In the outer repository, check out the unchanged patch files.
 1. Run `git apply -f` to apply the patch files to the submodule, changing the submodule's `HEAD`.
-1. In the submodule, `git checkout bad -- .` to copy the changes from the `bad` branch into the working directory.
+1. In the submodule, `git checkout bad -- .` to copy the changes from the `bad` branch into the index (and working directory).
 1. Split the staged changes into your desired commits.
 1. Try the rebase again.
+
+The [Reset Demystified](https://git-scm.com/book/en/v2/Git-Tools-Reset-Demystified) chapter of the Pro Git book may be helpful to understand the state of the Git repository, the index, and the working directory during each step of the recovery process.
 
 ## Fix up patch files after a submodule update
 
