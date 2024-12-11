@@ -81,7 +81,7 @@ type State struct {
 	InputChecksum uint32
 
 	// Day is the release day's state.
-	Day *DayState
+	Day DayState
 
 	// Versions maps each entry from the Input.Versions slice to its state.
 	Versions map[string]*VersionState
@@ -187,9 +187,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		if _, ok := rs.Versions[version]; !ok {
 			rs.Versions[version] = &VersionState{}
 		}
-	}
-	if rs.Day == nil {
-		rs.Day = &DayState{}
 	}
 
 	createStatusReportIssue := coordinator.NewRootStep(

@@ -18,27 +18,27 @@ const NoTimeout = time.Duration(0)
 type StepFunc func(ctx context.Context) error
 
 // Step represents a step in the release. Just enough information is represented in Step to allow
-// status to be reported, otherwise state is internal to Impl.
+// status to be reported, otherwise state is internal to Func.
 type Step struct {
 	// Name is the name of the step. It must be unique within the release step graph.
 	Name string
-	// Timeout defines the deadline that should be set up for the ctx passed to Impl.
+	// Timeout defines the deadline that should be set up for the ctx passed to Func.
 	// If NoTimeout (zero), no deadline is set.
 	Timeout time.Duration
-	// Impl is the implementation of the step. It is executed when the step is run.
+	// Func is the implementation of the step. It is executed when the step is run.
 	// It is run in its own goroutine and may block on network calls, retries, etc.
 	// It shouldn't wait for another step to complete: this should be done using DependsOn.
-	Impl StepFunc
-	// DependsOn is a list of steps that must all complete before Impl is run.
+	Func StepFunc
+	// DependsOn is a list of steps that must all complete before Func is run.
 	DependsOn []*Step
 }
 
 // NewRootStep creates a new step with the given name, implementation, and no dependencies.
-func NewRootStep(name string, timeout time.Duration, impl StepFunc) *Step {
+func NewRootStep(name string, timeout time.Duration, f StepFunc) *Step {
 	return &Step{
 		Name:    name,
 		Timeout: timeout,
-		Impl:    impl,
+		Func:    f,
 	}
 }
 
@@ -47,14 +47,14 @@ func NewRootStep(name string, timeout time.Duration, impl StepFunc) *Step {
 //
 // If there are no dependencies, use NewRootStep instead. These funcs are separate to prevent
 // accidentally creating a root step by omitting dependencies.
-func NewStep(name string, timeout time.Duration, impl StepFunc, dependsOn ...*Step) *Step {
+func NewStep(name string, timeout time.Duration, f StepFunc, dependsOn ...*Step) *Step {
 	if len(dependsOn) < 1 {
 		panic("at least one dependency required to create " + name)
 	}
 	return &Step{
 		Name:      name,
 		Timeout:   timeout,
-		Impl:      impl,
+		Func:      f,
 		DependsOn: dependsOn,
 	}
 }
@@ -73,11 +73,11 @@ func NewIndicatorStep(name string, dependsOnAdditional ...*Step) *Step {
 
 // Then creates a new step that depends on s and returns the new step. This can be used when
 // defining a step graph to chain a sequence of steps together without as much syntactic clutter.
-func (s *Step) Then(name string, timeout time.Duration, impl StepFunc, dependsOnAdditional ...*Step) *Step {
+func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdditional ...*Step) *Step {
 	return &Step{
 		Name:      name,
 		Timeout:   timeout,
-		Impl:      impl,
+		Func:      f,
 		DependsOn: append(dependsOnAdditional, s),
 	}
 }
@@ -106,6 +106,9 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 
 	var sortedSteps []*Step
 
+	// visit is a recursive function that explores the transitive dependency graph of a given step.
+	// It updates v during the exploration.
+	// If there is no cycle, returns nil. If there is a cycle, returns the step names in the cycle.
 	var visit func(s *Step) []string
 	visit = func(s *Step) []string {
 		switch v[s] {

@@ -21,7 +21,7 @@ const (
 	StepStatusFailed
 )
 
-var StepPanicErr = errors.New("step panicked")
+var stepPanicErr = errors.New("panic while executing step")
 
 type StepRunner struct {
 	states map[*Step]*stepState
@@ -30,7 +30,7 @@ type StepRunner struct {
 // Execute runs a group of steps, blocking until all are complete.
 //
 // If any step fails, returns the first error that occurred. If a step panics, it is recovered,
-// wrapped as a StepPanicErr, and treated as an error.
+// wrapped as a stepPanicErr, and treated as an error.
 //
 // If any step depends on a step that doesn't exist in steps, returns an error without executing.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
@@ -38,7 +38,7 @@ func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
 	r.states = make(map[*Step]*stepState, len(steps))
 	for _, step := range steps {
 		if _, ok := r.states[step]; ok {
-			return fmt.Errorf("step %v in provided steps is a duplicate", step.Name)
+			return fmt.Errorf("step %q in provided steps is a duplicate", step.Name)
 		}
 		r.states[step] = &stepState{
 			step:     step,
@@ -79,54 +79,45 @@ type stepState struct {
 
 func (s *stepState) run(ctx context.Context, states map[*Step]*stepState) (err error) {
 	defer func() {
+		// Capture a panic and return it as an error. The caller wants other steps to have a chance
+		// to clean up via context cancellation rather than terminating immediately.
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v; stack:\n%v", stepPanicErr, r, string(debug.Stack()))
+		}
+
 		// Update status on the way out, for reporting to the release runner.
-		if s.err != nil {
+		if err != nil {
+			// Wrap error with the step name for context.
+			err = fmt.Errorf("step %q failed: %w", s.step.Name, err)
+			s.err = err
 			s.status = StepStatusFailed
 		} else {
 			s.status = StepStatusSucceeded
 		}
+
+		// Signal step completion to any steps waiting on this one.
 		close(s.complete)
 	}()
 
-	fail := func(err error) error {
-		err = fmt.Errorf("step %v failed: %w", s.step.Name, err)
-		s.err = err
-		return err
-	}
-
 	if err := s.waitForDependencies(ctx, states); err != nil {
-		return fail(err)
+		return err
 	}
 	s.status = StepStatusRunning
 
-	var implCtx context.Context
 	if s.step.Timeout == NoTimeout {
-		implCtx = ctx
-	} else {
-		deadlineCtx, cancel := context.WithTimeout(ctx, s.step.Timeout)
-		defer cancel()
-		implCtx = deadlineCtx
+		return s.step.Func(ctx)
 	}
-
-	// Capture an implementation panic and return it as an error. The caller wants other steps to
-	// have a chance to clean up via context cancellation rather than terminating immediately.
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v, %v; stack:\n%v", StepPanicErr, s.step.Name, r, string(debug.Stack()))
-		}
-	}()
-	if err := s.step.Impl(implCtx); err != nil {
-		return fail(err)
-	}
-	return nil
+	deadlineCtx, cancel := context.WithTimeout(ctx, s.step.Timeout)
+	defer cancel()
+	return s.step.Func(deadlineCtx)
 }
 
 func (s *stepState) allDependencyStepStates(states map[*Step]*stepState) ([]*stepState, error) {
-	deps  := make([]*stepState, 0, len(s.steps.DependsOn))
+	deps := make([]*stepState, 0, len(s.step.DependsOn))
 	for _, dStep := range s.step.DependsOn {
 		d, ok := states[dStep]
 		if !ok {
-			return nil, fmt.Errorf("step %v depends on unknown step %v", s.step.Name, dStep.Name)
+			return nil, fmt.Errorf("step %q depends on unknown step %q", s.step.Name, dStep.Name)
 		}
 
 		deps = append(deps, d)
@@ -162,7 +153,7 @@ func (s *stepState) done(ctx context.Context) error {
 		return ctx.Err()
 	case <-s.complete:
 		if s.err != nil {
-			return fmt.Errorf("step %v completed with error: %w", s.step.Name, s.err)
+			return fmt.Errorf("step %q completed with error: %w", s.step.Name, s.err)
 		}
 		return nil
 	}
