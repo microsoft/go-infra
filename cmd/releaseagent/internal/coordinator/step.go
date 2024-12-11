@@ -65,7 +65,7 @@ func NewStep(name string, timeout time.Duration, impl StepFunc, dependsOn ...*St
 func NewIndicatorStep(name string, dependsOnAdditional ...*Step) *Step {
 	return NewStep(
 		name,
-		0,
+		NoTimeout,
 		func(context.Context) error { return nil },
 		dependsOnAdditional...,
 	)

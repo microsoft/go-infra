@@ -122,7 +122,7 @@ func (s *stepState) run(ctx context.Context, states map[*Step]*stepState) (err e
 }
 
 func (s *stepState) allDependencyStepStates(states map[*Step]*stepState) ([]*stepState, error) {
-	var deps []*stepState
+	deps  := make([]*stepState, 0, len(s.steps.DependsOn))
 	for _, dStep := range s.step.DependsOn {
 		d, ok := states[dStep]
 		if !ok {
