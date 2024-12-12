@@ -12,4 +12,7 @@
 
 package ci_tools
 
-import _ "gotest.tools/gotestsum"
+import (
+	_ "github.com/matryer/moq"
+	_ "gotest.tools/gotestsum"
+)

@@ -1,0 +1,40 @@
+{
+  "InputChecksum": 3437148890,
+  "Day": {
+    "ReleaseIssue": 0,
+    "GoImagesCommit": "",
+    "GoImagesOfficialBuildID": "",
+    "AnnouncementWritten": false,
+    "MARVersionChecked": false
+  },
+  "Versions": {
+    "1.22.10-1": {
+      "UpdatePR": 0,
+      "Commit": "",
+      "OfficialBuildID": "",
+      "InnerloopBuildID": "",
+      "ImageUpdatePR": 0,
+      "ImagesUpdated": false,
+      "GitHubTag": "",
+      "GitHubRelease": "",
+      "AkaMSBuildID": "",
+      "AkaMSUpdated": false,
+      "AzureLinuxUpdateBuildID": "",
+      "AzureLinuxPRSubmitted": false
+    },
+    "1.23.4-1": {
+      "UpdatePR": 0,
+      "Commit": "",
+      "OfficialBuildID": "",
+      "InnerloopBuildID": "",
+      "ImageUpdatePR": 0,
+      "ImagesUpdated": false,
+      "GitHubTag": "",
+      "GitHubRelease": "",
+      "AkaMSBuildID": "",
+      "AkaMSUpdated": false,
+      "AzureLinuxUpdateBuildID": "",
+      "AzureLinuxPRSubmitted": false
+    }
+  }
+}
