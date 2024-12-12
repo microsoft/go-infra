@@ -9,6 +9,7 @@
   },
   "Versions": {
     "1.22.10-1": {
+      "UpstreamCommit": "abcdef-upstream-commit",
       "UpdatePR": 1234,
       "Commit": "abcdef-merged-commit",
       "OfficialBuildID": "12345-running-pipeline",
@@ -23,6 +24,7 @@
       "AzureLinuxPRSubmitted": true
     },
     "1.23.4-1": {
+      "UpstreamCommit": "abcdef-upstream-commit",
       "UpdatePR": 1234,
       "Commit": "abcdef-merged-commit",
       "OfficialBuildID": "12345-running-pipeline",

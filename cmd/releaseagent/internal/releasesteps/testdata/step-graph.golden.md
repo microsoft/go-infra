@@ -4,46 +4,48 @@ config:
 ---
 flowchart RL
   0(Create release day issue)
-  1(Sync, 1.22.10-1) --> 0
-  2(⌚ Wait for PR merge, 1.22.10-1) --> 1
-  3(⌚ Wait for AzDO sync, 1.22.10-1) --> 2
-  4(🚀 Trigger official build, 1.22.10-1) --> 3
-  5(⌚ Wait for official build, 1.22.10-1) --> 4
-  6(🚀 Trigger innerloop build, 1.22.10-1) --> 3
-  7(⌚ Wait for innerloop build, 1.22.10-1) --> 6
-  8(✅ Artifacts ok to publish, 1.22.10-1) --> 5 & 7
-  9(🚀 Trigger Azure Linux PR creation, 1.22.10-1) --> 8
-  10(✅ External publish complete, 1.22.10-1) --> 9
-  11(Sync, 1.23.4-1) --> 0
-  12(⌚ Wait for PR merge, 1.23.4-1) --> 11
-  13(⌚ Wait for AzDO sync, 1.23.4-1) --> 12
-  14(🚀 Trigger official build, 1.23.4-1) --> 13
-  15(⌚ Wait for official build, 1.23.4-1) --> 14
-  16(🚀 Trigger innerloop build, 1.23.4-1) --> 13
-  17(⌚ Wait for innerloop build, 1.23.4-1) --> 16
-  18(✅ Artifacts ok to publish, 1.23.4-1) --> 15 & 17
-  19(🚀 Trigger Azure Linux PR creation, 1.23.4-1) --> 18
-  20(✅ External publish complete, 1.23.4-1) --> 19
-  21(Download asset metadata, 1.22.10-1) --> 5
-  22(Download artifacts, 1.22.10-1) --> 5
-  23(🎓 Create GitHub tag, 1.22.10-1) --> 8
-  24(🎓 Create GitHub release, 1.22.10-1) --> 21 & 22 & 23
-  25(🎓 Update aka.ms links, 1.22.10-1) --> 8 & 21
-  26(Update Dockerfiles, 1.22.10-1) --> 8 & 21
-  27(✅ microsoft/go publish and go-images PR complete, 1.22.10-1) --> 24 & 25 & 26
-  28(Download asset metadata, 1.23.4-1) --> 15
-  29(Download artifacts, 1.23.4-1) --> 15
-  30(🎓 Create GitHub tag, 1.23.4-1) --> 18
-  31(🎓 Create GitHub release, 1.23.4-1) --> 28 & 29 & 30
-  32(🎓 Update aka.ms links, 1.23.4-1) --> 18 & 28
-  33(Update Dockerfiles, 1.23.4-1) --> 18 & 28
-  34(✅ microsoft/go publish and go-images PR complete, 1.23.4-1) --> 31 & 32 & 33
-  35(✅ All microsoft/go publish and go-images PRs complete) --> 27 & 34
-  36(Get go-images commit) --> 35
-  37(🚀 Trigger go-image build/publish) --> 36
-  38(⌚ Wait for go-image build/publish) --> 37
-  39(🌊 Check published image version) --> 38
-  40(📰 Create blog post markdown) --> 35 & 39
-  41(✅ Complete) --> 10 & 20 & 39 & 40
+  1(⌚ Get upstream commit for release, 1.22.10-1) --> 0
+  2(Create sync PR, 1.22.10-1) --> 1
+  3(⌚ Wait for PR merge, 1.22.10-1) --> 2
+  4(⌚ Wait for AzDO sync, 1.22.10-1) --> 3
+  5(🚀 Trigger official build, 1.22.10-1) --> 4
+  6(⌚ Wait for official build, 1.22.10-1) --> 5
+  7(🚀 Trigger innerloop build, 1.22.10-1) --> 4
+  8(⌚ Wait for innerloop build, 1.22.10-1) --> 7
+  9(✅ Artifacts ok to publish, 1.22.10-1) --> 6 & 8
+  10(🚀 Trigger Azure Linux PR creation, 1.22.10-1) --> 9
+  11(✅ External publish complete, 1.22.10-1) --> 10
+  12(⌚ Get upstream commit for release, 1.23.4-1) --> 0
+  13(Create sync PR, 1.23.4-1) --> 12
+  14(⌚ Wait for PR merge, 1.23.4-1) --> 13
+  15(⌚ Wait for AzDO sync, 1.23.4-1) --> 14
+  16(🚀 Trigger official build, 1.23.4-1) --> 15
+  17(⌚ Wait for official build, 1.23.4-1) --> 16
+  18(🚀 Trigger innerloop build, 1.23.4-1) --> 15
+  19(⌚ Wait for innerloop build, 1.23.4-1) --> 18
+  20(✅ Artifacts ok to publish, 1.23.4-1) --> 17 & 19
+  21(🚀 Trigger Azure Linux PR creation, 1.23.4-1) --> 20
+  22(✅ External publish complete, 1.23.4-1) --> 21
+  23(Download asset metadata, 1.22.10-1) --> 6
+  24(Download artifacts, 1.22.10-1) --> 6
+  25(🎓 Create GitHub tag, 1.22.10-1) --> 9
+  26(🎓 Create GitHub release, 1.22.10-1) --> 23 & 24 & 25
+  27(🎓 Update aka.ms links, 1.22.10-1) --> 9 & 23
+  28(Update Dockerfiles, 1.22.10-1) --> 9 & 23
+  29(✅ microsoft/go publish and go-images PR complete, 1.22.10-1) --> 26 & 27 & 28
+  30(Download asset metadata, 1.23.4-1) --> 17
+  31(Download artifacts, 1.23.4-1) --> 17
+  32(🎓 Create GitHub tag, 1.23.4-1) --> 20
+  33(🎓 Create GitHub release, 1.23.4-1) --> 30 & 31 & 32
+  34(🎓 Update aka.ms links, 1.23.4-1) --> 20 & 30
+  35(Update Dockerfiles, 1.23.4-1) --> 20 & 30
+  36(✅ microsoft/go publish and go-images PR complete, 1.23.4-1) --> 33 & 34 & 35
+  37(✅ All microsoft/go publish and go-images PRs complete) --> 29 & 36
+  38(Get go-images commit) --> 37
+  39(🚀 Trigger go-image build/publish) --> 38
+  40(⌚ Wait for go-image build/publish) --> 39
+  41(🌊 Check published image version) --> 40
+  42(📰 Create blog post markdown) --> 37 & 41
+  43(✅ Complete) --> 11 & 22 & 41 & 42
 
-%% https://mermaid.live/view#pako:eNqclk+O2zYUh6/ywJUC2BORlP/uBuMiXaRokbYoUGhDS5RMiCINiupkJgjQTTdF0E12QYFcoWfKCXKEgrSlsUaW7HbHgfi9R/P36Y3eoUSnHK3RdDqNVaJVJvJ1rAAke9C1XQOXRaz8w0zq+2THjIU3r92OMLgznFkOhkvOKg4pewBRVTV/4R7j4McHlUwA3xByg8MpfgHTaVyHIeUQug0k+PLhE/zChIVMG/jhDZTc5Pw8gR1Bu8Tt4+Z7qAabEIdEwdfPn36Hn4zIc25AZ5lIBJOwrYVMz3PUcbNuq2u4yHHzbj+hFDdS6/3Fhotuw6vAuQOXwZe//4BbY0XGEluBLsBq2NdbKardeW4GbkHmsHAFVt0j3z7WhsNroeq3LpPEZSy0Ol9p6ZMO/RG+eWu5UUw2vSHR5V5yO5DoyqMnltCbqC8JHrPkOYG9JXhUkx7jNcGXPemBPjZ8WZQe6EXBV5gy0PIKVXqkVwVfdqUHtq5gLwv+D7b0anlbyDW29FBvC8HBRt8rqVkKrKq4hZJbljLLBjz3EDmBml8+tp8GXz//9RGOw+2VsN/WW7AsH3kDSHSOOc7FgemEm4slpF35fMnsUOznfeqKsYLdlBVIoYqBYy9b3vtP5sER3eik4CYTkl9JLnw0pUiMrnRmX+atHMBUCrmeipLlvPJRj77dJGpLtwYRLyFZjobYF9BDq6EQz++n4ViI58Wk+FKIzznydH+rZkX92KJkPMP+CdpKh7PQoQwvktH/zfB5ZdoaSltDqTeUzg5zRMrr+lRto9PLW7RF/UCk8+AVtydcostS2NMDHaJddCdQAxym38vjGU4xrx1ddqfmZczPO+rm3Yc/4W7Hk6L5gTyFA/sbN5XQ6pTyIUROv4//NCptpc5hrysLJTNFqu87RPt+UD/kIuwv965/Yzhsow6fmGYVhbFCE1RyUzKRojV656rFyO54yWO0hhilzBQxitV7NEG112sjWG5YidbW1HyCWG21+3/c/P2odYnWeIJ4Kqw23x0+Ff0X4wTtmfrVP3d73/8bAAD///DGFgs=
+%% https://mermaid.live/view#pako:eNqclk9u4zYUh6/ywJUHsDMiqfjfLkiK6WKKDtIWBQptGIlWCFOkQVHNJIMBuummGHQzu0GBXqFnmhP0CAWfLMWOLMnoTob4vUfq9+lZH0hqM0nWZDabJSa1ZqPydWIAtHi0lV+D1NvE4M2Ntg/pvXAebt+GFdHk2knhJTippSglZOIRVFlW8lW4TSdfP32BN9JDtSu9k6KA1BaF8rCxrmGmQC8Yu6DRjL6C2SypoohLiALPmvLlo0nh3e3ppTQs5djqZ7Gv/e4WCunynuIsEPExcfV08z32OY3wgFxO/v37y2/wo1N5Lh3YzUalSmi4q5TOTnNx4ObHrc7hLgO3OO6njJFOW7sbbbg8bngWuAjgavL1r9/hynm1EakvwW7BW9hVd1qV96e5OYQLNoclRh4d7/nqqXIS3ipTvQ+hpCFPZc3pUiusQHEP37z30hmhm+bBnJ2WvidSisJQdrZx/CLuCkf5KeNeLqXoD40HlOsg6A+9HHKuw2CUdD4qXQdEeehi1LoOOEdwOa5dT8vVuHcdErVh0ah4HXDRiEfRG0bPN+9lLVaPG3aGeR0Uxw/jkxv7YLQVGYiylB4K6UUmvOh5aRCKD6Dm5EPrw/z58zPsFX2j/LfVHXiRD7xNbH6KGRy9jDcPlsXtFebLFnWxn3ZZKCa24qIoQSuz7dn2quXRf7ac7NEbm26l2ygtzyTrwVSo1NnSbvzrvJUDhMkgtzNViFyWGPXgpGDtwGKtQQwl5NFgiF0BEaJ9IfasZ0MhnhaT87EQX3I8ao7GaXuFY4vHwxl2d9Dy9V4u+zIcJef/N8PO6VpDeWsoR0P5op4jWp/Xp2wbHW68lY/je8eXk/CP8szVfymHG6qjXR1PoAaop9/r/R4OMdQujo6n5jiGb3Yc5t2nP+D6Xqbb5oAyg5r9VbpSWXP4YYAhxEG/z/80Kt1pm8POlh4K4baZfTBHp2qeQ4xDLub4cK+7T4y2kjH2zLRXLDFkSgrpCqEysiYfQrWE+HtZyISsISGZcNuEJOYjmZIK9bpRIneiIGvvKjklovL2h0eTNr+frC3Imk6JzJS37rv6CxY/ZKdkJ8wveD+s/fhfAAAA//+4hEVT
