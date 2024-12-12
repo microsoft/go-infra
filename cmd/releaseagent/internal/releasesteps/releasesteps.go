@@ -16,37 +16,6 @@ import (
 
 //go:generate moq -out ServiceBundle_moq_test.go . ServiceBundle
 
-// Common timeout values. The goal is for each timeout to be low enough to improve response time
-// when manual intervention is necessary, but high enough that they don't trip on transient issues.
-const (
-	// NoTimeout is for steps where there's no cause for concern if it takes forever. Waiting for
-	// an external manual process is the only current use case.
-	//
-	// A step that "always" completes very quickly shouldn't use this timeout: if a bug or service
-	// issue causes the step to take a long time, it's important to time out to alert the release
-	// runner that something has gone wrong.
-	NoTimeout = coordinator.NoTimeout
-
-	// ShortTimeout is for steps that should complete quickly, like API calls. Even if the API call
-	// involves a significant upload or download, this timeout may be enough: the build machines
-	// tend to have fast network connections.
-	ShortTimeout = 10 * time.Minute
-
-	// InternalMirrorTimeout for mirroring a commit from GitHub to AzDO. Just over 15 minutes.
-	// See https://github.com/microsoft/go-lab/issues/124
-	InternalMirrorTimeout = 16 * time.Minute
-
-	// Timeouts for specific pipelines that we trigger and wait for during the release process.
-	// Some might be the same, but they are independent and roughly tuned to the specific pipeline.
-
-	MicrosoftGoPRCITimeout        = 1*time.Hour + 30*time.Minute
-	MicrosoftGoOfficialCITimeout  = 3 * time.Hour
-	MicrosoftGoInnerloopCITimeout = 2 * time.Hour
-
-	MicrosoftGoImagesPRCITimeout       = 2 * time.Hour
-	MicrosoftGoImagesOfficialCITimeout = 2 * time.Hour
-)
-
 // Input is the collection of inputs for a given release that don't change. They are provided once
 // by the release runner and stay the same upon retry.
 type Input struct {
@@ -174,6 +143,37 @@ type ServiceBundle interface {
 	CreateAnnouncementBlogFile(ctx context.Context, versions []string, user string, security bool, secret *Secret) error
 }
 
+// Common timeout values. The goal is for each timeout to be low enough to improve response time
+// when manual intervention is necessary, but high enough that they don't trip on transient issues.
+const (
+	// noTimeout is for steps where there's no cause for concern if it takes forever. Waiting for
+	// an external manual process is the only current use case.
+	//
+	// A step that "always" completes very quickly shouldn't use this timeout: if a bug or service
+	// issue causes the step to take a long time, it's important to time out to alert the release
+	// runner that something has gone wrong.
+	noTimeout = coordinator.NoTimeout
+
+	// shortTimeout is for steps that should complete quickly, like API calls. Even if the API call
+	// involves a significant upload or download, this timeout may be enough: the build machines
+	// tend to have fast network connections.
+	shortTimeout = 10 * time.Minute
+
+	// internalMirrorTimeout for mirroring a commit from GitHub to AzDO. Just over 15 minutes.
+	// See https://github.com/microsoft/go-lab/issues/124
+	internalMirrorTimeout = 16 * time.Minute
+
+	// Timeouts for specific pipelines that we trigger and wait for during the release process.
+	// Some might be the same, but they are independent and roughly tuned to the specific pipeline.
+
+	microsoftGoPRCITimeout        = 1*time.Hour + 30*time.Minute
+	microsoftGoOfficialCITimeout  = 3 * time.Hour
+	microsoftGoInnerloopCITimeout = 2 * time.Hour
+
+	microsoftGoImagesPRCITimeout       = 2 * time.Hour
+	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
+)
+
 // CreateStepGraph creates the steps for a release of one or more versions of Microsoft Go. The
 // returned step graph is not running.
 //
@@ -223,7 +223,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 	createStatusReportIssue := coordinator.NewRootStep(
 		"Create release day issue",
-		ShortTimeout,
+		shortTimeout,
 		func(ctx context.Context) error {
 			if rs.Day.ReleaseIssue != 0 {
 				return nil
@@ -246,7 +246,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		syncUpdate := coordinator.NewStep(
 			name("⌚ Get upstream commit for release"),
-			NoTimeout,
+			noTimeout,
 			func(ctx context.Context) error {
 				if vs.UpstreamCommit != "" {
 					return nil
@@ -258,7 +258,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			createStatusReportIssue,
 		).Then(
 			name("Create sync PR"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.UpdatePR != 0 {
 					return nil
@@ -269,7 +269,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 		).Then(
 			name("⌚ Wait for PR merge"),
-			MicrosoftGoPRCITimeout,
+			microsoftGoPRCITimeout,
 			func(ctx context.Context) error {
 				if vs.Commit != "" {
 					return nil
@@ -280,7 +280,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 		).Then(
 			name("⌚ Wait for AzDO sync"),
-			InternalMirrorTimeout,
+			internalMirrorTimeout,
 			func(ctx context.Context) error {
 				return sb.PollAzDOMirror(ctx, ri.TargetAzDORepo, vs.Commit, secret)
 			},
@@ -288,7 +288,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		officialBuild := coordinator.NewStep(
 			name("🚀 Trigger official build"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.OfficialBuildID != "" {
 					return nil
@@ -300,7 +300,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			syncUpdate,
 		).Then(
 			name("⌚ Wait for official build"),
-			MicrosoftGoOfficialCITimeout,
+			microsoftGoOfficialCITimeout,
 			func(ctx context.Context) error {
 				return sb.PollPipelineComplete(ctx, vs.OfficialBuildID, secret)
 			},
@@ -308,7 +308,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		testOfficialBuildCommit := coordinator.NewStep(
 			name("🚀 Trigger innerloop build"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.InnerloopBuildID != "" {
 					return nil
@@ -320,7 +320,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			syncUpdate,
 		).Then(
 			name("⌚ Wait for innerloop build"),
-			MicrosoftGoInnerloopCITimeout,
+			microsoftGoInnerloopCITimeout,
 			func(ctx context.Context) error {
 				return sb.PollPipelineComplete(ctx, vs.InnerloopBuildID, secret)
 			},
@@ -345,7 +345,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		downloadAssetMetadata := coordinator.NewStep(
 			name("Download asset metadata"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				dir, err := sb.DownloadPipelineArtifactToDir(
 					ctx,
@@ -364,7 +364,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		downloadArtifacts := coordinator.NewStep(
 			name("Download artifacts"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				var err error
 				artifactsDir, err = sb.DownloadPipelineArtifactToDir(
@@ -380,7 +380,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		githubPublish := coordinator.NewStep(
 			name("🎓 Create GitHub tag"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.GitHubTag != "" {
 					return nil
@@ -396,7 +396,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			readyForPublish,
 		).Then(
 			name("🎓 Create GitHub release"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.GitHubRelease != "" {
 					return nil
@@ -413,7 +413,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		akaMSPublish := coordinator.NewStep(
 			name("🎓 Update aka.ms links"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.AkaMSBuildID == "" {
 					var err error
@@ -437,7 +437,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			name("Update Dockerfiles"),
 			// Set timeout to expect one CI run per version. This accounts for the worst case: each
 			// version contributes a Dockerfile update to the shared PR just before CI finishes.
-			MicrosoftGoImagesPRCITimeout*time.Duration(len(ri.Versions)),
+			microsoftGoImagesPRCITimeout*time.Duration(len(ri.Versions)),
 			func(ctx context.Context) error {
 				if vs.ImageUpdatePR == 0 {
 					var err error
@@ -467,7 +467,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 		azureLinuxPRPublish := coordinator.NewStep(
 			name("🚀 Trigger Azure Linux PR creation"),
-			ShortTimeout,
+			shortTimeout,
 			func(ctx context.Context) error {
 				if vs.AzureLinuxUpdateBuildID == "" {
 					var err error
@@ -502,7 +502,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 	imagesReady := coordinator.NewStep(
 		"Get go-images commit",
-		ShortTimeout,
+		shortTimeout,
 		func(ctx context.Context) error {
 			if rs.Day.GoImagesCommit == "" {
 				var err error
@@ -516,7 +516,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		versionsComplete,
 	).Then(
 		"🚀 Trigger go-image build/publish",
-		ShortTimeout,
+		shortTimeout,
 		func(ctx context.Context) error {
 			if rs.Day.GoImagesOfficialBuildID != "" {
 				return nil
@@ -527,7 +527,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		},
 	).Then(
 		"⌚ Wait for go-image build/publish",
-		MicrosoftGoImagesOfficialCITimeout,
+		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
 			return sb.PollPipelineComplete(ctx, rs.Day.GoImagesOfficialBuildID, secret)
 		},
@@ -535,7 +535,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		"🌊 Check published image version",
 		// This may need to be expanded to deal with MAR latency.
 		// Alternatively, the go-images build can wait: https://github.com/microsoft/go/issues/1258
-		ShortTimeout,
+		shortTimeout,
 		func(ctx context.Context) error {
 			if rs.Day.MARVersionChecked {
 				return nil
@@ -550,7 +550,7 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 	createBlog := coordinator.NewStep(
 		"📰 Create blog post markdown",
-		ShortTimeout,
+		shortTimeout,
 		func(ctx context.Context) error {
 			if rs.Day.AnnouncementWritten {
 				return nil
