@@ -24,9 +24,9 @@ import (
 // Both local and global update commands are included in the error message when a Check fails.
 var update = flag.Bool("update", false, "Update the golden files instead of failing.")
 
-// Check looks for a file at goldenPath, compares actual against the content, and causes the test
-// to fail if it's incorrect. If "-update" or "-args update" is passed to the "go test" command,
-// instead of failing, it writes actual to goldenPath.
+// Check looks for a file at testdata/{t.Name()}/[goldenPath], compares [actual] against the
+// content, and causes the test to fail if it's incorrect. If "-update" or "-args update" is passed
+// to the "go test" command, instead of failing, writes [actual] to the file.
 func Check(t *testing.T, goldenPath, actual string) {
 	t.Helper()
 
@@ -34,11 +34,13 @@ func Check(t *testing.T, goldenPath, actual string) {
 		*update = true
 	}
 
+	path := filepath.Join("testdata", t.Name(), goldenPath)
+
 	if *update {
-		if err := os.MkdirAll(filepath.Dir(goldenPath), os.ModePerm); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(goldenPath, []byte(actual), 0o666); err != nil {
+		if err := os.WriteFile(path, []byte(actual), 0o666); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -55,7 +57,7 @@ func Check(t *testing.T, goldenPath, actual string) {
 			"go test '%v' -run '^%v$' -update",
 		wd, t.Name())
 
-	want, err := os.ReadFile(goldenPath)
+	want, err := os.ReadFile(path)
 	if err != nil {
 		t.Errorf("Unable to read golden file: %v.\n%v", err, runHelp)
 	} else if actual != string(want) {

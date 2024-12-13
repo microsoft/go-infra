@@ -17,7 +17,7 @@ import (
 
 var assetsJsonPath = filepath.Join("testdata", "update-azure-linux", "assets.json")
 
-func TestUpdateSpecFileContent(t *testing.T) {
+func TestAzLUpdateSpecFileContent(t *testing.T) {
 	assets, err := loadBuildAssets(assetsJsonPath)
 	if err != nil {
 		t.Fatal(err)
@@ -49,10 +49,10 @@ func TestUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
 
-	goldentest.Check(t, filepath.Join("testdata", "update-azure-linux", "updated_golang.golden.spec"), updatedSpecFile)
+	goldentest.Check(t, "updated_golang.golden.spec", updatedSpecFile)
 }
 
-func TestUpdateSignaturesFileContent(t *testing.T) {
+func TestAzLUpdateSignaturesFileContent(t *testing.T) {
 	assets, err := loadBuildAssets(assetsJsonPath)
 	if err != nil {
 		t.Fatal(err)
@@ -69,10 +69,10 @@ func TestUpdateSignaturesFileContent(t *testing.T) {
 		t.Errorf("Error updating CG Manifest file : %s", err)
 	}
 
-	goldentest.Check(t, filepath.Join("testdata", "update-azure-linux", "updated_signatures.golden.json"), string(updatedSignatureFile))
+	goldentest.Check(t, "updated_signatures.golden.json", string(updatedSignatureFile))
 }
 
-func TestUpdateCGManifestFileContent(t *testing.T) {
+func TestAzLUpdateCGManifestFileContent(t *testing.T) {
 	assets, err := loadBuildAssets(assetsJsonPath)
 	if err != nil {
 		t.Fatal(err)
@@ -89,10 +89,10 @@ func TestUpdateCGManifestFileContent(t *testing.T) {
 		t.Errorf("Error updating CG Manifest file : %s", err)
 	}
 
-	goldentest.Check(t, filepath.Join("testdata", "update-azure-linux", "updated_cgmanifest.golden.json"), string(updatedCgManifestFile))
+	goldentest.Check(t, "updated_cgmanifest.golden.json", string(updatedCgManifestFile))
 }
 
-func TestUpdateSpecVersion(t *testing.T) {
+func TestAzLUpdateSpecVersion(t *testing.T) {
 	type args struct {
 		newGoVersion string
 		oldVersion   string
@@ -150,7 +150,7 @@ func TestUpdateSpecVersion(t *testing.T) {
 	}
 }
 
-func TestPRBody(t *testing.T) {
+func TestAzLPRBody(t *testing.T) {
 	assets, err := loadBuildAssets(assetsJsonPath)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestPRBody(t *testing.T) {
 			got := generatePRTitleFromAssets(assets, tt.args.security)
 			got += "\n\n---\n\n"
 			got += GeneratePRDescription(assets, tt.args.latestMajor, tt.args.security, tt.args.notify, tt.args.prNumber)
-			goldentest.Check(t, filepath.Join("testdata", "update-azure-linux", "pr", "pr-description-"+tt.name+".golden.md"), got)
+			goldentest.Check(t, "pr-description-"+tt.name+".golden.md", got)
 		})
 	}
 }

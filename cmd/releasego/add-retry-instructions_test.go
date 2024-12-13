@@ -4,13 +4,12 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
 
-func Test_generateContent(t *testing.T) {
+func TestGenerateRetryInstructions(t *testing.T) {
 	tests := []struct {
 		name string
 		args retryTemplateArgs
@@ -35,7 +34,7 @@ func Test_generateContent(t *testing.T) {
 				t.Errorf("generateContent() error = %v", err)
 				return
 			}
-			goldentest.Check(t, filepath.Join("testdata", "retry-instructions", tt.name+".golden.md"), got)
+			goldentest.Check(t, tt.name+".golden.md", got)
 		})
 	}
 }

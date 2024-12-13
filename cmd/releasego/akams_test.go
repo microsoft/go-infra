@@ -71,7 +71,7 @@ func Test_createLinkPairs(t *testing.T) {
 			if err := writeLinkPairTable(&gotTableBuffer, got); err != nil {
 				t.Fatal(err)
 			}
-			goldentest.Check(t, "testdata/akams/"+t.Name()+".golden.txt", gotTableBuffer.String())
+			goldentest.Check(t, "aka.golden.txt", gotTableBuffer.String())
 		})
 	}
 }
