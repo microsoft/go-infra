@@ -60,13 +60,13 @@ func TestCreateStepGraphGolden(t *testing.T) {
 	goldenMermaid := src + "\n%% " + url + "\n"
 
 	// Use "md" file: help highlight the link for devs, and there is no clear better extension.
-	goldentest.Check(t, t.Name(), filepath.Join("testdata", "step-graph.golden.md"), goldenMermaid)
+	goldentest.Check(t, filepath.Join("testdata", "step-graph.golden.md"), goldenMermaid)
 
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	goldentest.Check(t, t.Name(), filepath.Join("testdata", "default-state.golden.json"), string(stateJSON))
+	goldentest.Check(t, filepath.Join("testdata", "default-state.golden.json"), string(stateJSON))
 }
 
 func TestRunFakeRelease(t *testing.T) {
@@ -150,5 +150,5 @@ func TestRunFakeRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	goldentest.Check(t, t.Name(), filepath.Join("testdata", "fake-complete-release-state.golden.json"), string(stateJSON))
+	goldentest.Check(t, filepath.Join("testdata", "fake-complete-release-state.golden.json"), string(stateJSON))
 }

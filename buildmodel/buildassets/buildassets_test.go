@@ -61,7 +61,7 @@ func TestBuildResultsDirectoryInfo_GoldenCreateSummary(t *testing.T) {
 				resultData = []byte(err.Error())
 			}
 
-			goldentest.Check(t, "go test ./buildassets", filepath.Join(dir, "result.golden.txt"), string(resultData))
+			goldentest.Check(t, filepath.Join(dir, "result.golden.txt"), string(resultData))
 		})
 	}
 }

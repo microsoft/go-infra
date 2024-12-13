@@ -7,20 +7,32 @@ package goldentest
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
 // update is a flag that can be set using "go test . -update", and it is registered here when this
 // package is initialized.
+//
+// Note that "go test ./... -update" emits errors in many cases. Packages with tests that don't
+// import goldentest don't have "-update" registered, and they fail noisily when they see the
+// unknown flag. For this reason, Check also supports "go test ./... -args update".
+//
+// Both local and global update commands are included in the error message when a Check fails.
 var update = flag.Bool("update", false, "Update the golden files instead of failing.")
 
-// Check looks for a file at goldenPath, compares actual against the content, and causes the test to
-// fail if it's incorrect. If "-update" is passed to the "go test" command, instead of failing, it
-// writes actual to goldenPath.
-func Check(t *testing.T, rerunCmd, goldenPath, actual string) {
+// Check looks for a file at goldenPath, compares actual against the content, and causes the test
+// to fail if it's incorrect. If "-update" or "-args update" is passed to the "go test" command,
+// instead of failing, it writes actual to goldenPath.
+func Check(t *testing.T, goldenPath, actual string) {
 	t.Helper()
+
+	if slices.Contains(flag.Args(), "update") {
+		*update = true
+	}
 
 	if *update {
 		if err := os.MkdirAll(filepath.Dir(goldenPath), os.ModePerm); err != nil {
@@ -31,14 +43,22 @@ func Check(t *testing.T, rerunCmd, goldenPath, actual string) {
 		}
 	}
 
-	runHelp := "Run '" + rerunCmd + " -update' to update golden file"
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+
+	runHelp := fmt.Sprintf(
+		"To regenerate all golden files, run in the module root: "+
+			"go test ./... -args update\n"+
+			"To regenerate just this test's golden file, run: "+
+			"go test '%v' -run '^%v$' -update",
+		wd, t.Name())
 
 	want, err := os.ReadFile(goldenPath)
 	if err != nil {
-		t.Fatalf("Unable to read golden file. %v. Error: %v", runHelp, err)
-	}
-
-	if actual != string(want) {
-		t.Errorf("Actual result didn't match golden file. %v and examine the Git diff to determine if the change is acceptable.", runHelp)
+		t.Errorf("Unable to read golden file: %v.\n%v", err, runHelp)
+	} else if actual != string(want) {
+		t.Errorf("Actual result didn't match golden file. Regenerate the golden file and examine the Git diff to determine if the change is acceptable.\n%v", runHelp)
 	}
 }
