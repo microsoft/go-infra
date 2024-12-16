@@ -1,7 +1,6 @@
 package buildreport
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -103,7 +102,7 @@ func Test_commentBody_body(t *testing.T) {
 				t.Errorf("(r *reportComment) body() error = %v", err)
 				return
 			}
-			goldentest.Check(t, "go test ./buildreport -run "+t.Name(), filepath.Join("testdata", "report", "body."+tt.name+".golden.md"), got)
+			goldentest.Check(t, "body."+tt.name+".golden.md", got)
 		})
 	}
 }
@@ -137,7 +136,7 @@ func Test_commentBody_body_UpdateExisting(t *testing.T) {
 		t.Errorf("(r *reportComment) body() error = %v", err)
 		return
 	}
-	goldentest.Check(t, "go test ./buildreport -run "+t.Name(), filepath.Join("testdata", "report", "update-existing.golden.md"), got)
+	goldentest.Check(t, "update-existing.golden.md", got)
 }
 
 func Test_State_notificationPreamble(t *testing.T) {
@@ -160,11 +159,7 @@ func Test_State_notificationPreamble(t *testing.T) {
 				Version: tt.version,
 				Status:  tt.status,
 			}
-			goldentest.Check(
-				t,
-				"go test ./buildreport -run "+t.Name(),
-				filepath.Join("testdata", "report", "notify."+tt.name+".golden.md"),
-				s.notificationPreamble())
+			goldentest.Check(t, "notify."+tt.name+".golden.md", s.notificationPreamble())
 		})
 	}
 }

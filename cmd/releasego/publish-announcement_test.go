@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,10 +35,7 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 				t.Errorf("WriteAnnouncement() error = %v", err)
 				return
 			}
-			goldentest.Check(
-				t, "Test_ReleaseInfo_WriteAnnouncement ",
-				filepath.Join("testdata", "publish-announcement", tt.name+".golden.md"),
-				b.String())
+			goldentest.Check(t, tt.name+".golden.md", b.String())
 		})
 	}
 }
