@@ -112,8 +112,8 @@ type systemOut struct {
 
 type junitTestCase struct {
 	XMLName   xml.Name    `xml:"testcase"`
-	Name      string      `xml:"name,attr"`
 	Classname string      `xml:"classname,attr"`
+	Name      string      `xml:"name,attr"`
 	Time      float64     `xml:"time,attr"`
 	Event     *junitEvent `xml:",omitempty"`
 	systemOut string      // Placeholder for the event output.

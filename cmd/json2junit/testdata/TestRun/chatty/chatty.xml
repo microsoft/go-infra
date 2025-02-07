@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testsuites tests="2" failures="0" skipped="0">
-	<testsuite name="cmd/go" id="0" tests="2" failures="0" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
-		<testcase name="TestScript" classname="cmd/go" time="1.23"></testcase>
-		<testcase name="TestScript/test_chatty_fail" classname="cmd/go" time="14.07"></testcase>
+	<testsuite name="cmd/go" tests="2" failures="0" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+		<testcase classname="cmd/go" name="TestScript" time="1.23"></testcase>
+		<testcase classname="cmd/go" name="TestScript/test_chatty_fail" time="14.07"></testcase>
 	</testsuite>
 </testsuites>
