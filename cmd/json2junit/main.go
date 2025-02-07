@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -88,7 +87,6 @@ type junitTestSuites struct {
 type junitTestSuite struct {
 	XMLName   xml.Name   `xml:"testsuite"`
 	Name      string     `xml:"name,attr"`
-	ID        string     `xml:"id,attr"`
 	Tests     int        `xml:"tests,attr"`
 	Failures  int        `xml:"failures,attr"`
 	Skipped   int        `xml:"skipped,attr"`
@@ -162,7 +160,6 @@ func convertJsonToJUnit(entries []jsonEntry) (*junitTestSuites, error) {
 			}
 			suite := &junitTestSuite{
 				Name:      entry.Package,
-				ID:        strconv.Itoa(len(cache)),
 				Timestamp: entry.Time.Format(time.RFC3339),
 			}
 			cache[entry.Package] = suite
