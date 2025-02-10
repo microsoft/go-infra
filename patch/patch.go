@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package patch manages patch files as stored in the Microsoft Go repository alongside a submodule.
+// Package patch manages patch files as stored in the Microsoft build of Go repository alongside a submodule.
 package patch
 
 import (
@@ -70,7 +70,7 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 	return executil.Run(cmd)
 }
 
-// WalkGoPatches finds patches in the given Microsoft Go repository root directory and runs fn once
+// WalkGoPatches finds patches in the given Microsoft build of Go repository root directory and runs fn once
 // per patch file path. If fn returns an error, walking terminates and the error is returned. The
 // walk iterates in the order the patches should be applied (alphabetical filename order).
 func WalkGoPatches(config *FoundConfig, fn func(string) error) error {
@@ -223,7 +223,7 @@ func FindAncestorConfig(dir string) (*FoundConfig, error) {
 			if byConvention != nil {
 				return byConvention, nil
 			}
-			return nil, fmt.Errorf("no %#q file or Microsoft Go root found in any ancestor of %v", ConfigFileName, originalDir)
+			return nil, fmt.Errorf("no %#q file or Microsoft build of Go root found in any ancestor of %v", ConfigFileName, originalDir)
 		}
 		dir = parent
 	}

@@ -2,10 +2,10 @@
 
 `git-go-patch` is a tool that makes it easier to work with a "patched submodule fork" workflow.
 It includes several subcommands that help with specific parts of the process.
-The [Microsoft Go repository](https://github.com/microsoft/go) uses this tool, and it's currently the main reason the tool is being developed and maintained.
+The [Microsoft build of Go repository](https://github.com/microsoft/go) uses this tool, and it's currently the main reason the tool is being developed and maintained.
 
 A "patched submodule fork" is when you don't hit GitHub's "Fork" button, but rather maintain your own Git repository that contains the upstream repo as a [submodule](https://git-scm.com/book/en/v2/Git-Tools-Submodules) along with `*.patch` files that modify the submodule when you use `git apply patches/*.patch`.
-For more information about why we chose this style of fork for the Microsoft Go repository, see [/docs/fork](https://github.com/microsoft/go-infra/tree/main/docs/fork).
+For more information about why we chose this style of fork for the Microsoft build of Go repository, see [/docs/fork](https://github.com/microsoft/go-infra/tree/main/docs/fork).
 
 Related documentation:
 

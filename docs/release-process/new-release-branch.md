@@ -1,7 +1,7 @@
 # Creating a new release branch
 
 To release any given major.minor version of Go, the microsoft/go repository needs to have a branch tracking that version.
-Microsoft Go doesn't ship betas or release candidates.
+Microsoft build of Go doesn't ship betas or release candidates.
 
 ## When to create the branch
 

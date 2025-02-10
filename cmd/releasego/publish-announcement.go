@@ -142,7 +142,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	var security bool
 	var dryRun bool
 
-	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Microsoft Go version in YYYY-MM-DD format.")
+	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Microsoft build of Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")

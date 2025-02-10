@@ -7,7 +7,7 @@ infrastructure used by Microsoft to build any Go release branch.
 
 ## microsoft/go
 
-The Microsoft Go toolset fork, maintained in
+The Microsoft build of Go fork, maintained in
 [microsoft/go](https://github.com/microsoft/go), contains one branch per
 maintained major version (e.g. `microsoft/release-branch.go1.19`). They
 correspond to the branches maintained by

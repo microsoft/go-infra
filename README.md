@@ -1,4 +1,4 @@
-# Microsoft Go Infrastructure
+# Microsoft build of Go Infrastructure
 
 This repository contains libraries and utilities that Microsoft uses to:
 

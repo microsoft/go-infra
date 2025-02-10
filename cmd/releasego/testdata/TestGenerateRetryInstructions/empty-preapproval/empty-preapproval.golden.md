@@ -8,7 +8,7 @@ Based on the variables that were set by this build when it failed, here's a sugg
 
 ### ⌚ Wait for go-images dependency flow
 
-This step might time out if the auto-update PR from the Microsoft Go build didn't merge successfully. It could also time out if the version numbers are incorrect.
+This step might time out if the auto-update PR from the Microsoft build of Go build didn't merge successfully. It could also time out if the version numbers are incorrect.
 
 If you see that the update PR is in progress, simply follow the **Retry** instructions below.
 

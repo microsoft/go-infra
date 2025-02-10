@@ -1,13 +1,13 @@
 # Patch files vs. in-place modifications
 
-The Microsoft Go project needs to be able to maintain modifications to the Go source code but also keep up with the latest versions of Go. There are two main approaches to maintain this kind of modification over time:
+The Microsoft build of Go project needs to be able to maintain modifications to the Go source code but also keep up with the latest versions of Go. There are two main approaches to maintain this kind of modification over time:
 
 1. Make changes directly to the files, "in place". Periodically merge from the official Go repository and resolve conflicts as merge commits.
 2. Put the changes into patch files. Periodically move to a newer version of the official Go source code and attempt to apply the same patch files. If they don't apply cleanly, resolve conflicts by fixing up the patch files.
 
 > A *patch file* is a text file that contains all the data necessary to create a commit that performs some changes. It's typically created using [`git format-patch`](https://git-scm.com/docs/git-format-patch). It contains commit title, author, commit message, and the source code diff. [`git apply`](https://git-scm.com/docs/git-apply) applies the diff, and [`git am`](https://git-scm.com/docs/git-am) applies the diff *and* creates a commit containing the changes.
 
-The Microsoft Go project uses patch files for modifications to the Go source code. This trades off some ease of development for maintainability benefits.
+The Microsoft build of Go project uses patch files for modifications to the Go source code. This trades off some ease of development for maintainability benefits.
 
 # Background
 

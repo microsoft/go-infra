@@ -12,7 +12,7 @@ First, determine the **list of versions to release**. Type them in as a YAML lis
     * Always include the upstream version with a `-1` suffix. For example, for 1.18.5, include `1.18.5-1`.
     * If the version is <= 1.18, include a version with `-1-fips` suffix. For example, `1.18.5-1-fips`.
     * If the version is >= 1.19, no extra version is necessary.
-* Microsoft Go servicing event:
+* Microsoft build of Go servicing event:
     * Sometimes, we have to release when upstream hasn't made any changes. For example, to fix an issue with the FIPS implementation, or Go being built incorrectly by our infrastructure.
     * First, make sure the fixes have been cherry-picked to the applicable release branches--normally only the two most recent major versions.
     * Use the latest release's version number with the Microsoft revision number incremented by one. If `1.18.3-1` was the latest, use `1.18.3-2` as the new version.

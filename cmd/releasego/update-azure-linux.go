@@ -315,14 +315,14 @@ func GeneratePRDescription(assets *buildassets.BuildAssets, latestMajor, securit
 	// Use calls to fmt.Fprint* family for readability with consistency.
 	// Ignore errors because they're acting upon a simple builder.
 	var b strings.Builder
-	fmt.Fprint(&b, "Hi! 👋 I'm the Microsoft Go team's bot. This is an automated pull request I generated to bump the Go version to ")
+	fmt.Fprint(&b, "Hi! 👋 I'm the Microsoft team's bot. This is an automated pull request I generated to bump the Go version to ")
 	fmt.Fprintf(&b, "[%s](%s).\n\n", assets.GoVersion().Full(), githubReleaseURL(assets))
 
 	if security {
 		fmt.Fprint(&b, "**This update contains security fixes.**\n\n")
 	}
 
-	fmt.Fprint(&b, "I'm not able to run the Azure Linux pipelines yet, so the Microsoft Go release runner will need to finalize this PR.")
+	fmt.Fprint(&b, "I'm not able to run the Azure Linux pipelines yet, so the Microsoft release runner will need to finalize this PR.")
 	if notify != "" && notify != "ghost" {
 		fmt.Fprintf(&b, " @%s", notify)
 	}
@@ -635,7 +635,7 @@ func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.Go
 		newRelease = 1
 	} else {
 		// When the upstream Go version didn't change, increment the release number. This means
-		// there has been a patch specific to Microsoft Go.
+		// there has been a patch specific to Microsoft build of Go.
 		newRelease = oldRelease + 1
 	}
 
