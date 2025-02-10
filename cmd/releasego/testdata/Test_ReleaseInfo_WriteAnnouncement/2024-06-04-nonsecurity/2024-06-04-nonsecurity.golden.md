@@ -5,10 +5,10 @@ post_slug: go-1-22-4-1-and-1-21-11-1-microsoft-builds-now-available
 categories: Microsoft for Go Developers
 tags: go, release
 featured_image:
-summary: A new set of Microsoft Go builds is now available for download.
+summary: A new release of the Microsoft build of Go is now available for download.
 ---
 
-A new set of Microsoft Go builds is now [available for download](https://github.com/microsoft/go#download-and-install).
+A new release of the Microsoft build of Go is now [available for download](https://github.com/microsoft/go#download-and-install).
 For more information about this release and the changes included, see the table below:
 
 | Microsoft Release | Upstream Tag |
