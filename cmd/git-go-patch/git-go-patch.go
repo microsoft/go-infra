@@ -36,7 +36,7 @@ where "go" is the submodule, and "patches" contains the list of patch files. The
 overridden using the "-c" argument.
 `
 
-// repoRootFlag can be passed to any subcommand to specify a particular Microsoft Go repository
+// repoRootFlag can be passed to any subcommand to specify a particular Microsoft build of Go repository
 // directory.
 var repoRootFlag = flag.String("c", "", "Disable Go repository discovery and use this path as the target.")
 

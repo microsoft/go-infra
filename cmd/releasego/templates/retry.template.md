@@ -29,7 +29,7 @@ If you expect the tag to be available, look carefully at the tag name being poll
 
 ### ⌚ Wait for go-images dependency flow
 
-This step might time out if the auto-update PR from the Microsoft Go build didn't merge successfully. It could also time out if the version numbers are incorrect.
+This step might time out if the auto-update PR from the Microsoft build of Go build didn't merge successfully. It could also time out if the version numbers are incorrect.
 
 If you see that the update PR is in progress, simply follow the **Retry** instructions below.
 
@@ -85,7 +85,7 @@ After submitting the PR, get the team to review it and merge it. Find the merged
 
 ### ⌚ Wait for go-images update PR merge
 
-This step waits until the PR completes to push the new Microsoft Go build into the microsoft/go-images repository. Look at the CI status of <https://github.com/microsoft/go-images/pull/{{ .LastNonNilEnv.Value }}>:
+This step waits until the PR completes to push the new Microsoft build of Go build into the microsoft/go-images repository. Look at the CI status of <https://github.com/microsoft/go-images/pull/{{ .LastNonNilEnv.Value }}>:
 
 * If the PR CI is taking a while to complete but seems to be progressing normally, simply **Retry** to resume polling.
 * If the PR CI failed due to flakiness, retry the PR's CI, then **Retry** to resume polling.

@@ -1,6 +1,6 @@
 # Automated branch sync
 
-microsoft/go-infra implements branch sync infrastructure for the Microsoft Go repositories.
+microsoft/go-infra implements branch sync infrastructure for the Microsoft build of Go repositories.
 Sync is used to keep Microsoft's repos up to date with upstream repos, and to update dev branches with the latest changes from their upstream branches.
 
 This sometimes involves automatically resolving merge conflicts, so the infra is implemented here rather than relying on existing infra that assumes clean merges.

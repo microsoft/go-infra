@@ -174,7 +174,7 @@ const (
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
 )
 
-// CreateStepGraph creates the steps for a release of one or more versions of Microsoft Go. The
+// CreateStepGraph creates the steps for a release of one or more versions of Microsoft build of Go. The
 // returned step graph is not running.
 //
 // If rs is nil, creates a new empty state that indicates no release work has been done yet.

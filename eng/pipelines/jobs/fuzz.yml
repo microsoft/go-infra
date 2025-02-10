@@ -6,9 +6,9 @@
 parameters:
   name: ''
   pool: null
-  # Platform, as it appears in the Microsoft Go pipeline artifact name: OS-Arch.
+  # Platform, as it appears in the Microsoft build of Go pipeline artifact name: OS-Arch.
   platform: ''
-  # Use the Microsoft Go toolset from a pipeline resource called "build", rather than official Go.
+  # Use the Microsoft build of Go toolset from a pipeline resource called "build", rather than official Go.
   useMicrosoftGo: true
   # The value of GOEXPERIMENT to use, or empty string.
   goExperiment: ''

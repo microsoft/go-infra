@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package submodule manages submodules as used by the Microsoft Go repository.
+// Package submodule manages submodules as used by the Microsoft build of Go repository.
 package submodule
 
 import (

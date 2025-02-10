@@ -3,14 +3,14 @@
 
 <#
 .SYNOPSIS
-    Installs Microsoft Go
+    Installs Microsoft build of Go
 .DESCRIPTION
-    Installs the Microsoft Go toolset.
+    Installs the Microsoft build of Go toolset.
 
     Note that the intended use of this script is for Continuous Integration (CI) scenarios, where:
     - The toolset needs to be installed without user interaction and without admin rights.
     - The toolset installation doesn't need to persist across multiple CI runs.
-    Visit https://github.com/microsoft/go for a list of other ways to install Microsoft Go.
+    Visit https://github.com/microsoft/go for a list of other ways to install Microsoft build of Go.
 
 .PARAMETER Version
     Default: Latest
@@ -21,11 +21,11 @@
           examples: go1.18, go1.23
     - 3-part version in format go1.A.B - latest revision of a specific release.
           examples: go1.18.0, go1.23.1
-    - 4-part version in format go1.A.B-C - a specific revision of Microsoft Go, immutable.
+    - 4-part version in format go1.A.B-C - a specific revision of Microsoft build of Go, immutable.
           examples: go1.18.0-1, go1.23.1-3
-    Microsoft Go doesn't publish prereleases, so they are not available.
+    Microsoft build of Go doesn't publish prereleases, so they are not available.
 .PARAMETER InstallDir
-    Path to where to install Microsoft Go. Note that if a directory is given, GOROOT is placed
+    Path to where to install Microsoft build of Go. Note that if a directory is given, GOROOT is placed
     directly in that directory.
     Default: <auto> - a folder automatically selected inside LocalApplicationData as evaluated by PowerShell.
     Example auto on Windows: C:\Users\myself\AppData\Local\microsoft-go\<version>
@@ -42,7 +42,7 @@
     Possible values are: <auto>, amd64, x64, 386, x86, arm64, arm
 .PARAMETER DryRun
     If set, it will not perform installation. Instead, it displays what command line to use to
-    consistently install currently requested version of Microsoft Go. For example, if you specify
+    consistently install currently requested version of Microsoft build of Go. For example, if you specify
     Version 'Latest', it will print a command with the specific 4-part version so this command can
     be used deterministicly in a build script.
     It also prints the location the binaries would have been installed to.
@@ -75,10 +75,10 @@
     Displays diagnostics information.
 .EXAMPLE
     go-install.ps1
-    Installs the latest released Microsoft Go version.
+    Installs the latest released Microsoft build of Go version.
 .EXAMPLE
     go-install.ps1 -Version Previous
-    Installs the latest version of the previous major (1.X) version of Microsoft Go.
+    Installs the latest version of the previous major (1.X) version of Microsoft build of Go.
 #>
 [cmdletbinding()]
 param(
@@ -802,12 +802,12 @@ if ($Help) {
     exit
 }
 
-Say "Microsoft Go Install Script version $MicrosoftGoInstallScriptVersion"
+Say "Microsoft build of Go Install Script version $MicrosoftGoInstallScriptVersion"
 
 Say-Verbose "Note that the intended use of this script is for Continuous Integration (CI) scenarios, where:"
 Say-Verbose "- The toolset needs to be installed without user interaction and without admin rights."
 Say-Verbose "- The toolset installation doesn't need to persist across multiple CI runs."
-Say-Verbose "Visit https://github.com/microsoft/go for a list of other ways to install Microsoft Go.`r`n"
+Say-Verbose "Visit https://github.com/microsoft/go for a list of other ways to install Microsoft build of Go.`r`n"
 
 Measure-Action "Product discovery" {
     $script:CLIArchitecture = Get-CLIArchitecture-From-Architecture $Architecture
@@ -835,7 +835,7 @@ Say-Verbose "Found download link $DownloadLink with version $SpecificVersion"
 if (-Not $DryRun) {
     Say-Verbose "Checking if the version $SpecificVersion is already installed"
     if (Is-ToolsetInstalled -InstallRoot $InstallRoot -SpecificVersion $SpecificVersion) {
-        Say "Microsoft Go version '$SpecificVersion' is already installed."
+        Say "Microsoft build of Go version '$SpecificVersion' is already installed."
         Measure-Action "Setting up shell environment" { Prepend-ToolsetPathEnv -InstallRoot $InstallRoot -SpecificVersion $SpecificVersion }
         return
     }

@@ -1,8 +1,8 @@
 # go-install.ps1
 
-[`go-install.ps1`](powershell/go-install.ps1) is a PowerShell script that installs the [Microsoft Go](https://github.com/microsoft/go) toolset.
-The script works with Windows PowerShell and PowerShell (`pwsh`) and can install all [supported prebuilt Microsoft Go toolset platforms](https://github.com/microsoft/go?tab=readme-ov-file#download-and-install).
-It installs the Microsoft Go toolset into a directory of your choice, or defaults to a directory in the user-specific data directory.
+[`go-install.ps1`](powershell/go-install.ps1) is a PowerShell script that installs the [Microsoft build of Go](https://github.com/microsoft/go) toolset.
+The script works with Windows PowerShell and PowerShell (`pwsh`) and can install all [supported prebuilt Microsoft build of Go toolset platforms](https://github.com/microsoft/go?tab=readme-ov-file#download-and-install).
+It installs the Microsoft build of Go toolset into a directory of your choice, or defaults to a directory in the user-specific data directory.
 
 See `go-install.ps1 -h` for more information about the parameters and defaults.
 
@@ -97,7 +97,7 @@ import (
 ### Updating the script using `goinstallscript`
 
 > [!NOTE]
-> It isn't necessary to update the script to get new builds of the Microsoft Go toolset.
+> It isn't necessary to update the script to get new builds of the Microsoft build of Go toolset.
 > Updates to the script are rare, and only occur when the lookup or download processes themselves change.
 
 To update the script, run the `go get` and `go run` commands again in the directory where the script is stored.

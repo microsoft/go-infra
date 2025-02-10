@@ -6,7 +6,7 @@ Based on the variables that were set by this build when it failed, here's a sugg
 
 ### ⌚ Wait for go-images update PR merge
 
-This step waits until the PR completes to push the new Microsoft Go build into the microsoft/go-images repository. Look at the CI status of <https://github.com/microsoft/go-images/pull/8>:
+This step waits until the PR completes to push the new Microsoft build of Go build into the microsoft/go-images repository. Look at the CI status of <https://github.com/microsoft/go-images/pull/8>:
 
 * If the PR CI is taking a while to complete but seems to be progressing normally, simply **Retry** to resume polling.
 * If the PR CI failed due to flakiness, retry the PR's CI, then **Retry** to resume polling.

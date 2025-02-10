@@ -1,8 +1,7 @@
 # Support
 
-This repository is only intended for use with the Microsoft Go build
-infrastructure. Please let us know if you find it useful for a different
-purpose!
+This repository is only intended for use with the Microsoft build of Go infrastructure.
+Please let us know if you find it useful for a different purpose!
 
 ## How to file issues and get help
 

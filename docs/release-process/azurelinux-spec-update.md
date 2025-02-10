@@ -4,7 +4,7 @@ This document describes how to update the Azure Linux 3.0 spec file to use a new
 
 For each version released:
 
-1. Find and open the [microsoft-go](https://dev.azure.com/dnceng/internal/_build?definitionId=958) build that produced the new Microsoft Go release.
+1. Find and open the [microsoft-go](https://dev.azure.com/dnceng/internal/_build?definitionId=958) build that produced the new Microsoft build of Go release.
 1. From the URL, copy the build ID.
    * For example, in `[...]results?buildId=2535309&view=results`, it is `2535309`.
 1. Go to [microsoft-go-infra-update-azure-linux](https://dev.azure.com/dnceng/internal/_build?definitionId=1405).

@@ -22,7 +22,7 @@ const marRepo = "mcr.microsoft.com/oss/go/microsoft/golang"
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "wait-latest-mar-go-version",
-		Summary: "Wait (poll) for the latest Microsoft Go images on MAR to match specified versions.",
+		Summary: "Wait (poll) for the latest Microsoft build of Go images on MAR to match specified versions.",
 		Description: `
 
 Given a list of Go versions, constructs tag names for each one's major version (1.20.3-1 -> 1.20)

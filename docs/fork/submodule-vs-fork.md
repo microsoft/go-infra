@@ -31,7 +31,7 @@ When Fedora builds the Go toolset, it [uses a spec file](https://src.fedoraproje
 
 Similar to how Debian has patch tooling, Fedora has tools to download source tarballs and build spec files. Using Git submodules, we leverage existing tooling to get essentially the same result.
 
-Git submodules do address a limitation of using `https://go.dev/dl/`. For the Microsoft Go repository, a requirement is to be able to develop on `master` and the tip of release branches. `https://go.dev/dl/` only serves source code for releases, so using submodules to fetch from the upstream Git repository addresses this.
+Git submodules do address a limitation of using `https://go.dev/dl/`. For the Microsoft build of Go repository, a requirement is to be able to develop on `master` and the tip of release branches. `https://go.dev/dl/` only serves source code for releases, so using submodules to fetch from the upstream Git repository addresses this.
 
 However, if necessary, a submodule's location on disk can be filled by a downloaded source tarball. For example, it might be faster to acquire a source tarball if the Git client or host lacks shallow fetch capabilities, or the source tarball is already available locally.
 

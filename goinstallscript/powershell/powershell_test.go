@@ -18,7 +18,7 @@ import (
 
 var download = flag.Bool(
 	"download", false,
-	"Run tests that include downloading Microsoft Go from the internet. "+
+	"Run tests that include downloading Microsoft build of Go from the internet. "+
 		"These may be very slow and not totally reproducible.")
 
 const endOfFunctionsMarker = "# [END OF FUNCTIONS]"
@@ -149,7 +149,7 @@ func TestInstallPath(t *testing.T) {
 
 func TestInstall(t *testing.T) {
 	if !*download {
-		t.Skip("skipping test that downloads Microsoft Go from the internet; use -download to run it")
+		t.Skip("skipping test that downloads Microsoft build of Go from the internet; use -download to run it")
 	}
 	for _, interpreter := range currentOSInterpreters(t) {
 		t.Run(interpreter, func(t *testing.T) {

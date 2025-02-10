@@ -546,7 +546,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			}
 
 			// Ensure either the VERSION file in the submodule is what we expect it to be, or the
-			// Microsoft Go repo contains a VERSION file specifying that version. This fixes boring
+			// Microsoft build of Go repository contains a VERSION file specifying that version. This fixes boring
 			// branches, where upstream has no VERSION file and we need to make it ourselves.
 			//
 			// If there is no expected version, (e.g. the sync entry simply wants to sync to
