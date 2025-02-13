@@ -110,4 +110,5 @@ script_test.go:163:
 	<testcase classname="cmd/go" name="TestScript/work_vendor_modules_txt_consistent" time="1.81"></testcase>
 	<testcase classname="cmd/go" name="TestScript/work_vendor_prune" time="17.61"></testcase>
 	<testcase classname="cmd/go" name="TestScript/work_vendor_prune_all" time="10.78"></testcase>
-</testsuite></testsuites>
+</testsuite>
+</testsuites>

@@ -310,6 +310,6 @@ func (c *Converter) openXML() error {
 }
 
 func (c *Converter) closeXML() error {
-	_, err := c.w.Write([]byte("</testsuites>\n"))
+	_, err := c.w.Write([]byte("\n</testsuites>\n"))
 	return err
 }

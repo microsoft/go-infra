@@ -663,4 +663,5 @@
 	<testcase classname="crypto/sha1" name="TestSHA1Hash/StatefulWrite" time="0"></testcase>
 	<testcase classname="crypto/sha1" name="ExampleNew" time="0"></testcase>
 	<testcase classname="crypto/sha1" name="ExampleSum" time="0"></testcase>
-</testsuite></testsuites>
+</testsuite>
+</testsuites>

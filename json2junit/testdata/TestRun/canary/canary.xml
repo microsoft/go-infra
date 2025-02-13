@@ -8327,4 +8327,5 @@ commands_test.go:296:
 	<testcase classname="github.com/microsoft/go-sqlcmd/cmd/modern/root/install" name="TestNegInstallMssql5" time="0"></testcase>
 	<testcase classname="github.com/microsoft/go-sqlcmd/cmd/modern/root/install" name="TestNegInstallMssql6" time="0"></testcase>
 	<testcase classname="github.com/microsoft/go-sqlcmd/cmd/modern/root/install" name="TestNegInstallMssql7" time="0"></testcase>
-</testsuite></testsuites>
+</testsuite>
+</testsuites>
