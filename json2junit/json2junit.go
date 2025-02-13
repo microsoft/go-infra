@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ func ConvertFile(out, in string) error {
 		return err
 	}
 	defer r.Close()
+
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+		return err
+	}
 
 	w, err := os.Create(out)
 	if err != nil {
