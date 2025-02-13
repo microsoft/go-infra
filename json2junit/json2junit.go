@@ -33,7 +33,7 @@ func ConvertFile(out, in string) error {
 	}
 	defer r.Close()
 
-	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
 
