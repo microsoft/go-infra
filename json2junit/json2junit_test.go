@@ -1,5 +1,7 @@
-// File: cmd/json2junit/main_test.go
-package main
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package json2junit
 
 import (
 	"os"
@@ -21,7 +23,7 @@ func TestRun(t *testing.T) {
 		t.Run(fileNameNoExt, func(t *testing.T) {
 			in := filepath.Join(dir, fileName)
 			tmpOut := filepath.Join(t.TempDir(), "output.xml")
-			if err := run(in, tmpOut); err != nil {
+			if err := ConvertFile(tmpOut, in); err != nil {
 				t.Fatal(err)
 			}
 			data, err := os.ReadFile(tmpOut)

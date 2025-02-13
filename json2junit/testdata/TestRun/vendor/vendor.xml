@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go" tests="48" failures="2" skipped="0" time="97.406" timestamp="2025-02-07T17:28:42+01:00">
+	<testcase classname="cmd/go" name="TestScript" time="0.5">
+		<failure message="failed"></failure>
+	</testcase>
+	<testcase classname="cmd/go" name="TestScript/build_vendor" time="2.65"></testcase>
+	<testcase classname="cmd/go" name="TestScript/gopath_std_vendor" time="38.59"></testcase>
+	<testcase classname="cmd/go" name="TestScript/gopath_vendor_dup_err" time="5.41"></testcase>
+	<testcase classname="cmd/go" name="TestScript/list_std_vendor" time="72.97"></testcase>
+	<testcase classname="cmd/go" name="TestScript/list_symlink_vendor_issue14054" time="21.15"></testcase>
+	<testcase classname="cmd/go" name="TestScript/list_symlink_vendor_issue15201" time="2.09"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_getmode_vendor" time="22.34"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_gomodcache_vendor" time="30.95"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_import_vendor" time="5.74"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_patterns_vendor" time="1.81"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_std_vendor" time="71.68"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor" time="66.98"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_auto" time="81.83"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_build" time="31.18"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_collision" time="5.39"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_embed" time="8.79"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_gomod" time="2.71"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_goversion" time="9.5"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_issue46867" time="1.74"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_nodeps" time="0.37"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_redundant_requirement" time="0.58"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_replace" time="3.71"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_trimpath" time="78.86"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_unused" time="0.54"></testcase>
+	<testcase classname="cmd/go" name="TestScript/mod_vendor_unused_only" time="1.46"></testcase>
+	<testcase classname="cmd/go" name="TestScript/run_vendor" time="21.7"></testcase>
+	<testcase classname="cmd/go" name="TestScript/std_vendor" time="21.36"></testcase>
+	<testcase classname="cmd/go" name="TestScript/test_vendor" time="36.79"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_complex" time="11.21"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_gopath_issue11409" time="43.93"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_import" time="13.25"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_import_missing" time="0.35"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_import_wrong" time="1.23"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_internal" time="0.88"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_issue12156" time="0.39"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_list_issue11977" time="1.08"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_outside_module" time="79.78"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_resolve" time="0.64"></testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_test_issue11864" time="38.49">
+		<failure message="failed"><![CDATA[script_test.go:139: 2025-02-07T16:29:34Z
+script_test.go:141: $WORK=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236
+script_test.go:163: 
+    PATH=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\testbin;C:\Users\qmuntaldiaz\code\go\go\bin;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\MSVC\14.29.30133\bin\HostX64\x64;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\VC\VCPackages;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TeamFoundation\Team Explorer;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\MSBuild\Current\bin\Roslyn;C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64\;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\Common7\Tools\devinit;C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64;C:\Program Files (x86)\Windows Kits\10\bin\x64;C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\\MSBuild\Current\Bin;C:\Window    USERPROFILE=/no-home
+    CCACHE_DISABLE=1
+    GOARCH=amd64
+    TESTGO_GOHOSTARCH=amd64
+    GOCACHE=C:\Users\qmuntaldiaz\AppData\Local\go-build
+    GOCOVERDIR=
+    GODEBUG=
+    GOEXE=.exe
+    GOEXPERIMENT=
+    GOOS=windows
+    TESTGO_GOHOSTOS=windows
+    GOPROXY=http://127.0.0.1:8803/mod
+    GOPRIVATE=
+    GOROOT=C:\Users\qmuntaldiaz\code\go\go
+    GOTRACEBACK=system
+    TESTGO_GOROOT=C:\Users\qmuntaldiaz\code\go\go
+    TESTGO_EXE=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\testbin\go.exe
+    TESTGO_VCSTEST_HOST=127.0.0.1:8801
+    TESTGO_VCSTEST_TLS_HOST=127.0.0.1:8802
+    TESTGO_VCSTEST_CERT=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\vcstest1440201431\cert.pem
+    TESTGONETWORK=panic
+    GOSUMDB=localhost.localdev/sumdb+00000c67+AcTrnkbUA+TU4heY3hkjiSES/DSQniBqIeQ/YppAUtK6
+    GONOPROXY=
+    GONOSUMDB=
+    GOVCS=*:all
+    devnull=NUL
+    goversion=1.24
+    CMDGO_TEST_RUN_MAIN=true
+    HGRCPATH=
+    GOTOOLCHAIN=auto
+    newline=
+    
+    SYSTEMROOT=C:\WINDOWS
+    WINDIR=C:\WINDOWS
+    WORK=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236
+    TEST_TELEMETRY_DIR=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236\telemetry
+    TMP=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236\tmp
+    GOPATH=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236\gopath
+    PWD=C:\Users\QMUNTA~1\AppData\Local\Temp\cmd-go-test-384050165\tmpdir2906741073\vendor_test_issue118643467679236\gopath\src
+    
+    > [short] skip
+    [condition not met]
+    > env GO111MODULE=off
+    # test should work too (27.738s)
+    > go test github.com/rsc/go-get-issue-11864
+    [stdout]
+    ?   	github.com/rsc/go-get-issue-11864	[no test files]
+    > go test github.com/rsc/go-get-issue-11864/t
+    [stdout]
+    ok  	github.com/rsc/go-get-issue-11864/t	5.842s
+    # external tests should observe internal test exports (golang.org/issue/11977) (10.643s)
+    > go test github.com/rsc/go-get-issue-11864/vendor/vendor.org/tx2
+    [stdout]
+    ok  	github.com/rsc/go-get-issue-11864/vendor/vendor.org/tx2	3.102s
+]]></failure>
+	</testcase>
+	<testcase classname="cmd/go" name="TestScript/vendor_test_issue14613" time="40.62"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_disablevendor" time="19.39"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_empty" time="2.27"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_main_module_replaced" time="1.97"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_modules_txt_conditional" time="1.22"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_modules_txt_consistent" time="1.81"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_prune" time="17.61"></testcase>
+	<testcase classname="cmd/go" name="TestScript/work_vendor_prune_all" time="10.78"></testcase>
+</testsuite></testsuites>
