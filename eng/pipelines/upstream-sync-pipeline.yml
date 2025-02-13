@@ -48,7 +48,6 @@ extends:
               clean: all
             steps:
               - template: /eng/pipelines/steps/checkout-unix-task.yml@self
-              - template: /eng/pipelines/steps/init-pwsh-task.yml@self
 
               - template: /eng/pipelines/steps/init-go.yml@self
               - template: /eng/pipelines/steps/set-bot-git-author.yml@self

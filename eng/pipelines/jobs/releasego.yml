@@ -56,7 +56,6 @@ jobs:
 
       - template: ../steps/checkout-unix-task.yml
 
-      - template: ../steps/init-pwsh-task.yml
       - template: ../steps/init-go.yml
       - template: ../steps/set-bot-git-author.yml
       - script: |

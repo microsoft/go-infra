@@ -55,7 +55,6 @@ extends:
               assetJsonPath: $(Pipeline.Workspace)/build/BuildAssets/assets.json
             steps:
               - template: /eng/pipelines/steps/checkout-unix-task.yml@self
-              - template: /eng/pipelines/steps/init-pwsh-task.yml@self
 
               - pwsh: |
                   echo "pipelineName: $(resources.pipeline.build.pipelineName)"
