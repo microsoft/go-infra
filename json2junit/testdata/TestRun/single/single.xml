@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="github.com/microsoft/go-infra/goversion" tests="2" failures="0" skipped="0" time="0.507" timestamp="2025-02-13T11:55:57-08:00">
+	<testcase classname="github.com/microsoft/go-infra/goversion" name="TestNew" time="0"></testcase>
+	<testcase classname="github.com/microsoft/go-infra/goversion" name="TestNew/Full_version" time="0"></testcase>
+</testsuite>
+</testsuites>

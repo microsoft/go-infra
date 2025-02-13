@@ -1,0 +1,12 @@
+{"Time":"2025-02-13T11:55:57.0140877-08:00","Action":"start","Package":"github.com/microsoft/go-infra/goversion"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"run","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew","Output":"=== RUN   TestNew\n"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"run","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew/Full_version"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew/Full_version","Output":"=== RUN   TestNew/Full_version\n"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew/Full_version","Output":"--- PASS: TestNew/Full_version (0.00s)\n"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"pass","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew/Full_version","Elapsed":0}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew","Output":"--- PASS: TestNew (0.00s)\n"}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"pass","Package":"github.com/microsoft/go-infra/goversion","Test":"TestNew","Elapsed":0}
+{"Time":"2025-02-13T11:55:57.5024824-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Output":"PASS\n"}
+{"Time":"2025-02-13T11:55:57.5058424-08:00","Action":"output","Package":"github.com/microsoft/go-infra/goversion","Output":"ok  \tgithub.com/microsoft/go-infra/goversion\t0.491s\n"}
+{"Time":"2025-02-13T11:55:57.521448-08:00","Action":"pass","Package":"github.com/microsoft/go-infra/goversion","Elapsed":0.507}
