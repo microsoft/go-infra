@@ -97,14 +97,13 @@ func (c *Converter) Write(b []byte) (int, error) {
 		}
 
 		// Unmarshal the JSON.
+		// If the JSON is invalid, just ignore it.
 		var jsonEntry jsonEntry
-		if err := json.Unmarshal(data, &jsonEntry); err != nil {
-			return 0, fmt.Errorf("failed to unmarshal JSON: %v", err)
-		}
-
-		// Process the JSON entry.
-		if err := c.processJSONEntry(jsonEntry); err != nil {
-			return 0, fmt.Errorf("failed to process line: %v", err)
+		if err := json.Unmarshal(data, &jsonEntry); err == nil {
+			// Process the JSON entry.
+			if err := c.processJSONEntry(jsonEntry); err != nil {
+				return 0, fmt.Errorf("failed to process line: %v", err)
+			}
 		}
 
 		// Skip the newline.
