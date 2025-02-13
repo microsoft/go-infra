@@ -19,15 +19,14 @@ jobs:
       - template: steps/init-go.yml
       - template: steps/set-bot-git-author.yml
 
-      # Install the version of gotestsum specified in the ci-tools module.
       - script: |
-          go install gotest.tools/gotestsum
-        displayName: Install gotestsum
-        workingDirectory: $(Build.SourcesDirectory)/eng/ci-tools
+          go test -json ./... > $(Build.StagingDirectory)/TestResults.json
+        displayName: Test
 
       - script: |
-          "$(go env GOPATH)/bin/gotestsum" --junitfile $(Build.StagingDirectory)/TestResults.xml
-        displayName: Test
+          go run ./cmd/json2junit -in $(Build.StagingDirectory)/TestResults.json -out $(Build.StagingDirectory)/TestResults.xml
+        displayName: Convert test results to JUnit format
+        condition: succeededOrFailed()
 
       - task: PublishTestResults@2
         displayName: Publish test results
