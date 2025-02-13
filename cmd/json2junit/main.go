@@ -30,7 +30,7 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	if err := json2junit.ConvertFile(*in, *out); err != nil {
+	if err := json2junit.ConvertFile(*out, *in); err != nil {
 		log.Fatalln(err)
 	}
 }
