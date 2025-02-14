@@ -120,6 +120,10 @@ type PRFlags struct {
 	githubPAT         *string
 	githubPATReviewer *string
 
+	gitHubAppID           *int64
+	gitHubAppInstallation *int64
+	gitHubAppPrivateKey   *string
+
 	UpdateFlags
 	sync.AzDOVariableFlags
 }
@@ -138,6 +142,10 @@ func BindPRFlags() *PRFlags {
 
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
+
+		gitHubAppID:           flag.Int64("github-app-id", 0, "Use this GitHub App ID to authenticate to GitHub."),
+		gitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
+		gitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
 
 		UpdateFlags:       *BindUpdateFlags(),
 		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
@@ -352,7 +360,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		skipReason = "Dry run"
 	case *f.origin == "":
 		skipReason = "No origin specified"
-	case *f.githubPAT == "":
+	case *f.githubPAT == "" && *f.gitHubAppID == 0:
 		skipReason = "github-pat not provided"
 	case *f.githubPATReviewer == "":
 		skipReason = "github-pat-reviewer not provided"

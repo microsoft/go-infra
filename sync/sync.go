@@ -80,7 +80,8 @@ func BindFlags(workingDirectory string) *Flags {
 			"The type of Git auth to inject into URLs for fetch/push access. String options:\n"+
 				" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
 				" ssh - Change the GitHub URL to SSH format.\n"+
-				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"),
+				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"+
+				" app - Add the 'github-app-id', 'github-app-installation', and 'github-app-private-key' values into the URL.\n"),
 	}
 }
 
