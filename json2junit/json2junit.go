@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+// Package json2junit converts JSON Go test output to JUnit XML format.
 package json2junit
 
 import (
@@ -16,7 +17,7 @@ import (
 	"time"
 )
 
-// Convert converts a JSON file reader with Go test output to a JUnit XML writer.
+// Convert reads Go test JSON and writes converted JUnit XML.
 func Convert(w io.Writer, r io.Reader) error {
 	c := NewConverter(w)
 	if _, err := io.Copy(c, r); err != nil {
@@ -25,7 +26,8 @@ func Convert(w io.Writer, r io.Reader) error {
 	return c.Close()
 }
 
-// ConvertFile converts a JSON file with Go test output to a JUnit XML file.
+// ConvertFile reads a Go test JSON file and creates a JUnit XML file with converted content.
+// Creates the directory containing the target file if necessary.
 func ConvertFile(out, in string) error {
 	r, err := os.Open(in)
 	if err != nil {
@@ -50,8 +52,9 @@ func ConvertFile(out, in string) error {
 }
 
 // A Converter holds the state of a JSON-to-JUnit conversion.
-// It implements io.WriteCloser; the caller writes test output in,
-// and the converter writes JUnit output to w.
+// It implements io.WriteCloser; call Write with JSON test output,
+// then Close. The JUnit output is written to the writer w that was
+// passed to NewConverter.
 //
 // The JSON input is buffered, so the caller can write it in arbitrary
 // size chunks that don't have to align with the JSON lines.
@@ -246,6 +249,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		if entry.Test == "" {
 			suite.Time = entry.Elapsed
 			if entry.Action != "fail" {
+				// In case of success, we don't care about the output.
 				suite.SystemOut = nil
 			}
 			err := c.writeXMLTestSuite(suite)
