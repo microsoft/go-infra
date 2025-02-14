@@ -5,6 +5,6 @@
 
 steps:
   - script: |
-      git config --global user.name 'microsoft-golang-bot'
-      git config --global user.email 'microsoft-golang-bot@users.noreply.github.com'
+      git config --global user.name 'microsoft-build-of-go-bot[bot]'
+      git config --global user.email '199222863+microsoft-build-of-go-bot[bot]@users.noreply.github.com'
     displayName: Set up Git author

@@ -6,14 +6,20 @@
 package gitcmd
 
 import (
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/stringutil"
 )
@@ -21,6 +27,7 @@ import (
 const (
 	githubPrefix     = "https://github.com/"
 	azdoDncengPrefix = "https://dnceng@dev.azure.com/"
+	githubAPI        = "https://api.github.com"
 )
 
 // URLAuther manipulates a Git repository URL (GitHub, AzDO, ...) such that Git commands taking a
@@ -30,10 +37,15 @@ type URLAuther interface {
 	// InsertAuth inserts authentication into the URL and returns it, or if the auther doesn't
 	// apply, returns the url without any modifications.
 	InsertAuth(url string) string
+	InsertHTTPAuth(req *http.Request)
 }
 
 // GitHubSSHAuther turns an https-style GitHub URL into an SSH-style GitHub URL.
 type GitHubSSHAuther struct{}
+
+func (GitHubSSHAuther) InsertHTTPAuth(req *http.Request) {
+	// No-op
+}
 
 func (GitHubSSHAuther) InsertAuth(url string) string {
 	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
@@ -47,6 +59,13 @@ type GitHubPATAuther struct {
 	User, PAT string
 }
 
+func (a GitHubPATAuther) InsertHTTPAuth(req *http.Request) {
+	if a.PAT == "" {
+		return
+	}
+	req.SetBasicAuth(a.User, a.PAT)
+}
+
 func (a GitHubPATAuther) InsertAuth(url string) string {
 	if a.User == "" || a.PAT == "" {
 		return url
@@ -57,9 +76,120 @@ func (a GitHubPATAuther) InsertAuth(url string) string {
 	return url
 }
 
+// GitHubAppAuther authenticates using a GitHub App instead of a PAT.
+type GitHubAppAuther struct {
+	AppID          int64
+	InstallationID int64
+	PrivateKey     string // The GitHub App's private key (PEM format)
+}
+
+func (a GitHubAppAuther) InsertAuth(url string) string {
+	token, err := a.getInstallationToken()
+	if err != nil {
+		log.Printf("Failed to get GitHub App installation token: %v", err)
+		return url
+	}
+	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
+		return fmt.Sprintf("https://x-access-token:%v@github.com/%v", token, after)
+	}
+	return url
+}
+
+func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) {
+	token, err := a.getInstallationToken()
+	if err != nil {
+		log.Printf("Failed to get GitHub App installation token: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "token "+token)
+}
+
+func (a GitHubAppAuther) getInstallationToken() (string, error) {
+	// Generate a JWT using the private key
+	jwt, err := generateJWT(a.AppID, a.PrivateKey)
+	if err != nil {
+		return "", err
+	}
+
+	// Exchange JWT for an installation token
+	token, err := fetchInstallationToken(jwt, a.InstallationID)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// generateJWT creates a JWT for the GitHub App.
+func generateJWT(appID int64, privateKey string) (string, error) {
+	privkey, err := base64.StdEncoding.DecodeString(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode private key: %v", err)
+	}
+	block, _ := pem.Decode(privkey)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode private key")
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse RSA private key: %v", err)
+	}
+
+	now := time.Now().Unix()
+	claims := jwt.MapClaims{
+		"iat": now,       // Issued at time
+		"exp": now + 600, // Expiration time (10 min)
+		"iss": appID,     // GitHub App ID
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signedToken, err := token.SignedString(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %v", err)
+	}
+	return signedToken, nil
+}
+
+// fetchInstallationToken exchanges a JWT for an installation access token.
+func fetchInstallationToken(jwt string, installationID int64) (string, error) {
+	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", githubAPI, installationID)
+
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("failed to get installation token, status: %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return "", err
+	}
+
+	return result.Token, nil
+}
+
 // AzDOPATAuther adds a PAT into the https-style Azure DevOps repository URL.
 type AzDOPATAuther struct {
 	PAT string
+}
+
+func (a AzDOPATAuther) InsertHTTPAuth(req *http.Request) {
+	// No-op
 }
 
 func (a AzDOPATAuther) InsertAuth(url string) string {
@@ -78,6 +208,10 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 // NoAuther does nothing to URLs.
 type NoAuther struct{}
 
+func (NoAuther) InsertHTTPAuth(req *http.Request) {
+	// No-op
+}
+
 func (NoAuther) InsertAuth(url string) string {
 	return url
 }
@@ -86,6 +220,12 @@ func (NoAuther) InsertAuth(url string) string {
 // makes a change to the URL.
 type MultiAuther struct {
 	Authers []URLAuther
+}
+
+func (m MultiAuther) InsertHTTPAuth(req *http.Request) {
+	for _, a := range m.Authers {
+		a.InsertHTTPAuth(req)
+	}
 }
 
 func (m MultiAuther) InsertAuth(url string) string {

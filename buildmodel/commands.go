@@ -148,6 +148,18 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
+	var auther *gitcmd.GitHubPATAuther
+	if f.githubPAT != nil {
+		auther = &gitcmd.GitHubPATAuther{
+			PAT: *f.githubPAT,
+		}
+	}
+	var reviewAuthor *gitcmd.GitHubPATAuther
+	if f.githubPATReviewer != nil {
+		reviewAuthor = &gitcmd.GitHubPATAuther{
+			PAT: *f.githubPATReviewer,
+		}
+	}
 	if !*f.skipDockerfiles {
 		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
 			return err
@@ -226,7 +238,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 				parsedOrigin,
 				b.PRBranch(),
 				githubUser,
-				*f.githubPAT)
+				auther)
 			if err != nil {
 				return err
 			}
@@ -358,7 +370,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		p, err := gitpr.PostGitHub(
 			parsedOrigin.GetOwnerSlashRepo(),
 			request,
-			*f.githubPAT)
+			auther)
 		fmt.Printf("%+v\n", p)
 		if err != nil {
 			return err
@@ -372,13 +384,13 @@ func SubmitUpdatePR(f *PRFlags) error {
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
 
 		fmt.Printf("---- Approving with reviewer account...\n")
-		if err = gitpr.ApprovePR(existingPR.ID, *f.githubPATReviewer); err != nil {
+		if err = gitpr.ApprovePR(existingPR.ID, reviewAuthor); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-	if err = gitpr.EnablePRAutoMerge(existingPR.ID, *f.githubPATReviewer); err != nil {
+	if err = gitpr.EnablePRAutoMerge(existingPR.ID, reviewAuthor); err != nil {
 		return err
 	}
 

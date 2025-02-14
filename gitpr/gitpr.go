@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/microsoft/go-infra/gitcmd"
 )
 
 var client = http.Client{
@@ -267,7 +269,7 @@ type GitHubRequestError struct {
 
 // PostGitHub creates a PR on GitHub using pat for the given owner/repo and request details.
 // If the PR already exists, returns a wrapped [ErrPRAlreadyExists].
-func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (*GitHubResponse, error) {
+func PostGitHub(ownerRepo string, request *GitHubRequest, auther gitcmd.URLAuther) (*GitHubResponse, error) {
 	prSubmitContent, err := json.MarshalIndent(request, "", "")
 	if err != nil {
 		return nil, err
@@ -278,7 +280,7 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (*GitHubRe
 	if err != nil {
 		return nil, err
 	}
-	httpRequest.SetBasicAuth("", pat)
+	auther.InsertHTTPAuth(httpRequest)
 
 	var response struct {
 		GitHubResponse
@@ -328,7 +330,7 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, pat string) (*GitHubRe
 	return &response.GitHubResponse, nil
 }
 
-func QueryGraphQL(pat string, query string, variables map[string]interface{}, result interface{}) error {
+func QueryGraphQL(auther gitcmd.URLAuther, query string, variables map[string]interface{}, result interface{}) error {
 	queryBytes, err := json.Marshal(&struct {
 		Query     string                 `json:"query"`
 		Variables map[string]interface{} `json:"variables,omitempty"`
@@ -344,14 +346,14 @@ func QueryGraphQL(pat string, query string, variables map[string]interface{}, re
 	if err != nil {
 		return err
 	}
-	httpRequest.SetBasicAuth("", pat)
+	auther.InsertHTTPAuth(httpRequest)
 
 	return sendJSONRequestSuccessful(httpRequest, result)
 }
 
-func MutateGraphQL(pat string, query string, variables map[string]interface{}) error {
+func MutateGraphQL(auther gitcmd.URLAuther, query string, variables map[string]interface{}) error {
 	// Queries and mutations use the same API. But with a mutation, the results aren't useful to us.
-	return QueryGraphQL(pat, query, variables, &struct{}{})
+	return QueryGraphQL(auther, query, variables, &struct{}{})
 }
 
 type ExistingPR struct {
@@ -363,7 +365,7 @@ type ExistingPR struct {
 // FindExistingPR looks for a PR submitted to a target branch with a set of filters. Returns the
 // result's graphql identity if one match is found, empty string if no matches are found, and an
 // error if more than one match was found.
-func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser, githubPAT string) (*ExistingPR, error) {
+func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser string, auther gitcmd.URLAuther) (*ExistingPR, error) {
 	prQuery := `query ($githubUser: String!, $headRefName: String!, $baseRefName: String!) {
 		user(login: $githubUser) {
 			pullRequests(states: OPEN, headRefName: $headRefName, baseRefName: $baseRefName, first: 5) {
@@ -422,7 +424,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 		}
 	}{}
 
-	if err := QueryGraphQL(githubPAT, prQuery, variables, result); err != nil {
+	if err := QueryGraphQL(auther, prQuery, variables, result); err != nil {
 		return nil, err
 	}
 	fmt.Printf("%+v\n", result)
@@ -460,9 +462,9 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 
 // ApprovePR adds an approving review on the target GraphQL PR node ID. The review author is the user
 // associated with the PAT.
-func ApprovePR(nodeID string, pat string) error {
+func ApprovePR(nodeID string, auther gitcmd.URLAuther) error {
 	return MutateGraphQL(
-		pat,
+		auther,
 		`mutation ($nodeID: ID!) {
 				addPullRequestReview(input: {pullRequestId: $nodeID, event: APPROVE, body: "Thanks! Auto-approving."}) {
 					clientMutationId
@@ -472,9 +474,9 @@ func ApprovePR(nodeID string, pat string) error {
 }
 
 // EnablePRAutoMerge enables PR automerge on the target GraphQL PR node ID.
-func EnablePRAutoMerge(nodeID string, pat string) error {
+func EnablePRAutoMerge(nodeID string, auther gitcmd.URLAuther) error {
 	return MutateGraphQL(
-		pat,
+		auther,
 		`mutation ($nodeID: ID!) {
 			enablePullRequestAutoMerge(input: {pullRequestId: $nodeID, mergeMethod: MERGE}) {
 				clientMutationId
