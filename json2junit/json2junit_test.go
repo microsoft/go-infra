@@ -4,6 +4,7 @@
 package json2junit
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,8 +12,8 @@ import (
 	"github.com/microsoft/go-infra/goldentest"
 )
 
-func TestRun(t *testing.T) {
-	dir := filepath.Join("testdata", "inputs")
+func TestConverter(t *testing.T) {
+	dir := filepath.Join("testdata", "inputs", "good")
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +32,28 @@ func TestRun(t *testing.T) {
 				t.Fatal(err)
 			}
 			goldentest.Check(t, fileNameNoExt+".xml", string(data))
+		})
+	}
+}
+
+func TestConverterErrors(t *testing.T) {
+	dir := filepath.Join("testdata", "inputs", "bad")
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		fileName := file.Name()
+		fileNameNoExt := fileName[:len(fileName)-len(filepath.Ext(fileName))]
+		t.Run(fileNameNoExt, func(t *testing.T) {
+			in, err := os.Open(filepath.Join(dir, fileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = Convert(io.Discard, in)
+			if err == nil {
+				t.Fatal("expected error")
+			}
 		})
 	}
 }

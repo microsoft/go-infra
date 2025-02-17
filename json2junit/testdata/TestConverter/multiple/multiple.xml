@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go1" tests="1" failures="0" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+	<testcase classname="cmd/go1" name="TestScript" time="1.22"></testcase>
+</testsuite>
+<testsuite name="cmd/go2" tests="1" failures="0" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+	<testcase classname="cmd/go2" name="TestScript" time="1.23"></testcase>
+</testsuite>
+</testsuites>

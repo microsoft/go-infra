@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go" tests="3" failures="1" skipped="1" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+	<testcase classname="cmd/go" name="TestScriptSucc" time="1.21"></testcase>
+	<testcase classname="cmd/go" name="TestScriptFail" time="1.22">
+		<failure message="failed"></failure>
+	</testcase>
+	<testcase classname="cmd/go" name="TestScriptSkip" time="1.23">
+		<skipped message="skipped"></skipped>
+	</testcase>
+</testsuite>
+</testsuites>

@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -207,38 +206,32 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			return fmt.Errorf("no start entry for %v", entry.Package)
 		}
 		testCase := suite.testCase(entry.Test)
-		if testCase == nil {
-			suite.Tests++
-			testCase = &junitTestCase{
-				Name:      entry.Test,
-				Classname: entry.Package,
-			}
-			suite.TestCases = append(suite.TestCases, testCase)
+		if testCase != nil {
+			return fmt.Errorf("duplicate run entry for package %v test %v", entry.Package, entry.Test)
 		}
+		suite.Tests++
+		testCase = &junitTestCase{
+			Name:      entry.Test,
+			Classname: entry.Package,
+		}
+		suite.TestCases = append(suite.TestCases, testCase)
 	case "output":
 		// append output to the current test case or suite.
 		_, suite := c.suite(entry.Package)
 		if suite == nil {
 			return fmt.Errorf("no start entry for %v", entry.Package)
 		}
-		out, ok := strings.CutPrefix(entry.Output, "    ")
-		if !ok {
-			// Ignore all lines that don't start with "    " (4 spaces),
-			// because they are not part of the test output but to the
-			// Go test runner.
-			break
-		}
 		if entry.Test == "" {
 			if suite.SystemOut == nil {
 				suite.SystemOut = new(systemOut)
 			}
-			suite.SystemOut.Content = append(suite.SystemOut.Content, out...)
+			suite.SystemOut.Content = append(suite.SystemOut.Content, []byte(entry.Output)...)
 		} else {
 			testCase := suite.testCase(entry.Test)
 			if testCase == nil {
 				return fmt.Errorf("no run entry for %v", entry.Test)
 			}
-			testCase.systemOut = append(testCase.systemOut, out...)
+			testCase.systemOut = append(testCase.systemOut, []byte(entry.Output)...)
 		}
 	case "pass", "skip", "fail":
 		// finish the current test case or suite.
@@ -248,9 +241,11 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		}
 		if entry.Test == "" {
 			suite.Time = entry.Elapsed
-			if entry.Action != "fail" {
+			if entry.Action == "pass" {
 				// In case of success, we don't care about the output.
 				suite.SystemOut = nil
+			} else if suite.SystemOut != nil {
+				suite.SystemOut.Content = bytes.TrimSuffix(suite.SystemOut.Content, []byte{'\n'})
 			}
 			err := c.writeXMLTestSuite(suite)
 			if err != nil {
@@ -265,6 +260,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			return fmt.Errorf("no run entry for %v", entry.Test)
 		}
 		testCase.Time = entry.Elapsed
+		testCase.systemOut = bytes.TrimSuffix(testCase.systemOut, []byte{'\n'})
 		switch entry.Action {
 		case "skip":
 			suite.Skipped++
@@ -287,7 +283,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 	case "pause", "cont":
 		// Ignore.
 	default:
-		return fmt.Errorf("unknown action: %v", entry.Action)
+		// Not a JSON test entry, ignore.
 	}
 	return nil
 }
@@ -314,6 +310,11 @@ func (c *Converter) openXML() error {
 }
 
 func (c *Converter) closeXML() error {
+	if c.xmlEnc == nil {
+		// Write an empty <testsuites> element
+		// if there are no test suites.
+		c.openXML()
+	}
 	_, err := c.w.Write([]byte("\n</testsuites>\n"))
 	return err
 }
