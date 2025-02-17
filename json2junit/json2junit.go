@@ -6,6 +6,7 @@ package json2junit
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -288,7 +289,12 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 	return nil
 }
 
+// writeXMLTestSuite writes a single test suite to the writer.
+// Test cases are sorted by name.
 func (c *Converter) writeXMLTestSuite(suite *junitTestSuite) error {
+	slices.SortFunc(suite.TestCases, func(a, b *junitTestCase) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
 	return c.xmlEnc.Encode(suite)
 }
 
@@ -313,7 +319,9 @@ func (c *Converter) closeXML() error {
 	if c.xmlEnc == nil {
 		// Write an empty <testsuites> element
 		// if there are no test suites.
-		c.openXML()
+		if err := c.openXML(); err != nil {
+			return err
+		}
 	}
 	_, err := c.w.Write([]byte("\n</testsuites>\n"))
 	return err
