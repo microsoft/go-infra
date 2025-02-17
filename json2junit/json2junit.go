@@ -62,7 +62,7 @@ func ConvertFile(out, in string) error {
 // suites which are written to w as soon as they are complete.
 type Converter struct {
 	b      []byte // input buffer
-	suites []*junitTestSuite
+	suites map[string]*junitTestSuite
 	w      io.Writer
 	xmlEnc *xml.Encoder
 }
@@ -72,7 +72,8 @@ type Converter struct {
 // with minimal delay.
 func NewConverter(w io.Writer) *Converter {
 	return &Converter{
-		w: w,
+		w:      w,
+		suites: make(map[string]*junitTestSuite),
 	}
 }
 
@@ -137,24 +138,17 @@ type jsonEntry struct {
 // https://llg.cubic.org/docs/junit/.
 
 type junitTestSuite struct {
-	XMLName   xml.Name   `xml:"testsuite"`
-	Name      string     `xml:"name,attr"`
-	Tests     int        `xml:"tests,attr"`
-	Failures  int        `xml:"failures,attr"`
-	Skipped   int        `xml:"skipped,attr"`
-	Time      float64    `xml:"time,attr"`
-	Timestamp string     `xml:"timestamp,attr"`
-	SystemOut *systemOut `xml:",omitempty"`
-	TestCases []*junitTestCase
-}
+	XMLName   xml.Name         `xml:"testsuite"`
+	Name      string           `xml:"name,attr"`
+	Tests     int              `xml:"tests,attr"`
+	Failures  int              `xml:"failures,attr"`
+	Skipped   int              `xml:"skipped,attr"`
+	Time      float64          `xml:"time,attr"`
+	Timestamp string           `xml:"timestamp,attr"`
+	SystemOut *systemOut       `xml:",omitempty"`
+	TestCases []*junitTestCase // Empty until written to XML. Will be filled in with testCases.
 
-func (s junitTestSuite) testCase(name string) *junitTestCase {
-	for _, tc := range s.TestCases {
-		if tc.Name == name {
-			return tc
-		}
-	}
-	return nil
+	testCases map[string]*junitTestCase `xml:"-"` // Map from test name to *junitTestCase.
 }
 
 type systemOut struct {
@@ -168,7 +162,8 @@ type junitTestCase struct {
 	Name      string       `xml:"name,attr"`
 	Time      float64      `xml:"time,attr"`
 	Result    *junitResult `xml:",omitempty"`
-	systemOut []byte       // Placeholder for the event output.
+
+	systemOut []byte // Placeholder for the event output.
 }
 
 type junitResult struct {
@@ -177,49 +172,37 @@ type junitResult struct {
 	Content []byte `xml:",cdata"`
 }
 
-// suite returns the suite with the given name, or nil if there is none.
-func (c *Converter) suite(name string) (int, *junitTestSuite) {
-	for i, s := range c.suites {
-		if s.Name == name {
-			return i, s
-		}
-	}
-	return 0, nil
-}
-
 // processLine converts a single JSON test line.
 func (c *Converter) processJSONEntry(entry jsonEntry) error {
 	switch entry.Action {
 	case "start":
 		// start a new test suite.
-		if _, suite := c.suite(entry.Package); suite != nil {
+		if _, ok := c.suites[entry.Package]; ok {
 			return fmt.Errorf("duplicate start entry for %v", entry.Package)
 		}
-		suite := &junitTestSuite{
+		c.suites[entry.Package] = &junitTestSuite{
 			Name:      entry.Package,
 			Timestamp: entry.Time.Format(time.RFC3339),
+			testCases: make(map[string]*junitTestCase),
 		}
-		c.suites = append(c.suites, suite)
 	case "run":
 		// start a new test case.
-		_, suite := c.suite(entry.Package)
-		if suite == nil {
+		suite, ok := c.suites[entry.Package]
+		if !ok {
 			return fmt.Errorf("no start entry for %v", entry.Package)
 		}
-		testCase := suite.testCase(entry.Test)
-		if testCase != nil {
+		if _, ok = suite.testCases[entry.Test]; ok {
 			return fmt.Errorf("duplicate run entry for package %v test %v", entry.Package, entry.Test)
 		}
 		suite.Tests++
-		testCase = &junitTestCase{
+		suite.testCases[entry.Test] = &junitTestCase{
 			Name:      entry.Test,
 			Classname: entry.Package,
 		}
-		suite.TestCases = append(suite.TestCases, testCase)
 	case "output":
 		// append output to the current test case or suite.
-		_, suite := c.suite(entry.Package)
-		if suite == nil {
+		suite, ok := c.suites[entry.Package]
+		if !ok {
 			return fmt.Errorf("no start entry for %v", entry.Package)
 		}
 		if entry.Test == "" {
@@ -228,16 +211,16 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			}
 			suite.SystemOut.Content = append(suite.SystemOut.Content, []byte(entry.Output)...)
 		} else {
-			testCase := suite.testCase(entry.Test)
-			if testCase == nil {
+			testCase, ok := suite.testCases[entry.Test]
+			if !ok {
 				return fmt.Errorf("no run entry for %v", entry.Test)
 			}
 			testCase.systemOut = append(testCase.systemOut, []byte(entry.Output)...)
 		}
 	case "pass", "skip", "fail":
 		// finish the current test case or suite.
-		i, suite := c.suite(entry.Package)
-		if suite == nil {
+		suite, ok := c.suites[entry.Package]
+		if !ok {
 			return fmt.Errorf("no start entry for %v", entry.Package)
 		}
 		if entry.Test == "" {
@@ -253,11 +236,11 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 				return fmt.Errorf("failed to write test suite: %v", err)
 			}
 			// Remove the suite, we are done with it.
-			c.suites = slices.Delete(c.suites, i, i+1)
+			delete(c.suites, entry.Package)
 			return nil
 		}
-		testCase := suite.testCase(entry.Test)
-		if testCase == nil {
+		testCase, ok := suite.testCases[entry.Test]
+		if !ok {
 			return fmt.Errorf("no run entry for %v", entry.Test)
 		}
 		testCase.Time = entry.Elapsed
@@ -292,6 +275,10 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 // writeXMLTestSuite writes a single test suite to the writer.
 // Test cases are sorted by name.
 func (c *Converter) writeXMLTestSuite(suite *junitTestSuite) error {
+	suite.TestCases = make([]*junitTestCase, 0, len(suite.testCases))
+	for _, testCase := range suite.testCases {
+		suite.TestCases = append(suite.TestCases, testCase)
+	}
 	slices.SortFunc(suite.TestCases, func(a, b *junitTestCase) int {
 		return cmp.Compare(a.Name, b.Name)
 	})
