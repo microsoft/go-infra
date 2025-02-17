@@ -34,6 +34,9 @@ alert a dev that the process is not proceeding smoothly.
 func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
+	ghAppId := githubutil.BindAPPIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	prNumber := flag.Int("pr", 0, "[Required] The PR number to check.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
 	setVariable := flag.String("set-azdo-variable", "", "An AzDO variable name to set.")
@@ -52,9 +55,18 @@ func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
-	if err != nil {
-		return err
+	var client *github.Client
+
+	if *ghAppId != 0 {
+		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = githubutil.NewClient(ctx, *pat)
+		if err != nil {
+			return err
+		}
 	}
 
 	var commit string

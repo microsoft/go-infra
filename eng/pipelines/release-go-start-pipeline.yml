@@ -76,7 +76,9 @@ extends:
                       -notify '${{ parameters.notify }}' \
                       -releases '${{ join(',', parameters.releaseVersions) }}' \
                       -repo '$(TargetGitHubRepo)' \
-                      -pat '$(GitHubPAT)' \
+                      -github-app-id '$(BotAccount-bot-for-go-app-id)' \
+                      -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+                      -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
                       -set-azdo-variable-name GO_RELEASE_DAY_ISSUE_NUMBER
                   displayName: Create release day tracking issue
 

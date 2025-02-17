@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/internal/infrasort"
@@ -141,13 +142,20 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	var author string
 	var security bool
 	var dryRun bool
+	var org string
+	var repo string
 
 	flag.StringVar(&releaseDateStr, "release-date", "", "The release date of the Microsoft build of Go version in YYYY-MM-DD format.")
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
 	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push blog post to GitHub.")
+	flag.StringVar(&org, "org", "microsoft", "Enable dry run: do not push blog post to GitHub.")
+	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository to push the blog post to.")
 	pat := githubutil.BindPATFlag()
+	ghAppId := githubutil.BindAPPIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 
 	if err := p(); err != nil {
 		return err
@@ -167,9 +175,18 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
-	if err != nil {
-		return err
+	var client *github.Client
+
+	if *ghAppId != 0 {
+		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = githubutil.NewClient(ctx, *pat)
+		if err != nil {
+			return err
+		}
 	}
 
 	if dryRun {
@@ -186,7 +203,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	blogFilePath := generateBlogFilePath(releaseDate, releaseInfo.Slug)
 
 	// check if the file already exists in the go-devblog repository
-	if _, err := githubutil.DownloadFile(ctx, client, "microsoft", "go-devblog", "main", blogFilePath); err != nil {
+	if _, err := githubutil.DownloadFile(ctx, client, org, repo, "main", blogFilePath); err != nil {
 		if errors.Is(err, githubutil.ErrFileNotExists) {
 			// Good.
 		} else {
@@ -201,8 +218,8 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		if err := githubutil.UploadFile(
 			ctx,
 			client,
-			"microsoft",
-			"go-devblog",
+			org,
+			repo,
 			"main",
 			blogFilePath,
 			fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),

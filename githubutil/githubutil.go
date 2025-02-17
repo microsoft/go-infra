@@ -5,6 +5,10 @@ package githubutil
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,9 +17,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v65/github"
 	"golang.org/x/oauth2"
 )
+
+const githubAPI = "https://api.github.com"
 
 // Types of error that may be returned from the GitHub API that the caller may want to handle.
 var (
@@ -35,9 +42,114 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	return github.NewClient(tokenClient), nil
 }
 
+// NewInstallationClient creates a GitHub client using the given GitHub App ID, installation ID, and private key.
+func NewInstallationClient(ctx context.Context, appID int64, installationID int64, privateKey string) (*github.Client, error) {
+	if appID == 0 {
+		return nil, errors.New("no GitHub App ID specified")
+	}
+	if installationID == 0 {
+		return nil, errors.New("no GitHub App Installation ID specified")
+	}
+	if privateKey == "" {
+		return nil, errors.New("no GitHub App private key specified")
+	}
+	// Generate a JWT using the private key
+	jwt, err := GenerateJWT(appID, privateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Exchange JWT for an installation token
+	token, err := FetchInstallationToken(jwt, installationID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a client using the installation token
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tokenClient := oauth2.NewClient(ctx, tokenSource)
+
+	return github.NewClient(tokenClient), nil
+}
+
+// GenerateJWT generates a JWT for a GitHub App.
+func GenerateJWT(appID int64, privateKey string) (string, error) {
+	privkey, err := base64.StdEncoding.DecodeString(privateKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode private key: %v", err)
+	}
+	block, _ := pem.Decode(privkey)
+	if block == nil {
+		return "", fmt.Errorf("failed to decode private key")
+	}
+
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse RSA private key: %v", err)
+	}
+
+	now := time.Now().Unix()
+	claims := jwt.MapClaims{
+		"iat": now,       // Issued at time
+		"exp": now + 600, // Expiration time (10 min)
+		"iss": appID,     // GitHub App ID
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signedToken, err := token.SignedString(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %v", err)
+	}
+	return signedToken, nil
+}
+
+func FetchInstallationToken(jwt string, installationID int64) (string, error) {
+	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", githubAPI, installationID)
+
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return "", fmt.Errorf("failed to get installation token, status: %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Token string `json:"token"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	if err != nil {
+		return "", err
+	}
+
+	return result.Token, nil
+}
+
 // BindPATFlag returns a flag to specify the personal access token.
 func BindPATFlag() *string {
 	return flag.String("pat", "", "[Required] The GitHub PAT to use.")
+}
+
+func BindAPPIDFlag() *int64 {
+	return flag.Int64("github-app-id", 0, "[Required] The GitHub App ID to use.")
+}
+
+func BindAppInstallationFlag() *int64 {
+	return flag.Int64("github-app-installation", 0, "[Required] The GitHub App Installation ID to use.")
+}
+
+func BindAppPrivateKeyFlag() *string {
+	return flag.String("github-app-private-key", "", "[Required] The GitHub App private key to use.")
 }
 
 // BindRepoFlag returns a flag to specify a GitHub repo to target. Parse it with ParseRepoFlag.

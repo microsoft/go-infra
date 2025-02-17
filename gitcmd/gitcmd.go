@@ -6,10 +6,6 @@
 package gitcmd
 
 import (
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,15 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
 const (
 	githubPrefix     = "https://github.com/"
 	azdoDncengPrefix = "https://dnceng@dev.azure.com/"
-	githubAPI        = "https://api.github.com"
 )
 
 // URLAuther manipulates a Git repository URL (GitHub, AzDO, ...) such that Git commands taking a
@@ -106,81 +101,17 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) {
 
 func (a GitHubAppAuther) getInstallationToken() (string, error) {
 	// Generate a JWT using the private key
-	jwt, err := generateJWT(a.AppID, a.PrivateKey)
+	jwt, err := githubutil.GenerateJWT(a.AppID, a.PrivateKey)
 	if err != nil {
 		return "", err
 	}
 
 	// Exchange JWT for an installation token
-	token, err := fetchInstallationToken(jwt, a.InstallationID)
+	token, err := githubutil.FetchInstallationToken(jwt, a.InstallationID)
 	if err != nil {
 		return "", err
 	}
 	return token, nil
-}
-
-// generateJWT creates a JWT for the GitHub App.
-func generateJWT(appID int64, privateKey string) (string, error) {
-	privkey, err := base64.StdEncoding.DecodeString(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode private key: %v", err)
-	}
-	block, _ := pem.Decode(privkey)
-	if block == nil {
-		return "", fmt.Errorf("failed to decode private key")
-	}
-
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse RSA private key: %v", err)
-	}
-
-	now := time.Now().Unix()
-	claims := jwt.MapClaims{
-		"iat": now,       // Issued at time
-		"exp": now + 600, // Expiration time (10 min)
-		"iss": appID,     // GitHub App ID
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	signedToken, err := token.SignedString(key)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign JWT: %v", err)
-	}
-	return signedToken, nil
-}
-
-// fetchInstallationToken exchanges a JWT for an installation access token.
-func fetchInstallationToken(jwt string, installationID int64) (string, error) {
-	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", githubAPI, installationID)
-
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("failed to get installation token, status: %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	if err != nil {
-		return "", err
-	}
-
-	return result.Token, nil
 }
 
 // AzDOPATAuther adds a PAT into the https-style Azure DevOps repository URL.
