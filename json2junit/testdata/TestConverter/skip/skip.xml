@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go" tests="1" failures="0" skipped="1" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+	<system-out><![CDATA[SKIP]]></system-out>
+	<testcase classname="cmd/go" name="TestScript" time="1.23">
+		<skipped message="skipped"><![CDATA[BAR
+FOO]]></skipped>
+	</testcase>
+</testsuite>
+</testsuites>

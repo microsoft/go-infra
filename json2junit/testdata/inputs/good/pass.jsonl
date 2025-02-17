@@ -1,0 +1,5 @@
+{"Time":"2025-02-07T14:43:16.4746636+01:00","Action":"start","Package":"cmd/go"}
+{"Time":"2025-02-07T14:43:16.4751944+01:00","Action":"run","Package":"cmd/go","Test":"TestScript"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go","Test":"TestScript","Elapsed":1.23}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"output","Package":"cmd/go","Output":"PASS\n"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go","Elapsed":0.011}

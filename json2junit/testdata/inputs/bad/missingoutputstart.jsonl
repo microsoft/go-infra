@@ -1,0 +1,2 @@
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"output","Package":"cmd/go","Output":"PASS\n"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go","Elapsed":0.011}

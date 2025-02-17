@@ -1,0 +1,10 @@
+{"Time":"2025-02-07T14:43:16.4746636+01:00","Action":"start","Package":"cmd/go1"}
+{"Time":"2025-02-07T14:43:16.4751944+01:00","Action":"run","Package":"cmd/go1","Test":"TestScript"}
+{"Time":"2025-02-07T14:43:16.4746636+01:00","Action":"start","Package":"cmd/go2"}
+{"Time":"2025-02-07T14:43:16.4751944+01:00","Action":"run","Package":"cmd/go2","Test":"TestScript"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go1","Test":"TestScript","Elapsed":1.22}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"output","Package":"cmd/go1","Output":"PASS\n"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go2","Test":"TestScript","Elapsed":1.23}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go1","Elapsed":0.011}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"output","Package":"cmd/go2","Output":"PASS\n"}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"pass","Package":"cmd/go2","Elapsed":0.011}
