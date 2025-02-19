@@ -136,22 +136,26 @@ func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch,
 	return err
 }
 
+func ListDirFiles(ctx context.Context, client *github.Client, owner, repo, ref, dir string) ([]*github.RepositoryContent, error) {
+	_, directoryContent, err := getContents(ctx, client, owner, repo, ref, dir)
+	if err != nil {
+		return nil, err
+	}
+	if directoryContent == nil {
+		return nil, fmt.Errorf("%q is unexpectedly a file; %w", dir, ErrFileNotExists)
+	}
+
+	return directoryContent, nil
+}
+
 // DownloadFile downloads a file from a given repository.
 func DownloadFile(ctx context.Context, client *github.Client, owner, repo, ref, path string) ([]byte, error) {
-	var fileContent *github.RepositoryContent
-	var resp *github.Response
-	var err error
-
-	if err = Retry(func() error {
-		fileContent, _, resp, err = client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{
-			Ref: ref,
-		})
-		return err
-	}); err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, ErrFileNotExists
-		}
+	fileContent, _, err := getContents(ctx, client, owner, repo, ref, path)
+	if err != nil {
 		return nil, err
+	}
+	if fileContent == nil {
+		return nil, fmt.Errorf("%q is unexpectedly a directory; %w", path, ErrFileNotExists)
 	}
 
 	content, err := fileContent.GetContent()
@@ -160,6 +164,37 @@ func DownloadFile(ctx context.Context, client *github.Client, owner, repo, ref, 
 	}
 
 	return []byte(content), nil
+}
+
+// getContents either gets the file content or directory contents at the given path. Depending on
+// the type of content at path, the other returned value will be nil.
+func getContents(
+	ctx context.Context,
+	client *github.Client,
+	owner, repo, ref, path string,
+) (
+	fileContent *github.RepositoryContent,
+	directoryContent []*github.RepositoryContent,
+	err error,
+) {
+	var resp *github.Response
+
+	if err = Retry(func() error {
+		fileContent, directoryContent, resp, err = client.Repositories.GetContents(
+			ctx,
+			owner, repo, path,
+			&github.RepositoryContentGetOptions{
+				Ref: ref,
+			})
+		return err
+	}); err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, nil, ErrFileNotExists
+		}
+		return nil, nil, err
+	}
+
+	return fileContent, directoryContent, nil
 }
 
 // FullyCreateFork creates a fork of the given repository under the PAT owner's account, waits for
