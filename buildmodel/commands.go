@@ -234,9 +234,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	if *f.githubPAT != "" {
-		githubUser := gitpr.GetUsername(*f.githubPAT)
-		fmt.Printf("---- User for github-pat is: %v\n", githubUser)
+	if *f.githubPAT != "" || *f.gitHubAppID != 0 {
+		var githubUser string
+		if *f.gitHubAppID != 0 {
+			githubUser = gitpr.GetUsernameOrAppName(auther, true)
+		} else {
+			githubUser = gitpr.GetUsernameOrAppName(auther, false)
+		}
+		fmt.Printf("---- User for github is: %v\n", githubUser)
 
 		if parsedOrigin != nil {
 			fmt.Println("---- Checking for an existing PR for this base branch and origin...")

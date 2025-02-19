@@ -135,10 +135,17 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 		if missingArgs != "" {
 			return nil, fmt.Errorf("missing command-line args:%v", missingArgs)
 		}
-		return gitcmd.GitHubAppAuther{
-			AppID:          *f.GitHubAppID,
-			InstallationID: *f.GitHubAppInstallation,
-			PrivateKey:     *f.GitHubAppPrivateKey,
+		return gitcmd.MultiAuther{
+			Authers: []gitcmd.URLAuther{
+				gitcmd.GitHubAppAuther{
+					AppID:          *f.GitHubAppID,
+					InstallationID: *f.GitHubAppInstallation,
+					PrivateKey:     *f.GitHubAppPrivateKey,
+				},
+				gitcmd.AzDOPATAuther{
+					PAT: *f.AzDODncengPAT,
+				},
+			},
 		}, nil
 
 	case GitAuthSSH:
@@ -876,7 +883,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 			}
 
-			fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
+			fmt.Printf("---- Enabling auto-merge with bot account...\n")
 			if err = gitpr.EnablePRAutoMerge(pr.NodeID, auther); err != nil {
 				return err
 			}

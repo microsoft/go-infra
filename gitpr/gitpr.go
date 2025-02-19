@@ -182,23 +182,38 @@ func (r Remote) GetOwnerSlashRepo() string {
 	return strings.Join(r.GetOwnerRepo(), "/")
 }
 
-// GetUsername queries GitHub for the username associated with a PAT.
-func GetUsername(pat string) string {
-	request, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+// GetUsernameOrAppName returns the username for PAT auth (from /user)
+// or the app name for App-based auth (from /app), based on the useApp flag.
+func GetUsernameOrAppName(auther gitcmd.URLAuther, useApp bool) string {
+	var url string
+	if useApp {
+		url = "https://api.github.com/app"
+	} else {
+		url = "https://api.github.com/user"
+	}
+	request, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Panic(err)
 	}
-	request.SetBasicAuth("", pat)
+	auther.InsertHTTPAuth(request)
 
-	response := &struct {
-		Login string `json:"login"`
-	}{}
-
-	if err := sendJSONRequestSuccessful(request, response); err != nil {
-		log.Panic(err)
+	if useApp {
+		response := &struct {
+			Name string `json:"name"`
+		}{}
+		if err := sendJSONRequestSuccessful(request, response); err != nil {
+			log.Panic(err)
+		}
+		return response.Name
+	} else {
+		response := &struct {
+			Login string `json:"login"`
+		}{}
+		if err := sendJSONRequestSuccessful(request, response); err != nil {
+			log.Panic(err)
+		}
+		return response.Login
 	}
-
-	return response.Login
 }
 
 // sendJSONRequest sends a request for JSON information. The JSON response is unmarshalled (parsed)
@@ -366,13 +381,16 @@ type ExistingPR struct {
 // result's graphql identity if one match is found, empty string if no matches are found, and an
 // error if more than one match was found.
 func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser string, auther gitcmd.URLAuther) (*ExistingPR, error) {
-	prQuery := `query ($githubUser: String!, $headRefName: String!, $baseRefName: String!) {
-		user(login: $githubUser) {
+	prQuery := `query ($repoOwner: String!, $repoName: String!, $headRefName: String!, $baseRefName: String!) {
+		repository(owner: $repoOwner, name: $repoName) {
 			pullRequests(states: OPEN, headRefName: $headRefName, baseRefName: $baseRefName, first: 5) {
 				nodes {
 					title
 					id
 					number
+					author {
+						login
+					}
 					headRepositoryOwner {
 						login
 					}
@@ -387,7 +405,8 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 		}
 	}`
 	variables := map[string]interface{}{
-		"githubUser":  submitterUser,
+		"repoOwner":   target.GetOwner(),
+		"repoName":    target.GetRepo(),
 		"headRefName": headBranch,
 		"baseRefName": r.Base,
 	}
@@ -399,6 +418,9 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	// Declared adjacent to the query because the query determines the structure.
 	type PRNode struct {
 		ExistingPR
+		Author struct {
+			Login string
+		}
 		HeadRepositoryOwner struct {
 			Login string
 		}
@@ -413,7 +435,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 		// Note: Go encoding/json only detects exported properties (capitalized), but it does handle
 		// matching it to the lowercase JSON for us.
 		Data struct {
-			User struct {
+			Repository struct {
 				PullRequests struct {
 					Nodes    []PRNode
 					PageInfo struct {
@@ -430,8 +452,8 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	fmt.Printf("%+v\n", result)
 
 	// The user.pullRequests GitHub API isn't able to filter by repo name, so do it ourselves.
-	result.Data.User.PullRequests.Nodes = selectFunc(
-		result.Data.User.PullRequests.Nodes,
+	result.Data.Repository.PullRequests.Nodes = selectFunc(
+		result.Data.Repository.PullRequests.Nodes,
 		func(n PRNode) bool {
 			return n.BaseRepository.NameWithOwner == target.GetOwnerSlashRepo()
 		})
@@ -439,18 +461,20 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 	// Basic search result validation. We could be more flexible in some cases, but the goal here is
 	// to detect an unknown state early so we don't end up doing something strange.
 
-	if prNodes := len(result.Data.User.PullRequests.Nodes); prNodes > 1 {
+	if prNodes := len(result.Data.Repository.PullRequests.Nodes); prNodes > 1 {
 		return nil, fmt.Errorf("expected 0/1 PR search result, found %v", prNodes)
 	}
-	if result.Data.User.PullRequests.PageInfo.HasNextPage {
+	if result.Data.Repository.PullRequests.PageInfo.HasNextPage {
 		return nil, fmt.Errorf("expected 0/1 PR search result, but the results say there's another page")
 	}
 
-	if len(result.Data.User.PullRequests.Nodes) == 0 {
+	if len(result.Data.Repository.PullRequests.Nodes) == 0 {
 		return nil, nil
 	}
-
-	n := result.Data.User.PullRequests.Nodes[0]
+	n := result.Data.Repository.PullRequests.Nodes[0]
+	if foundAuthor := n.Author.Login; foundAuthor != submitterUser {
+		return nil, fmt.Errorf("pull request author is %v, expected %v", foundAuthor, submitterUser)
+	}
 	if foundHeadOwner := n.HeadRepositoryOwner.Login; foundHeadOwner != head.GetOwner() {
 		return nil, fmt.Errorf("pull request head owner is %v, expected %v", foundHeadOwner, head.GetOwner())
 	}

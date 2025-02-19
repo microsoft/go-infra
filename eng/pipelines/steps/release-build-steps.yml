@@ -26,7 +26,8 @@ steps:
           -c '$(ReleaseSyncConfigPath)' \
           -commit '$(upstreamReleasedCommit)' \
           -version '${{ parameters.releaseVersion }}' \
-          -git-auth pat \
+          -git-auth app \
+          -github-user 'bot-for-go' \
           -github-app-id '$(BotAccount-bot-for-go-app-id)' \
           -github-app-installation '$(BotAccount-bot-for-go-installation)' \
           -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
