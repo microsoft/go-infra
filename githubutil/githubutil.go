@@ -113,8 +113,7 @@ func FetchInstallationToken(jwt string, installationID int64) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}

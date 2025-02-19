@@ -677,8 +677,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 		// If we still have unmerged files, 'git commit' will exit non-zero, causing the script to
 		// exit. This prevents the script from pushing a bad merge.
-		commitArgs := []string{"commit", "-m", commitMessage}
-		if err := run(newGitCmd(commitArgs...)); err != nil {
+		if err := run(newGitCmd("commit", "-m", commitMessage)); err != nil {
 			return nil, err
 		}
 
