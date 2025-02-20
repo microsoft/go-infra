@@ -26,11 +26,9 @@ steps:
           -c '$(ReleaseSyncConfigPath)' \
           -commit '$(upstreamReleasedCommit)' \
           -version '${{ parameters.releaseVersion }}' \
-          -git-auth app \
-          -github-user 'bot-for-go' \
-          -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-          -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-          -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+          -git-auth pat \
+          -github-user '$(GitHubUser)' \
+          -github-pat '$(GitHubPAT)' \
           -github-pat-reviewer '$(GitHubPATReviewer)' \
           -azdo-dnceng-pat '$(AzDODncengPAT)' \
           -create-branches \
@@ -45,9 +43,7 @@ steps:
         releasego get-merged-pr-commit \
           -repo '$(TargetGitHubRepo)' \
           -pr '$(poll1MicrosoftGoPRNumber)' \
-          -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-          -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-          -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+          -pat '$(GitHubPAT)' \
           -set-azdo-variable poll2MicrosoftGoCommitHash
       displayName: ⌚ Get sync PR merged commit hash
       timeoutInMinutes: 90
@@ -204,9 +200,7 @@ steps:
             -tag 'v$(buildAssetVersion)' \
             -commit '$(BuildInfoSourceVersion)' \
             -repo '$(TargetGitHubRepo)' \
-            -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
+            -pat '$(GitHubPAT)'
         displayName: 🎓 Create GitHub tag
 
     - ${{ if eq(parameters.runGitHubRelease, true) }}:
@@ -216,9 +210,7 @@ steps:
             -repo '$(TargetGitHubRepo)' \
             -build-asset-json '$(buildAssetJsonFile)' \
             -build-dir '$(artifactsDir)' \
-            -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
+            -pat '$(GitHubPAT)'
         displayName: 🎓 Create GitHub release
 
     - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
@@ -261,10 +253,8 @@ steps:
           sudo apt update && sudo apt install -y jq
 
           go run ./cmd/dockerupdatepr \
-            -origin 'https://github.com/$(TargetGoImagesGitHubRepo)' \
-            -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-            -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+            -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
+            -github-pat '$(GitHubPAT)' \
             -github-pat-reviewer '$(GitHubPATReviewer)' \
             -build-asset-json '$(buildAssetJsonFile)' \
             -manual-branch '$(TargetGoImagesBranch)' \
@@ -279,9 +269,7 @@ steps:
           releasego get-merged-pr-commit \
             -repo '$(TargetGoImagesGitHubRepo)' \
             -pr '$(poll4MicrosoftGoImagesPRNumber)' \
-            -github-app-id '$(BotAccount-bot-for-go-app-id)' \
-            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
+            -pat '$(GitHubPAT)'
         displayName: ⌚ Wait for go-images update PR merge
         timeoutInMinutes: 120
         # Skip this task if the PR number isn't set. This might intentionally happen if we have to
