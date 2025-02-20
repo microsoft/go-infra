@@ -153,7 +153,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.StringVar(&org, "org", "microsoft", "Enable dry run: do not push blog post to GitHub.")
 	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository to push the blog post to.")
 	pat := githubutil.BindPATFlag()
-	ghAppId := githubutil.BindAPPIDFlag()
+	ghClientId := githubutil.BindClientIDFlag()
 	ghAppInstallation := githubutil.BindAppInstallationFlag()
 	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 
@@ -177,8 +177,8 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghAppId != 0 {
-		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
 		if err != nil {
 			return err
 		}

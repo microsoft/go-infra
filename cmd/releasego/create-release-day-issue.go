@@ -37,7 +37,7 @@ var releaseIssueLabels = []string{"Area-Release"}
 func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
-	ghAppId := githubutil.BindAPPIDFlag()
+	ghClientId := githubutil.BindClientIDFlag()
 	ghAppInstallation := githubutil.BindAppInstallationFlag()
 	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	releasesFlag := flag.String(
@@ -81,8 +81,8 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 
 	var client *github.Client
 
-	if *ghAppId != 0 {
-		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
 		if err != nil {
 			return err
 		}

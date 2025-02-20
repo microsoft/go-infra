@@ -34,7 +34,7 @@ alert a dev that the process is not proceeding smoothly.
 func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
-	ghAppId := githubutil.BindAPPIDFlag()
+	ghClientId := githubutil.BindClientIDFlag()
 	ghAppInstallation := githubutil.BindAppInstallationFlag()
 	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	prNumber := flag.Int("pr", 0, "[Required] The PR number to check.")
@@ -57,8 +57,8 @@ func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghAppId != 0 {
-		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
 		if err != nil {
 			return err
 		}

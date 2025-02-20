@@ -73,7 +73,7 @@ func (a GitHubPATAuther) InsertAuth(url string) string {
 
 // GitHubAppAuther authenticates using a GitHub App instead of a PAT.
 type GitHubAppAuther struct {
-	AppID          int64
+	ClientID       string
 	InstallationID int64
 	PrivateKey     string // The GitHub App's private key (PEM format)
 }
@@ -101,7 +101,7 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) {
 
 func (a GitHubAppAuther) getInstallationToken() (string, error) {
 	// Generate a JWT using the private key
-	jwt, err := githubutil.GenerateJWT(a.AppID, a.PrivateKey)
+	jwt, err := githubutil.GenerateJWT(a.ClientID, a.PrivateKey)
 	if err != nil {
 		return "", err
 	}

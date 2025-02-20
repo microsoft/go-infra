@@ -37,7 +37,7 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
-	ghAppId := githubutil.BindAPPIDFlag()
+	ghClientId := githubutil.BindClientIDFlag()
 	ghAppInstallation := githubutil.BindAppInstallationFlag()
 	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 
@@ -55,8 +55,8 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 		return errors.New("no branch specified")
 	}
 
-	if *ghAppId != 0 {
-		jwt, err := githubutil.GenerateJWT(*ghAppId, *ghAppPrivateKey)
+	if *ghClientId != "" {
+		jwt, err := githubutil.GenerateJWT(*ghClientId, *ghAppPrivateKey)
 		if err != nil {
 			return err
 		}

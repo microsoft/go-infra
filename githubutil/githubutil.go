@@ -42,10 +42,10 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	return github.NewClient(tokenClient), nil
 }
 
-// NewInstallationClient creates a GitHub client using the given GitHub App ID, installation ID, and private key.
-func NewInstallationClient(ctx context.Context, appID int64, installationID int64, privateKey string) (*github.Client, error) {
-	if appID == 0 {
-		return nil, errors.New("no GitHub App ID specified")
+// NewInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
+func NewInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
+	if clientID == "" {
+		return nil, errors.New("no GitHub App Client ID specified")
 	}
 	if installationID == 0 {
 		return nil, errors.New("no GitHub App Installation ID specified")
@@ -54,7 +54,7 @@ func NewInstallationClient(ctx context.Context, appID int64, installationID int6
 		return nil, errors.New("no GitHub App private key specified")
 	}
 	// Generate a JWT using the private key
-	jwt, err := GenerateJWT(appID, privateKey)
+	jwt, err := GenerateJWT(clientID, privateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func NewInstallationClient(ctx context.Context, appID int64, installationID int6
 }
 
 // GenerateJWT generates a JWT for a GitHub App.
-func GenerateJWT(appID int64, privateKey string) (string, error) {
+func GenerateJWT(clientID string, privateKey string) (string, error) {
 	privkey, err := base64.StdEncoding.DecodeString(privateKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode private key: %v", err)
@@ -92,7 +92,7 @@ func GenerateJWT(appID int64, privateKey string) (string, error) {
 	claims := jwt.MapClaims{
 		"iat": now,       // Issued at time
 		"exp": now + 600, // Expiration time (10 min)
-		"iss": appID,     // GitHub App ID
+		"iss": clientID,  // GitHub Client ID
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -139,8 +139,8 @@ func BindPATFlag() *string {
 	return flag.String("pat", "", "[Required] The GitHub PAT to use.")
 }
 
-func BindAPPIDFlag() *int64 {
-	return flag.Int64("github-app-id", 0, "[Required] The GitHub App ID to use.")
+func BindClientIDFlag() *string {
+	return flag.String("github-app-client-id", "", "[Required] The GitHub App Client ID to use.")
 }
 
 func BindAppInstallationFlag() *int64 {

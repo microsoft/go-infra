@@ -120,7 +120,7 @@ type PRFlags struct {
 	githubPAT         *string
 	githubPATReviewer *string
 
-	gitHubAppID           *int64
+	gitHubAppClientID     *string
 	gitHubAppInstallation *int64
 	gitHubAppPrivateKey   *string
 
@@ -143,7 +143,7 @@ func BindPRFlags() *PRFlags {
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-		gitHubAppID:           flag.Int64("github-app-id", 0, "Use this GitHub App ID to authenticate to GitHub."),
+		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
 		gitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
 		gitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
 
@@ -234,9 +234,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	if *f.githubPAT != "" || *f.gitHubAppID != 0 {
+	if *f.githubPAT != "" || *f.gitHubAppClientID != "" {
 		var githubUser string
-		if *f.gitHubAppID != 0 {
+		if *f.gitHubAppClientID != "" {
 			githubUser = gitpr.GetUsernameOrAppName(auther, true)
 		} else {
 			githubUser = gitpr.GetUsernameOrAppName(auther, false)
@@ -365,7 +365,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		skipReason = "Dry run"
 	case *f.origin == "":
 		skipReason = "No origin specified"
-	case *f.githubPAT == "" && *f.gitHubAppID == 0:
+	case *f.githubPAT == "" && *f.gitHubAppClientID == "":
 		skipReason = "github-pat not provided"
 	case *f.githubPATReviewer == "":
 		skipReason = "github-pat-reviewer not provided"

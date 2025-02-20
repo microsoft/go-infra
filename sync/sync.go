@@ -30,7 +30,7 @@ type Flags struct {
 	GitHubPAT         *string
 	GitHubPATReviewer *string
 
-	GitHubAppID           *int64
+	gitHubAppClientID     *string
 	GitHubAppInstallation *int64
 	GitHubAppPrivateKey   *string
 
@@ -56,7 +56,7 @@ func BindFlags(workingDirectory string) *Flags {
 		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		GitHubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
-		GitHubAppID:           flag.Int64("github-app-id", 0, "Use this GitHub App ID to authenticate to GitHub."),
+		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
 		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
 		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
 
@@ -81,7 +81,7 @@ func BindFlags(workingDirectory string) *Flags {
 				" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
 				" ssh - Change the GitHub URL to SSH format.\n"+
 				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"+
-				" app - Add the 'github-app-id', 'github-app-installation', and 'github-app-private-key' values into the URL.\n"),
+				" app - Add the 'github-app-client-id', 'github-app-installation', and 'github-app-private-key' values into the URL.\n"),
 	}
 }
 
@@ -123,8 +123,8 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 
 	case GitAuthApp:
 		var missingArgs string
-		if *f.GitHubAppID == 0 {
-			missingArgs += " git-auth app is specified but github-app-id is not."
+		if *f.gitHubAppClientID == "" {
+			missingArgs += " git-auth app is specified but github-app-client-id is not."
 		}
 		if *f.GitHubAppInstallation == 0 {
 			missingArgs += " git-auth app is specified but github-app-installation is not."
@@ -138,7 +138,7 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 		return gitcmd.MultiAuther{
 			Authers: []gitcmd.URLAuther{
 				gitcmd.GitHubAppAuther{
-					AppID:          *f.GitHubAppID,
+					ClientID:       *f.gitHubAppClientID,
 					InstallationID: *f.GitHubAppInstallation,
 					PrivateKey:     *f.GitHubAppPrivateKey,
 				},
@@ -736,9 +736,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		case *f.DryRun:
 			c.SkipReason = "Dry run"
 
-		case *f.GitHubUser == "" && *f.GitHubAppID == 0:
+		case *f.GitHubUser == "" && *f.gitHubAppClientID == "":
 			c.SkipReason = "github-user not provided"
-		case *f.GitHubPAT == "" && *f.GitHubAppID == 0:
+		case *f.GitHubPAT == "" && *f.gitHubAppClientID == "":
 			c.SkipReason = "github-pat not provided"
 
 		case *f.GitHubPATReviewer == "":

@@ -37,7 +37,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
-	ghAppId := githubutil.BindAPPIDFlag()
+	ghClientId := githubutil.BindClientIDFlag()
 	ghAppInstallation := githubutil.BindAppInstallationFlag()
 	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
@@ -75,8 +75,8 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghAppId != 0 {
-		client, err = githubutil.NewInstallationClient(ctx, *ghAppId, *ghAppInstallation, *ghAppPrivateKey)
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
 		if err != nil {
 			return err
 		}

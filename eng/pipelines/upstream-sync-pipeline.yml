@@ -56,7 +56,7 @@ extends:
                   go run ./cmd/sync `
                     -git-auth app `
                     -github-user bot-for-go `
-                    -github-app-id $(BotAccount-bot-for-go-app-id) `
+                    -github-app-client-id $(BotAccount-bot-for-go-client-id) `
                     -github-app-installation $(BotAccount-bot-for-go-installation) `
                     -github-app-private-key '$(BotAccount-bot-for-go-private-key)' `
                     -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
