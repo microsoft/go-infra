@@ -120,6 +120,10 @@ type PRFlags struct {
 	githubPAT         *string
 	githubPATReviewer *string
 
+	gitHubAppClientID     *string
+	gitHubAppInstallation *int64
+	gitHubAppPrivateKey   *string
+
 	UpdateFlags
 	sync.AzDOVariableFlags
 }
@@ -139,6 +143,10 @@ func BindPRFlags() *PRFlags {
 		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
+		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
+		gitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
+		gitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
+
 		UpdateFlags:       *BindUpdateFlags(),
 		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
 	}
@@ -148,6 +156,18 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
+	var auther *gitcmd.GitHubPATAuther
+	if f.githubPAT != nil {
+		auther = &gitcmd.GitHubPATAuther{
+			PAT: *f.githubPAT,
+		}
+	}
+	var reviewAuthor *gitcmd.GitHubPATAuther
+	if f.githubPATReviewer != nil {
+		reviewAuthor = &gitcmd.GitHubPATAuther{
+			PAT: *f.githubPATReviewer,
+		}
+	}
 	if !*f.skipDockerfiles {
 		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
 			return err
@@ -214,9 +234,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	if *f.githubPAT != "" {
-		githubUser := gitpr.GetUsername(*f.githubPAT)
-		fmt.Printf("---- User for github-pat is: %v\n", githubUser)
+	if *f.githubPAT != "" || *f.gitHubAppClientID != "" {
+		var githubUser string
+		if *f.gitHubAppClientID != "" {
+			githubUser = gitpr.GetUsernameOrAppName(auther, true)
+		} else {
+			githubUser = gitpr.GetUsernameOrAppName(auther, false)
+		}
+		fmt.Printf("---- User for github is: %v\n", githubUser)
 
 		if parsedOrigin != nil {
 			fmt.Println("---- Checking for an existing PR for this base branch and origin...")
@@ -226,7 +251,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 				parsedOrigin,
 				b.PRBranch(),
 				githubUser,
-				*f.githubPAT)
+				auther)
 			if err != nil {
 				return err
 			}
@@ -340,7 +365,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		skipReason = "Dry run"
 	case *f.origin == "":
 		skipReason = "No origin specified"
-	case *f.githubPAT == "":
+	case *f.githubPAT == "" && *f.gitHubAppClientID == "":
 		skipReason = "github-pat not provided"
 	case *f.githubPATReviewer == "":
 		skipReason = "github-pat-reviewer not provided"
@@ -358,7 +383,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		p, err := gitpr.PostGitHub(
 			parsedOrigin.GetOwnerSlashRepo(),
 			request,
-			*f.githubPAT)
+			auther)
 		fmt.Printf("%+v\n", p)
 		if err != nil {
 			return err
@@ -372,13 +397,13 @@ func SubmitUpdatePR(f *PRFlags) error {
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
 
 		fmt.Printf("---- Approving with reviewer account...\n")
-		if err = gitpr.ApprovePR(existingPR.ID, *f.githubPATReviewer); err != nil {
+		if err = gitpr.ApprovePR(existingPR.ID, reviewAuthor); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-	if err = gitpr.EnablePRAutoMerge(existingPR.ID, *f.githubPATReviewer); err != nil {
+	if err = gitpr.EnablePRAutoMerge(existingPR.ID, reviewAuthor); err != nil {
 		return err
 	}
 

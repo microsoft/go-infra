@@ -37,6 +37,9 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
+	ghClientId := githubutil.BindClientIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
 	buildDir := flag.String("build-dir", "", "[Required] The directory containing build artifacts to attach.")
 
@@ -70,9 +73,18 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
-	if err != nil {
-		return err
+	var client *github.Client
+
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = githubutil.NewClient(ctx, *pat)
+		if err != nil {
+			return err
+		}
 	}
 
 	log.Printf("Creating draft release %v...\n", *tag)

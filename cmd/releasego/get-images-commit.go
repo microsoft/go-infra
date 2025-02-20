@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -36,6 +37,9 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
+	ghClientId := githubutil.BindClientIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 
 	if err := p(); err != nil {
 		return err
@@ -50,6 +54,27 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	if *branchFlag == "" {
 		return errors.New("no branch specified")
 	}
+
+	if *ghClientId != "" {
+		jwt, err := githubutil.GenerateJWT(*ghClientId, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+
+		token, err := githubutil.FetchInstallationToken(jwt, *ghAppInstallation)
+		if err != nil {
+			return nil
+		}
+
+		// Inject the token into the repo URL
+		parts := strings.Split(*repoFlag, "https://")
+		if len(parts) > 1 {
+			*repoFlag = fmt.Sprintf("https://git:%s@%s", token, parts[1])
+		} else {
+			*repoFlag = fmt.Sprintf("https://git:%s@%s", token, *repoFlag)
+		}
+	}
+
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second
 
 	versions := strings.Split(*versionsFlag, ",")
@@ -82,6 +107,7 @@ type imageVersionChecker struct {
 	Upstream string
 	Branch   string
 	Versions []string
+	Token    string
 }
 
 func (c *imageVersionChecker) Check() (string, error) {

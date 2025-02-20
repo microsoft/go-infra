@@ -31,6 +31,9 @@ func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
+	ghClientId := githubutil.BindClientIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	commit := flag.String("commit", "", "The commit hash to tag.")
 
 	if err := p(); err != nil {
@@ -49,9 +52,18 @@ func handleTag(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
-	if err != nil {
-		return err
+	var client *github.Client
+
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = githubutil.NewClient(ctx, *pat)
+		if err != nil {
+			return err
+		}
 	}
 
 	ref := "refs/tags/" + *tag

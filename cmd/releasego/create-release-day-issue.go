@@ -37,6 +37,9 @@ var releaseIssueLabels = []string{"Area-Release"}
 func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	pat := githubutil.BindPATFlag()
+	ghClientId := githubutil.BindClientIDFlag()
+	ghAppInstallation := githubutil.BindAppInstallationFlag()
+	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
 	releasesFlag := flag.String(
 		"releases", "",
 		"[Required] The release numbers to track releasing during this day, separated by ','.")
@@ -75,9 +78,19 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
-	if err != nil {
-		return err
+
+	var client *github.Client
+
+	if *ghClientId != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = githubutil.NewClient(ctx, *pat)
+		if err != nil {
+			return err
+		}
 	}
 
 	log.Printf("Creating comment on %v/%v with title %#q and content:\n%v\n", owner, name, title, desc)
