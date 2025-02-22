@@ -58,7 +58,7 @@ func BindFlags(workingDirectory string) *Flags {
 
 		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
 		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
-		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
+		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format."),
 
 		AzDODncengPAT: flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs."),
 
@@ -81,7 +81,7 @@ func BindFlags(workingDirectory string) *Flags {
 				" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
 				" ssh - Change the GitHub URL to SSH format.\n"+
 				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"+
-				" app - Add the 'github-app-client-id', 'github-app-installation', and 'github-app-private-key' values into the URL.\n"),
+				" app - Generate an installation token using 'github-app-client-id', 'github-app-installation', and 'github-app-private-key'\n"),
 	}
 }
 
@@ -305,8 +305,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		return nil, err
 	}
 
-	var reviewAuther gitcmd.URLAuther
-
+	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
 	if f.GitHubPATReviewer != nil {
 		reviewAuther = &gitcmd.GitHubPATAuther{
 			PAT: *f.GitHubPATReviewer,

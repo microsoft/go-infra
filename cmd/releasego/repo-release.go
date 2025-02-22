@@ -36,10 +36,7 @@ given build asset JSON file and the artifacts it lists that are found in the spe
 func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
-	ghClientId := githubutil.BindClientIDFlag()
-	ghAppInstallation := githubutil.BindAppInstallationFlag()
-	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
 	buildDir := flag.String("build-dir", "", "[Required] The directory containing build artifacts to attach.")
 
@@ -75,13 +72,13 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghClientId != "" {
-		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+	if *gitHubAuthFlags.GitHubAppClientID != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppInstallation, *gitHubAuthFlags.GitHubAppPrivateKey)
 		if err != nil {
 			return err
 		}
 	} else {
-		client, err = githubutil.NewClient(ctx, *pat)
+		client, err = githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
 		if err != nil {
 			return err
 		}

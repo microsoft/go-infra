@@ -32,15 +32,31 @@ type URLAuther interface {
 	// InsertAuth inserts authentication into the URL and returns it, or if the auther doesn't
 	// apply, returns the url without any modifications.
 	InsertAuth(url string) string
+}
+
+type HttpAuther interface {
+	// InsertHTTPAuth inserts authentication into the request, if applicable.
 	InsertHTTPAuth(req *http.Request)
+}
+
+func NewHttpAutherFromFlags(f *githubutil.GitHubAuthFlags) HttpAuther {
+	if *f.GitHubPat != "" {
+		return &GitHubPATAuther{
+			PAT: *f.GitHubPat,
+		}
+	}
+	if *f.GitHubAppClientID != "" && *f.GitHubAppInstallation != 0 && *f.GitHubAppPrivateKey != "" {
+		return &GitHubAppAuther{
+			ClientID:       *f.GitHubAppClientID,
+			InstallationID: *f.GitHubAppInstallation,
+			PrivateKey:     *f.GitHubAppPrivateKey,
+		}
+	}
+	return nil
 }
 
 // GitHubSSHAuther turns an https-style GitHub URL into an SSH-style GitHub URL.
 type GitHubSSHAuther struct{}
-
-func (GitHubSSHAuther) InsertHTTPAuth(req *http.Request) {
-	// No-op
-}
 
 func (GitHubSSHAuther) InsertAuth(url string) string {
 	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
@@ -119,10 +135,6 @@ type AzDOPATAuther struct {
 	PAT string
 }
 
-func (a AzDOPATAuther) InsertHTTPAuth(req *http.Request) {
-	// No-op
-}
-
 func (a AzDOPATAuther) InsertAuth(url string) string {
 	if a.PAT == "" {
 		return url
@@ -140,7 +152,7 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 type NoAuther struct{}
 
 func (NoAuther) InsertHTTPAuth(req *http.Request) {
-	// No-op
+	// no-op
 }
 
 func (NoAuther) InsertAuth(url string) string {
@@ -151,12 +163,6 @@ func (NoAuther) InsertAuth(url string) string {
 // makes a change to the URL.
 type MultiAuther struct {
 	Authers []URLAuther
-}
-
-func (m MultiAuther) InsertHTTPAuth(req *http.Request) {
-	for _, a := range m.Authers {
-		a.InsertHTTPAuth(req)
-	}
 }
 
 func (m MultiAuther) InsertAuth(url string) string {

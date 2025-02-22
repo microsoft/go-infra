@@ -30,10 +30,7 @@ exists, exit with code 1.
 func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
-	ghClientId := githubutil.BindClientIDFlag()
-	ghAppInstallation := githubutil.BindAppInstallationFlag()
-	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
 	commit := flag.String("commit", "", "The commit hash to tag.")
 
 	if err := p(); err != nil {
@@ -54,13 +51,13 @@ func handleTag(p subcmd.ParseFunc) error {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghClientId != "" {
-		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+	if *gitHubAuthFlags.GitHubAppClientID != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppInstallation, *gitHubAuthFlags.GitHubAppPrivateKey)
 		if err != nil {
 			return err
 		}
 	} else {
-		client, err = githubutil.NewClient(ctx, *pat)
+		client, err = githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
 		if err != nil {
 			return err
 		}

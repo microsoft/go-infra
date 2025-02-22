@@ -37,9 +37,7 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
-	ghClientId := githubutil.BindClientIDFlag()
-	ghAppInstallation := githubutil.BindAppInstallationFlag()
-	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
 
 	if err := p(); err != nil {
 		return err
@@ -55,13 +53,13 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 		return errors.New("no branch specified")
 	}
 
-	if *ghClientId != "" {
-		jwt, err := githubutil.GenerateJWT(*ghClientId, *ghAppPrivateKey)
+	if *gitHubAuthFlags.GitHubAppClientID != "" {
+		jwt, err := githubutil.GenerateJWT(*gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppPrivateKey)
 		if err != nil {
 			return err
 		}
 
-		token, err := githubutil.FetchInstallationToken(jwt, *ghAppInstallation)
+		token, err := githubutil.FetchInstallationToken(jwt, *gitHubAuthFlags.GitHubAppInstallation)
 		if err != nil {
 			return nil
 		}
@@ -107,7 +105,6 @@ type imageVersionChecker struct {
 	Upstream string
 	Branch   string
 	Versions []string
-	Token    string
 }
 
 func (c *imageVersionChecker) Check() (string, error) {

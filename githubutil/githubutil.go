@@ -22,8 +22,6 @@ import (
 	"golang.org/x/oauth2"
 )
 
-const githubAPI = "https://api.github.com"
-
 // Types of error that may be returned from the GitHub API that the caller may want to handle.
 var (
 	// ErrFileNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
@@ -31,6 +29,13 @@ var (
 	// ErrRepositoryNotExists indicates that the requested repository does not exist.
 	ErrRepositoryNotExists = errors.New("repository does not exist")
 )
+
+type GitHubAuthFlags struct {
+	GitHubPat             *string
+	GitHubAppClientID     *string
+	GitHubAppInstallation *int64
+	GitHubAppPrivateKey   *string
+}
 
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
@@ -73,10 +78,10 @@ func NewInstallationClient(ctx context.Context, clientID string, installationID 
 }
 
 // GenerateJWT generates a JWT for a GitHub App.
-func GenerateJWT(clientID string, privateKey string) (string, error) {
+func GenerateJWT(clientID, privateKey string) (string, error) {
 	privkey, err := base64.StdEncoding.DecodeString(privateKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode private key: %v", err)
+		return "", fmt.Errorf("failed to base64-decode private key: %v", err)
 	}
 	block, _ := pem.Decode(privkey)
 	if block == nil {
@@ -88,11 +93,11 @@ func GenerateJWT(clientID string, privateKey string) (string, error) {
 		return "", fmt.Errorf("failed to parse RSA private key: %v", err)
 	}
 
-	now := time.Now().Unix()
-	claims := jwt.MapClaims{
-		"iat": now,       // Issued at time
-		"exp": now + 600, // Expiration time (10 min)
-		"iss": clientID,  // GitHub Client ID
+	now := time.Now()
+	claims := jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
+		Issuer:    clientID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -104,7 +109,7 @@ func GenerateJWT(clientID string, privateKey string) (string, error) {
 }
 
 func FetchInstallationToken(jwt string, installationID int64) (string, error) {
-	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", githubAPI, installationID)
+	url := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", installationID)
 
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
@@ -134,21 +139,20 @@ func FetchInstallationToken(jwt string, installationID int64) (string, error) {
 	return result.Token, nil
 }
 
-// BindPATFlag returns a flag to specify the personal access token.
-func BindPATFlag() *string {
-	return flag.String("pat", "", "[Required] The GitHub PAT to use.")
+// BindPATReviewerFlag returns a flag to specify the personal access token for the reviewer.
+func BindPATReviewerFlag() *string {
+	return flag.String("github-pat-reviewer", "", "[Required] The GitHub PAT to use for the reviewer.")
 }
 
-func BindClientIDFlag() *string {
-	return flag.String("github-app-client-id", "", "[Required] The GitHub App Client ID to use.")
-}
-
-func BindAppInstallationFlag() *int64 {
-	return flag.Int64("github-app-installation", 0, "[Required] The GitHub App Installation ID to use.")
-}
-
-func BindAppPrivateKeyFlag() *string {
-	return flag.String("github-app-private-key", "", "[Required] The GitHub App private key to use.")
+// BindGitHubAuthFlags creates gitHubAuthFlags with the 'flag' package, globally registering them
+// in the flag package so ParseBoundFlags will find them.
+func BindGitHubAuthFlags() *GitHubAuthFlags {
+	return &GitHubAuthFlags{
+		GitHubPat:             flag.String("github-pat", "", "[Required] The GitHub PAT to use."),
+		GitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
+		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
+		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format."),
+	}
 }
 
 // BindRepoFlag returns a flag to specify a GitHub repo to target. Parse it with ParseRepoFlag.

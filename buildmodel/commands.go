@@ -19,6 +19,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
@@ -117,13 +118,10 @@ type PRFlags struct {
 	origin *string
 	to     *string
 
-	githubPAT         *string
-	githubPATReviewer *string
+	gitHubPAT         *string
+	gitHubPATReviewer *string
 
-	gitHubAppClientID     *string
-	gitHubAppInstallation *int64
-	gitHubAppPrivateKey   *string
-
+	githubutil.GitHubAuthFlags
 	UpdateFlags
 	sync.AzDOVariableFlags
 }
@@ -140,13 +138,8 @@ func BindPRFlags() *PRFlags {
 		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
 
-		githubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
-		githubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
-
-		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
-		gitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
-		gitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub."),
-
+		gitHubPATReviewer: githubutil.BindPATReviewerFlag(),
+		GitHubAuthFlags:   *githubutil.BindGitHubAuthFlags(),
 		UpdateFlags:       *BindUpdateFlags(),
 		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
 	}
@@ -156,16 +149,11 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	var auther *gitcmd.GitHubPATAuther
-	if f.githubPAT != nil {
-		auther = &gitcmd.GitHubPATAuther{
-			PAT: *f.githubPAT,
-		}
-	}
-	var reviewAuthor *gitcmd.GitHubPATAuther
-	if f.githubPATReviewer != nil {
-		reviewAuthor = &gitcmd.GitHubPATAuther{
-			PAT: *f.githubPATReviewer,
+	auther := gitcmd.NewHttpAutherFromFlags(&f.GitHubAuthFlags)
+	var reviewAuther gitcmd.HttpAuther = gitcmd.NoAuther{}
+	if f.gitHubPATReviewer != nil {
+		reviewAuther = &gitcmd.GitHubPATAuther{
+			PAT: *f.gitHubPATReviewer,
 		}
 	}
 	if !*f.skipDockerfiles {
@@ -234,12 +222,12 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	if *f.githubPAT != "" || *f.gitHubAppClientID != "" {
+	if *f.gitHubPAT != "" || *f.GitHubAppClientID != "" {
 		var githubUser string
-		if *f.gitHubAppClientID != "" {
-			githubUser = gitpr.GetUsernameOrAppName(auther, true)
+		if *f.GitHubAppClientID != "" {
+			githubUser = gitpr.GetAppName(auther)
 		} else {
-			githubUser = gitpr.GetUsernameOrAppName(auther, false)
+			githubUser = gitpr.GetUsername(auther)
 		}
 		fmt.Printf("---- User for github is: %v\n", githubUser)
 
@@ -365,9 +353,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 		skipReason = "Dry run"
 	case *f.origin == "":
 		skipReason = "No origin specified"
-	case *f.githubPAT == "" && *f.gitHubAppClientID == "":
+	case *f.gitHubPAT == "" && *f.GitHubAppClientID == "":
 		skipReason = "github-pat not provided"
-	case *f.githubPATReviewer == "":
+	case *f.gitHubPATReviewer == "":
 		skipReason = "github-pat-reviewer not provided"
 	}
 	if skipReason != "" {
@@ -397,13 +385,13 @@ func SubmitUpdatePR(f *PRFlags) error {
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
 
 		fmt.Printf("---- Approving with reviewer account...\n")
-		if err = gitpr.ApprovePR(existingPR.ID, reviewAuthor); err != nil {
+		if err = gitpr.ApprovePR(existingPR.ID, reviewAuther); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-	if err = gitpr.EnablePRAutoMerge(existingPR.ID, reviewAuthor); err != nil {
+	if err = gitpr.EnablePRAutoMerge(existingPR.ID, reviewAuther); err != nil {
 		return err
 	}
 

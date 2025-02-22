@@ -22,10 +22,7 @@ func init() {
 }
 
 func handleCheckLimits(p subcmd.ParseFunc) error {
-	pat := githubutil.BindPATFlag()
-	ghClientId := githubutil.BindClientIDFlag()
-	ghAppInstallation := githubutil.BindAppInstallationFlag()
-	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
 
 	if err := p(); err != nil {
 		return err
@@ -35,13 +32,13 @@ func handleCheckLimits(p subcmd.ParseFunc) error {
 	var err error
 	var client *github.Client
 
-	if *ghClientId != "" {
-		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+	if *gitHubAuthFlags.GitHubAppClientID != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppInstallation, *gitHubAuthFlags.GitHubAppPrivateKey)
 		if err != nil {
 			return err
 		}
 	} else {
-		client, err = githubutil.NewClient(ctx, *pat)
+		client, err = githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
 		if err != nil {
 			return err
 		}

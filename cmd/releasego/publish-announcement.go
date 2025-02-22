@@ -150,12 +150,9 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
 	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push blog post to GitHub.")
-	flag.StringVar(&org, "org", "microsoft", "Enable dry run: do not push blog post to GitHub.")
-	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository to push the blog post to.")
-	pat := githubutil.BindPATFlag()
-	ghClientId := githubutil.BindClientIDFlag()
-	ghAppInstallation := githubutil.BindAppInstallationFlag()
-	ghAppPrivateKey := githubutil.BindAppPrivateKeyFlag()
+	flag.StringVar(&org, "org", "microsoft", "The GitHub organization to push the blog post to.")
+	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository name to push the blog post to.")
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
 
 	if err := p(); err != nil {
 		return err
@@ -177,13 +174,13 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	ctx := context.Background()
 	var client *github.Client
 
-	if *ghClientId != "" {
-		client, err = githubutil.NewInstallationClient(ctx, *ghClientId, *ghAppInstallation, *ghAppPrivateKey)
+	if *gitHubAuthFlags.GitHubAppClientID != "" {
+		client, err = githubutil.NewInstallationClient(ctx, *gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppInstallation, *gitHubAuthFlags.GitHubAppPrivateKey)
 		if err != nil {
 			return err
 		}
 	} else {
-		client, err = githubutil.NewClient(ctx, *pat)
+		client, err = githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
 		if err != nil {
 			return err
 		}
