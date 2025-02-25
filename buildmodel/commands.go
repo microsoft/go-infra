@@ -150,7 +150,7 @@ func BindPRFlags() *PRFlags {
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
 	auther := gitcmd.NewHttpAutherFromFlags(&f.GitHubAuthFlags)
-	var reviewAuther gitcmd.HttpAuther = gitcmd.NoAuther{}
+	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
 	if f.gitHubPATReviewer != nil {
 		reviewAuther = &gitcmd.GitHubPATAuther{
 			PAT: *f.gitHubPATReviewer,

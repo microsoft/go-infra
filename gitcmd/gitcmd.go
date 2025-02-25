@@ -32,14 +32,11 @@ type URLAuther interface {
 	// InsertAuth inserts authentication into the URL and returns it, or if the auther doesn't
 	// apply, returns the url without any modifications.
 	InsertAuth(url string) string
-}
-
-type HttpAuther interface {
 	// InsertHTTPAuth inserts authentication into the request, if applicable.
-	InsertHTTPAuth(req *http.Request)
+	InsertHTTPAuth(req *http.Request) error
 }
 
-func NewHttpAutherFromFlags(f *githubutil.GitHubAuthFlags) HttpAuther {
+func NewHttpAutherFromFlags(f *githubutil.GitHubAuthFlags) URLAuther {
 	if *f.GitHubPat != "" {
 		return &GitHubPATAuther{
 			PAT: *f.GitHubPat,
@@ -65,16 +62,21 @@ func (GitHubSSHAuther) InsertAuth(url string) string {
 	return url
 }
 
+func (GitHubSSHAuther) InsertHTTPAuth(req *http.Request) error {
+	return nil
+}
+
 // GitHubPATAuther adds a username and password into the https-style GitHub URL.
 type GitHubPATAuther struct {
 	User, PAT string
 }
 
-func (a GitHubPATAuther) InsertHTTPAuth(req *http.Request) {
+func (a GitHubPATAuther) InsertHTTPAuth(req *http.Request) error {
 	if a.PAT == "" {
-		return
+		return nil
 	}
 	req.SetBasicAuth(a.User, a.PAT)
+	return nil
 }
 
 func (a GitHubPATAuther) InsertAuth(url string) string {
@@ -106,13 +108,14 @@ func (a GitHubAppAuther) InsertAuth(url string) string {
 	return url
 }
 
-func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) {
+func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
 	token, err := a.getInstallationToken()
 	if err != nil {
 		log.Printf("Failed to get GitHub App installation token: %v", err)
-		return
+		return err
 	}
 	req.Header.Set("Authorization", "token "+token)
+	return nil
 }
 
 func (a GitHubAppAuther) getInstallationToken() (string, error) {
@@ -148,11 +151,15 @@ func (a AzDOPATAuther) InsertAuth(url string) string {
 	return url
 }
 
+func (a AzDOPATAuther) InsertHTTPAuth(req *http.Request) error {
+	return nil
+}
+
 // NoAuther does nothing to URLs.
 type NoAuther struct{}
 
-func (NoAuther) InsertHTTPAuth(req *http.Request) {
-	// no-op
+func (NoAuther) InsertHTTPAuth(req *http.Request) error {
+	return nil
 }
 
 func (NoAuther) InsertAuth(url string) string {
@@ -172,6 +179,15 @@ func (m MultiAuther) InsertAuth(url string) string {
 		}
 	}
 	return url
+}
+
+func (m MultiAuther) InsertHTTPAuth(req *http.Request) error {
+	for _, a := range m.Authers {
+		if err := a.InsertHTTPAuth(req); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Poll repeatedly checks using the given checker until it returns a successful result.
