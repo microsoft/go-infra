@@ -6,6 +6,8 @@
 package gitcmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/stringutil"
@@ -36,7 +39,8 @@ type URLAuther interface {
 	InsertHTTPAuth(req *http.Request) error
 }
 
-func NewHttpAutherFromFlags(f *githubutil.GitHubAuthFlags) URLAuther {
+// NewURLAutherFromFlags returns a URLAuther based on the flags (e.g. PAT, GitHub App).
+func NewURLAutherFromFlags(f *githubutil.GitHubAuthFlags) URLAuther {
 	if *f.GitHubPat != "" {
 		return &GitHubPATAuther{
 			PAT: *f.GitHubPat,
@@ -50,6 +54,21 @@ func NewHttpAutherFromFlags(f *githubutil.GitHubAuthFlags) URLAuther {
 		}
 	}
 	return nil
+}
+
+// NewClientFromFlags returns a GitHub client based on the flags (e.g. PAT, GitHub App).
+func NewClientFromFlags(f *githubutil.GitHubAuthFlags, ctx context.Context) (*github.Client, error) {
+	if *f.GitHubPat != "" {
+		return githubutil.NewClient(ctx, *f.GitHubPat)
+	}
+	if *f.GitHubAppClientID != "" && *f.GitHubAppInstallation != 0 && *f.GitHubAppPrivateKey != "" {
+		return githubutil.NewInstallationClient(
+			ctx,
+			*f.GitHubAppClientID,
+			*f.GitHubAppInstallation,
+			*f.GitHubAppPrivateKey)
+	}
+	return nil, errors.New("no GitHub authentication provided")
 }
 
 // GitHubSSHAuther turns an https-style GitHub URL into an SSH-style GitHub URL.
@@ -119,18 +138,11 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
 }
 
 func (a GitHubAppAuther) getInstallationToken() (string, error) {
-	// Generate a JWT using the private key
-	jwt, err := githubutil.GenerateJWT(a.ClientID, a.PrivateKey)
-	if err != nil {
-		return "", err
-	}
-
-	// Exchange JWT for an installation token
-	token, err := githubutil.FetchInstallationToken(jwt, a.InstallationID)
-	if err != nil {
-		return "", err
-	}
-	return token, nil
+	return githubutil.GenerateInstallationToken(
+		context.Background(),
+		a.ClientID,
+		a.InstallationID,
+		a.PrivateKey)
 }
 
 // AzDOPATAuther adds a PAT into the https-style Azure DevOps repository URL.

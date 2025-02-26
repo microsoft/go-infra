@@ -10,6 +10,7 @@ import (
 	"log"
 
 	"github.com/google/go-github/v65/github"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -30,7 +31,7 @@ exists, exit with code 1.
 func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags()
 	commit := flag.String("commit", "", "The commit hash to tag.")
 
 	if err := p(); err != nil {
@@ -49,18 +50,9 @@ func handleTag(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	var client *github.Client
-
-	if *gitHubAuthFlags.GitHubAppClientID != "" {
-		client, err = githubutil.NewInstallationClient(ctx, *gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppInstallation, *gitHubAuthFlags.GitHubAppPrivateKey)
-		if err != nil {
-			return err
-		}
-	} else {
-		client, err = githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
-		if err != nil {
-			return err
-		}
+	client, err := gitcmd.NewClientFromFlags(gitHubAuthFlags, ctx)
+	if err != nil {
+		return err
 	}
 
 	ref := "refs/tags/" + *tag

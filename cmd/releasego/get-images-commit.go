@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -54,14 +55,14 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	}
 
 	if *gitHubAuthFlags.GitHubAppClientID != "" {
-		jwt, err := githubutil.GenerateJWT(*gitHubAuthFlags.GitHubAppClientID, *gitHubAuthFlags.GitHubAppPrivateKey)
+		token, err := githubutil.GenerateInstallationToken(
+			context.Background(),
+			*gitHubAuthFlags.GitHubAppClientID,
+			*gitHubAuthFlags.GitHubAppInstallation,
+			*gitHubAuthFlags.GitHubAppPrivateKey,
+		)
 		if err != nil {
 			return err
-		}
-
-		token, err := githubutil.FetchInstallationToken(jwt, *gitHubAuthFlags.GitHubAppInstallation)
-		if err != nil {
-			return nil
 		}
 
 		// Inject the token into the repo URL

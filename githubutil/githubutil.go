@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -58,27 +57,37 @@ func NewInstallationClient(ctx context.Context, clientID string, installationID 
 	if privateKey == "" {
 		return nil, errors.New("no GitHub App private key specified")
 	}
-	// Generate a JWT using the private key
-	jwt, err := GenerateJWT(clientID, privateKey)
+
+	installationToken, err := GenerateInstallationToken(ctx, clientID, installationID, privateKey)
 	if err != nil {
 		return nil, err
 	}
 
-	// Exchange JWT for an installation token
-	token, err := FetchInstallationToken(jwt, installationID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a client using the installation token
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: installationToken})
 	tokenClient := oauth2.NewClient(ctx, tokenSource)
-
 	return github.NewClient(tokenClient), nil
 }
 
+func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, error) {
+	jwt, err := generateJWT(clientID, privateKey)
+	if err != nil {
+		return "", err
+	}
+
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
+	tokenClient := oauth2.NewClient(ctx, tokenSource)
+
+	client := github.NewClient(tokenClient)
+	installationToken, _, err := client.Apps.CreateInstallationToken(ctx, installationID, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return *installationToken.Token, nil
+}
+
 // GenerateJWT generates a JWT for a GitHub App.
-func GenerateJWT(clientID, privateKey string) (string, error) {
+func generateJWT(clientID, privateKey string) (string, error) {
 	privkey, err := base64.StdEncoding.DecodeString(privateKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to base64-decode private key: %v", err)
@@ -106,37 +115,6 @@ func GenerateJWT(clientID, privateKey string) (string, error) {
 		return "", fmt.Errorf("failed to sign JWT: %v", err)
 	}
 	return signedToken, nil
-}
-
-func FetchInstallationToken(jwt string, installationID int64) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", installationID)
-
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("failed to get installation token, status: %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Token string `json:"token"`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	if err != nil {
-		return "", err
-	}
-
-	return result.Token, nil
 }
 
 // BindPATReviewerFlag returns a flag to specify the personal access token for the reviewer.

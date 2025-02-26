@@ -149,7 +149,7 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	auther := gitcmd.NewHttpAutherFromFlags(&f.GitHubAuthFlags)
+	auther := gitcmd.NewURLAutherFromFlags(&f.GitHubAuthFlags)
 	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
 	if f.gitHubPATReviewer != nil {
 		reviewAuther = &gitcmd.GitHubPATAuther{
@@ -354,7 +354,11 @@ func SubmitUpdatePR(f *PRFlags) error {
 	case *f.origin == "":
 		skipReason = "No origin specified"
 	case *f.gitHubPAT == "" && *f.GitHubAppClientID == "":
-		skipReason = "github-pat not provided"
+		skipReason = "github-pat and github-app-client-id not provided"
+	case *f.GitHubAppClientID != "" && *f.GitHubAppInstallation == 0:
+		skipReason = "github-app-installation not provided"
+	case *f.GitHubAppClientID != "" && *f.GitHubAppPrivateKey == "":
+		skipReason = "github-app-private-key not provided"
 	case *f.gitHubPATReviewer == "":
 		skipReason = "github-pat-reviewer not provided"
 	}
