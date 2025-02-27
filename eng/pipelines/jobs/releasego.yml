@@ -71,13 +71,13 @@ jobs:
           buildStatus: InProgress
           start: true
 
-      - script: releasego check-limits -pat '$(GitHubPAT)'
+      - script: releasego check-limits -github-pat '$(GitHubPAT)'
         displayName: Check GitHub rate limit
 
       - ${{ each step in parameters.steps }}:
         - ${{ step }}
 
-      - script: releasego check-limits -pat '$(GitHubPAT)'
+      - script: releasego check-limits -github-pat '$(GitHubPAT)'
         displayName: Check GitHub rate limit
 
       - ${{ if ne(parameters.retryInstructionsFlags, '') }}:

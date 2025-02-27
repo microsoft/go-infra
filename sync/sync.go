@@ -30,6 +30,10 @@ type Flags struct {
 	GitHubPAT         *string
 	GitHubPATReviewer *string
 
+	gitHubAppClientID     *string
+	GitHubAppInstallation *int64
+	GitHubAppPrivateKey   *string
+
 	AzDODncengPAT *string
 
 	SyncConfig *string
@@ -52,6 +56,10 @@ func BindFlags(workingDirectory string) *Flags {
 		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
 		GitHubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
 
+		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
+		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
+		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format."),
+
 		AzDODncengPAT: flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs."),
 
 		SyncConfig: flag.String("c", "eng/sync-config.json", "The sync configuration file to run."),
@@ -72,7 +80,8 @@ func BindFlags(workingDirectory string) *Flags {
 			"The type of Git auth to inject into URLs for fetch/push access. String options:\n"+
 				" none - Leave GitHub URLs as they are. Git may use HTTPS authentication in this case.\n"+
 				" ssh - Change the GitHub URL to SSH format.\n"+
-				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"),
+				" pat - Add the 'github-user' and 'github-pat' values into the URL.\n"+
+				" app - Generate an installation token using 'github-app-client-id', 'github-app-installation', and 'github-app-private-key'\n"),
 	}
 }
 
@@ -111,6 +120,33 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 	switch GitAuthOption(*f.GitAuthString) {
 	case GitAuthNone:
 		return gitcmd.NoAuther{}, nil
+
+	case GitAuthApp:
+		var missingArgs string
+		if *f.gitHubAppClientID == "" {
+			missingArgs += " git-auth app is specified but github-app-client-id is not."
+		}
+		if *f.GitHubAppInstallation == 0 {
+			missingArgs += " git-auth app is specified but github-app-installation is not."
+		}
+		if *f.GitHubAppPrivateKey == "" {
+			missingArgs += " git-auth app is specified but github-app-private-key is not."
+		}
+		if missingArgs != "" {
+			return nil, fmt.Errorf("missing command-line args:%v", missingArgs)
+		}
+		return gitcmd.MultiAuther{
+			Authers: []gitcmd.URLAuther{
+				gitcmd.GitHubAppAuther{
+					ClientID:       *f.gitHubAppClientID,
+					InstallationID: *f.GitHubAppInstallation,
+					PrivateKey:     *f.GitHubAppPrivateKey,
+				},
+				gitcmd.AzDOPATAuther{
+					PAT: *f.AzDODncengPAT,
+				},
+			},
+		}, nil
 
 	case GitAuthSSH:
 		return gitcmd.GitHubSSHAuther{}, nil
@@ -185,6 +221,7 @@ const (
 	GitAuthNone GitAuthOption = "none"
 	GitAuthSSH  GitAuthOption = "ssh"
 	GitAuthPAT  GitAuthOption = "pat"
+	GitAuthApp  GitAuthOption = "app"
 )
 
 var errWouldCreateBranchButCurrentlyDryRun = errors.New("would have pushed a new branch to the target repository to kick off a new version, but this is a dry run. Cannot continue")
@@ -266,6 +303,13 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	auther, err := f.ParseAuth()
 	if err != nil {
 		return nil, err
+	}
+
+	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
+	if f.GitHubPATReviewer != nil {
+		reviewAuther = &gitcmd.GitHubPATAuther{
+			PAT: *f.GitHubPATReviewer,
+		}
 	}
 
 	if *f.InitialCloneDir == "" {
@@ -691,9 +735,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		case *f.DryRun:
 			c.SkipReason = "Dry run"
 
-		case *f.GitHubUser == "":
+		case *f.GitHubUser == "" && *f.gitHubAppClientID == "":
 			c.SkipReason = "github-user not provided"
-		case *f.GitHubPAT == "":
+		case *f.GitHubPAT == "" && *f.gitHubAppClientID == "":
 			c.SkipReason = "github-pat not provided"
 
 		case *f.GitHubPATReviewer == "":
@@ -712,7 +756,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			parsedPRTargetRemote,
 			c.Refs.PRBranch(),
 			*f.GitHubUser,
-			*f.GitHubPAT)
+			auther)
 		if err != nil {
 			return nil, err
 		}
@@ -811,7 +855,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
-			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), b.PRRequest, *f.GitHubPAT)
+			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), b.PRRequest, auther)
 			if err != nil {
 				if errors.Is(err, gitpr.ErrPRAlreadyExists) {
 					if b.ExistingPR == nil {
@@ -832,13 +876,13 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 
 				fmt.Printf("---- Approving with reviewer account...\n")
-				if err = gitpr.ApprovePR(pr.NodeID, *f.GitHubPATReviewer); err != nil {
+				if err = gitpr.ApprovePR(pr.NodeID, reviewAuther); err != nil {
 					return err
 				}
 			}
 
-			fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
-			if err = gitpr.EnablePRAutoMerge(pr.NodeID, *f.GitHubPATReviewer); err != nil {
+			fmt.Printf("---- Enabling auto-merge with bot account...\n")
+			if err = gitpr.EnablePRAutoMerge(pr.NodeID, auther); err != nil {
 				return err
 			}
 

@@ -179,7 +179,7 @@ extends:
                         -author '${{ parameters.notify }}' \
                         -versions '${{ join(',', parameters.releaseVersions) }}' \
                         -security='${{ parameters.isSecurityRelease }}' \
-                        -pat '$(GitHubPAT)'
+                        -github-pat '$(GitHubPAT)'
                     displayName: 📰 Publish announcement details
 
                 - ${{ if eq(parameters.runGoImageVersionCheck, true) }}:

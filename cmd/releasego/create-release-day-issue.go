@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/azdo"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -36,7 +37,7 @@ var releaseIssueLabels = []string{"Area-Release"}
 
 func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags()
 	releasesFlag := flag.String(
 		"releases", "",
 		"[Required] The release numbers to track releasing during this day, separated by ','.")
@@ -75,7 +76,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
+	client, err := gitcmd.NewClientFromFlags(gitHubAuthFlags, ctx)
 	if err != nil {
 		return err
 	}
