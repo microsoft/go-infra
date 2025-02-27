@@ -1,9 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package main
+package azurelinux
 
 import (
+	"encoding/json"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,22 +18,35 @@ import (
 
 var assetsJsonPath = filepath.Join("testdata", "update-azure-linux", "assets.json")
 
-func TestAzLUpdateSpecFileContent(t *testing.T) {
-	assets, err := loadBuildAssets(assetsJsonPath)
+func loadBuildAssets(t *testing.T) *buildassets.BuildAssets {
+	t.Helper()
+	data := readFile(t, assetsJsonPath)
+
+	var assets buildassets.BuildAssets
+	if err := json.Unmarshal(data, &assets); err != nil {
+		t.Fatal(err)
+	}
+	return &assets
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
 
-	specFilepPath := filepath.Join("testdata", "update-azure-linux", "golang.spec")
-	specFile, err := os.ReadFile(specFilepPath)
-	if err != nil {
-		t.Fatalf("Error reading spec file from path %s, error is:%s", specFilepPath, err)
+func TestAzLUpdateSpecFileContent(t *testing.T) {
+	assets := loadBuildAssets(t)
+	v := Version{
+		Spec: readFile(t, filepath.Join("testdata", "update-azure-linux", "golang.spec")),
 	}
 
-	specFileContent := string(specFile)
-	extractedGoFileVersion, err := extractGoArchiveNameFromSpecFile(specFileContent)
+	extractedGoFileVersion, err := v.parseGoArchiveName()
 	if err != nil {
-		t.Fatalf("Error extracting go archive name from spec file : %s", err)
+		t.Fatalf("error parsing Go archive name: %s", err)
 	}
 
 	if extractedGoFileVersion != "go1.22.4-20240604.2.src.tar.gz" {
@@ -44,52 +58,37 @@ func TestAzLUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Error parsing changelog time : %s", err)
 	}
 
-	updatedSpecFile, err := updateSpecFile(assets, changelogTime, specFileContent)
-	if err != nil {
+	if err := v.updateSpec(assets, changelogTime); err != nil {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
 
-	goldentest.Check(t, "updated_golang.golden.spec", updatedSpecFile)
+	goldentest.Check(t, "updated_golang.golden.spec", string(v.Spec))
 }
 
 func TestAzLUpdateSignaturesFileContent(t *testing.T) {
-	assets, err := loadBuildAssets(assetsJsonPath)
-	if err != nil {
-		t.Fatal(err)
+	assets := loadBuildAssets(t)
+	v := Version{
+		Signatures: readFile(t, filepath.Join("testdata", "update-azure-linux", "signatures.json")),
 	}
 
-	signaturesFilePath := filepath.Join("testdata", "update-azure-linux", "signatures.json")
-	signaturesFile, err := os.ReadFile(signaturesFilePath)
-	if err != nil {
-		t.Fatalf("Error reading spec file from path %s, error is:%s", signaturesFilePath, err)
+	if err := v.updateSignatures("go1.22.4-20240604.2.src.tar.gz", path.Base(assets.GoSrcURL), assets.GoSrcSHA256); err != nil {
+		t.Fatalf("error updating signatures in spec file: %s", err)
 	}
 
-	updatedSignatureFile, err := updateSignatureFile(signaturesFile, "go1.22.4-20240604.2.src.tar.gz", path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
-	if err != nil {
-		t.Errorf("Error updating CG Manifest file : %s", err)
-	}
-
-	goldentest.Check(t, "updated_signatures.golden.json", string(updatedSignatureFile))
+	goldentest.Check(t, "updated_signatures.golden.json", string(v.Signatures))
 }
 
 func TestAzLUpdateCGManifestFileContent(t *testing.T) {
-	assets, err := loadBuildAssets(assetsJsonPath)
-	if err != nil {
-		t.Fatal(err)
+	assets := loadBuildAssets(t)
+	rm := RepositoryModel{
+		CGManifest: readFile(t, filepath.Join("testdata", "update-azure-linux", "cgmanifest.json")),
 	}
 
-	cgManifestFilePath := filepath.Join("testdata", "update-azure-linux", "cgmanifest.json")
-	cgManifestFile, err := os.ReadFile(cgManifestFilePath)
-	if err != nil {
-		t.Fatalf("Error reading spec file from path %s, error is:%s", cgManifestFilePath, err)
+	if err := rm.UpdateCGManifest(assets); err != nil {
+		t.Fatalf("error updating CG Manifest file: %s", err)
 	}
 
-	updatedCgManifestFile, err := updateCGManifest(assets, cgManifestFile)
-	if err != nil {
-		t.Errorf("Error updating CG Manifest file : %s", err)
-	}
-
-	goldentest.Check(t, "updated_cgmanifest.golden.json", string(updatedCgManifestFile))
+	goldentest.Check(t, "updated_cgmanifest.golden.json", string(rm.CGManifest))
 }
 
 func TestAzLUpdateSpecVersion(t *testing.T) {
@@ -151,10 +150,7 @@ func TestAzLUpdateSpecVersion(t *testing.T) {
 }
 
 func TestAzLPRBody(t *testing.T) {
-	assets, err := loadBuildAssets(assetsJsonPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assets := loadBuildAssets(t)
 
 	type args struct {
 		latestMajor bool
@@ -174,7 +170,7 @@ func TestAzLPRBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := generatePRTitleFromAssets(assets, tt.args.security)
+			got := GeneratePRTitleFromAssets(assets, tt.args.security)
 			got += "\n\n---\n\n"
 			got += GeneratePRDescription(assets, tt.args.latestMajor, tt.args.security, tt.args.notify, tt.args.prNumber)
 			goldentest.Check(t, "pr-description-"+tt.name+".golden.md", got)
