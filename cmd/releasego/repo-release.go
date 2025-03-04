@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
-	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -37,7 +36,7 @@ given build asset JSON file and the artifacts it lists that are found in the spe
 func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	gitHubAuthFlags := githubutil.BindGitHubAuthFlags()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
 	buildDir := flag.String("build-dir", "", "[Required] The directory containing build artifacts to attach.")
 
@@ -71,7 +70,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := gitcmd.NewClientFromFlags(gitHubAuthFlags, ctx)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

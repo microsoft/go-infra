@@ -9,12 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/githubutil"
 )
 
 var client = http.Client{
@@ -182,50 +181,6 @@ func (r Remote) GetOwnerSlashRepo() string {
 	return strings.Join(r.GetOwnerRepo(), "/")
 }
 
-// GetUsername returns the username for PAT auth (from /user endpoint).
-func GetUsername(auther gitcmd.URLAuther) string {
-	url := "https://api.github.com/user"
-	request, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Panic(err)
-	}
-	err = auther.InsertHTTPAuth(request)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	response := &struct {
-		Login string `json:"login"`
-	}{}
-
-	if err := sendJSONRequestSuccessful(request, response); err != nil {
-		log.Panic(err)
-	}
-
-	return response.Login
-}
-
-// GetAppName returns the app name for App-based auth (from /app endpoint).
-func GetAppName(auther gitcmd.URLAuther) string {
-	url := "https://api.github.com/app"
-	request, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Panic(err)
-	}
-	err = auther.InsertHTTPAuth(request)
-	if err != nil {
-		log.Panic(err)
-	}
-
-	response := &struct {
-		Name string `json:"name"`
-	}{}
-	if err := sendJSONRequestSuccessful(request, response); err != nil {
-		log.Panic(err)
-	}
-	return response.Name
-}
-
 // sendJSONRequest sends a request for JSON information. The JSON response is unmarshalled (parsed)
 // into the 'response' parameter, based on the structure of 'response'.
 func sendJSONRequest(request *http.Request, response interface{}) (status int, err error) {
@@ -294,7 +249,7 @@ type GitHubRequestError struct {
 
 // PostGitHub creates a PR on GitHub using pat for the given owner/repo and request details.
 // If the PR already exists, returns a wrapped [ErrPRAlreadyExists].
-func PostGitHub(ownerRepo string, request *GitHubRequest, auther gitcmd.URLAuther) (*GitHubResponse, error) {
+func PostGitHub(ownerRepo string, request *GitHubRequest, auther githubutil.HTTPRequestAuther) (*GitHubResponse, error) {
 	prSubmitContent, err := json.MarshalIndent(request, "", "")
 	if err != nil {
 		return nil, err
@@ -358,7 +313,7 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, auther gitcmd.URLAuthe
 	return &response.GitHubResponse, nil
 }
 
-func QueryGraphQL(auther gitcmd.URLAuther, query string, variables map[string]interface{}, result interface{}) error {
+func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]interface{}, result interface{}) error {
 	queryBytes, err := json.Marshal(&struct {
 		Query     string                 `json:"query"`
 		Variables map[string]interface{} `json:"variables,omitempty"`
@@ -382,7 +337,7 @@ func QueryGraphQL(auther gitcmd.URLAuther, query string, variables map[string]in
 	return sendJSONRequestSuccessful(httpRequest, result)
 }
 
-func MutateGraphQL(auther gitcmd.URLAuther, query string, variables map[string]interface{}) error {
+func MutateGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]interface{}) error {
 	// Queries and mutations use the same API. But with a mutation, the results aren't useful to us.
 	return QueryGraphQL(auther, query, variables, &struct{}{})
 }
@@ -396,7 +351,7 @@ type ExistingPR struct {
 // FindExistingPR looks for a PR submitted to a target branch with a set of filters. Returns the
 // result's graphql identity if one match is found, empty string if no matches are found, and an
 // error if more than one match was found.
-func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser string, auther gitcmd.URLAuther) (*ExistingPR, error) {
+func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitterUser string, auther githubutil.HTTPRequestAuther) (*ExistingPR, error) {
 	prQuery := `query ($repoOwner: String!, $repoName: String!, $headRefName: String!, $baseRefName: String!) {
 		repository(owner: $repoOwner, name: $repoName) {
 			pullRequests(states: OPEN, headRefName: $headRefName, baseRefName: $baseRefName, first: 5) {
@@ -502,7 +457,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 
 // ApprovePR adds an approving review on the target GraphQL PR node ID. The review author is the user
 // associated with the PAT.
-func ApprovePR(nodeID string, auther gitcmd.URLAuther) error {
+func ApprovePR(nodeID string, auther githubutil.HTTPRequestAuther) error {
 	return MutateGraphQL(
 		auther,
 		`mutation ($nodeID: ID!) {
@@ -514,7 +469,7 @@ func ApprovePR(nodeID string, auther gitcmd.URLAuther) error {
 }
 
 // EnablePRAutoMerge enables PR automerge on the target GraphQL PR node ID.
-func EnablePRAutoMerge(nodeID string, auther gitcmd.URLAuther) error {
+func EnablePRAutoMerge(nodeID string, auther githubutil.HTTPRequestAuther) error {
 	return MutateGraphQL(
 		auther,
 		`mutation ($nodeID: ID!) {

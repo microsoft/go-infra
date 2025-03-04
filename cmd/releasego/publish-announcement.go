@@ -19,7 +19,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/internal/infrasort"
@@ -152,7 +151,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push blog post to GitHub.")
 	flag.StringVar(&org, "org", "microsoft", "The GitHub organization to push the blog post to.")
 	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository name to push the blog post to.")
-	gitHubAuthFlags := githubutil.BindGitHubAuthFlags()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 
 	if err := p(); err != nil {
 		return err
@@ -172,7 +171,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
 
 	ctx := context.Background()
-	client, err := gitcmd.NewClientFromFlags(gitHubAuthFlags, ctx)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

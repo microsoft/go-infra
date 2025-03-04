@@ -79,7 +79,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
 	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
-	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags()
+	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags("")
 
 	if err := p(); err != nil {
 		return err

@@ -5,9 +5,6 @@ package githubutil
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v65/github"
 	"golang.org/x/oauth2"
 )
@@ -28,13 +24,6 @@ var (
 	// ErrRepositoryNotExists indicates that the requested repository does not exist.
 	ErrRepositoryNotExists = errors.New("repository does not exist")
 )
-
-type GitHubAuthFlags struct {
-	GitHubPat             *string
-	GitHubAppClientID     *string
-	GitHubAppInstallation *int64
-	GitHubAppPrivateKey   *string
-}
 
 // NewClient creates a GitHub client using the given personal access token.
 func NewClient(ctx context.Context, pat string) (*github.Client, error) {
@@ -68,69 +57,93 @@ func NewInstallationClient(ctx context.Context, clientID string, installationID 
 	return github.NewClient(tokenClient), nil
 }
 
-func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, error) {
-	jwt, err := generateJWT(clientID, privateKey)
-	if err != nil {
-		return "", err
-	}
-
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
-
-	client := github.NewClient(tokenClient)
-	installationToken, _, err := client.Apps.CreateInstallationToken(ctx, installationID, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return *installationToken.Token, nil
-}
-
-// GenerateJWT generates a JWT for a GitHub App.
-func generateJWT(clientID, privateKey string) (string, error) {
-	privkey, err := base64.StdEncoding.DecodeString(privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to base64-decode private key: %v", err)
-	}
-	block, _ := pem.Decode(privkey)
-	if block == nil {
-		return "", fmt.Errorf("failed to decode private key")
-	}
-
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse RSA private key: %v", err)
-	}
-
-	now := time.Now()
-	claims := jwt.RegisteredClaims{
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
-		Issuer:    clientID,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	signedToken, err := token.SignedString(key)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign JWT: %v", err)
-	}
-	return signedToken, nil
-}
-
-// BindPATReviewerFlag returns a flag to specify the personal access token for the reviewer.
-func BindPATReviewerFlag() *string {
-	return flag.String("github-pat-reviewer", "", "[Required] The GitHub PAT to use for the reviewer.")
+type GitHubAuthFlags struct {
+	GitHubPat             *string
+	GitHubAppClientID     *string
+	GitHubAppInstallation *int64
+	GitHubAppPrivateKey   *string
 }
 
 // BindGitHubAuthFlags creates gitHubAuthFlags with the 'flag' package, globally registering them
 // in the flag package so ParseBoundFlags will find them.
-func BindGitHubAuthFlags() *GitHubAuthFlags {
-	return &GitHubAuthFlags{
-		GitHubPat:             flag.String("github-pat", "", "[Required] The GitHub PAT to use."),
-		GitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
-		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
-		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format."),
+//
+// If user is specified, it is inserted into the middle of the flag name. This lets the func be
+// called multiple times to set up multiple users/apps. It's inserted into the middle so the sorted
+// "-h" output shows all the user/app's auth flags adjacent to each other, and so we can include a
+// reminder about which values are associated with each other.
+func BindGitHubAuthFlags(user string) *GitHubAuthFlags {
+	prefix := "github"
+	if user != "" {
+		prefix += "-" + user
 	}
+	appAuthTogether := "If specified, all " + prefix + "-app-* flags must be specified."
+	return &GitHubAuthFlags{
+		GitHubPat: flag.String(
+			prefix+"-pat", "",
+			"The GitHub PAT to use. Exclusive with "+prefix+"-app-*"),
+		GitHubAppClientID: flag.String(
+			prefix+"-app-client-id"+user, "",
+			"Use this GitHub App Client ID to authenticate to GitHub. "+appAuthTogether),
+		GitHubAppInstallation: flag.Int64(
+			prefix+"-app-installation"+user, 0,
+			"Use this GitHub App Installation ID to authenticate to GitHub. "+appAuthTogether),
+		GitHubAppPrivateKey: flag.String(
+			prefix+"-app-private-key"+user, "",
+			"Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format. "+appAuthTogether),
+	}
+}
+
+// NewClient returns a GitHub client based on the flags (e.g. PAT, GitHub App).
+func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error) {
+	if *f.GitHubPat != "" {
+		return NewClient(ctx, *f.GitHubPat)
+	}
+	for _, appFlagSet := range []bool{
+		*f.GitHubAppClientID != "",
+		*f.GitHubAppInstallation != 0,
+		*f.GitHubAppPrivateKey != "",
+	} {
+		if appFlagSet {
+			return NewInstallationClient(
+				ctx,
+				*f.GitHubAppClientID,
+				*f.GitHubAppInstallation,
+				*f.GitHubAppPrivateKey)
+		}
+	}
+	return nil, errors.New("no GitHub authentication provided")
+}
+
+// NewAuther returns an auther based on the flags (e.g. PAT, GitHub App).
+func (f *GitHubAuthFlags) NewAuther() (GitHubAPIAuther, error) {
+	if *f.GitHubPat != "" {
+		return &GitHubPATAuther{
+			PAT: *f.GitHubPat,
+		}, nil
+	}
+	for _, appFlagSet := range []bool{
+		*f.GitHubAppClientID != "",
+		*f.GitHubAppInstallation != 0,
+		*f.GitHubAppPrivateKey != "",
+	} {
+		if appFlagSet {
+			if *f.GitHubAppClientID == "" {
+				return nil, errors.New("no GitHub App Client ID specified")
+			}
+			if *f.GitHubAppInstallation == 0 {
+				return nil, errors.New("no GitHub App Installation ID specified")
+			}
+			if *f.GitHubAppPrivateKey == "" {
+				return nil, errors.New("no GitHub App private key specified")
+			}
+			return &GitHubAppAuther{
+				ClientID:       *f.GitHubAppClientID,
+				InstallationID: *f.GitHubAppInstallation,
+				PrivateKey:     *f.GitHubAppPrivateKey,
+			}, nil
+		}
+	}
+	return nil, errors.New("no GitHub authentication provided")
 }
 
 // BindRepoFlag returns a flag to specify a GitHub repo to target. Parse it with ParseRepoFlag.

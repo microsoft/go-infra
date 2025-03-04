@@ -118,10 +118,9 @@ type PRFlags struct {
 	origin *string
 	to     *string
 
-	gitHubPAT         *string
-	gitHubPATReviewer *string
+	Auth         githubutil.GitHubAuthFlags
+	ReviewerAuth githubutil.GitHubAuthFlags
 
-	githubutil.GitHubAuthFlags
 	UpdateFlags
 	sync.AzDOVariableFlags
 }
@@ -138,8 +137,8 @@ func BindPRFlags() *PRFlags {
 		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
 
-		gitHubPATReviewer: githubutil.BindPATReviewerFlag(),
-		GitHubAuthFlags:   *githubutil.BindGitHubAuthFlags(),
+		ReviewerAuth:      *githubutil.BindGitHubAuthFlags("reviewer"),
+		Auth:              *githubutil.BindGitHubAuthFlags(""),
 		UpdateFlags:       *BindUpdateFlags(),
 		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
 	}
@@ -149,13 +148,6 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	auther := gitcmd.NewURLAutherFromFlags(&f.GitHubAuthFlags)
-	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
-	if f.gitHubPATReviewer != nil {
-		reviewAuther = &gitcmd.GitHubPATAuther{
-			PAT: *f.gitHubPATReviewer,
-		}
-	}
 	if !*f.skipDockerfiles {
 		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
 			return err
@@ -222,12 +214,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	if *f.gitHubPAT != "" || *f.GitHubAppClientID != "" {
+	auther, err := f.Auth.NewAuther()
+	if err != nil {
+		fmt.Printf("---- Skipping finding PR to update; no auth: %v\n", err)
+	} else {
 		var githubUser string
-		if *f.GitHubAppClientID != "" {
-			githubUser = gitpr.GetAppName(auther)
-		} else {
-			githubUser = gitpr.GetUsername(auther)
+		githubUser, err := auther.GetIdentity()
+		if err != nil {
+			return err
 		}
 		fmt.Printf("---- User for github is: %v\n", githubUser)
 
@@ -353,14 +347,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 		skipReason = "Dry run"
 	case *f.origin == "":
 		skipReason = "No origin specified"
-	case *f.gitHubPAT == "" && *f.GitHubAppClientID == "":
-		skipReason = "github-pat and github-app-client-id not provided"
-	case *f.GitHubAppClientID != "" && *f.GitHubAppInstallation == 0:
-		skipReason = "github-app-installation not provided"
-	case *f.GitHubAppClientID != "" && *f.GitHubAppPrivateKey == "":
-		skipReason = "github-app-private-key not provided"
-	case *f.gitHubPATReviewer == "":
-		skipReason = "github-pat-reviewer not provided"
+	}
+	auther, err = f.Auth.NewAuther()
+	if err != nil {
+		skipReason = "No auth"
+	}
+	reviewAuther, err := f.ReviewerAuth.NewAuther()
+	if err != nil {
+		skipReason = "No reviewer auth"
 	}
 	if skipReason != "" {
 		fmt.Printf("---- %s: skipping submitting PR for %v\n", skipReason, b.Name)

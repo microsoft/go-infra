@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/stringutil"
 )
@@ -26,13 +27,10 @@ type Flags struct {
 	DryRun          *bool
 	InitialCloneDir *string
 
-	GitHubUser        *string
-	GitHubPAT         *string
-	GitHubPATReviewer *string
+	GitHubUser *string
 
-	gitHubAppClientID     *string
-	GitHubAppInstallation *int64
-	GitHubAppPrivateKey   *string
+	Auth         githubutil.GitHubAuthFlags
+	ReviewerAuth githubutil.GitHubAuthFlags
 
 	AzDODncengPAT *string
 
@@ -52,13 +50,10 @@ func BindFlags(workingDirectory string) *Flags {
 			"When creating a repo, clone this repo/directory rather than starting from scratch.\n"+
 				"This may be used in dev/test to reduce network usage if fetching the official source from scratch is slow."),
 
-		GitHubUser:        flag.String("github-user", "", "Use this github user to submit pull requests."),
-		GitHubPAT:         flag.String("github-pat", "", "Submit the PR with this GitHub PAT, if specified."),
-		GitHubPATReviewer: flag.String("github-pat-reviewer", "", "Approve the PR and turn on auto-merge with this PAT, if specified. Required, if github-pat specified."),
+		GitHubUser: flag.String("github-user", "", "Only submit/update pull requests under this github user."),
 
-		gitHubAppClientID:     flag.String("github-app-client-id", "", "Use this GitHub App Client ID to authenticate to GitHub."),
-		GitHubAppInstallation: flag.Int64("github-app-installation", 0, "Use this GitHub App Installation ID to authenticate to GitHub."),
-		GitHubAppPrivateKey:   flag.String("github-app-private-key", "", "Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format."),
+		Auth:         *githubutil.BindGitHubAuthFlags(""),
+		ReviewerAuth: *githubutil.BindGitHubAuthFlags("reviewer"),
 
 		AzDODncengPAT: flag.String("azdo-dnceng-pat", "", "Use this Azure DevOps PAT to authenticate to dnceng project HTTPS Git URLs."),
 
@@ -121,54 +116,22 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 	case GitAuthNone:
 		return gitcmd.NoAuther{}, nil
 
-	case GitAuthApp:
-		var missingArgs string
-		if *f.gitHubAppClientID == "" {
-			missingArgs += " git-auth app is specified but github-app-client-id is not."
-		}
-		if *f.GitHubAppInstallation == 0 {
-			missingArgs += " git-auth app is specified but github-app-installation is not."
-		}
-		if *f.GitHubAppPrivateKey == "" {
-			missingArgs += " git-auth app is specified but github-app-private-key is not."
-		}
-		if missingArgs != "" {
-			return nil, fmt.Errorf("missing command-line args:%v", missingArgs)
-		}
-		return gitcmd.MultiAuther{
-			Authers: []gitcmd.URLAuther{
-				gitcmd.GitHubAppAuther{
-					ClientID:       *f.gitHubAppClientID,
-					InstallationID: *f.GitHubAppInstallation,
-					PrivateKey:     *f.GitHubAppPrivateKey,
-				},
-				gitcmd.AzDOPATAuther{
-					PAT: *f.AzDODncengPAT,
-				},
-			},
-		}, nil
-
 	case GitAuthSSH:
-		return gitcmd.GitHubSSHAuther{}, nil
+		return githubutil.GitHubSSHAuther{}, nil
 
-	case GitAuthPAT:
-		var missingArgs string
-		if *f.GitHubUser == "" {
-			missingArgs += " git-auth pat is specified but github-user is not."
+	case GitAuthAPI:
+		auther, err := f.Auth.NewAuther()
+		if err != nil {
+			return nil, err
 		}
-		if *f.GitHubPAT == "" {
-			missingArgs += " git-auth pat is specified but github-pat is not."
-		}
-		if missingArgs != "" {
-			return nil, fmt.Errorf("missing command-line args:%v", missingArgs)
+		// The GitHub user shouldn't be necessary for auth, but some APIs treat it as necessary.
+		if patAuther, ok := auther.(githubutil.GitHubPATAuther); ok {
+			patAuther.User = *f.GitHubUser
 		}
 		return gitcmd.MultiAuther{
 			Authers: []gitcmd.URLAuther{
-				gitcmd.GitHubPATAuther{
-					User: *f.GitHubUser,
-					PAT:  *f.GitHubPAT,
-				},
-				gitcmd.AzDOPATAuther{
+				auther,
+				azdo.AzDOPATAuther{
 					PAT: *f.AzDODncengPAT,
 				},
 			},
@@ -220,8 +183,7 @@ type GitAuthOption string
 const (
 	GitAuthNone GitAuthOption = "none"
 	GitAuthSSH  GitAuthOption = "ssh"
-	GitAuthPAT  GitAuthOption = "pat"
-	GitAuthApp  GitAuthOption = "app"
+	GitAuthAPI  GitAuthOption = "api" // PAT or app
 )
 
 var errWouldCreateBranchButCurrentlyDryRun = errors.New("would have pushed a new branch to the target repository to kick off a new version, but this is a dry run. Cannot continue")
@@ -300,16 +262,9 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
-	auther, err := f.ParseAuth()
+	urlAuther, err := f.ParseAuth()
 	if err != nil {
 		return nil, err
-	}
-
-	var reviewAuther gitcmd.URLAuther = gitcmd.NoAuther{}
-	if f.GitHubPATReviewer != nil {
-		reviewAuther = &gitcmd.GitHubPATAuther{
-			PAT: *f.GitHubPATReviewer,
-		}
 	}
 
 	if *f.InitialCloneDir == "" {
@@ -382,7 +337,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 				fetchMain := newGitCmd(
 					"fetch", "--no-tags",
-					auther.InsertAuth(entry.Target),
+					urlAuther.InsertAuth(entry.Target),
 					mainRef.BaseBranchFetchRefspec())
 				if err := run(fetchMain); err != nil {
 					return nil, err
@@ -391,7 +346,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				// Push the new branch: fork from the main commit we just fetched to a local branch.
 				fork := newGitCmd(
 					"push", "--no-tags",
-					auther.InsertAuth(entry.Target),
+					urlAuther.InsertAuth(entry.Target),
 					b.ForkFromMainRefspec(mainRef.PRBranch()))
 				if *f.DryRun {
 					fork.Args = append(fork.Args, "-n")
@@ -413,8 +368,8 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	//
 	// For an overview of the sequence of Git commands below, see the command description.
 
-	fetchUpstream := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.Upstream))
-	fetchOrigin := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.Target))
+	fetchUpstream := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Upstream))
+	fetchOrigin := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Target))
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
@@ -432,7 +387,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	// Fetch the state of the official/upstream-maintained mirror (if specified) so we can check
 	// against it later.
 	if entry.UpstreamMirror != "" {
-		fetchUpstreamMirror := newGitCmd("fetch", "--no-tags", auther.InsertAuth(entry.UpstreamMirror))
+		fetchUpstreamMirror := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.UpstreamMirror))
 		for _, b := range branches {
 			fetchUpstreamMirror.Args = append(fetchUpstreamMirror.Args, b.UpstreamMirrorFetchRefspec())
 		}
@@ -444,7 +399,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	// Before attempting any update, mirror everything (if specified). Only continue once this is
 	// complete, to avoid a potentially broken internal build state.
 	if entry.MirrorTarget != "" {
-		mirror := newGitCmd("push", auther.InsertAuth(entry.MirrorTarget))
+		mirror := newGitCmd("push", urlAuther.InsertAuth(entry.MirrorTarget))
 		for _, b := range branches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
@@ -731,22 +686,18 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 		c.PRRequest = c.Refs.CreateGitHubPR(parsedPRHeadRemote.GetOwner(), prTitle, prBody)
 
-		switch {
-		case *f.DryRun:
+		if *f.DryRun {
 			c.SkipReason = "Dry run"
-
-		case *f.GitHubUser == "" && *f.gitHubAppClientID == "":
-			c.SkipReason = "github-user not provided"
-		case *f.GitHubPAT == "" && *f.gitHubAppClientID == "":
-			c.SkipReason = "github-pat not provided"
-
-		case *f.GitHubPATReviewer == "":
-			// In theory, if we have githubPAT but no reviewer, we can submit the PR but skip
-			// reviewing it/enabling auto-merge. However, this doesn't seem very useful, so it isn't
-			// implemented.
-			c.SkipReason = "github-pat-reviewer not provided"
+			continue
 		}
-		if c.SkipReason != "" {
+
+		auther, err := f.Auth.NewAuther()
+		if err != nil {
+			c.SkipReason = fmt.Sprintf("provided auth doesn't support PR submission: %v", err)
+			continue
+		}
+		if _, err := f.ReviewerAuth.NewAuther(); err != nil {
+			c.SkipReason = fmt.Sprintf("provided reviewer auth doesn't support PR approval: %v", err)
 			continue
 		}
 
@@ -765,7 +716,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			// branch to make sure we don't overwrite them.
 			remoteCommit, err := gitcmd.FetchRefCommit(
 				dir,
-				auther.InsertAuth(entry.PRBranchStorageRepo()),
+				urlAuther.InsertAuth(entry.PRBranchStorageRepo()),
 				"refs/heads/"+c.Refs.PRBranch())
 			if err != nil {
 				return nil, err
@@ -801,7 +752,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		if force {
 			c.Args = append(c.Args, "--force")
 		}
-		c.Args = append(c.Args, auther.InsertAuth(remote))
+		c.Args = append(c.Args, urlAuther.InsertAuth(remote))
 		c.Args = append(c.Args, refspecs...)
 		if *f.DryRun {
 			c.Args = append(c.Args, "-n")
@@ -852,6 +803,15 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		// each one into a named function.
 		err := func() error {
 			fmt.Printf("---- %s: submitting PR...\n", prFlowDescription)
+
+			auther, err := f.Auth.NewAuther()
+			if err != nil {
+				return fmt.Errorf("failed to create auther, which is unexpected ecause this should have caused a branch skip: %v", err)
+			}
+			reviewAuther, err := f.ReviewerAuth.NewAuther()
+			if err != nil {
+				return fmt.Errorf("failed to create reviewer auther, which is unexpected because this should have caused a branch skip: %v", err)
+			}
 
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
