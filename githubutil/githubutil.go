@@ -146,6 +146,12 @@ func (f *GitHubAuthFlags) NewAuther() (GitHubAPIAuther, error) {
 	return nil, errors.New("no GitHub authentication provided")
 }
 
+// BindPATFlag returns a flag to specify the personal access token.
+// If possible, a command should instead use BindGitHubAuthFlags to support both PAT and app auth.
+func BindPATFlag() *string {
+	return flag.String("github-pat", "", "[Required] The GitHub PAT to use.")
+}
+
 // BindRepoFlag returns a flag to specify a GitHub repo to target. Parse it with ParseRepoFlag.
 func BindRepoFlag() *string {
 	return flag.String("repo", "", "[Required] The target repo, in '{owner}/{repo}' form.")

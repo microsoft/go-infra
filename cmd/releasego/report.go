@@ -31,7 +31,7 @@ builds being reported about. Other info about the build must be passed via the r
 
 func handleReport(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
-	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags("")
+	pat := githubutil.BindPATFlag()
 	issue := flag.Int("i", 0, "[Required] The issue number to add the comment to.")
 
 	status := flag.String(
@@ -105,5 +105,5 @@ func handleReport(p subcmd.ParseFunc) error {
 
 	log.Printf("Reporting %#v\n", s)
 	ctx := context.Background()
-	return buildreport.Update(ctx, owner, name, *gitHubAuthFlags.GitHubPat, *issue, s)
+	return buildreport.Update(ctx, owner, name, *pat, *issue, s)
 }
