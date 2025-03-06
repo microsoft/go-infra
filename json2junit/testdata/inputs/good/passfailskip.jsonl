@@ -1,0 +1,8 @@
+{"Time":"2025-02-07T14:43:16.4146636+01:00","Action":"start","Package":"cmd/go"}
+{"Time":"2025-02-07T14:43:16.4251944+01:00","Action":"run","Package":"cmd/go","Test":"TestScriptSucc"}
+{"Time":"2025-02-07T14:43:16.4351944+01:00","Action":"run","Package":"cmd/go","Test":"TestScriptFail"}
+{"Time":"2025-02-07T14:43:16.4451944+01:00","Action":"run","Package":"cmd/go","Test":"TestScriptSkip"}
+{"Time":"2025-02-07T14:43:16.4556162+01:00","Action":"pass","Package":"cmd/go","Test":"TestScriptSucc","Elapsed":1.21}
+{"Time":"2025-02-07T14:43:16.4656162+01:00","Action":"fail","Package":"cmd/go","Test":"TestScriptFail","Elapsed":1.22}
+{"Time":"2025-02-07T14:43:16.4756162+01:00","Action":"skip","Package":"cmd/go","Test":"TestScriptSkip","Elapsed":1.23}
+{"Time":"2025-02-07T14:43:16.4856162+01:00","Action":"fail","Package":"cmd/go","Elapsed":0.011}

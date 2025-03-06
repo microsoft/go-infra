@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go" tests="0" failures="0" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00"></testsuite>
+</testsuites>
