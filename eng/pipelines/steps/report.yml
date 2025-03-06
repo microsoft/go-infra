@@ -51,6 +51,6 @@ steps:
           -build-id '${{ parameters.buildID }}' \
           -build-status '${{ parameters.buildStatus }}' \
           -build-start=${{ parameters.start }} \
-          -pat '$(GitHubPAT)'
+          -github-pat '$(GitHubPAT)'
       displayName: 📣 Report ${{ parameters.reason }}
       condition: ${{ parameters.condition }}

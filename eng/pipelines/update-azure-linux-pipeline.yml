@@ -114,7 +114,7 @@ extends:
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
                   - script: |
                       releasego update-azure-linux \
-                        -pat '$(GitHubPAT)' \
+                        -github-pat '$(GitHubPAT)' \
                         -build-asset-json $(buildAssetJsonFile) \
                         -upstream ${{ parameters.upstream }} \
                         -owner ${{ parameters.owner }} \

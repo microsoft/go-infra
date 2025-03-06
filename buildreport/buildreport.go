@@ -92,10 +92,8 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 	// descriptions isn't safe concurrently. The ETags provided are weak, so If-Match doesn't work.
 	// If-Unmodified-Since seems to be ignored. The "update ref without force update" API allows
 	// forced updates if the API calls happen close together.
-	auther := gitcmd.GitHubPATAuther{
-		// Username doesn't need to match PAT owner to auth a Git HTTP URL. Use a placeholder.
-		User: "unused-placeholder",
-		PAT:  pat,
+	auther := githubutil.GitHubPATAuther{
+		PAT: pat,
 	}
 	// Use the wiki to store the data. This makes it visible without causing noise in the main repo.
 	url := "https://github.com/" + owner + "/" + repoName + ".wiki.git"

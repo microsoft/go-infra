@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -31,11 +32,12 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	versionsFlag := flag.String(
 		"versions", "",
 		"[Required] A list of full or partial microsoft/go version numbers (major.minor.patch[-revision[-suffix]]). Separated by commas.")
-	repoFlag := flag.String("repo", "", "[required] The Git repo to check, as a full, cloneable URL.")
+	repoFlag := flag.String("repo", "", "[required] The Git repo to check, as a full, cloneable https URL.")
 	branchFlag := flag.String("branch", "", "[required] The branch to check.")
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 
 	if err := p(); err != nil {
 		return err
@@ -50,6 +52,18 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	if *branchFlag == "" {
 		return errors.New("no branch specified")
 	}
+
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil {
+		// No auth is ok. It might not be necessary. For the GitHub API, it's always better to
+		// use auth to get a higher rate limit, but with "git clone", it's not as essential.
+		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+			return err
+		}
+	} else {
+		*repoFlag = auther.InsertAuth(*repoFlag)
+	}
+
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second
 
 	versions := strings.Split(*versionsFlag, ",")

@@ -30,7 +30,7 @@ exists, exit with code 1.
 func handleTag(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	commit := flag.String("commit", "", "The commit hash to tag.")
 
 	if err := p(); err != nil {
@@ -49,7 +49,7 @@ func handleTag(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

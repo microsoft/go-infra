@@ -21,14 +21,14 @@ func init() {
 }
 
 func handleCheckLimits(p subcmd.ParseFunc) error {
-	pat := githubutil.BindPATFlag()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 
 	if err := p(); err != nil {
 		return err
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

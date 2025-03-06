@@ -36,7 +36,7 @@ given build asset JSON file and the artifacts it lists that are found in the spe
 func handleRepoRelease(p subcmd.ParseFunc) error {
 	tag := tagFlag()
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	buildAssetJSON := flag.String("build-asset-json", "", "[Required] The build asset JSON file to release.")
 	buildDir := flag.String("build-dir", "", "[Required] The directory containing build artifacts to attach.")
 
@@ -70,7 +70,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

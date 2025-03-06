@@ -54,9 +54,11 @@ extends:
 
               - pwsh: |
                   go run ./cmd/sync `
-                    -git-auth pat `
-                    -github-user microsoft-golang-bot `
-                    -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+                    -git-auth api `
+                    -github-user bot-for-go `
+                    -github-app-client-id $(BotAccount-bot-for-go-client-id) `
+                    -github-app-installation $(BotAccount-bot-for-go-installation) `
+                    -github-app-private-key '$(BotAccount-bot-for-go-private-key)' `
                     -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
                     -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
                 displayName: Sync

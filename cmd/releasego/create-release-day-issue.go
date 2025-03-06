@@ -36,7 +36,7 @@ var releaseIssueLabels = []string{"Area-Release"}
 
 func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
-	pat := githubutil.BindPATFlag()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	releasesFlag := flag.String(
 		"releases", "",
 		"[Required] The release numbers to track releasing during this day, separated by ','.")
@@ -75,7 +75,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *pat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}

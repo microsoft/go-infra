@@ -23,6 +23,12 @@ var (
 	ErrFileNotExists = errors.New("file does not exist in the given repository and branch")
 	// ErrRepositoryNotExists indicates that the requested repository does not exist.
 	ErrRepositoryNotExists = errors.New("repository does not exist")
+	// ErrNoAuthProvided indicates that no GitHubAuthFlags fields are filled in. It can be used to
+	// skip actions that require auth when no auth is provided.
+	//
+	// This error is not used if any of the flags are set, e.g. if app auth is partially
+	// configured. This indicates an issue with the command call and needs to be fixed.
+	ErrNoAuthProvided = errors.New("no GitHub authentication provided")
 )
 
 // NewClient creates a GitHub client using the given personal access token.
@@ -35,9 +41,121 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	return github.NewClient(tokenClient), nil
 }
 
+// NewInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
+func NewInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
+	if clientID == "" {
+		return nil, errors.New("no GitHub App Client ID specified")
+	}
+	if installationID == 0 {
+		return nil, errors.New("no GitHub App Installation ID specified")
+	}
+	if privateKey == "" {
+		return nil, errors.New("no GitHub App private key specified")
+	}
+
+	installationToken, err := GenerateInstallationToken(ctx, clientID, installationID, privateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: installationToken})
+	tokenClient := oauth2.NewClient(ctx, tokenSource)
+	return github.NewClient(tokenClient), nil
+}
+
+type GitHubAuthFlags struct {
+	GitHubPat             *string
+	GitHubAppClientID     *string
+	GitHubAppInstallation *int64
+	GitHubAppPrivateKey   *string
+}
+
+// BindGitHubAuthFlags creates gitHubAuthFlags with the 'flag' package, globally registering them
+// in the flag package so ParseBoundFlags will find them.
+//
+// If user is specified, it is inserted into the middle of the flag name. This lets the func be
+// called multiple times to set up multiple users/apps. It's inserted into the middle so the sorted
+// "-h" output shows all the user/app's auth flags adjacent to each other, and so we can include a
+// reminder about which values are associated with each other.
+func BindGitHubAuthFlags(user string) *GitHubAuthFlags {
+	prefix := "github"
+	if user != "" {
+		prefix += "-" + user
+	}
+	appAuthTogether := "If specified, all " + prefix + "-app-* flags must be specified."
+	return &GitHubAuthFlags{
+		GitHubPat: flag.String(
+			prefix+"-pat", "",
+			"The GitHub PAT to use. Exclusive with "+prefix+"-app-*"),
+		GitHubAppClientID: flag.String(
+			prefix+"-app-client-id"+user, "",
+			"Use this GitHub App Client ID to authenticate to GitHub. "+appAuthTogether),
+		GitHubAppInstallation: flag.Int64(
+			prefix+"-app-installation"+user, 0,
+			"Use this GitHub App Installation ID to authenticate to GitHub. "+appAuthTogether),
+		GitHubAppPrivateKey: flag.String(
+			prefix+"-app-private-key"+user, "",
+			"Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format. "+appAuthTogether),
+	}
+}
+
+// NewClient returns a GitHub client based on the flags (e.g. PAT, GitHub App).
+func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error) {
+	if *f.GitHubPat != "" {
+		return NewClient(ctx, *f.GitHubPat)
+	}
+	for _, appFlagSet := range []bool{
+		*f.GitHubAppClientID != "",
+		*f.GitHubAppInstallation != 0,
+		*f.GitHubAppPrivateKey != "",
+	} {
+		if appFlagSet {
+			return NewInstallationClient(
+				ctx,
+				*f.GitHubAppClientID,
+				*f.GitHubAppInstallation,
+				*f.GitHubAppPrivateKey)
+		}
+	}
+	return nil, ErrNoAuthProvided
+}
+
+// NewAuther returns an auther based on the flags (e.g. PAT, GitHub App).
+func (f *GitHubAuthFlags) NewAuther() (GitHubAPIAuther, error) {
+	if *f.GitHubPat != "" {
+		return &GitHubPATAuther{
+			PAT: *f.GitHubPat,
+		}, nil
+	}
+	for _, appFlagSet := range []bool{
+		*f.GitHubAppClientID != "",
+		*f.GitHubAppInstallation != 0,
+		*f.GitHubAppPrivateKey != "",
+	} {
+		if appFlagSet {
+			if *f.GitHubAppClientID == "" {
+				return nil, errors.New("no GitHub App Client ID specified")
+			}
+			if *f.GitHubAppInstallation == 0 {
+				return nil, errors.New("no GitHub App Installation ID specified")
+			}
+			if *f.GitHubAppPrivateKey == "" {
+				return nil, errors.New("no GitHub App private key specified")
+			}
+			return &GitHubAppAuther{
+				ClientID:       *f.GitHubAppClientID,
+				InstallationID: *f.GitHubAppInstallation,
+				PrivateKey:     *f.GitHubAppPrivateKey,
+			}, nil
+		}
+	}
+	return nil, ErrNoAuthProvided
+}
+
 // BindPATFlag returns a flag to specify the personal access token.
+// If possible, a command should instead use BindGitHubAuthFlags to support both PAT and app auth.
 func BindPATFlag() *string {
-	return flag.String("pat", "", "[Required] The GitHub PAT to use.")
+	return flag.String("github-pat", "", "[Required] The GitHub PAT to use.")
 }
 
 // BindRepoFlag returns a flag to specify a GitHub repo to target. Parse it with ParseRepoFlag.
