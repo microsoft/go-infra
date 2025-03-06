@@ -26,7 +26,7 @@ steps:
           -c '$(ReleaseSyncConfigPath)' \
           -commit '$(upstreamReleasedCommit)' \
           -version '${{ parameters.releaseVersion }}' \
-          -git-auth pat \
+          -git-auth api \
           -github-user '$(GitHubUser)' \
           -github-pat '$(GitHubPAT)' \
           -github-reviewer-pat '$(GitHubPATReviewer)' \
