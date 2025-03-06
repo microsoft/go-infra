@@ -137,8 +137,8 @@ func BindPRFlags() *PRFlags {
 		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
 
-		ReviewerAuth:      *githubutil.BindGitHubAuthFlags("reviewer"),
 		Auth:              *githubutil.BindGitHubAuthFlags(""),
+		ReviewerAuth:      *githubutil.BindGitHubAuthFlags("reviewer"),
 		UpdateFlags:       *BindUpdateFlags(),
 		AzDOVariableFlags: *sync.BindAzDOVariableFlags(),
 	}
