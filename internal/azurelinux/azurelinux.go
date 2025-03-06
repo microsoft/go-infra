@@ -85,12 +85,10 @@ func (rm *RepositoryModel) UpdateCGManifest(buildAssets *buildassets.BuildAssets
 		} `json:"component"`
 	}
 
-	type CGManifest struct {
+	var cgManifest struct {
 		Registrations []Registration `json:"Registrations"`
 		Version       int            `json:"Version"`
 	}
-
-	var cgManifest CGManifest
 	if err := json.Unmarshal(rm.CGManifest, &cgManifest); err != nil {
 		return fmt.Errorf("failed to parse cgmanifest.json: %w", err)
 	}
@@ -361,11 +359,9 @@ func (v *Version) updateSignatures(oldFilename, newFilename, newHash string) err
 		return fmt.Errorf("provided signatures file content is empty")
 	}
 
-	type JSONSignature struct {
+	var data struct {
 		Signatures map[string]string `json:"Signatures"`
 	}
-
-	var data JSONSignature
 	if err := json.Unmarshal(v.Signatures, &data); err != nil {
 		return err
 	}
