@@ -43,23 +43,34 @@ type GitHubAPIAuther interface {
 
 // GitHubPATAuther adds a username and password into the https-style GitHub URL.
 type GitHubPATAuther struct {
-	User, PAT string
+	// User to authenticate as. GitHub APIs don't care what this is, but this value is used if set.
+	User string
+	// PAT to authenticate with.
+	PAT string
 }
 
 func (a GitHubPATAuther) InsertHTTPAuth(req *http.Request) error {
 	if a.PAT == "" {
 		return nil
 	}
-	req.SetBasicAuth(a.User, a.PAT)
+	user := a.User
+	if user == "" {
+		user = "_" // A placeholder is required, but GitHub doesn't care what it is.
+	}
+	req.SetBasicAuth(user, a.PAT)
 	return nil
 }
 
 func (a GitHubPATAuther) InsertAuth(url string) string {
-	if a.User == "" || a.PAT == "" {
+	if a.PAT == "" {
 		return url
 	}
+	user := a.User
+	if user == "" {
+		user = "_" // A placeholder is required, but GitHub doesn't care what it is.
+	}
 	if after, found := stringutil.CutPrefix(url, githubPrefix); found {
-		return fmt.Sprintf("https://%v:%v@github.com/%v", a.User, a.PAT, after)
+		return fmt.Sprintf("https://%v:%v@github.com/%v", user, a.PAT, after)
 	}
 	return url
 }

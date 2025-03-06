@@ -93,9 +93,7 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 	// If-Unmodified-Since seems to be ignored. The "update ref without force update" API allows
 	// forced updates if the API calls happen close together.
 	auther := githubutil.GitHubPATAuther{
-		// Username doesn't need to match PAT owner to auth a Git HTTP URL. Use a placeholder.
-		User: "unused-placeholder",
-		PAT:  pat,
+		PAT: pat,
 	}
 	// Use the wiki to store the data. This makes it visible without causing noise in the main repo.
 	url := "https://github.com/" + owner + "/" + repoName + ".wiki.git"

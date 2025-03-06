@@ -216,6 +216,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	auther, err := f.Auth.NewAuther()
 	if err != nil {
+		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+			return err
+		}
 		fmt.Printf("---- Skipping finding PR to update; no auth: %v\n", err)
 	} else {
 		var githubUser string
@@ -350,10 +353,16 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 	auther, err = f.Auth.NewAuther()
 	if err != nil {
+		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+			return err
+		}
 		skipReason = "No auth"
 	}
 	reviewAuther, err := f.ReviewerAuth.NewAuther()
 	if err != nil {
+		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+			return err
+		}
 		skipReason = "No reviewer auth"
 	}
 	if skipReason != "" {

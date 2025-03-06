@@ -23,6 +23,12 @@ var (
 	ErrFileNotExists = errors.New("file does not exist in the given repository and branch")
 	// ErrRepositoryNotExists indicates that the requested repository does not exist.
 	ErrRepositoryNotExists = errors.New("repository does not exist")
+	// ErrNoAuthProvided indicates that no GitHubAuthFlags fields are filled in. It can be used to
+	// skip actions that require auth when no auth is provided.
+	//
+	// This error is not used if any of the flags are set, e.g. if app auth is partially
+	// configured. This indicates an issue with the command call and needs to be fixed.
+	ErrNoAuthProvided = errors.New("no GitHub authentication provided")
 )
 
 // NewClient creates a GitHub client using the given personal access token.
@@ -111,7 +117,7 @@ func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error)
 				*f.GitHubAppPrivateKey)
 		}
 	}
-	return nil, errors.New("no GitHub authentication provided")
+	return nil, ErrNoAuthProvided
 }
 
 // NewAuther returns an auther based on the flags (e.g. PAT, GitHub App).
@@ -143,7 +149,7 @@ func (f *GitHubAuthFlags) NewAuther() (GitHubAPIAuther, error) {
 			}, nil
 		}
 	}
-	return nil, errors.New("no GitHub authentication provided")
+	return nil, ErrNoAuthProvided
 }
 
 // BindPATFlag returns a flag to specify the personal access token.

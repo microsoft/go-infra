@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -33,7 +32,7 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	versionsFlag := flag.String(
 		"versions", "",
 		"[Required] A list of full or partial microsoft/go version numbers (major.minor.patch[-revision[-suffix]]). Separated by commas.")
-	repoFlag := flag.String("repo", "", "[required] The Git repo to check, as a full, cloneable URL.")
+	repoFlag := flag.String("repo", "", "[required] The Git repo to check, as a full, cloneable https URL.")
 	branchFlag := flag.String("branch", "", "[required] The branch to check.")
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
@@ -54,24 +53,15 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 		return errors.New("no branch specified")
 	}
 
-	if *gitHubAuthFlags.GitHubAppClientID != "" {
-		token, err := githubutil.GenerateInstallationToken(
-			context.Background(),
-			*gitHubAuthFlags.GitHubAppClientID,
-			*gitHubAuthFlags.GitHubAppInstallation,
-			*gitHubAuthFlags.GitHubAppPrivateKey,
-		)
-		if err != nil {
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil {
+		// No auth is ok. It might not be necessary. For the GitHub API, it's always better to
+		// use auth to get a higher rate limit, but with "git clone", it's not as essential.
+		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
 			return err
 		}
-
-		// Inject the token into the repo URL
-		parts := strings.Split(*repoFlag, "https://")
-		if len(parts) > 1 {
-			*repoFlag = fmt.Sprintf("https://git:%s@%s", token, parts[1])
-		} else {
-			*repoFlag = fmt.Sprintf("https://git:%s@%s", token, *repoFlag)
-		}
+	} else {
+		*repoFlag = auther.InsertAuth(*repoFlag)
 	}
 
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second

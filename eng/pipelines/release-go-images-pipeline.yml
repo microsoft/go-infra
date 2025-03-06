@@ -130,7 +130,8 @@ extends:
                           releasego get-images-commit \
                             -versions '${{ join(',', parameters.releaseVersions) }}' \
                             -branch 'refs/heads/$(TargetGoImagesBranch)' \
-                            -repo 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
+                            -repo 'https://github.com/$(TargetGoImagesGitHubRepo)' \
+                            -github-pat '$(GitHubPAT)' \
                             -set-azdo-variable poll1MicrosoftGoImagesCommitHash
                         displayName: ⌚ Wait for go-images dependency flow
 

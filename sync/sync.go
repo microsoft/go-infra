@@ -124,10 +124,6 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 		if err != nil {
 			return nil, err
 		}
-		// The GitHub user shouldn't be necessary for auth, but some APIs treat it as necessary.
-		if patAuther, ok := auther.(githubutil.GitHubPATAuther); ok {
-			patAuther.User = *f.GitHubUser
-		}
 		return gitcmd.MultiAuther{
 			Authers: []gitcmd.URLAuther{
 				auther,
@@ -693,10 +689,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 		auther, err := f.Auth.NewAuther()
 		if err != nil {
+			if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+				return nil, err
+			}
 			c.SkipReason = fmt.Sprintf("provided auth doesn't support PR submission: %v", err)
 			continue
 		}
 		if _, err := f.ReviewerAuth.NewAuther(); err != nil {
+			if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+				return nil, err
+			}
 			c.SkipReason = fmt.Sprintf("provided reviewer auth doesn't support PR approval: %v", err)
 			continue
 		}
