@@ -148,14 +148,14 @@ func (rm *RepositoryModel) UpdateCGManifest(buildAssets *buildassets.BuildAssets
 // made up to that point are applied and if multiple errors occur, they are joined. This allows for
 // partial upgrades to be applied, which is useful for testing and manual dev work when (e.g.) the
 // Azure Linux repository has partially conflicting changes.
-func (rm *RepositoryModel) UpdateMatchingVersion(assets *buildassets.BuildAssets, latestMajor bool, changelogDate time.Time) (*Version, error) {
+func (rm *RepositoryModel) UpdateMatchingVersion(assets *buildassets.BuildAssets, latestMajor bool, changelogDate time.Time, author string) (*Version, error) {
 	v := rm.matchingVersion(assets, latestMajor)
 	if v == nil {
 		return nil, fmt.Errorf("failed to find matching version for %q", assets.GoVersion().Full())
 	}
 	err := errors.Join(
 		rm.UpdateCGManifest(assets),
-		v.Update(assets, changelogDate),
+		v.Update(assets, changelogDate, author),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update the model: %v", err)
@@ -206,7 +206,7 @@ func ReadVersion(f githubutil.SimplifiedFS, version string) (*Version, error) {
 	return v, nil
 }
 
-func (v *Version) Update(assets *buildassets.BuildAssets, changelogDate time.Time) error {
+func (v *Version) Update(assets *buildassets.BuildAssets, changelogDate time.Time, author string) error {
 	oldFilename, err := v.parseGoArchiveName()
 	if err != nil {
 		return err
@@ -216,11 +216,11 @@ func (v *Version) Update(assets *buildassets.BuildAssets, changelogDate time.Tim
 	// This helps a dev if they want to take the result and run with it.
 	return errors.Join(
 		v.updateSignatures(oldFilename, path.Base(assets.GoSrcURL), assets.GoSrcSHA256),
-		v.updateSpec(assets, changelogDate),
+		v.updateSpec(assets, changelogDate, author),
 	)
 }
 
-func (v *Version) updateSpec(assets *buildassets.BuildAssets, changelogDate time.Time) error {
+func (v *Version) updateSpec(assets *buildassets.BuildAssets, changelogDate time.Time, author string) error {
 	if len(v.Spec) == 0 {
 		return fmt.Errorf("provided spec file content is empty")
 	}
@@ -246,7 +246,7 @@ func (v *Version) updateSpec(assets *buildassets.BuildAssets, changelogDate time
 	if err := v.updateRelease(newRelease); err != nil {
 		return err
 	}
-	if err := v.addChangelog(changelogDate, assets, newVersion, newRelease); err != nil {
+	if err := v.addChangelog(changelogDate, assets, author, newVersion, newRelease); err != nil {
 		return err
 	}
 	return nil
@@ -335,17 +335,16 @@ func (v *Version) updateGoRevision(newRevisionVersion string) error {
 	return nil
 }
 
-func (v *Version) addChangelog(changelogDate time.Time, assets *buildassets.BuildAssets, newVersion, newRelease string) error {
+func (v *Version) addChangelog(changelogDate time.Time, assets *buildassets.BuildAssets, author, newVersion, newRelease string) error {
 	const template = `%%changelog
-* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s-%s
+* %s %s - %s-%s
 - Bump version to %s
 `
 	formattedTime := changelogDate.Format("Mon Jan 02 2006")
 
 	changelog := fmt.Sprintf(
 		template,
-		formattedTime,
-		newVersion, newRelease,
+		formattedTime, author, newVersion, newRelease,
 		assets.GoVersion().Full())
 
 	before := string(v.Spec)

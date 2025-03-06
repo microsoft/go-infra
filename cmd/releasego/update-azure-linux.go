@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/internal/azurelinux"
 	"github.com/microsoft/go-infra/stringutil"
@@ -68,9 +69,15 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
 	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
+	authorFlag := changelogAuthorFlag()
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
+		return err
+	}
+
+	author, err := changelogAuthor(*authorFlag)
+	if err != nil {
 		return err
 	}
 
@@ -144,7 +151,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		if err != nil {
 			return err
 		}
-		v, err := rm.UpdateMatchingVersion(assets, latestMajor, start)
+		v, err := rm.UpdateMatchingVersion(assets, latestMajor, start, author)
 		if err != nil {
 			return err
 		}
@@ -267,4 +274,17 @@ func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 	}
 
 	return assets, nil
+}
+
+func changelogAuthorFlag() *string {
+	return flag.String(
+		"changelog-author", "",
+		"The author to mention in the changelog, 'Name <name@example.org>'. Otherwise, the globally configured Git author will be used.")
+}
+
+func changelogAuthor(authorFlag string) (string, error) {
+	if authorFlag != "" {
+		return authorFlag, nil
+	}
+	return gitcmd.GetGlobalAuthor()
 }

@@ -41,7 +41,14 @@ func updateAzureLinuxLocal(p subcmd.ParseFunc) error {
 	flag.BoolVar(&latestMajor, "latest-major", false, "This is the latest major version, so update 'golang.spec' instead of 'golang-1.<N>.spec'.")
 	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
+	authorFlag := changelogAuthorFlag()
+
 	if err := p(); err != nil {
+		return err
+	}
+
+	author, err := changelogAuthor(*authorFlag)
+	if err != nil {
 		return err
 	}
 
@@ -63,7 +70,7 @@ func updateAzureLinuxLocal(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	v, err := rm.UpdateMatchingVersion(assets, latestMajor, start)
+	v, err := rm.UpdateMatchingVersion(assets, latestMajor, start, author)
 	if err != nil {
 		return err
 	}

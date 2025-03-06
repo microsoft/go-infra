@@ -58,7 +58,7 @@ func TestAzLUpdateSpecFileContent(t *testing.T) {
 		t.Fatalf("Error parsing changelog time : %s", err)
 	}
 
-	if err := v.updateSpec(assets, changelogTime); err != nil {
+	if err := v.updateSpec(assets, changelogTime, "Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com>"); err != nil {
 		t.Fatalf("Error updating Go revision in spec file : %s", err)
 	}
 
