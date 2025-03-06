@@ -130,6 +130,28 @@ steps:
         start: true
         reason: queued build
 
+    - script: |
+        releasego build-pipeline \
+          -id '1422' \
+          -org 'https://dev.azure.com/dnceng/' \
+          -proj 'internal' \
+          -azdopat '$(System.AccessToken)' \
+          -set-azdo-variable MicrosoftGoCanaryBuildID \
+          p version '${{ parameters.releaseVersion }}' \
+          p upstreamRunID '$(poll3MicrosoftGoBuildID)'
+      displayName: 🚀 Start microsoft-go-canary
+
+    - template: ../steps/report.yml
+      parameters:
+        releaseIssue: ${{ parameters.releaseIssue }}
+        version: ${{ parameters.releaseVersion }}
+        condition: succeeded()
+        buildPipeline: microsoft-go-canary
+        buildID: $(MicrosoftGoCanaryBuildID)
+        buildStatus: '?'
+        start: true
+        reason: queued build
+
   - ${{ elseif eq(parameters.emptyPollNumber, 4) }}:
 
     # Now we have poll3MicrosoftGoBuildID
