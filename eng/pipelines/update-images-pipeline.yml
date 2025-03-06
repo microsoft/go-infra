@@ -75,6 +75,6 @@ extends:
                   go run ./cmd/dockerupdatepr `
                     -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-images `
                     -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
-                    -github-pat-reviewer $(BotAccount-microsoft-golang-review-bot-PAT) `
+                    -github-reviewer-pat $(BotAccount-microsoft-golang-review-bot-PAT) `
                     -build-asset-json "$(assetJsonPath)"
                 displayName: Update go-images
