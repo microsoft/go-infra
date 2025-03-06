@@ -38,7 +38,7 @@ func handleGetImagesCommit(p subcmd.ParseFunc) error {
 	azdoVarName := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the commit hash using a logging command.")
 	keepTemp := flag.Bool("w", false, "Keep the temporary repository used for polling, rather than cleaning it up.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
-	gitHubAuthFlags := *githubutil.BindGitHubAuthFlags("")
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 
 	if err := p(); err != nil {
 		return err
