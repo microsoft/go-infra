@@ -139,6 +139,20 @@ func ShowQuietPretty(dir, format, rev string) (string, error) {
 	return CombinedOutput(dir, "show", "--quiet", "--pretty=format:"+format, strings.TrimSpace(rev))
 }
 
+// GetGlobalAuthor returns the author that a new Git commit would be written by, based (only!) on
+// the current global Git settings.
+func GetGlobalAuthor() (string, error) {
+	name, err := getConfigGlobal("user.name")
+	if err != nil {
+		return "", err
+	}
+	email, err := getConfigGlobal("user.email")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%v <%v>", name, email), nil
+}
+
 // FetchRefCommit effectively runs "git fetch <remote> <ref>" and returns the commit hash.
 func FetchRefCommit(dir, remote, ref string) (string, error) {
 	output, err := executil.CombinedOutput(executil.Dir(dir, "git", "fetch", remote, "--porcelain", ref))
@@ -193,4 +207,12 @@ func AttemptDelete(gitDir string) {
 	if err := os.RemoveAll(gitDir); err != nil {
 		log.Printf("Unable to clean up git repository directory %#q: %v\n", gitDir, err)
 	}
+}
+
+func getConfigGlobal(key string) (string, error) {
+	output, err := exec.Command("git", "config", "--global", key).CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(output), "\n"), nil
 }

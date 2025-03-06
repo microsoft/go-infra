@@ -4,24 +4,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"path"
-	"regexp"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
-	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/internal/azurelinux"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -52,11 +47,6 @@ modified any GitHub workflows.
 	})
 }
 
-const (
-	AzureLinuxBuddyBuildURL           = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2190"
-	AzureLinuxSourceTarballPublishURL = "https://dev.azure.com/mariner-org/mariner/_build?definitionId=2284"
-)
-
 func updateAzureLinux(p subcmd.ParseFunc) error {
 	var (
 		buildAssetJSON string
@@ -79,9 +69,15 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
 	flag.BoolVar(&security, "security", false, "Whether to indicate in the PR title and description that this is a security release.")
 
+	authorFlag := changelogAuthorFlag()
 	pat := githubutil.BindPATFlag()
 
 	if err := p(); err != nil {
+		return err
+	}
+
+	author, err := changelogAuthor(*authorFlag)
+	if err != nil {
 		return err
 	}
 
@@ -150,66 +146,27 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return fmt.Errorf("failed to get commit %v: %w", upstreamCommitSHA, err)
 		}
 
-		specPath := golangSpecFilepath(assets, latestMajor)
-		golangSpecFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, specPath)
+		fs := githubutil.NewRefFS(ctx, client, upstream, repo, upstreamCommitSHA)
+		rm, err := azurelinux.ReadModel(fs)
+		if err != nil {
+			return err
+		}
+		v, err := rm.UpdateMatchingVersion(assets, latestMajor, start, author)
 		if err != nil {
 			return err
 		}
 
-		golangSpecFileContent := string(golangSpecFileBytes)
-
-		prevGoArchiveName, err := extractGoArchiveNameFromSpecFile(golangSpecFileContent)
-		if err != nil {
-			return err
+		treeFile := func(path string, content []byte) *github.TreeEntry {
+			return &github.TreeEntry{
+				Path:    github.String(path),
+				Content: github.String(string(content)),
+				Mode:    github.String(githubutil.TreeModeFile),
+			}
 		}
-
-		golangSpecFileContent, err = updateSpecFile(assets, start, golangSpecFileContent)
-		if err != nil {
-			return err
-		}
-
-		// Validation (as described in previous response)
-		if assets.GoSrcURL == "" || assets.GoSrcSHA256 == "" {
-			return fmt.Errorf("invalid or missing GoSrcURL or GoSrcSHA256 in assets.json")
-		}
-
-		signaturesPath := golangSignaturesFilepath(assets, latestMajor)
-		golangSignaturesFileBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, signaturesPath)
-		if err != nil {
-			return err
-		}
-
-		golangSignaturesFileBytes, err = updateSignatureFile(golangSignaturesFileBytes, prevGoArchiveName, path.Base(assets.GoSrcURL), assets.GoSrcSHA256)
-		if err != nil {
-			return err
-		}
-
-		cgManifestBytes, err := downloadFileFromRepo(ctx, client, upstream, repo, upstreamCommitSHA, cgManifestFilepath)
-		if err != nil {
-			return err
-		}
-
-		cgManifestBytes, err = updateCGManifest(assets, cgManifestBytes)
-		if err != nil {
-			return err
-		}
-
 		tree := []*github.TreeEntry{
-			{
-				Path:    github.String(specPath),
-				Content: &golangSpecFileContent,
-				Mode:    github.String(githubutil.TreeModeFile),
-			},
-			{
-				Path:    github.String(signaturesPath),
-				Content: github.String(string(golangSignaturesFileBytes)),
-				Mode:    github.String(githubutil.TreeModeFile),
-			},
-			{
-				Path:    github.String(cgManifestFilepath),
-				Content: github.String(string(cgManifestBytes)),
-				Mode:    github.String(githubutil.TreeModeFile),
-			},
+			treeFile(v.SpecPath, v.Spec),
+			treeFile(v.SignaturesPath, v.Signatures),
+			treeFile(azurelinux.CGManifestPath, rm.CGManifest),
 		}
 
 		createTree, _, err := client.Git.CreateTree(ctx, owner, repo, upstreamCommit.Tree.GetSHA(), tree)
@@ -218,7 +175,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		}
 
 		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, &github.Commit{
-			Message: github.String(generatePRTitleFromAssets(assets, security)),
+			Message: github.String(azurelinux.GeneratePRTitleFromAssets(assets, security)),
 			Parents: []*github.Commit{upstreamCommit},
 			Tree:    createTree,
 		}, &github.CreateCommitOptions{})
@@ -248,11 +205,11 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			prHead = owner + ":" + updateBranch
 		}
 		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, &github.NewPullRequest{
-			Title: github.String(generatePRTitleFromAssets(assets, security)),
+			Title: github.String(azurelinux.GeneratePRTitleFromAssets(assets, security)),
 			Head:  &prHead,
 			Base:  github.String(baseBranch),
 			// We don't know the PR number yet, so pass 0 to use a placeholder.
-			Body:  github.String(GeneratePRDescription(assets, latestMajor, security, notify, 0)),
+			Body:  github.String(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, 0)),
 			Draft: github.Bool(true),
 		})
 		if err != nil {
@@ -267,7 +224,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	// Update the PR description with the PR number.
 	if err := githubutil.Retry(func() error {
 		_, _, err := client.PullRequests.Edit(ctx, upstream, repo, pr.GetNumber(), &github.PullRequest{
-			Body: github.String(GeneratePRDescription(assets, latestMajor, security, notify, pr.GetNumber())),
+			Body: github.String(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, pr.GetNumber())),
 		})
 		return err
 	}); err != nil {
@@ -301,62 +258,6 @@ func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string 
 	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
 }
 
-func generatePRTitleFromAssets(assets *buildassets.BuildAssets, security bool) string {
-	var b strings.Builder
-	if security {
-		b.WriteString("(security) ")
-	}
-	b.WriteString("golang: bump Go version to ")
-	b.WriteString(assets.GoVersion().Full())
-	return b.String()
-}
-
-func GeneratePRDescription(assets *buildassets.BuildAssets, latestMajor, security bool, notify string, prNumber int) string {
-	// Use calls to fmt.Fprint* family for readability with consistency.
-	// Ignore errors because they're acting upon a simple builder.
-	var b strings.Builder
-	fmt.Fprint(&b, "Hi! 👋 I'm the Microsoft team's bot. This is an automated pull request I generated to bump the Go version to ")
-	fmt.Fprintf(&b, "[%s](%s).\n\n", assets.GoVersion().Full(), githubReleaseURL(assets))
-
-	if security {
-		fmt.Fprint(&b, "**This update contains security fixes.**\n\n")
-	}
-
-	fmt.Fprint(&b, "I'm not able to run the Azure Linux pipelines yet, so the Microsoft release runner will need to finalize this PR.")
-	if notify != "" && notify != "ghost" {
-		fmt.Fprintf(&b, " @%s", notify)
-	}
-	fmt.Fprint(&b, "\n\nFinalization steps:\n")
-
-	printCopiableOption := func(name, value string) {
-		fmt.Fprintf(&b, "  %s:  \n", name)
-		fmt.Fprint(&b, "  ```\n")
-		fmt.Fprintf(&b, "  %s\n", value)
-		fmt.Fprint(&b, "  ```\n")
-	}
-
-	fmt.Fprintf(&b, "- Trigger [Source Tarball Publishing](%s) with:  \n", AzureLinuxSourceTarballPublishURL)
-	printCopiableOption("Full Name", path.Base(assets.GoSrcURL))
-	printCopiableOption("URL", githubReleaseDownloadURL(assets))
-
-	fmt.Fprintf(&b, "- Trigger [the Buddy Build](%s) with:  \n", AzureLinuxBuddyBuildURL)
-	if prNumber == 0 {
-		// If we aren't able to update the PR later to put the PR number in, at least leave
-		// instructions the release runner can follow.
-		fmt.Fprint(&b, "  First field: `PR-` then the number of this PR.  \n")
-	} else {
-		printCopiableOption("First field", fmt.Sprintf("PR-%v", prNumber))
-	}
-
-	printCopiableOption("Core spec", golangSpecName(assets, latestMajor))
-
-	fmt.Fprint(&b, "- Post a PR comment with the URL of the triggered Buddy Build.\n")
-	fmt.Fprint(&b, "- Mark this draft PR as ready for review.\n")
-
-	fmt.Fprint(&b, "\nThanks!\n")
-	return b.String()
-}
-
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 	assets := new(buildassets.BuildAssets)
 
@@ -364,290 +265,26 @@ func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
 		return nil, fmt.Errorf("error loading build assets: %w", err)
 	}
 
+	// Basic validation up front.
+	if assets.GoSrcURL == "" {
+		return nil, fmt.Errorf("invalid or missing GoSrcUrl in assets.json")
+	}
+	if assets.GoSrcSHA256 == "" {
+		return nil, fmt.Errorf("invalid or missing GoSrcSHA256 in assets.json")
+	}
+
 	return assets, nil
 }
 
-func downloadFileFromRepo(ctx context.Context, client *github.Client, owner, repo, ref, filePath string) ([]byte, error) {
-	fileContent, err := githubutil.DownloadFile(ctx, client, owner, repo, ref, filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download file %q: %w", filePath, err)
-	}
-	return fileContent, nil
+func changelogAuthorFlag() *string {
+	return flag.String(
+		"changelog-author", "",
+		"The author to mention in the changelog, 'Name <name@example.org>'. Otherwise, the globally configured Git author will be used.")
 }
 
-func golangSignaturesFilepath(assets *buildassets.BuildAssets, latestMajor bool) string {
-	return "SPECS/golang/" + golangSpecName(assets, latestMajor) + ".signatures.json"
-}
-
-func golangSpecFilepath(assets *buildassets.BuildAssets, latestMajor bool) string {
-	return "SPECS/golang/" + golangSpecName(assets, latestMajor) + ".spec"
-}
-
-func golangSpecName(assets *buildassets.BuildAssets, latestMajor bool) string {
-	if latestMajor {
-		return "golang"
+func changelogAuthor(authorFlag string) (string, error) {
+	if authorFlag != "" {
+		return authorFlag, nil
 	}
-	return "golang-" + assets.GoVersion().MajorMinor()
-}
-
-const cgManifestFilepath = "cgmanifest.json"
-
-var specFileVersionRegex = regexp.MustCompile(`(Version: +)(.+)`)
-
-func extractVersionFromSpecFile(content string) (*goversion.GoVersion, error) {
-	matches := specFileVersionRegex.FindStringSubmatch(content)
-	if matches == nil {
-		return nil, fmt.Errorf("no Version declaration found in spec content")
-	}
-	return goversion.New(matches[2]), nil
-}
-
-func updateVersionInSpecFile(content string, newVersion string) string {
-	return specFileVersionRegex.ReplaceAllString(
-		content,
-		"${1}"+escapeRegexReplacementValue(newVersion))
-}
-
-var specFileReleaseRegex = regexp.MustCompile(`(Release: +)(.+)(%\{\?dist\})`)
-
-func extractReleaseFromSpecFile(content string) (int, error) {
-	matches := specFileReleaseRegex.FindStringSubmatch(content)
-	if matches == nil {
-		return 0, fmt.Errorf("no Release declaration found in spec content")
-	}
-	releaseInt, err := strconv.Atoi(matches[2])
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse old Release number: %v", err)
-	}
-	return releaseInt, nil
-}
-
-func updateReleaseInSpecFile(content string, newRelease string) string {
-	return specFileReleaseRegex.ReplaceAllString(
-		content,
-		"${1}"+escapeRegexReplacementValue(newRelease)+"${3}")
-}
-
-var specFileGoFilenameRegex = regexp.MustCompile(`(%global ms_go_filename +)(.+)`)
-
-func extractGoArchiveNameFromSpecFile(specContent string) (string, error) {
-	matches := specFileGoFilenameRegex.FindStringSubmatch(specContent)
-
-	if matches == nil {
-		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
-	}
-
-	return strings.TrimSpace(matches[2]), nil
-}
-
-func updateGoArchiveNameInSpecFile(specContent, newArchiveName string) (string, error) {
-	if !specFileGoFilenameRegex.MatchString(specContent) {
-		return "", fmt.Errorf("no Go archive filename declaration found in spec content")
-	}
-	return specFileGoFilenameRegex.ReplaceAllString(
-		specContent,
-		"${1}"+escapeRegexReplacementValue(newArchiveName),
-	), nil
-}
-
-var specFileRevisionRegex = regexp.MustCompile(`(%global ms_go_revision +)(.+)`)
-
-func updateGoRevisionInSpecFile(specContent, newRevisionVersion string) (string, error) {
-	if !specFileRevisionRegex.MatchString(specContent) {
-		return "", fmt.Errorf("no Go revision version declaration found in spec content")
-	}
-	return specFileRevisionRegex.ReplaceAllString(
-		specContent,
-		"${1}"+escapeRegexReplacementValue(newRevisionVersion),
-	), nil
-}
-
-func updateSpecFile(assets *buildassets.BuildAssets, changelogDate time.Time, specFileContent string) (string, error) {
-	if len(specFileContent) == 0 {
-		return "", fmt.Errorf("provided spec file content is empty")
-	}
-
-	// Gather the old spec file data we need to make the updated one.
-	oldVersion, err := extractVersionFromSpecFile(specFileContent)
-	if err != nil {
-		return "", err
-	}
-	oldRelease, err := extractReleaseFromSpecFile(specFileContent)
-	if err != nil {
-		return "", err
-	}
-
-	newVersion, newRelease := updateSpecVersion(assets, oldVersion, oldRelease)
-
-	// Perform updates with a series of replacements.
-	specFileContent, err = updateGoArchiveNameInSpecFile(specFileContent, path.Base(assets.GoSrcURL))
-	if err != nil {
-		return "", fmt.Errorf("error updating Go archive name in spec file: %w", err)
-	}
-	specFileContent, err = updateGoRevisionInSpecFile(specFileContent, assets.GoVersion().Revision)
-	if err != nil {
-		return "", fmt.Errorf("error updating Go revision in spec file: %w", err)
-	}
-	specFileContent = updateVersionInSpecFile(specFileContent, newVersion)
-	specFileContent = updateReleaseInSpecFile(specFileContent, newRelease)
-	specFileContent = addChangelogToSpecFile(specFileContent, changelogDate, assets, newVersion, newRelease)
-
-	return specFileContent, nil
-}
-
-func addChangelogToSpecFile(specFile string, changelogDate time.Time, assets *buildassets.BuildAssets, newVersion, newRelease string) string {
-	const template = `%%changelog
-* %s Microsoft Golang Bot <microsoft-golang-bot@users.noreply.github.com> - %s-%s
-- Bump version to %s
-`
-	formattedTime := changelogDate.Format("Mon Jan 02 2006")
-
-	changelog := fmt.Sprintf(
-		template,
-		formattedTime,
-		newVersion, newRelease,
-		assets.GoVersion().Full())
-
-	return strings.Replace(specFile, "%changelog", changelog, 1)
-}
-
-// JSONSignature structure to map the provided JSON data
-type JSONSignature struct {
-	Signatures map[string]string `json:"Signatures"`
-}
-
-func updateSignatureFile(jsonData []byte, oldFilename, newFilename, newHash string) ([]byte, error) {
-	if len(jsonData) == 0 {
-		return nil, fmt.Errorf("provided signature file data is empty")
-	}
-
-	var data JSONSignature
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		return nil, err
-	}
-
-	// Check if the oldFilename exists in the map
-	if _, exists := data.Signatures[oldFilename]; !exists {
-		return nil, errors.New("old filename not found in signatures")
-	}
-
-	// Update the filename and hash in the map
-	delete(data.Signatures, oldFilename) // Remove the old entry
-	// add new filename and hash
-	data.Signatures[newFilename] = newHash
-
-	// Marshal the updated JSON back to a byte slice
-	updatedJSON, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-
-	updatedJSON = append(updatedJSON, '\n') // Add a newline at the end
-
-	return updatedJSON, nil
-}
-
-type CGManifest struct {
-	Registrations []Registration `json:"Registrations"`
-	Version       int            `json:"Version"`
-}
-
-type Registration struct {
-	Component struct {
-		Type    string `json:"type"`
-		Comment string `json:"comment,omitempty"`
-		Other   struct {
-			Name        string `json:"name"`
-			Version     string `json:"version"`
-			DownloadURL string `json:"downloadUrl"`
-		} `json:"other"`
-	} `json:"component"`
-}
-
-func updateCGManifest(buildAssets *buildassets.BuildAssets, cgManifestContent []byte) ([]byte, error) {
-	if len(cgManifestContent) == 0 {
-		return nil, fmt.Errorf("provided CG manifest content is empty")
-	}
-
-	var cgManifest CGManifest
-	if err := json.Unmarshal(cgManifestContent, &cgManifest); err != nil {
-		return nil, fmt.Errorf("failed to parse cgmanifest.json: %w", err)
-	}
-
-	updated := false
-	for i := range cgManifest.Registrations {
-		reg := &cgManifest.Registrations[i]
-		if reg.Component.Other.Name != "golang" {
-			continue
-		}
-		// Azure Linux maintains two major versions. Only update this one.
-		regVersion := goversion.New(reg.Component.Other.Version)
-		if regVersion.MajorMinor() != buildAssets.GoVersion().MajorMinor() {
-			continue
-		}
-		reg.Component.Other.Version = buildAssets.GoVersion().MajorMinorPatch()
-		reg.Component.Other.DownloadURL = githubReleaseDownloadURL(buildAssets)
-		updated = true
-		break
-	}
-
-	if !updated {
-		return nil, fmt.Errorf("golang component not found in cgmanifest.json")
-	}
-
-	// Serialize the updated cgManifest back to JSON
-	buf := new(bytes.Buffer)
-	encoder := json.NewEncoder(buf)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-
-	err := encoder.Encode(cgManifest) // Use indentation for readability
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal updated cgmanifest.json: %w", err)
-	}
-
-	return buf.Bytes(), nil
-}
-
-func githubReleaseURL(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf(
-		"https://github.com/microsoft/go/releases/tag/v%s",
-		assets.GoVersion().Full(),
-	)
-}
-
-func githubReleaseDownloadURL(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf(
-		"https://github.com/microsoft/go/releases/download/v%s/%s",
-		assets.GoVersion().Full(),
-		path.Base(assets.GoSrcURL),
-	)
-}
-
-func updateSpecVersion(assets *buildassets.BuildAssets, oldVersion *goversion.GoVersion, oldRelease int) (version, release string) {
-	// Decide on the new Azure Linux golang package release number.
-	//
-	// We don't use assets.GoVersion().Revision because Azure Linux may have incremented the
-	// release version manually for an Azure-Linux-specific fix.
-	var newRelease int
-	if assets.GoVersion().MajorMinorPatch() != oldVersion.MajorMinorPatch() {
-		// When updating to a new upstream Go version, reset release number to 1.
-		newRelease = 1
-	} else {
-		// When the upstream Go version didn't change, increment the release number. This means
-		// there has been a patch specific to Microsoft build of Go.
-		newRelease = oldRelease + 1
-	}
-
-	return assets.GoVersion().MajorMinorPatch(), strconv.Itoa(newRelease)
-}
-
-// escapeRegexReplacementValue returns s where all "$" signs are replaced with with "$$" for the
-// purposes of passing the result to ReplaceAllString. Use this to make sure a replacement value
-// doesn't get interpreted as part of a regex replacement pattern in [Regexp.Expand].
-//
-// As of writing, we don't expect "$" in the replacement values. However, it's easy to handle, and
-// it's cleaner than rejecting "$" and propagating an error.
-func escapeRegexReplacementValue(s string) string {
-	return strings.ReplaceAll(s, "$", "$$")
+	return gitcmd.GetGlobalAuthor()
 }
