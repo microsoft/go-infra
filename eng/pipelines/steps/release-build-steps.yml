@@ -29,7 +29,7 @@ steps:
           -git-auth pat \
           -github-user '$(GitHubUser)' \
           -github-pat '$(GitHubPAT)' \
-          -github-pat-reviewer '$(GitHubPATReviewer)' \
+          -github-reviewer-pat '$(GitHubPATReviewer)' \
           -azdo-dnceng-pat '$(AzDODncengPAT)' \
           -create-branches \
           -set-azdo-variable-pr-number poll1MicrosoftGoPRNumber \
@@ -277,7 +277,7 @@ steps:
           go run ./cmd/dockerupdatepr \
             -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
             -github-pat '$(GitHubPAT)' \
-            -github-pat-reviewer '$(GitHubPATReviewer)' \
+            -github-reviewer-pat '$(GitHubPATReviewer)' \
             -build-asset-json '$(buildAssetJsonFile)' \
             -manual-branch '$(TargetGoImagesBranch)' \
             -set-azdo-variable-pr-number poll4MicrosoftGoImagesPRNumber
