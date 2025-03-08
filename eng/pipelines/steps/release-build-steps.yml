@@ -26,9 +26,11 @@ steps:
           -c '$(ReleaseSyncConfigPath)' \
           -commit '$(upstreamReleasedCommit)' \
           -version '${{ parameters.releaseVersion }}' \
-          -git-auth pat \
-          -github-user '$(GitHubUser)' \
-          -github-pat '$(GitHubPAT)' \
+          -git-auth api \
+          -github-user bot-for-go \
+          -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+          -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+          -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
           -github-reviewer-pat '$(GitHubPATReviewer)' \
           -azdo-dnceng-pat '$(AzDODncengPAT)' \
           -create-branches \
