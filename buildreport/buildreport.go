@@ -71,17 +71,17 @@ var pipelinesWithRetryInstructions = map[string]struct{}{
 }
 
 // Update updates the report then sends a notification comment if necessary.
-func Update(ctx context.Context, owner, repoName, pat string, issue int, s State) error {
-	if err := UpdateIssueBody(ctx, owner, repoName, pat, issue, s); err != nil {
+func Update(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State) error {
+	if err := UpdateIssueBody(ctx, owner, repoName, gitHubAuthFlags, issue, s); err != nil {
 		return err
 	}
-	return Notify(ctx, owner, repoName, pat, issue, s)
+	return Notify(ctx, owner, repoName, gitHubAuthFlags, issue, s)
 }
 
 // UpdateIssueBody updates the given issue with new state. Requires the target GitHub repo to have
 // the wiki activated to perform safer concurrent updates than a simple issue description edit.
-func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int, s State) error {
-	client, err := githubutil.NewClient(ctx, pat)
+func UpdateIssueBody(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State) error {
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 	// If-Unmodified-Since seems to be ignored. The "update ref without force update" API allows
 	// forced updates if the API calls happen close together.
 	auther := githubutil.GitHubPATAuther{
-		PAT: pat,
+		PAT: *gitHubAuthFlags.GitHubPat,
 	}
 	// Use the wiki to store the data. This makes it visible without causing noise in the main repo.
 	url := "https://github.com/" + owner + "/" + repoName + ".wiki.git"
@@ -201,13 +201,13 @@ func UpdateIssueBody(ctx context.Context, owner, repoName, pat string, issue int
 }
 
 // Notify determines if a notification is necessary for the given status update and sends it.
-func Notify(ctx context.Context, owner string, repoName string, pat string, issue int, s State) error {
+func Notify(ctx context.Context, owner string, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State) error {
 	notification := s.notificationPreamble()
 	if notification == "" {
 		return nil
 	}
 
-	client, err := githubutil.NewClient(ctx, pat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}
