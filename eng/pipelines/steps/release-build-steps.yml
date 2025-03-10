@@ -104,55 +104,57 @@ steps:
         start: true
         reason: queued build
 
-    # Above, we launched the official build. Now launch innerloop tests. We actually
-    # don't poll this build here: it's a release pipeline, so it reports its own
-    # status to the release issue. This also means it runs in parallel.
-    - script: |
-        releasego build-pipeline \
-          -id '$(GoReleaseInnerloopPipelineID)' \
-          -org 'https://dev.azure.com/dnceng/' \
-          -proj 'internal' \
-          -branch '$(Build.SourceBranch)' \
-          -azdopat '$(System.AccessToken)' \
-          -set-azdo-variable MicrosoftGoReleaseInnerloopBuildID \
-          p releaseVersion '${{ parameters.releaseVersion }}' \
-          p releaseIssue '${{ parameters.releaseIssue }}' \
-          p microsoftGoCommitHash '$(poll2MicrosoftGoCommitHash)' \
-          p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
-      displayName: 🚀 Start microsoft-go-infra-release-innerloop
+    - ${{ if eq(parameters.runInnerloop, true) }}:
+      # Above, we launched the official build. Now launch innerloop tests. We actually
+      # don't poll this build here: it's a release pipeline, so it reports its own
+      # status to the release issue. This also means it runs in parallel.
+      - script: |
+          releasego build-pipeline \
+            -id '$(GoReleaseInnerloopPipelineID)' \
+            -org 'https://dev.azure.com/dnceng/' \
+            -proj 'internal' \
+            -branch '$(Build.SourceBranch)' \
+            -azdopat '$(System.AccessToken)' \
+            -set-azdo-variable MicrosoftGoReleaseInnerloopBuildID \
+            p releaseVersion '${{ parameters.releaseVersion }}' \
+            p releaseIssue '${{ parameters.releaseIssue }}' \
+            p microsoftGoCommitHash '$(poll2MicrosoftGoCommitHash)' \
+            p goReleaseConfigVariableGroup '${{ parameters.goReleaseConfigVariableGroup }}'
+        displayName: 🚀 Start microsoft-go-infra-release-innerloop
 
-    - template: ../steps/report.yml
-      parameters:
-        releaseIssue: ${{ parameters.releaseIssue }}
-        version: ${{ parameters.releaseVersion }}
-        condition: succeeded()
-        buildPipeline: microsoft-go-infra-release-innerloop
-        buildID: $(MicrosoftGoReleaseInnerloopBuildID)
-        buildStatus: '?'
-        start: true
-        reason: queued build
+      - template: ../steps/report.yml
+        parameters:
+          releaseIssue: ${{ parameters.releaseIssue }}
+          version: ${{ parameters.releaseVersion }}
+          condition: succeeded()
+          buildPipeline: microsoft-go-infra-release-innerloop
+          buildID: $(MicrosoftGoReleaseInnerloopBuildID)
+          buildStatus: '?'
+          start: true
+          reason: queued build
 
-    - script: |
-        releasego build-pipeline \
-          -id '1422' \
-          -org 'https://dev.azure.com/dnceng/' \
-          -proj 'internal' \
-          -azdopat '$(System.AccessToken)' \
-          -set-azdo-variable MicrosoftGoCanaryBuildID \
-          p version '${{ parameters.releaseVersion }}' \
-          p upstreamRunID '$(poll3MicrosoftGoBuildID)'
-      displayName: 🚀 Start microsoft-go-canary
+    - ${{ if eq(parameters.runCanary, true) }}:
+      - script: |
+          releasego build-pipeline \
+            -id '1422' \
+            -org 'https://dev.azure.com/dnceng/' \
+            -proj 'internal' \
+            -azdopat '$(System.AccessToken)' \
+            -set-azdo-variable MicrosoftGoCanaryBuildID \
+            p version '${{ parameters.releaseVersion }}' \
+            p upstreamRunID '$(poll3MicrosoftGoBuildID)'
+        displayName: 🚀 Start microsoft-go-canary
 
-    - template: ../steps/report.yml
-      parameters:
-        releaseIssue: ${{ parameters.releaseIssue }}
-        version: ${{ parameters.releaseVersion }}
-        condition: succeeded()
-        buildPipeline: microsoft-go-canary
-        buildID: $(MicrosoftGoCanaryBuildID)
-        buildStatus: '?'
-        start: true
-        reason: queued build
+      - template: ../steps/report.yml
+        parameters:
+          releaseIssue: ${{ parameters.releaseIssue }}
+          version: ${{ parameters.releaseVersion }}
+          condition: succeeded()
+          buildPipeline: microsoft-go-canary
+          buildID: $(MicrosoftGoCanaryBuildID)
+          buildStatus: '?'
+          start: true
+          reason: queued build
 
   - ${{ elseif eq(parameters.emptyPollNumber, 4) }}:
 

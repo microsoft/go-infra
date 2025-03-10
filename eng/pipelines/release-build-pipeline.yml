@@ -32,6 +32,14 @@ parameters:
 
   # Allow disabling specific parts of the internal build release. These can be used to re-run
   # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runInnerloop
+    displayName: Trigger innerloop test pipeline
+    type: boolean
+    default: true
+  - name: runCanary
+    displayName: Trigger go-canary pipeline
+    type: boolean
+    default: false
   - name: runTag
     displayName: Tag the release.
     type: boolean
