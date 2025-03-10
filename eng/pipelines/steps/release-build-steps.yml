@@ -45,7 +45,9 @@ steps:
         releasego get-merged-pr-commit \
           -repo '$(TargetGitHubRepo)' \
           -pr '$(poll1MicrosoftGoPRNumber)' \
-          -github-pat '$(GitHubPAT)' \
+          -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+          -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+          -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
           -set-azdo-variable poll2MicrosoftGoCommitHash
       displayName: ⌚ Get sync PR merged commit hash
       timeoutInMinutes: 90
@@ -226,7 +228,9 @@ steps:
             -tag 'v$(buildAssetVersion)' \
             -commit '$(BuildInfoSourceVersion)' \
             -repo '$(TargetGitHubRepo)' \
-            -github-pat '$(GitHubPAT)'
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
         displayName: 🎓 Create GitHub tag
 
     - ${{ if eq(parameters.runGitHubRelease, true) }}:
@@ -236,7 +240,9 @@ steps:
             -repo '$(TargetGitHubRepo)' \
             -build-asset-json '$(buildAssetJsonFile)' \
             -build-dir '$(artifactsDir)' \
-            -github-pat '$(GitHubPAT)'
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
         displayName: 🎓 Create GitHub release
 
     - ${{ if eq(parameters.runAkaMSUpdate, true) }}:
@@ -295,7 +301,9 @@ steps:
           releasego get-merged-pr-commit \
             -repo '$(TargetGoImagesGitHubRepo)' \
             -pr '$(poll4MicrosoftGoImagesPRNumber)' \
-            -github-pat '$(GitHubPAT)'
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
         displayName: ⌚ Wait for go-images update PR merge
         timeoutInMinutes: 120
         # Skip this task if the PR number isn't set. This might intentionally happen if we have to
