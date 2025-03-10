@@ -131,7 +131,9 @@ extends:
                             -versions '${{ join(',', parameters.releaseVersions) }}' \
                             -branch 'refs/heads/$(TargetGoImagesBranch)' \
                             -repo 'https://github.com/$(TargetGoImagesGitHubRepo)' \
-                            -github-pat '$(GitHubPAT)' \
+                            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+                            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+                            -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
                             -set-azdo-variable poll1MicrosoftGoImagesCommitHash
                         displayName: ⌚ Wait for go-images dependency flow
 
@@ -182,7 +184,7 @@ extends:
                         -security='${{ parameters.isSecurityRelease }}' \
                         -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
                         -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-                        -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+                        -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
                     displayName: 📰 Publish announcement details
 
                 - ${{ if eq(parameters.runGoImageVersionCheck, true) }}:

@@ -71,13 +71,21 @@ jobs:
           buildStatus: InProgress
           start: true
 
-      - script: releasego check-limits -github-pat '$(GitHubPAT)'
+      - script: |
+          releasego check-limits \
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
         displayName: Check GitHub rate limit
 
       - ${{ each step in parameters.steps }}:
         - ${{ step }}
 
-      - script: releasego check-limits -github-pat '$(GitHubPAT)'
+      - script: |
+          releasego check-limits \
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)'
         displayName: Check GitHub rate limit
 
       - ${{ if ne(parameters.retryInstructionsFlags, '') }}:
