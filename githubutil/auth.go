@@ -106,7 +106,7 @@ type GitHubAppAuther struct {
 }
 
 func (a GitHubAppAuther) InsertAuth(url string) string {
-	token, err := a.getInstallationToken()
+	token, _, err := a.getInstallationToken()
 	if err != nil {
 		log.Printf("Failed to get GitHub App installation token: %v", err)
 		return url
@@ -118,7 +118,7 @@ func (a GitHubAppAuther) InsertAuth(url string) string {
 }
 
 func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
-	token, err := a.getInstallationToken()
+	token, _, err := a.getInstallationToken()
 	if err != nil {
 		log.Printf("Failed to get GitHub App installation token: %v", err)
 		return err
@@ -140,7 +140,7 @@ func (a GitHubAppAuther) GetIdentity() (string, error) {
 	return response.GetName(), nil
 }
 
-func (a GitHubAppAuther) getInstallationToken() (string, error) {
+func (a GitHubAppAuther) getInstallationToken() (string, time.Time, error) {
 	return GenerateInstallationToken(
 		context.Background(),
 		a.ClientID,
@@ -148,10 +148,10 @@ func (a GitHubAppAuther) getInstallationToken() (string, error) {
 		a.PrivateKey)
 }
 
-func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, error) {
+func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, time.Time, error) {
 	jwt, err := generateJWT(clientID, privateKey)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 
 	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
@@ -160,10 +160,10 @@ func GenerateInstallationToken(ctx context.Context, clientID string, installatio
 	client := github.NewClient(tokenClient)
 	installationToken, _, err := client.Apps.CreateInstallationToken(ctx, installationID, nil)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 
-	return *installationToken.Token, nil
+	return *installationToken.Token, installationToken.ExpiresAt.Time, nil
 }
 
 // GenerateJWT generates a JWT for a GitHub App.
@@ -185,7 +185,7 @@ func generateJWT(clientID, privateKey string) (string, error) {
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
 		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
+		ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
 		Issuer:    clientID,
 	}
 	fmt.Printf("%#v\n", claims)
