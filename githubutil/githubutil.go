@@ -17,6 +17,21 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// tokenSource implements oauth2.TokenSource for GitHub App authentication
+type tokenSource struct {
+	ClientID       string
+	InstallationID int64
+	PrivateKey     string
+}
+
+func (t *tokenSource) Token() (*oauth2.Token, error) {
+	token, expiry, err := GenerateInstallationToken(context.Background(), t.ClientID, t.InstallationID, t.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	return &oauth2.Token{AccessToken: token, Expiry: expiry}, nil
+}
+
 // Types of error that may be returned from the GitHub API that the caller may want to handle.
 var (
 	// ErrFileNotExists indicates that the requested file does not exist in the specified GitHub repository and branch.
@@ -53,12 +68,12 @@ func NewInstallationClient(ctx context.Context, clientID string, installationID 
 		return nil, errors.New("no GitHub App private key specified")
 	}
 
-	installationToken, err := GenerateInstallationToken(ctx, clientID, installationID, privateKey)
-	if err != nil {
-		return nil, err
+	tokenSource := &tokenSource{
+		ClientID:       clientID,
+		InstallationID: installationID,
+		PrivateKey:     privateKey,
 	}
 
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: installationToken})
 	tokenClient := oauth2.NewClient(ctx, tokenSource)
 	return github.NewClient(tokenClient), nil
 }
