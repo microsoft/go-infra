@@ -184,7 +184,8 @@ func generateJWT(clientID, privateKey string) (string, error) {
 
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
-		IssuedAt:  jwt.NewNumericDate(now),
+		IssuedAt: jwt.NewNumericDate(now),
+		// This token is only used to get an installation token, so we set the expiration to 5 minutes.
 		ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
 		Issuer:    clientID,
 	}
