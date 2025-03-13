@@ -129,10 +129,15 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
 
 func (a GitHubAppAuther) GetIdentity() (string, error) {
 	ctx := context.Background()
-	client, err := NewInstallationClient(ctx, a.ClientID, a.InstallationID, a.PrivateKey)
+	jwt, err := generateJWT(a.ClientID, a.PrivateKey)
 	if err != nil {
 		return "", err
 	}
+
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
+	client := github.NewClient(oauth2.NewClient(ctx, tokenSource))
+
+	// This route requires a JWT, not an installation token
 	response, _, err := client.Apps.Get(ctx, "")
 	if err != nil {
 		return "", err

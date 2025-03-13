@@ -73,8 +73,10 @@ extends:
 
               - pwsh: |
                   go run ./cmd/dockerupdatepr `
-                    -origin https://microsoft-golang-bot:$(BotAccount-microsoft-golang-bot-PAT)@github.com/microsoft/go-images `
-                    -github-pat $(BotAccount-microsoft-golang-bot-PAT) `
+                    -origin https://github.com/microsoft/go-images `
+                    -github-app-client-id '$(BotAccount-bot-for-go-client-id)' `
+                    -github-app-installation '$(BotAccount-bot-for-go-installation)' `
+                    -github-app-private-key '$(BotAccount-bot-for-go-private-key)' `
                     -github-reviewer-pat $(BotAccount-microsoft-golang-review-bot-PAT) `
                     -build-asset-json "$(assetJsonPath)"
                 displayName: Update go-images
