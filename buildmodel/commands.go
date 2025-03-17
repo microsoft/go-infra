@@ -190,16 +190,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 		Purpose: "auto-update",
 	}
 
-	// if using github app we need to insert the app token into the URL
-	// so that the app can push to the repo
-	if *f.Auth.GitHubAppClientID != "" {
-		auther, err := f.Auth.NewAuther()
-		if err != nil {
-			return err
-		}
-		*f.origin = auther.InsertAuth(*f.origin)
-		*f.to = auther.InsertAuth(*f.to)
+	// if using github app/pat we need to insert the app token into the URL
+	// so that the we can push to the repo
+	auther, err := f.Auth.NewAuther()
+	if err != nil {
+		return err
 	}
+	*f.origin = auther.InsertAuth(*f.origin)
+	*f.to = auther.InsertAuth(*f.to)
 
 	parsedOrigin, err := gitpr.ParseRemoteURL(*f.origin)
 	if err != nil {

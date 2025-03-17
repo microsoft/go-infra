@@ -129,13 +129,10 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
 
 func (a GitHubAppAuther) GetIdentity() (string, error) {
 	ctx := context.Background()
-	jwt, err := generateJWT(a.ClientID, a.PrivateKey)
+	client, err := newAppClient(a.ClientID, a.PrivateKey)
 	if err != nil {
 		return "", err
 	}
-
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
-	client := github.NewClient(oauth2.NewClient(ctx, tokenSource))
 
 	// This route requires a JWT, not an installation token
 	response, _, err := client.Apps.Get(ctx, "")
@@ -153,16 +150,25 @@ func (a GitHubAppAuther) getInstallationToken() (string, time.Time, error) {
 		a.PrivateKey)
 }
 
-func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, time.Time, error) {
+// newAppClient creates a new JWT-based GitHub client using the provided client ID and private key.
+func newAppClient(clientID, privateKey string) (*github.Client, error) {
 	jwt, err := generateJWT(clientID, privateKey)
 	if err != nil {
-		return "", time.Time{}, err
+		return nil, err
 	}
 
 	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
+	tokenClient := oauth2.NewClient(context.Background(), tokenSource)
 
 	client := github.NewClient(tokenClient)
+	return client, nil
+}
+
+func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, time.Time, error) {
+	client, err := newAppClient(clientID, privateKey)
+	if err != nil {
+		return "", time.Time{}, err
+	}
 	installationToken, _, err := client.Apps.CreateInstallationToken(ctx, installationID, nil)
 	if err != nil {
 		return "", time.Time{}, err
