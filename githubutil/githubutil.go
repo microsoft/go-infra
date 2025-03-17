@@ -56,8 +56,8 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	return github.NewClient(tokenClient), nil
 }
 
-// NewInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
-func NewInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
+// newInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
+func newInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
 	if clientID == "" {
 		return nil, errors.New("no GitHub App Client ID specified")
 	}
@@ -125,7 +125,7 @@ func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error)
 		*f.GitHubAppPrivateKey != "",
 	} {
 		if appFlagSet {
-			return NewInstallationClient(
+			return newInstallationClient(
 				ctx,
 				*f.GitHubAppClientID,
 				*f.GitHubAppInstallation,
