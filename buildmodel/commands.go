@@ -221,8 +221,6 @@ func SubmitUpdatePR(f *PRFlags) error {
 		}
 		fmt.Printf("---- Skipping finding PR to update; no auth: %v\n", err)
 	} else {
-		*f.origin = auther.InsertAuth(*f.origin)
-		*f.to = auther.InsertAuth(*f.to)
 		var githubUser string
 		githubUser, err := auther.GetIdentity()
 		if err != nil {
@@ -330,7 +328,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	runOrPanic(newGitCmd("commit", "-m", commitMessage))
 
 	// Push the commit.
-	args := []string{"push", *f.origin, b.PRBranchRefspec()}
+	args := []string{"push", auther.InsertAuth(*f.origin), b.PRBranchRefspec()}
 	if *f.dryRun {
 		// Show what would be pushed, but don't actually push it.
 		args = append(args, "-n")
