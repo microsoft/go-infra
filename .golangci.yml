@@ -1,23 +1,28 @@
-# Configure "golangci-lint" command. This file makes it behave the same for devs and CI.
-# See https://golangci-lint.run/usage/configuration
+version: "2"
 linters:
   enable:
-    # Defaults.
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-
-    # Added.
-    - gofumpt
     - bodyclose
+    - godox
     - nakedret
     - predeclared
-    - godox
     - unconvert
-
-linters-settings:
-  nakedret:
-    max-func-lines: 0
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
