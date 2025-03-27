@@ -214,13 +214,17 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// be strange for this to not be the case and the assumption simplifies the code for now.
 	var existingPR *gitpr.ExistingPR
 
-	auther, err := f.Auth.NewAuther()
-	if err != nil {
+	// The auther to use for Git operations. For convenience, set to a no-op auther rather than nil.
+	var gitAuther gitcmd.URLAuther
+
+	if auther, err := f.Auth.NewAuther(); err != nil {
 		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
 			return err
 		}
 		fmt.Printf("---- Skipping finding PR to update; no auth: %v\n", err)
+		gitAuther = new(gitcmd.NoAuther)
 	} else {
+		gitAuther = auther
 		var githubUser string
 		githubUser, err := auther.GetIdentity()
 		if err != nil {
@@ -261,10 +265,10 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	if existingPR != nil {
 		// Fetch the existing PR head branch to add onto.
-		runOrPanic(newGitCmd("fetch", "--no-tags", *f.to, b.PRBranchRefspec()))
+		runOrPanic(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec()))
 	} else {
 		// Fetch the base branch to start the PR head branch.
-		runOrPanic(newGitCmd("fetch", "--no-tags", *f.origin, b.BaseBranchFetchRefspec()))
+		runOrPanic(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.BaseBranchFetchRefspec()))
 	}
 	runOrPanic(newGitCmd("checkout", b.PRBranch()))
 
@@ -328,7 +332,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	runOrPanic(newGitCmd("commit", "-m", commitMessage))
 
 	// Push the commit.
-	args := []string{"push", auther.InsertAuth(*f.origin), b.PRBranchRefspec()}
+	args := []string{"push", gitAuther.InsertAuth(*f.origin), b.PRBranchRefspec()}
 	if *f.dryRun {
 		// Show what would be pushed, but don't actually push it.
 		args = append(args, "-n")
@@ -351,7 +355,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	case *f.origin == "":
 		skipReason = "No origin specified"
 	}
-	auther, err = f.Auth.NewAuther()
+	auther, err := f.Auth.NewAuther()
 	if err != nil {
 		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
 			return err
