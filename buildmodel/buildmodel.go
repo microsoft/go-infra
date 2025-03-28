@@ -232,9 +232,9 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 	manifest.Repos[0].Images = images
 }
 
-// NoMajorMinorUpgradeMatchError indicates that while running UpdateVersions, the input assets file
+// ErrNoMajorMinorUpgradeMatch indicates that while running UpdateVersions, the input assets file
 // didn't match any major.minor versions and no update could be performed.
-var NoMajorMinorUpgradeMatchError = errors.New("no match found in existing versions.json file")
+var ErrNoMajorMinorUpgradeMatch = errors.New("no match found in existing versions.json file")
 
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
 // versions.json model to consume the new build.
@@ -254,7 +254,7 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		if !ok {
 			return fmt.Errorf(
 				"checked current version %v and previous version %v, however: %w",
-				key, prevKey, NoMajorMinorUpgradeMatchError)
+				key, prevKey, ErrNoMajorMinorUpgradeMatch)
 		}
 		// Create a new Docker versions file entry for the new branch/major.minor version. Copy the
 		// data (such as the list of variants) from the previous version. Use JSON serialization to
