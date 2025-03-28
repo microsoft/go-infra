@@ -228,7 +228,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		})
 		return err
 	}); err != nil {
-		return fmt.Errorf("failed to update pull request description: %w\n", err)
+		return fmt.Errorf("failed to update pull request description: %w", err)
 	}
 
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())

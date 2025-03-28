@@ -129,7 +129,8 @@ func run(p subcmd.ParseFunc) error {
 		if err != nil {
 			return err
 		}
-		if *ciType == "github-actions-env" {
+		switch *ciType {
+		case "github-actions-env":
 			// Append to the file specified by $GITHUB_PATH:
 			// https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
 			ghp := os.Getenv("GITHUB_PATH")
@@ -154,9 +155,9 @@ func run(p subcmd.ParseFunc) error {
 			if err != nil {
 				return err
 			}
-		} else if *ciType == "azdo" {
+		case "azdo":
 			azdo.LogCmdPrependPath(binDir)
-		} else {
+		default:
 			return fmt.Errorf("unknown CI type %#q", *ciType)
 		}
 	}
