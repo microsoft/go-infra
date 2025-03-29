@@ -21,7 +21,7 @@ const (
 	StepStatusFailed
 )
 
-var stepPanicErr = errors.New("panic while executing step")
+var errStepPanic = errors.New("panic while executing step")
 
 type StepRunner struct {
 	states map[*Step]*stepState
@@ -30,7 +30,7 @@ type StepRunner struct {
 // Execute runs a group of steps, blocking until all are complete.
 //
 // If any step fails, returns the first error that occurred. If a step panics, it is recovered,
-// wrapped as a stepPanicErr, and treated as an error.
+// wrapped as a errStepPanic, and treated as an error.
 //
 // If any step depends on a step that doesn't exist in steps, returns an error without executing.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
@@ -82,7 +82,7 @@ func (s *stepState) run(ctx context.Context, states map[*Step]*stepState) (err e
 		// Capture a panic and return it as an error. The caller wants other steps to have a chance
 		// to clean up via context cancellation rather than terminating immediately.
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v; stack:\n%v", stepPanicErr, r, string(debug.Stack()))
+			err = fmt.Errorf("%w: %v; stack:\n%v", errStepPanic, r, string(debug.Stack()))
 		}
 
 		// Update status on the way out, for reporting to the release runner.

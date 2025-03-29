@@ -47,8 +47,8 @@ func TestStepRunner_Execute_PanicToError(t *testing.T) {
 		},
 	)
 	if err := execute(t, a); err != nil {
-		if !errors.Is(err, stepPanicErr) {
-			t.Fatalf("expected StepPanicErr err, got: %v", err)
+		if !errors.Is(err, errStepPanic) {
+			t.Fatalf("expected errStepPanic err, got: %v", err)
 		}
 	} else {
 		t.Fatal("expected error")

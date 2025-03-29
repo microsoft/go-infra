@@ -132,7 +132,7 @@ func (f *Flags) ParseAuth() (gitcmd.URLAuther, error) {
 			},
 		}, nil
 	}
-	return nil, fmt.Errorf("git-auth value %q is not an accepted value.\n", *f.GitAuthString)
+	return nil, fmt.Errorf("git-auth value %q is not an accepted value", *f.GitAuthString)
 }
 
 func (f *Flags) MakeGitWorkDir() (string, error) {
