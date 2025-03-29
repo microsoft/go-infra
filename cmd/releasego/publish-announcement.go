@@ -224,13 +224,14 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 
 func generateBlogPostTitle(versions []string) string {
 	count := len(versions)
-	if count == 0 {
+	switch count {
+	case 0:
 		return ""
-	} else if count == 1 {
+	case 1:
 		return fmt.Sprintf("Go %s Microsoft build now available", versions[0])
-	} else if count == 2 {
+	case 2:
 		return fmt.Sprintf("Go %s and %s Microsoft builds now available", versions[0], versions[1])
-	} else {
+	default:
 		allExceptLast := strings.Join(versions[:count-1], ", ")
 		return fmt.Sprintf("Go %s, and %s Microsoft builds now available", allExceptLast, versions[count-1])
 	}
