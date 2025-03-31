@@ -70,7 +70,7 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 			},
 		}
 		err := UpdateVersions(a, v)
-		if !errors.Is(err, NoMajorMinorUpgradeMatchError) {
+		if !errors.Is(err, ErrNoMajorMinorUpgradeMatch) {
 			t.Fatalf("Failed to reject the update with expected error result.")
 		}
 	})
