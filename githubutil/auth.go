@@ -14,10 +14,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/go-github/v65/github"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/stringutil"
-	"golang.org/x/oauth2"
 )
 
 const (
@@ -129,10 +127,12 @@ func (a GitHubAppAuther) InsertHTTPAuth(req *http.Request) error {
 
 func (a GitHubAppAuther) GetIdentity() (string, error) {
 	ctx := context.Background()
-	client, err := NewInstallationClient(ctx, a.ClientID, a.InstallationID, a.PrivateKey)
+	client, err := newAppClient(ctx, a.ClientID, a.PrivateKey)
 	if err != nil {
 		return "", err
 	}
+
+	// This route requires a JWT, not an installation token
 	response, _, err := client.Apps.Get(ctx, "")
 	if err != nil {
 		return "", err
@@ -141,23 +141,18 @@ func (a GitHubAppAuther) GetIdentity() (string, error) {
 }
 
 func (a GitHubAppAuther) getInstallationToken() (string, time.Time, error) {
-	return GenerateInstallationToken(
+	return generateInstallationToken(
 		context.Background(),
 		a.ClientID,
 		a.InstallationID,
 		a.PrivateKey)
 }
 
-func GenerateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, time.Time, error) {
-	jwt, err := generateJWT(clientID, privateKey)
+func generateInstallationToken(ctx context.Context, clientID string, installationID int64, privateKey string) (string, time.Time, error) {
+	client, err := newAppClient(ctx, clientID, privateKey)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
-
-	client := github.NewClient(tokenClient)
 	installationToken, _, err := client.Apps.CreateInstallationToken(ctx, installationID, nil)
 	if err != nil {
 		return "", time.Time{}, err

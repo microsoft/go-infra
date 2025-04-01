@@ -25,7 +25,7 @@ type tokenSource struct {
 }
 
 func (t *tokenSource) Token() (*oauth2.Token, error) {
-	token, expiry, err := GenerateInstallationToken(context.Background(), t.ClientID, t.InstallationID, t.PrivateKey)
+	token, expiry, err := generateInstallationToken(context.Background(), t.ClientID, t.InstallationID, t.PrivateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -56,8 +56,8 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	return github.NewClient(tokenClient), nil
 }
 
-// NewInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
-func NewInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
+// newInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
+func newInstallationClient(ctx context.Context, clientID string, installationID int64, privateKey string) (*github.Client, error) {
 	if clientID == "" {
 		return nil, errors.New("no GitHub App Client ID specified")
 	}
@@ -76,6 +76,20 @@ func NewInstallationClient(ctx context.Context, clientID string, installationID 
 
 	tokenClient := oauth2.NewClient(ctx, tokenSource)
 	return github.NewClient(tokenClient), nil
+}
+
+// newAppClient creates a new JWT-based GitHub client using the provided client ID and private key.
+func newAppClient(ctx context.Context, clientID, privateKey string) (*github.Client, error) {
+	jwt, err := generateJWT(clientID, privateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
+	tokenClient := oauth2.NewClient(ctx, tokenSource)
+
+	client := github.NewClient(tokenClient)
+	return client, nil
 }
 
 type GitHubAuthFlags struct {
@@ -125,7 +139,7 @@ func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error)
 		*f.GitHubAppPrivateKey != "",
 	} {
 		if appFlagSet {
-			return NewInstallationClient(
+			return newInstallationClient(
 				ctx,
 				*f.GitHubAppClientID,
 				*f.GitHubAppInstallation,

@@ -285,8 +285,10 @@ steps:
           sudo apt update && sudo apt install -y jq
 
           go run ./cmd/dockerupdatepr \
-            -origin 'https://_:$(GitHubPAT)@github.com/$(TargetGoImagesGitHubRepo)' \
-            -github-pat '$(GitHubPAT)' \
+            -origin 'https://github.com/$(TargetGoImagesGitHubRepo)' \
+            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
+            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
+            -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
             -github-reviewer-pat '$(GitHubPATReviewer)' \
             -build-asset-json '$(buildAssetJsonFile)' \
             -manual-branch '$(TargetGoImagesBranch)' \
