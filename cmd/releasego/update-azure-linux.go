@@ -255,7 +255,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 }
 
 func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf("refs/heads/dev/go-%s", assets.GoVersion().Full())
+	return fmt.Sprintf("refs/heads/dev/bot-for-go/go-%s", assets.GoVersion().Full())
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
