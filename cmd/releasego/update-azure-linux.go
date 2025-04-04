@@ -83,7 +83,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 	start := time.Now()
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 }
 
 func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
+	return fmt.Sprintf("refs/heads/dev/go-%s", assets.GoVersion().Full())
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
