@@ -83,7 +83,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 	start := time.Now()
 	ctx := context.Background()
-	client, err := githubutil.NewClient(ctx, *gitHubAuthFlags.GitHubPat)
+	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
 	}
@@ -92,34 +92,36 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	client.UserAgent = "microsoft/go-infra update-azure-linux"
 
 	// Check that the PAT has the necessary scopes.
-	patScopes, err := githubutil.PATScopes(ctx, client)
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(patScopes, "repo") {
-		return fmt.Errorf("the PAT must have 'repo' scope, but not found in list: %v", patScopes)
-	}
-
-	if upstream != owner {
-		// Submitting PR via fork. Try to make sure it'll work.
-		if !slices.Contains(patScopes, "workflow") {
-			return fmt.Errorf("the PAT must have 'workflow' scope, but not found in list: %v", patScopes)
+	if *gitHubAuthFlags.GitHubPat != "" {
+		patScopes, err := githubutil.PATScopes(ctx, client)
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(patScopes, "repo") {
+			return fmt.Errorf("the PAT must have 'repo' scope, but not found in list: %v", patScopes)
 		}
 
-		// Get full details about the fork.
-		forkRepo, err := githubutil.FetchRepository(ctx, client, owner, repo)
-		if err != nil {
-			if errors.Is(err, githubutil.ErrRepositoryNotExists) {
-				// Fork doesn't exist. Try to create it and get the full details.
-				forkRepo, err = githubutil.FullyCreateFork(ctx, client, upstream, repo)
-				if err != nil {
+		if upstream != owner {
+			// Submitting PR via fork. Try to make sure it'll work.
+			if !slices.Contains(patScopes, "workflow") {
+				return fmt.Errorf("the PAT must have 'workflow' scope, but not found in list: %v", patScopes)
+			}
+
+			// Get full details about the fork.
+			forkRepo, err := githubutil.FetchRepository(ctx, client, owner, repo)
+			if err != nil {
+				if errors.Is(err, githubutil.ErrRepositoryNotExists) {
+					// Fork doesn't exist. Try to create it and get the full details.
+					forkRepo, err = githubutil.FullyCreateFork(ctx, client, upstream, repo)
+					if err != nil {
+						return err
+					}
+				} else {
 					return err
 				}
-			} else {
-				return err
 			}
+			log.Printf("Submitting PR via owner's fork: %s\n", forkRepo.GetHTMLURL())
 		}
-		log.Printf("Submitting PR via owner's fork: %s\n", forkRepo.GetHTMLURL())
 	}
 
 	assets, err := loadBuildAssets(buildAssetJSON)
@@ -255,7 +257,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 }
 
 func generateUpdateBranchNameFromAssets(assets *buildassets.BuildAssets) string {
-	return fmt.Sprintf("refs/heads/update-go-%s", assets.GoVersion().Full())
+	return fmt.Sprintf("refs/heads/user/app/bot-for-go/go-%s", assets.GoVersion().Full())
 }
 
 func loadBuildAssets(assetFilePath string) (*buildassets.BuildAssets, error) {
