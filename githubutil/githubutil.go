@@ -117,13 +117,13 @@ func BindGitHubAuthFlags(user string) *GitHubAuthFlags {
 			prefix+"-pat", "",
 			"The GitHub PAT to use. Exclusive with "+prefix+"-app-*"),
 		GitHubAppClientID: flag.String(
-			prefix+"-app-client-id"+user, "",
+			prefix+"-app-client-id", "",
 			"Use this GitHub App Client ID to authenticate to GitHub. "+appAuthTogether),
 		GitHubAppInstallation: flag.Int64(
-			prefix+"-app-installation"+user, 0,
+			prefix+"-app-installation", 0,
 			"Use this GitHub App Installation ID to authenticate to GitHub. "+appAuthTogether),
 		GitHubAppPrivateKey: flag.String(
-			prefix+"-app-private-key"+user, "",
+			prefix+"-app-private-key", "",
 			"Use this GitHub App Private Key to authenticate to GitHub, provided in base64 PEM format. "+appAuthTogether),
 	}
 }
