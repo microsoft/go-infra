@@ -52,7 +52,33 @@ extends:
               - template: /eng/pipelines/steps/init-go.yml@self
               - template: /eng/pipelines/steps/set-bot-git-author.yml@self
 
+              - task: UniversalPackages@0
+                displayName: "Download credential provider Artifact"
+                name: "download_credProvider"
+                inputs:
+                  command: download
+                  vstsFeed: "dnceng/internal/go-internal"
+                  vstsFeedPackage: "terrapin-golang-cred-provider-linux-x64"
+                  vstsPackageVersion: "1.*"
+                  downloadDirectory: "$(Pipeline.Workspace)/terrapin-golang-cred-provider"
+
+              - task: AzureCLI@2
+                displayName: "Start the golang credential provider"
+                timeoutInMinutes: 1
+                env:
+                  SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+                inputs:
+                  azureSubscription: "DotNet-Engineering-Services_KeyVault"
+                  scriptType: "bash"
+                  scriptLocation: "inlineScript"
+                  inlineScript: |
+                    set -euo pipefail
+
+                    chmod +x $(Pipeline.Workspace)/terrapin-golang-cred-provider/terrapin-golang-cred-provider
+                    $(Pipeline.Workspace)/terrapin-golang-cred-provider/terrapin-golang-cred-provider --start-background
+
               - pwsh: |
+                  $env:GOPROXY = "http://localhost:5000"
                   go run ./cmd/sync `
                     -git-auth api `
                     -github-user bot-for-go `
@@ -62,3 +88,9 @@ extends:
                     -github-reviewer-pat $(BotAccount-microsoft-golang-review-bot-PAT) `
                     -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
                 displayName: Sync
+
+              - bash: |
+                  cat ~/.terrapin-golang-cred-provider/terrapin-golang-cred-provider.log*
+                  $(Pipeline.Workspace)/terrapin-golang-cred-provider/terrapin-golang-cred-provider --stop-background
+                condition: always()
+                displayName: Print logs and kill background process
