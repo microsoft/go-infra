@@ -59,6 +59,8 @@ extends:
                     -github-app-client-id $(BotAccount-bot-for-go-client-id) `
                     -github-app-installation $(BotAccount-bot-for-go-installation) `
                     -github-app-private-key '$(BotAccount-bot-for-go-private-key)' `
-                    -github-reviewer-pat $(BotAccount-microsoft-golang-review-bot-PAT) `
+                    -github-reviewer-app-client-id $(BotAccount-review-bot-for-go-client-id) `
+                    -github-reviewer-app-installation $(BotAccount-review-bot-for-go-installation) `
+                    -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)' `
                     -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
                 displayName: Sync
