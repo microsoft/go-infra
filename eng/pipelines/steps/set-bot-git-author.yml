@@ -6,6 +6,6 @@
 steps:
   - script: |
       git config --global user.name 'bot-for-go[bot]'
-      # Include App ID in email address.
+      # Include App's User ID in email address (not App ID), from https://api.github.com/users/bot-for-go%5Bbot%5D
       git config --global user.email '199222863+bot-for-go[bot]@users.noreply.github.com'
     displayName: Set up Git author
