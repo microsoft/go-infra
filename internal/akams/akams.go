@@ -15,7 +15,7 @@ import (
 	"net/url"
 )
 
-const Scope = "https://microsoft.onmicrosoft.com/redirectionapi"
+const Scope = "https://msazurecloud.onmicrosoft.com/RedirectionMgmtApi-Prod"
 
 // Host is the host identifier.
 type Host string
@@ -55,7 +55,7 @@ type Client struct {
 
 // NewClient creates a new [Client].
 func NewClient(tenant string, httpClient *http.Client) (*Client, error) {
-	const apiProdBaseUrl = "https://redirectionapi.trafficmanager.net/api"
+	const apiProdBaseUrl = "https://redirectionapi-ame.trafficmanager.net/api"
 	return NewClientCustom(apiProdBaseUrl, HostAkaMs, tenant, httpClient)
 }
 
