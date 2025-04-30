@@ -21,6 +21,7 @@ jobs:
 
       - script: |
           go test -json ./... > $(Build.StagingDirectory)/TestResults.json
+          go test -json ./telemetry/... > $(Build.StagingDirectory)/TestResults.json
         displayName: Test
 
       - script: |
