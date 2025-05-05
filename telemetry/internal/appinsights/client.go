@@ -4,8 +4,8 @@ import (
 	"cmp"
 	"context"
 	"log"
+	"maps"
 	"net/http"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +38,10 @@ type Client struct {
 	// If nil, it defaults to http.DefaultClient.
 	HttpClient *http.Client
 
+	// Tags to be sent with every telemetry item.
+	// If nil, no additional tags will be sent.
+	Tags map[string]string
+
 	channel  *inMemoryChannel
 	context  *telemetryContext
 	disabled bool
@@ -58,18 +62,15 @@ func (c *Client) init() {
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
 		httpClient := cmp.Or(c.HttpClient, http.DefaultClient)
 		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
-		c.context = setupContext(c.InstrumentationKey)
+		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		c.initialized.Store(true)
 	})
 }
 
-func setupContext(instrumentationKey string) *telemetryContext {
+func setupContext(instrumentationKey string, tags map[string]string) *telemetryContext {
 	context := newTelemetryContext(instrumentationKey)
 	context.Tags["ai.internal.sdkVersion"] = sdkName + ":" + version
-	context.Tags["golang.runtime.goos"] = runtime.GOOS
-	context.Tags["golang.runtime.goarch"] = runtime.GOARCH
-	context.Tags["golang.runtime.version"] = runtime.Version()
-
+	maps.Copy(context.Tags, tags)
 	for _, warn := range contracts.SanitizeTags(context.Tags) {
 		log.Printf("Telemetry tag warning: %s", warn)
 	}
