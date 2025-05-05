@@ -13,7 +13,7 @@ jobs:
       clean: all
     pool:
       # Use generic recent LTS.
-      vmImage: ubuntu-20.04
+      vmImage: ubuntu-22.04
     steps:
       - template: steps/checkout-unix-task.yml
       - template: steps/init-go.yml
@@ -52,7 +52,7 @@ jobs:
     parameters:
       name: TestFuzz1x
       pool:
-        vmImage: ubuntu-20.04
+        vmImage: ubuntu-22.04
       platform: linux-amd64
       useMicrosoftGo: false
       # 1x runs the tests only once. It uses the first entry in the corpus so won't generate any

@@ -21,7 +21,6 @@ jobs:
           - windows-latest
           - windows-2019
           - ubuntu-latest
-          - ubuntu-20.04
     runs-on: ${{ matrix.os }}
     steps:
       # Intentionally get upstream Go. This allows us to run install script
