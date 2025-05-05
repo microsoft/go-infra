@@ -24,8 +24,9 @@ jobs:
         displayName: Test
         
       - script: |
-          go test -json -race ./telemetry/... > $(Build.StagingDirectory)/TestResults.json
+          go test -json -race ./... > $(Build.StagingDirectory)/TestResults.json
         displayName: Test Telemetry
+        workingDirectory: $(Build.SourcesDirectory)/telemetry
         env:
           GOEXPERIMENT: synctest
 
