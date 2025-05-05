@@ -21,8 +21,10 @@ jobs:
 
       - script: |
           go test -json ./... > $(Build.StagingDirectory)/TestResults.json
-          go test -json ./telemetry/... > $(Build.StagingDirectory)/TestResults.json
+          go test -json -race ./telemetry/... > $(Build.StagingDirectory)/TestResults.json
         displayName: Test
+        env:
+          GOEXPERIMENT: synctest
 
       - script: |
           go run ./cmd/json2junit -in $(Build.StagingDirectory)/TestResults.json -out $(Build.StagingDirectory)/TestResults.xml

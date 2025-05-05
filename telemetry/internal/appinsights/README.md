@@ -5,6 +5,7 @@ It is tailored for the use of the [Microsoft build of Go](https://github.com/mic
 
 These are the changes made to the original package:
 
-- Remove all runtime external dependencies.
-- Remove all telemetry types except for `EventTelemetry`.
-- Simplify and modernize the code.
+- Remove all external dependencies.
+- Remove all telemetry types except for `Event`.
+- Simplify the API.
+- Modernize the code.

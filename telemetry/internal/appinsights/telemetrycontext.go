@@ -3,6 +3,7 @@ package appinsights
 import (
 	"log"
 	"strings"
+	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
@@ -25,54 +26,29 @@ type telemetryContext struct {
 func newTelemetryContext(ikey string) *telemetryContext {
 	return &telemetryContext{
 		iKey:     ikey,
-		nameIKey: strings.Replace(ikey, "-", "", -1),
+		nameIKey: "Microsoft.ApplicationInsights." + strings.Replace(ikey, "-", "", -1) + ".Event",
 		Tags:     make(contracts.ContextTags),
 	}
 }
 
-// instrumentationKey gets the instrumentation key associated with this TelemetryContext.
-// This will be an empty string on telemetry items' context instances.
-func (context *telemetryContext) instrumentationKey() string {
-	return context.iKey
-}
-
 // Wraps a telemetry item in an envelope with the information found in this
 // context.
-func (context *telemetryContext) envelop(item telemetry) *contracts.Envelope {
-	tdata := item.telemetryData()
-	data := contracts.NewData()
-	data.BaseType = tdata.BaseType()
-	data.BaseData = tdata
-
+func (context *telemetryContext) envelop(data contracts.EventData) *contracts.Envelope {
 	envelope := contracts.NewEnvelope()
-	envelope.Name = tdata.EnvelopeName(context.nameIKey)
-	envelope.Data = data
+	envelope.Name = context.nameIKey
+	envelope.Data = contracts.Data{
+		BaseType: "EventData",
+		BaseData: data,
+	}
 	envelope.IKey = context.iKey
 
-	timestamp := item.time()
-	if timestamp.IsZero() {
-		timestamp = now()
-	}
+	envelope.Time = time.Now().UTC().Format("2006-01-02T15:04:05.999999Z")
 
-	envelope.Time = timestamp.UTC().Format("2006-01-02T15:04:05.999999Z")
-
-	// Create new tags object
-	envelope.Tags = make(map[string]string)
-	for k, v := range context.Tags {
-		envelope.Tags[k] = v
-	}
-
-	// Create operation ID if it does not exist
-	if _, ok := envelope.Tags[contracts.OperationId]; !ok {
-		envelope.Tags[contracts.OperationId] = newUUID()
-	}
+	envelope.Tags = context.Tags
 
 	// Sanitize.
-	for _, warn := range tdata.Sanitize() {
+	for _, warn := range envelope.Sanitize() {
 		log.Printf("Telemetry data warning: %s", warn)
-	}
-	for _, warn := range contracts.SanitizeTags(envelope.Tags) {
-		log.Printf("Telemetry tag warning: %s", warn)
 	}
 
 	return envelope

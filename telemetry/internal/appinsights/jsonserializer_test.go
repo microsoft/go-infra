@@ -1,3 +1,5 @@
+//go:build goexperiment.synctest
+
 package appinsights
 
 import (
@@ -8,90 +10,43 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+	"testing/synctest"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
-const test_ikey = "01234567-0000-89ab-cdef-000000000000"
-
 func TestJsonSerializerEvents(t *testing.T) {
-	mockClockAt(time.Unix(1511001321, 0))
-	defer resetClock()
+	synctest.Run(func() {
+		var buffer telemetryBufferItems
 
-	var buffer telemetryBufferItems
+		buffer.add(
+			contracts.EventData{
+				Name: "an-event",
+				Ver:  2,
+			},
+		)
 
-	buffer.add(
-		NewEventTelemetry("an-event"),
-	)
+		j, err := parsePayload(buffer.serialize())
+		if err != nil {
+			t.Errorf("Error parsing payload: %s", err.Error())
+		}
 
-	j, err := parsePayload(buffer.serialize())
-	if err != nil {
-		t.Errorf("Error parsing payload: %s", err.Error())
-	}
+		if len(j) != 1 {
+			t.Fatal("Unexpected event count")
+		}
 
-	if len(j) != 1 {
-		t.Fatal("Unexpected event count")
-	}
-
-	// Event
-	j[0].assertPath(t, "iKey", test_ikey)
-	j[0].assertPath(t, "name", "Microsoft.ApplicationInsights.01234567000089abcdef000000000000.Event")
-	j[0].assertPath(t, "time", "2017-11-18T10:35:21Z")
-	j[0].assertPath(t, "sampleRate", 100.0)
-	j[0].assertPath(t, "data.baseType", "EventData")
-	j[0].assertPath(t, "data.baseData.name", "an-event")
-	j[0].assertPath(t, "data.baseData.ver", 2)
+		// Event
+		j[0].assertPath(t, "iKey", test_ikey)
+		j[0].assertPath(t, "name", "Microsoft.ApplicationInsights.01234567000089abcdef000000000000.Event")
+		j[0].assertPath(t, "time", "2000-01-01T00:00:00Z")
+		j[0].assertPath(t, "sampleRate", 100.0)
+		j[0].assertPath(t, "data.baseType", "EventData")
+		j[0].assertPath(t, "data.baseData.name", "an-event")
+		j[0].assertPath(t, "data.baseData.ver", 2)
+	})
 }
 
-func TestJsonSerializerNakedEvents(t *testing.T) {
-	mockClockAt(time.Unix(1511001321, 0))
-	defer resetClock()
-
-	var buffer telemetryBufferItems
-
-	buffer.add(
-		&EventTelemetry{
-			Name: "Naked event",
-		},
-	)
-
-	j, err := parsePayload(buffer.serialize())
-	if err != nil {
-		t.Errorf("Error parsing payload: %s", err.Error())
-	}
-
-	if len(j) != 1 {
-		t.Fatal("Unexpected event count")
-	}
-
-	// Event
-	j[0].assertPath(t, "iKey", test_ikey)
-	j[0].assertPath(t, "name", "Microsoft.ApplicationInsights.01234567000089abcdef000000000000.Event")
-	j[0].assertPath(t, "time", "2017-11-18T10:35:21Z")
-	j[0].assertPath(t, "sampleRate", 100)
-	j[0].assertPath(t, "data.baseType", "EventData")
-	j[0].assertPath(t, "data.baseData.name", "Naked event")
-	j[0].assertPath(t, "data.baseData.ver", 2)
-}
-
-// Test helpers...
-
-func telemetryBuffer(items ...telemetry) telemetryBufferItems {
-	ctx := newTelemetryContext(test_ikey)
-	ctx.iKey = test_ikey
-
-	var result telemetryBufferItems
-	for _, item := range items {
-		result = append(result, ctx.envelop(item))
-	}
-
-	return result
-}
-
-func (buffer *telemetryBufferItems) add(items ...telemetry) {
-	*buffer = append(*buffer, telemetryBuffer(items...)...)
-}
-
-type jsonMessage map[string]interface{}
+type jsonMessage map[string]any
 type jsonPayload []jsonMessage
 
 func parsePayload(payload []byte) (jsonPayload, error) {
@@ -114,7 +69,8 @@ func parsePayload(payload []byte) (jsonPayload, error) {
 	return result, nil
 }
 
-func (msg jsonMessage) assertPath(t *testing.T, path string, value interface{}) {
+func (msg jsonMessage) assertPath(t *testing.T, path string, value any) {
+	t.Helper()
 	const tolerance = 0.0001
 	v, err := msg.getPath(path)
 	if err != nil {
@@ -167,16 +123,16 @@ func (msg jsonMessage) assertPath(t *testing.T, path string, value interface{}) 
 	}
 }
 
-func (msg jsonMessage) getPath(path string) (interface{}, error) {
+func (msg jsonMessage) getPath(path string) (any, error) {
 	parts := strings.Split(path, ".")
-	var obj interface{} = msg
+	var obj any = msg
 	for i, part := range parts {
 		if strings.HasPrefix(part, "[") && strings.HasSuffix(part, "]") {
 			// Array
 			idxstr := part[1 : len(part)-2]
 			idx, _ := strconv.Atoi(idxstr)
 
-			if ar, ok := obj.([]interface{}); ok {
+			if ar, ok := obj.([]any); ok {
 				if idx >= len(ar) {
 					return nil, fmt.Errorf("Index out of bounds: %s", strings.Join(parts[0:i+1], "."))
 				}
@@ -186,7 +142,7 @@ func (msg jsonMessage) getPath(path string) (interface{}, error) {
 				return nil, fmt.Errorf("Path %s is not an array", strings.Join(parts[0:i], "."))
 			}
 		} else if part == "<len>" {
-			if ar, ok := obj.([]interface{}); ok {
+			if ar, ok := obj.([]any); ok {
 				return len(ar), nil
 			}
 		} else {
@@ -197,7 +153,7 @@ func (msg jsonMessage) getPath(path string) (interface{}, error) {
 				} else {
 					return nil, fmt.Errorf("Key %s not found in %s", part, strings.Join(parts[0:i], "."))
 				}
-			} else if dict, ok := obj.(map[string]interface{}); ok {
+			} else if dict, ok := obj.(map[string]any); ok {
 				if val, ok := dict[part]; ok {
 					obj = val
 				} else {

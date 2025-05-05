@@ -6,89 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
-
-type testServer struct {
-	server *httptest.Server
-	notify chan *testRequest
-
-	responseData    []byte
-	responseCode    int
-	responseHeaders map[string]string
-}
-
-type testRequest struct {
-	request *http.Request
-	body    []byte
-}
-
-func (server *testServer) Close() {
-	server.server.Close()
-	close(server.notify)
-}
-
-func (server *testServer) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
-	body, _ := io.ReadAll(req.Body)
-
-	hdr := writer.Header()
-	for k, v := range server.responseHeaders {
-		hdr[k] = []string{v}
-	}
-
-	writer.WriteHeader(server.responseCode)
-	writer.Write(server.responseData)
-
-	server.notify <- &testRequest{
-		request: req,
-		body:    body,
-	}
-}
-
-func (server *testServer) waitForRequest(t *testing.T) *testRequest {
-	select {
-	case req := <-server.notify:
-		return req
-	case <-time.After(time.Second):
-		t.Fatal("Server did not receive request within a second")
-		return nil /* not reached */
-	}
-}
-
-type nullTransmitter struct{}
-
-func (transmitter *nullTransmitter) Transmit(payload []byte, items telemetryBufferItems) (*transmissionResult, error) {
-	return &transmissionResult{statusCode: successResponse}, nil
-}
-
-func newTestClientServer() (transmitter, *testServer) {
-	server := &testServer{}
-	server.server = httptest.NewServer(server)
-	server.notify = make(chan *testRequest, 1)
-	server.responseCode = 200
-	server.responseData = make([]byte, 0)
-	server.responseHeaders = make(map[string]string)
-
-	client := newTransmitter(fmt.Sprintf("http://%s/v2/track", server.server.Listener.Addr().String()), nil)
-
-	return client, server
-}
-
-func newTestTlsClientServer(t *testing.T) (transmitter, *testServer) {
-	server := &testServer{}
-	server.server = httptest.NewTLSServer(server)
-	server.notify = make(chan *testRequest, 1)
-	server.responseCode = 200
-	server.responseData = make([]byte, 0)
-	server.responseHeaders = make(map[string]string)
-
-	client := newTransmitter(fmt.Sprintf("https://%s/v2/track", server.server.Listener.Addr().String()), server.server.Client())
-
-	return client, server
-}
 
 func TestBasicTransitTls(t *testing.T) {
 	client, server := newTestTlsClientServer(t)
@@ -97,7 +20,7 @@ func TestBasicTransitTls(t *testing.T) {
 }
 
 func TestBasicTransmit(t *testing.T) {
-	client, server := newTestClientServer()
+	client, server := newTestClientServer(t)
 
 	doBasicTransmit(client, server, t)
 }
@@ -178,7 +101,7 @@ func doBasicTransmit(client transmitter, server *testServer, t *testing.T) {
 }
 
 func TestFailedTransmit(t *testing.T) {
-	client, server := newTestClientServer()
+	client, server := newTestClientServer(t)
 	defer server.Close()
 
 	server.responseCode = errorResponse
@@ -229,7 +152,7 @@ func TestFailedTransmit(t *testing.T) {
 }
 
 func TestThrottledTransmit(t *testing.T) {
-	client, server := newTestClientServer()
+	client, server := newTestClientServer(t)
 	defer server.Close()
 
 	server.responseCode = errorResponse
@@ -321,8 +244,8 @@ func TestTransmitResults(t *testing.T) {
 		ItemsAccepted: 3,
 		ItemsReceived: 5,
 		Errors: []*itemTransmissionResult{
-			&itemTransmissionResult{Index: 2, StatusCode: 400, Message: "Bad 1"},
-			&itemTransmissionResult{Index: 4, StatusCode: 400, Message: "Bad 2"},
+			{Index: 2, StatusCode: 400, Message: "Bad 1"},
+			{Index: 4, StatusCode: 400, Message: "Bad 2"},
 		},
 	}
 
@@ -330,8 +253,8 @@ func TestTransmitResults(t *testing.T) {
 		ItemsAccepted: 2,
 		ItemsReceived: 4,
 		Errors: []*itemTransmissionResult{
-			&itemTransmissionResult{Index: 2, StatusCode: 400, Message: "Bad 1"},
-			&itemTransmissionResult{Index: 4, StatusCode: 408, Message: "OK Later"},
+			{Index: 2, StatusCode: 400, Message: "Bad 1"},
+			{Index: 4, StatusCode: 408, Message: "OK Later"},
 		},
 	}
 
@@ -339,11 +262,11 @@ func TestTransmitResults(t *testing.T) {
 		ItemsAccepted: 0,
 		ItemsReceived: 5,
 		Errors: []*itemTransmissionResult{
-			&itemTransmissionResult{Index: 0, StatusCode: 500, Message: "Bad 1"},
-			&itemTransmissionResult{Index: 1, StatusCode: 500, Message: "Bad 2"},
-			&itemTransmissionResult{Index: 2, StatusCode: 500, Message: "Bad 3"},
-			&itemTransmissionResult{Index: 3, StatusCode: 500, Message: "Bad 4"},
-			&itemTransmissionResult{Index: 4, StatusCode: 500, Message: "Bad 5"},
+			{Index: 0, StatusCode: 500, Message: "Bad 1"},
+			{Index: 1, StatusCode: 500, Message: "Bad 2"},
+			{Index: 2, StatusCode: 500, Message: "Bad 3"},
+			{Index: 3, StatusCode: 500, Message: "Bad 4"},
+			{Index: 4, StatusCode: 500, Message: "Bad 5"},
 		},
 	}
 
@@ -386,9 +309,6 @@ func TestTransmitResults(t *testing.T) {
 }
 
 func TestGetRetryItems(t *testing.T) {
-	mockClock()
-	defer resetClock()
-
 	originalPayload, originalItems := makePayload()
 
 	res1 := &transmissionResult{
@@ -432,7 +352,7 @@ func TestGetRetryItems(t *testing.T) {
 func makePayload() ([]byte, telemetryBufferItems) {
 	buffer := telemetryBuffer()
 	for i := range 7 {
-		tr := NewEventTelemetry(fmt.Sprintf("msg%d", i+1))
+		tr := contracts.EventData{Name: fmt.Sprintf("msg%d", i+1), Ver: 2}
 		buffer.add(tr)
 	}
 

@@ -3,14 +3,27 @@ package appinsights
 import (
 	"cmp"
 	"context"
+	"log"
 	"net/http"
-	"os"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
-// Configuration data used to initialize a new TelemetryClient.
-type TelemetryConfiguration struct {
+// Client is the main entry point for sending telemetry to Application Insights.
+// Changing its properties after a telemetry item is created will have no effect.
+type Client struct {
+	// The instrumentation key used to identify the application.
+	// This key is required and must be set before sending any telemetry.
+	InstrumentationKey string
+
+	// The endpoint URL to which telemetry will be sent.
+	// If empty, it defaults to https://dc.services.visualstudio.com/v2/track.
+	Endpoint string
+
 	// Maximum number of telemetry items that can be submitted in each
 	// request. If this many items are buffered, the buffer will be
 	// flushed before MaxBatchInterval expires.
@@ -23,86 +36,84 @@ type TelemetryConfiguration struct {
 
 	// Customized http client.
 	// If nil, it defaults to http.DefaultClient.
-	Client *http.Client
+	HttpClient *http.Client
+
+	channel  *inMemoryChannel
+	context  *telemetryContext
+	disabled bool
+
+	initialized atomic.Bool
+	initOnce    sync.Once
 }
 
-type TelemetryClient struct {
-	channel *inMemoryChannel
-	context *telemetryContext
-	enabled bool
-}
-
-// Creates a new telemetry client instance configured by the specified TelemetryConfiguration object.
-// The instrumentation key and endpoint URL are required.
-// The configuration is optional and can be nil.
-func NewTelemetryClient(insturmentationKey, endpointUrl string, config *TelemetryConfiguration) *TelemetryClient {
-	if insturmentationKey == "" {
-		panic("instrumentation key is required")
-	}
-	if endpointUrl == "" {
-		panic("endpoint URL is required")
-	}
-	var batchSize int
-	var batchInterval time.Duration
-	var httpClient *http.Client
-	if config != nil {
-		batchSize = config.MaxBatchSize
-		batchInterval = config.MaxBatchInterval
-		httpClient = config.Client
-	}
-	batchSize = cmp.Or(batchSize, 1024)
-	batchInterval = cmp.Or(batchInterval, 10*time.Second)
-	httpClient = cmp.Or(httpClient, http.DefaultClient)
-
-	return &TelemetryClient{
-		channel: newInMemoryChannel(endpointUrl, batchSize, batchInterval, httpClient),
-		context: setupContext(insturmentationKey),
-		enabled: true,
-	}
+// init initializes the client.
+// It is safe to call this method multiple times concurrently.
+func (c *Client) init() {
+	c.initOnce.Do(func() {
+		if c.InstrumentationKey == "" {
+			panic("instrumentation key is required")
+		}
+		endpoint := cmp.Or(c.Endpoint, "https://dc.services.visualstudio.com/v2/track")
+		batchSize := cmp.Or(c.MaxBatchSize, 1024)
+		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
+		httpClient := cmp.Or(c.HttpClient, http.DefaultClient)
+		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
+		c.context = setupContext(c.InstrumentationKey)
+		c.initialized.Store(true)
+	})
 }
 
 func setupContext(instrumentationKey string) *telemetryContext {
 	context := newTelemetryContext(instrumentationKey)
-	context.Tags.Internal().SetSdkVersion(sdkName + ":" + Version)
-	context.Tags.Device().SetOsVersion(runtime.GOOS)
+	context.Tags["ai.internal.sdkVersion"] = sdkName + ":" + version
+	context.Tags["golang.runtime.goos"] = runtime.GOOS
+	context.Tags["golang.runtime.goarch"] = runtime.GOARCH
+	context.Tags["golang.runtime.version"] = runtime.Version()
 
-	if hostname, err := os.Hostname(); err == nil {
-		context.Tags.Device().SetId(hostname)
-		context.Tags.Cloud().SetRoleInstance(hostname)
+	for _, warn := range contracts.SanitizeTags(context.Tags) {
+		log.Printf("Telemetry tag warning: %s", warn)
 	}
-
 	return context
 }
 
-// Gets whether this client is enabled and will accept telemetry.
-func (tc *TelemetryClient) Enabled() bool {
-	return tc.enabled
+// Enabled returns true if this client is enabled and will accept telemetry.
+func (c *Client) Enabled() bool {
+	return !c.disabled
 }
 
-// Enables or disables the telemetry client.  When disabled, telemetry is
-// silently swallowed by the client.  Defaults to enabled.
-func (tc *TelemetryClient) SetEnabled(isEnabled bool) {
-	tc.enabled = isEnabled
+// SetEnabled enables or disables the client. When disabled, telemetry is
+// silently swallowed by the client. Defaults to enabled.
+func (c *Client) SetEnabled(enabled bool) {
+	c.disabled = !enabled
+}
+
+// NewEvent creates a new event with the specified name.
+func (c *Client) NewEvent(name string) *Event {
+	return &Event{
+		name:   name,
+		client: c,
+	}
 }
 
 // TrackNewEvent logs a user action with the specified name.
-func (tc *TelemetryClient) TrackNewEvent(name string) {
-	tc.TrackEvent(NewEventTelemetry(name))
-}
-
-// TrackEvent los a user action with the specified event.
-func (tc *TelemetryClient) TrackEvent(ev *EventTelemetry) {
-	tc.track(ev)
+func (c *Client) TrackNewEvent(name string) {
+	c.NewEvent(name).Inc()
 }
 
 // Forces the current queue to be sent.
-func (tc *TelemetryClient) Flush() {
-	tc.channel.Flush()
+func (c *Client) Flush() {
+	if !c.initialized.Load() {
+		return
+	}
+	c.channel.Flush()
 }
 
 // Close flushes and tears down the submission goroutine and closes internal channels.
 // Waits until all pending telemetry items have been submitted.
-func (tc *TelemetryClient) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) error {
+	if !c.initialized.Load() {
+		return nil
+	}
 	var d time.Duration
 	if timeout, ok := ctx.Deadline(); ok {
 		d = time.Until(timeout)
@@ -114,7 +125,7 @@ func (tc *TelemetryClient) Close(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-tc.channel.Close(d):
+	case <-c.channel.Close(d):
 		// TODO: check for errors.
 		return nil
 	}
@@ -122,14 +133,42 @@ func (tc *TelemetryClient) Close(ctx context.Context) error {
 
 // Tears down the submission goroutines, closes internal channels.
 // Any telemetry waiting to be sent is discarded.
-// This is a more abrupt version of [TelemetryClient.Close].
-func (tc *TelemetryClient) Stop() {
-	tc.channel.Stop()
+// This is a more abrupt version of [Client.Close].
+func (c *Client) Stop() {
+	if !c.initialized.Load() {
+		return
+	}
+	c.channel.Stop()
 }
 
 // Submits the specified telemetry item.
-func (tc *TelemetryClient) track(item telemetry) {
-	if tc.enabled && item != nil {
-		tc.channel.Send(tc.context.envelop(item))
+func (c *Client) track(data contracts.EventData) {
+	if !c.disabled {
+		c.init()
+		c.channel.Send(c.context.envelop(data))
+	}
+}
+
+// Event represents an event to be tracked.
+type Event struct {
+	name   string
+	client *Client
+}
+
+// Inc adds 1 to the counter.
+func (e *Event) Inc() {
+	e.Add(1)
+}
+
+// Add adds n to the counter. n cannot be negative, as counts cannot decrease.
+func (e *Event) Add(n uint64) {
+	if n == 0 {
+		return
+	}
+	for range n {
+		e.client.track(contracts.EventData{
+			Name: e.name,
+			Ver:  2,
+		})
 	}
 }

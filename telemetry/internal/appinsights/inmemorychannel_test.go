@@ -1,11 +1,21 @@
+//go:build goexperiment.synctest
+
 package appinsights
 
 import (
 	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func slowTick(seconds int) {
+	for range seconds {
+		time.Sleep(1*time.Second + 5*time.Millisecond)
+		synctest.Wait()
+	}
+}
 
 const ten_seconds = 10 * time.Second
 
@@ -21,7 +31,7 @@ func (transmitter *testTransmitter) Transmit(payload []byte, items telemetryBuff
 	transmitter.requests <- &testTransmission{
 		payload:   string(payload),
 		items:     itemsCopy,
-		timestamp: now(),
+		timestamp: time.Now(),
 	}
 
 	return <-transmitter.responses, nil
@@ -39,7 +49,7 @@ func (transmitter *testTransmitter) prepResponse(statusCodes ...int) {
 }
 
 func (transmitter *testTransmitter) prepThrottle(after time.Duration) time.Time {
-	retryAfter := now().Add(after)
+	retryAfter := time.Now().Add(after)
 
 	transmitter.responses <- &transmissionResult{
 		statusCode: 408,
@@ -70,18 +80,19 @@ type testTransmission struct {
 	items     telemetryBufferItems
 }
 
-func newTestChannelServer(config *TelemetryConfiguration) (*TelemetryClient, *testTransmitter) {
+func newTestChannelServer(client *Client) (*Client, *testTransmitter) {
 	transmitter := &testTransmitter{
 		requests:  make(chan *testTransmission, 16),
 		responses: make(chan *transmissionResult, 16),
 	}
 
-	if config == nil {
-		config = &TelemetryConfiguration{
-			MaxBatchInterval: ten_seconds, // assumed by every test.
+	if client == nil {
+		client = &Client{
+			MaxBatchInterval: ten_seconds, // assumed by every test
 		}
 	}
-	client := NewTelemetryClient("fake", "fake", config)
+	client.InstrumentationKey = test_ikey
+	client.init()
 
 	client.channel.transmitter = transmitter
 
@@ -111,115 +122,115 @@ func waitForClose(t *testing.T, ch <-chan struct{}) {
 }
 
 func TestSimpleSubmit(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
-	defer client.Stop()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	client.TrackNewEvent("~msg~")
-	tm := now()
-	transmitter.prepResponse(200)
+		client.TrackNewEvent("~msg~")
+		tm := time.Now()
+		transmitter.prepResponse(200)
 
-	slowTick(11)
-	req := transmitter.waitForRequest(t)
+		slowTick(11)
+		req := transmitter.waitForRequest(t)
 
-	assertTimeApprox(t, req.timestamp, tm.Add(ten_seconds))
+		assertTimeApprox(t, req.timestamp, tm.Add(ten_seconds))
 
-	if !strings.Contains(string(req.payload), "~msg~") {
-		t.Errorf("Payload does not contain message")
-	}
+		if !strings.Contains(string(req.payload), "~msg~") {
+			t.Errorf("Payload does not contain message")
+		}
+	})
 }
 
 func TestMultipleSubmit(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
-	defer client.Stop()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepResponse(200, 200)
+		transmitter.prepResponse(200, 200)
 
-	start := now()
+		start := time.Now()
 
-	for i := 0; i < 16; i++ {
-		client.TrackNewEvent(fmt.Sprintf("~msg-%x~", i))
-		slowTick(1)
-	}
-
-	slowTick(10)
-
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, start.Add(ten_seconds))
-
-	for i := 0; i < 10; i++ {
-		if !strings.Contains(req1.payload, fmt.Sprintf("~msg-%x~", i)) {
-			t.Errorf("Payload does not contain expected item: %x", i)
+		for i := range 16 {
+			client.TrackNewEvent(fmt.Sprintf("~msg-%x~", i))
+			slowTick(1)
 		}
-	}
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, start.Add(ten_seconds+ten_seconds))
+		slowTick(10)
 
-	for i := 10; i < 16; i++ {
-		if !strings.Contains(req2.payload, fmt.Sprintf("~msg-%x~", i)) {
-			t.Errorf("Payload does not contain expected item: %x", i)
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, start.Add(ten_seconds))
+
+		for i := range 10 {
+			if !strings.Contains(req1.payload, fmt.Sprintf("~msg-%x~", i)) {
+				t.Errorf("Payload does not contain expected item: %x", i)
+			}
 		}
-	}
+
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, start.Add(ten_seconds+ten_seconds))
+
+		for i := 10; i < 16; i++ {
+			if !strings.Contains(req2.payload, fmt.Sprintf("~msg-%x~", i)) {
+				t.Errorf("Payload does not contain expected item: %x", i)
+			}
+		}
+	})
 }
 
 func TestFlush(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
-	defer client.Stop()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepResponse(200, 200)
+		transmitter.prepResponse(200, 200)
 
-	// Empty flush should do nothing
-	client.Flush()
+		// Empty flush should do nothing
+		client.Flush()
 
-	tm := now()
-	client.TrackNewEvent("~msg~")
-	client.Flush()
+		tm := time.Now()
+		client.TrackNewEvent("~msg~")
+		client.Flush()
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, tm)
-	if !strings.Contains(req1.payload, "~msg~") {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, tm)
+		if !strings.Contains(req1.payload, "~msg~") {
+			t.Error("Unexpected payload")
+		}
 
-	// Next one goes back to normal
-	client.TrackNewEvent("~next~")
-	slowTick(11)
+		// Next one goes back to normal
+		client.TrackNewEvent("~next~")
+		slowTick(11)
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
-	if !strings.Contains(req2.payload, "~next~") {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
+		if !strings.Contains(req2.payload, "~next~") {
+			t.Error("Unexpected payload")
+		}
+	})
 }
 
 func TestStop(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepResponse(200)
+		transmitter.prepResponse(200)
 
-	client.TrackNewEvent("Not sent")
-	client.Stop()
-	slowTick(20)
-	transmitter.assertNoRequest(t)
+		client.TrackNewEvent("Not sent")
+		client.Stop()
+		slowTick(20)
+		transmitter.assertNoRequest(t)
+	})
 }
 
 func TestCloseFlush(t *testing.T) {
-	mockClock()
-	defer resetClock()
 	client, transmitter := newTestChannelServer(nil)
 	defer transmitter.Close()
+	defer client.Stop()
 
 	transmitter.prepResponse(200)
 
@@ -233,375 +244,379 @@ func TestCloseFlush(t *testing.T) {
 }
 
 func TestCloseFlushRetry(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepResponse(500, 200)
+		transmitter.prepResponse(500, 200)
 
-	client.TrackNewEvent("~flushed~")
-	tm := now()
-	ch := client.channel.Close(time.Minute)
+		client.TrackNewEvent("~flushed~")
+		tm := time.Now()
+		ch := client.channel.Close(time.Minute)
 
-	slowTick(30)
+		slowTick(30)
 
-	waitForClose(t, ch)
+		waitForClose(t, ch)
 
-	req1 := transmitter.waitForRequest(t)
-	if !strings.Contains(req1.payload, "~flushed~") {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		if !strings.Contains(req1.payload, "~flushed~") {
+			t.Error("Unexpected payload")
+		}
 
-	assertTimeApprox(t, req1.timestamp, tm)
+		assertTimeApprox(t, req1.timestamp, tm)
 
-	req2 := transmitter.waitForRequest(t)
-	if !strings.Contains(req2.payload, "~flushed~") {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		if !strings.Contains(req2.payload, "~flushed~") {
+			t.Error("Unexpected payload")
+		}
 
-	assertTimeApprox(t, req2.timestamp, tm.Add(submit_retries[0]))
+		assertTimeApprox(t, req2.timestamp, tm.Add(submit_retries[0]))
+	})
 }
 
 func TestCloseWithOngoingRetry(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepResponse(408, 200, 200)
+		transmitter.prepResponse(408, 200, 200)
 
-	// This message should get stuck, retried
-	client.TrackNewEvent("~msg-1~")
-	slowTick(11)
+		// This message should get stuck, retried
+		client.TrackNewEvent("~msg-1~")
+		slowTick(11)
 
-	// Check first one came through
-	req1 := transmitter.waitForRequest(t)
-	if !strings.Contains(req1.payload, "~msg-1~") {
-		t.Error("First message unexpected payload")
-	}
+		// Check first one came through
+		req1 := transmitter.waitForRequest(t)
+		if !strings.Contains(req1.payload, "~msg-1~") {
+			t.Error("First message unexpected payload")
+		}
 
-	// This message will get flushed immediately
-	client.TrackNewEvent("~msg-2~")
-	ch := client.channel.Close(time.Minute)
+		// This message will get flushed immediately
+		client.TrackNewEvent("~msg-2~")
+		ch := client.channel.Close(time.Minute)
 
-	// Let 2 go out, but not the retry for 1
-	slowTick(3)
+		// Let 2 go out, but not the retry for 1
+		slowTick(3)
 
-	assertNotClosed(t, ch)
+		assertNotClosed(t, ch)
 
-	req2 := transmitter.waitForRequest(t)
-	if !strings.Contains(req2.payload, "~msg-2~") {
-		t.Error("Second message unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		if !strings.Contains(req2.payload, "~msg-2~") {
+			t.Error("Second message unexpected payload")
+		}
 
-	// Then, let's wait for the first message to go out...
-	slowTick(20)
+		// Then, let's wait for the first message to go out...
+		slowTick(20)
 
-	waitForClose(t, ch)
+		waitForClose(t, ch)
 
-	req3 := transmitter.waitForRequest(t)
-	if !strings.Contains(req3.payload, "~msg-1~") {
-		t.Error("Third message unexpected payload")
-	}
+		req3 := transmitter.waitForRequest(t)
+		if !strings.Contains(req3.payload, "~msg-1~") {
+			t.Error("Third message unexpected payload")
+		}
+	})
 }
 
 func TestSendOnBufferFull(t *testing.T) {
-	mockClock()
-	defer resetClock()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
+		defer transmitter.Close()
+		defer client.Stop()
 
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 4})
-	defer transmitter.Close()
-	defer client.Stop()
+		transmitter.prepResponse(200, 200)
 
-	transmitter.prepResponse(200, 200)
+		for i := range 5 {
+			client.TrackNewEvent(fmt.Sprintf("~msg-%d~", i))
+		}
 
-	for i := range 5 {
-		client.TrackNewEvent(fmt.Sprintf("~msg-%d~", i))
-	}
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, time.Now())
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, now())
+		for i := range 4 {
+			if !strings.Contains(req1.payload, fmt.Sprintf("~msg-%d~", i)) || len(req1.items) != 4 {
+				t.Errorf("Payload does not contain expected message")
+			}
+		}
 
-	for i := range 4 {
-		if !strings.Contains(req1.payload, fmt.Sprintf("~msg-%d~", i)) || len(req1.items) != 4 {
+		slowTick(5)
+		transmitter.assertNoRequest(t)
+		slowTick(5)
+
+		// The last one should have gone out as normal
+
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, time.Now())
+		if !strings.Contains(req2.payload, "~msg-4~") || len(req2.items) != 1 {
 			t.Errorf("Payload does not contain expected message")
 		}
-	}
-
-	slowTick(5)
-	transmitter.assertNoRequest(t)
-	slowTick(5)
-
-	// The last one should have gone out as normal
-
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, now())
-	if !strings.Contains(req2.payload, "~msg-4~") || len(req2.items) != 1 {
-		t.Errorf("Payload does not contain expected message")
-	}
+	})
 }
 
 func TestRetryOnFailure(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer client.Stop()
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer client.Stop()
+		defer transmitter.Close()
 
-	transmitter.prepResponse(500, 200)
+		transmitter.prepResponse(500, 200)
 
-	client.TrackNewEvent("~msg-1~")
-	client.TrackNewEvent("~msg-2~")
+		client.TrackNewEvent("~msg-1~")
+		client.TrackNewEvent("~msg-2~")
 
-	tm := now()
-	slowTick(10)
+		tm := time.Now()
+		slowTick(10)
 
-	req1 := transmitter.waitForRequest(t)
-	if !strings.Contains(req1.payload, "~msg-1~") || !strings.Contains(req1.payload, "~msg-2~") || len(req1.items) != 2 {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		if !strings.Contains(req1.payload, "~msg-1~") || !strings.Contains(req1.payload, "~msg-2~") || len(req1.items) != 2 {
+			t.Error("Unexpected payload")
+		}
 
-	assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
+		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
 
-	slowTick(30)
+		slowTick(30)
 
-	req2 := transmitter.waitForRequest(t)
-	if req2.payload != req1.payload || len(req2.items) != 2 {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		if req2.payload != req1.payload || len(req2.items) != 2 {
+			t.Error("Unexpected payload")
+		}
 
-	assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
+	})
 }
 
 func TestPartialRetry(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(nil)
-	defer client.Stop()
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(nil)
+		defer client.Stop()
+		defer transmitter.Close()
 
-	client.TrackNewEvent("~ok-1~")
-	client.TrackNewEvent("~retry-1~")
-	client.TrackNewEvent("~ok-2~")
-	client.TrackNewEvent("~bad-1~")
-	client.TrackNewEvent("~retry-2~")
+		client.TrackNewEvent("~ok-1~")
+		client.TrackNewEvent("~retry-1~")
+		client.TrackNewEvent("~ok-2~")
+		client.TrackNewEvent("~bad-1~")
+		client.TrackNewEvent("~retry-2~")
 
-	transmitter.responses <- &transmissionResult{
-		statusCode: 206,
-		response: &backendResponse{
-			ItemsAccepted: 2,
-			ItemsReceived: 5,
-			Errors: []*itemTransmissionResult{
-				{Index: 1, StatusCode: 500, Message: "Server Error"},
-				{Index: 2, StatusCode: 200, Message: "OK"},
-				{Index: 3, StatusCode: 400, Message: "Bad Request"},
-				{Index: 4, StatusCode: 408, Message: "Plz Retry"},
+		transmitter.responses <- &transmissionResult{
+			statusCode: 206,
+			response: &backendResponse{
+				ItemsAccepted: 2,
+				ItemsReceived: 5,
+				Errors: []*itemTransmissionResult{
+					{Index: 1, StatusCode: 500, Message: "Server Error"},
+					{Index: 2, StatusCode: 200, Message: "OK"},
+					{Index: 3, StatusCode: 400, Message: "Bad Request"},
+					{Index: 4, StatusCode: 408, Message: "Plz Retry"},
+				},
 			},
-		},
-	}
+		}
 
-	transmitter.prepResponse(200)
+		transmitter.prepResponse(200)
 
-	tm := now()
-	slowTick(30)
+		tm := time.Now()
+		slowTick(30)
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
-	if len(req1.items) != 5 {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
+		if len(req1.items) != 5 {
+			t.Error("Unexpected payload")
+		}
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
-	if len(req2.items) != 2 {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
+		if len(req2.items) != 2 {
+			t.Error("Unexpected payload")
+		}
 
-	if strings.Contains(req2.payload, "~ok-") || strings.Contains(req2.payload, "~bad-") || !strings.Contains(req2.payload, "~retry-") {
-		t.Error("Unexpected payload")
-	}
+		if strings.Contains(req2.payload, "~ok-") || strings.Contains(req2.payload, "~bad-") || !strings.Contains(req2.payload, "~retry-") {
+			t.Error("Unexpected payload")
+		}
+	})
 }
 
 func TestThrottleDropsMessages(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 4})
-	defer client.Stop()
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
+		defer client.Stop()
+		defer transmitter.Close()
 
-	tm := now()
-	retryAfter := transmitter.prepThrottle(time.Minute)
-	transmitter.prepResponse(200, 200)
+		tm := time.Now()
+		retryAfter := transmitter.prepThrottle(time.Minute)
+		transmitter.prepResponse(200, 200)
 
-	client.TrackNewEvent("~throttled~")
-	slowTick(10)
+		client.TrackNewEvent("~throttled~")
+		slowTick(10)
 
-	for i := range 20 {
-		client.TrackNewEvent(fmt.Sprintf("~msg-%d~", i))
-	}
+		for i := range 20 {
+			client.TrackNewEvent(fmt.Sprintf("~msg-%d~", i))
+		}
 
-	slowTick(60)
+		slowTick(60)
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
-	if len(req1.items) != 1 || !strings.Contains(req1.payload, "~throttled~") || strings.Contains(req1.payload, "~msg-") {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
+		if len(req1.items) != 1 || !strings.Contains(req1.payload, "~throttled~") || strings.Contains(req1.payload, "~msg-") {
+			t.Error("Unexpected payload")
+		}
 
-	// Humm.. this might break- these two could flip places. But I haven't seen it happen yet.
+		// Humm.. this might break- these two could flip places. But I haven't seen it happen yet.
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, retryAfter)
-	if len(req2.items) != 1 || !strings.Contains(req2.payload, "~throttled~") || strings.Contains(req2.payload, "~msg-") {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, retryAfter)
+		if len(req2.items) != 1 || !strings.Contains(req2.payload, "~throttled~") || strings.Contains(req2.payload, "~msg-") {
+			t.Error("Unexpected payload")
+		}
 
-	req3 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req3.timestamp, retryAfter)
-	if len(req3.items) != 4 || strings.Contains(req3.payload, "~throttled-") || !strings.Contains(req3.payload, "~msg-") {
-		t.Error("Unexpected payload")
-	}
+		req3 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req3.timestamp, retryAfter)
+		if len(req3.items) != 4 || strings.Contains(req3.payload, "~throttled-") || !strings.Contains(req3.payload, "~msg-") {
+			t.Error("Unexpected payload")
+		}
 
-	transmitter.assertNoRequest(t)
+		transmitter.assertNoRequest(t)
+	})
 }
 
 func TestThrottleCannotFlush(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 4})
-	defer client.Stop()
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
+		defer client.Stop()
+		defer transmitter.Close()
 
-	tm := now()
-	retryAfter := transmitter.prepThrottle(time.Minute)
+		tm := time.Now()
+		retryAfter := transmitter.prepThrottle(time.Minute)
 
-	transmitter.prepResponse(200, 200)
+		transmitter.prepResponse(200, 200)
 
-	client.TrackNewEvent("~throttled~")
-	slowTick(10)
+		client.TrackNewEvent("~throttled~")
+		slowTick(10)
 
-	client.TrackNewEvent("~msg~")
-	client.Flush()
+		client.TrackNewEvent("~msg~")
+		client.Flush()
 
-	slowTick(60)
+		slowTick(60)
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, retryAfter)
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, retryAfter)
 
-	req3 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req3.timestamp, retryAfter)
+		req3 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req3.timestamp, retryAfter)
 
-	transmitter.assertNoRequest(t)
+		transmitter.assertNoRequest(t)
+	})
 }
 
 func TestThrottleFlushesOnClose(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 4})
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
+		defer transmitter.Close()
+		defer client.Stop()
 
-	tm := now()
-	retryAfter := transmitter.prepThrottle(time.Minute)
+		tm := time.Now()
+		retryAfter := transmitter.prepThrottle(time.Minute)
 
-	transmitter.prepResponse(200, 200)
+		transmitter.prepResponse(200, 200)
 
-	client.TrackNewEvent("~throttled~")
-	slowTick(10)
+		client.TrackNewEvent("~throttled~")
+		slowTick(10)
 
-	client.TrackNewEvent("~msg~")
-	ch := client.channel.Close(30 * time.Second)
+		client.TrackNewEvent("~msg~")
+		ch := client.channel.Close(30 * time.Second)
 
-	slowTick(60)
+		slowTick(60)
 
-	waitForClose(t, ch)
+		waitForClose(t, ch)
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
-	if !strings.Contains(req1.payload, "~throttled~") || len(req1.items) != 1 {
-		t.Error("Unexpected payload")
-	}
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
+		if !strings.Contains(req1.payload, "~throttled~") || len(req1.items) != 1 {
+			t.Error("Unexpected payload")
+		}
 
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
-	if !strings.Contains(req2.payload, "~msg~") || len(req2.items) != 1 {
-		t.Error("Unexpected payload")
-	}
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
+		if !strings.Contains(req2.payload, "~msg~") || len(req2.items) != 1 {
+			t.Error("Unexpected payload")
+		}
 
-	req3 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req3.timestamp, retryAfter)
-	if !strings.Contains(req3.payload, "~throttled~") || len(req3.items) != 1 {
-		t.Error("Unexpected payload")
-	}
+		req3 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req3.timestamp, retryAfter)
+		if !strings.Contains(req3.payload, "~throttled~") || len(req3.items) != 1 {
+			t.Error("Unexpected payload")
+		}
 
-	transmitter.assertNoRequest(t)
+		transmitter.assertNoRequest(t)
+	})
 }
 
 func TestThrottleAbandonsMessageOnStop(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 4})
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
+		defer transmitter.Close()
+		defer client.Stop()
 
-	transmitter.prepThrottle(time.Minute)
-	transmitter.prepResponse(200, 200, 200, 200)
+		transmitter.prepThrottle(time.Minute)
+		transmitter.prepResponse(200, 200, 200, 200)
 
-	client.TrackNewEvent("~throttled~")
-	slowTick(10)
-	client.TrackNewEvent("~dropped~")
-	slowTick(10)
-	client.Stop()
-	slowTick(45)
+		client.TrackNewEvent("~throttled~")
+		slowTick(10)
+		client.TrackNewEvent("~dropped~")
+		slowTick(10)
+		client.Stop()
+		slowTick(45)
 
-	// ~throttled~ will get retried after throttle is done; ~dropped~ should get lost.
-	for i := 0; i < 2; i++ {
-		req := transmitter.waitForRequest(t)
-		if strings.Contains(req.payload, "~dropped~") || len(req.items) != 1 {
-			t.Fatal("Dropped should have never been sent")
+		// ~throttled~ will get retried after throttle is done; ~dropped~ should get lost.
+		for range 2 {
+			req := transmitter.waitForRequest(t)
+			if strings.Contains(req.payload, "~dropped~") || len(req.items) != 1 {
+				t.Fatal("Dropped should have never been sent")
+			}
 		}
-	}
 
-	transmitter.assertNoRequest(t)
+		transmitter.assertNoRequest(t)
+	})
 }
 
 func TestThrottleStacking(t *testing.T) {
-	mockClock()
-	defer resetClock()
-	client, transmitter := newTestChannelServer(&TelemetryConfiguration{MaxBatchSize: 1})
-	defer transmitter.Close()
+	synctest.Run(func() {
+		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 1})
+		defer transmitter.Close()
+		defer client.Stop()
 
-	// It's easy to hit a race in this test. There are two places that check for
-	// a throttle: one in the channel accept loop, the other in transmitRetry.
-	// For this test, I want both to hit the one in transmitRetry and then each
-	// make further attempts in lock-step from there.
+		// It's easy to hit a race in this test. There are two places that check for
+		// a throttle: one in the channel accept loop, the other in transmitRetry.
+		// For this test, I want both to hit the one in transmitRetry and then each
+		// make further attempts in lock-step from there.
 
-	start := now()
-	client.TrackNewEvent("~throttle-1~")
-	client.TrackNewEvent("~throttle-2~")
+		start := time.Now()
+		client.TrackNewEvent("~throttle-1~")
+		client.TrackNewEvent("~throttle-2~")
 
-	// Per above, give both time to get to transmitRetry, then send out responses
-	// simultaneously.
-	slowTick(10)
+		// Per above, give both time to get to transmitRetry, then send out responses
+		// simultaneously.
+		slowTick(10)
 
-	transmitter.prepThrottle(20 * time.Second)
-	second_tm := transmitter.prepThrottle(time.Minute)
+		transmitter.prepThrottle(20 * time.Second)
+		second_tm := transmitter.prepThrottle(time.Minute)
 
-	transmitter.prepResponse(200, 200, 200)
+		transmitter.prepResponse(200, 200, 200)
 
-	slowTick(65)
+		slowTick(65)
 
-	req1 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req1.timestamp, start)
-	req2 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req2.timestamp, start)
+		req1 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req1.timestamp, start)
+		req2 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req2.timestamp, start)
 
-	req3 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req3.timestamp, second_tm)
-	req4 := transmitter.waitForRequest(t)
-	assertTimeApprox(t, req4.timestamp, second_tm)
+		req3 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req3.timestamp, second_tm)
+		req4 := transmitter.waitForRequest(t)
+		assertTimeApprox(t, req4.timestamp, second_tm)
 
-	transmitter.assertNoRequest(t)
+		transmitter.assertNoRequest(t)
+	})
 }

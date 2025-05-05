@@ -89,6 +89,7 @@ func (throttle *throttleManager) waitForThrottle() (time.Time, bool) {
 		} else if msg.wait {
 			msg.result <- true
 		} else if msg.stop {
+			msg.result <- false
 			return time.Time{}, false
 		} else if msg.throttle {
 			return msg.timestamp, true
@@ -97,7 +98,7 @@ func (throttle *throttleManager) waitForThrottle() (time.Time, bool) {
 }
 
 func (throttle *throttleManager) waitForReady(throttledUntil time.Time) bool {
-	duration := throttledUntil.Sub(now())
+	duration := time.Until(throttledUntil)
 	if duration <= 0 {
 		return true
 	}
@@ -105,11 +106,11 @@ func (throttle *throttleManager) waitForReady(throttledUntil time.Time) bool {
 	var notify []chan bool
 
 	// --- Throttled and waiting ---
-	t := newTimer(duration)
+	t := time.NewTimer(duration)
 
 	for {
 		select {
-		case <-t.C():
+		case <-t.C:
 			for _, n := range notify {
 				n <- true
 			}
@@ -133,7 +134,7 @@ func (throttle *throttleManager) waitForReady(throttledUntil time.Time) bool {
 					throttledUntil = msg.timestamp
 
 					t.Stop()
-					t.Reset(throttledUntil.Sub(now()))
+					t.Reset(time.Until(throttledUntil))
 				}
 			}
 		}

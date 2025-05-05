@@ -1,10 +1,25 @@
 package contracts
 
-// NOTE: This file was automatically generated.
+// Data struct to contain both B and C sections.
+type Data struct {
+	BaseType string    `json:"baseType"`
+	BaseData EventData `json:"baseData"`
+}
+
+// Instances of Event represent structured event records that can be grouped
+// and searched by their properties. Event data item also creates a metric of
+// event count by name.
+type EventData struct {
+	// Schema version
+	Ver int `json:"ver"`
+
+	// Event name. Keep it low cardinality to allow proper grouping and useful
+	// metrics.
+	Name string `json:"name"`
+}
 
 // System variables for a telemetry item.
 type Envelope struct {
-
 	// Envelope version. For internal use only. By assigning this the default, it
 	// will not be serialized within the payload unless changed to a value other
 	// than #1.
@@ -41,7 +56,7 @@ type Envelope struct {
 	Tags map[string]string `json:"tags,omitempty"`
 
 	// Telemetry data item.
-	Data interface{} `json:"data"`
+	Data Data `json:"data"`
 }
 
 // Truncates string fields that exceed their maximum supported sizes for this
@@ -68,6 +83,11 @@ func (data *Envelope) Sanitize() []string {
 	if len(data.IKey) > 40 {
 		data.IKey = data.IKey[:40]
 		warnings = append(warnings, "Envelope.IKey exceeded maximum length of 40")
+	}
+
+	if len(data.Data.BaseData.Name) > 512 {
+		data.Data.BaseData.Name = data.Data.BaseData.Name[:512]
+		warnings = append(warnings, "EventData.Name exceeded maximum length of 512")
 	}
 
 	return warnings

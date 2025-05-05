@@ -43,13 +43,13 @@ type itemTransmissionResult struct {
 }
 
 const (
-	successResponse                         = 200
-	partialSuccessResponse                  = 206
-	requestTimeoutResponse                  = 408
-	tooManyRequestsResponse                 = 429
+	successResponse                         = http.StatusOK
+	partialSuccessResponse                  = http.StatusPartialContent
+	requestTimeoutResponse                  = http.StatusRequestTimeout
+	tooManyRequestsResponse                 = http.StatusTooManyRequests
 	tooManyRequestsOverExtendedTimeResponse = 439
-	errorResponse                           = 500
-	serviceUnavailableResponse              = 503
+	errorResponse                           = http.StatusInternalServerError
+	serviceUnavailableResponse              = http.StatusServiceUnavailable
 )
 
 func newTransmitter(endpointAddress string, client *http.Client) transmitter {
@@ -74,7 +74,7 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 
 	gzipWriter.Close()
 
-	req, err := http.NewRequest("POST", transmitter.endpoint, &postBody)
+	req, err := http.NewRequest(http.MethodPost, transmitter.endpoint, &postBody)
 	if err != nil {
 		return nil, err
 	}
