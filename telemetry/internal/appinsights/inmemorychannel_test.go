@@ -53,7 +53,7 @@ func (transmitter *testTransmitter) prepThrottle(after time.Duration) time.Time 
 
 	transmitter.responses <- &transmissionResult{
 		statusCode: 408,
-		retryAfter: &retryAfter,
+		retryAfter: retryAfter,
 	}
 
 	return retryAfter
@@ -403,7 +403,7 @@ func TestPartialRetry(t *testing.T) {
 			response: &backendResponse{
 				ItemsAccepted: 2,
 				ItemsReceived: 5,
-				Errors: []*itemTransmissionResult{
+				Errors: []itemTransmissionResult{
 					{Index: 1, StatusCode: 500, Message: "Server Error"},
 					{Index: 2, StatusCode: 200, Message: "OK"},
 					{Index: 3, StatusCode: 400, Message: "Bad Request"},
