@@ -32,7 +32,7 @@ func TestEndToEnd(t *testing.T) {
 		server.responseData = []byte(`{"itemsReceived":4, "itemsAccepted":4, "errors":[]}`)
 		server.responseHeaders["Content-type"] = "application/json"
 
-		client := &Client{InstrumentationKey: test_ikey, Endpoint: xmit.(*httpTransmitter).endpoint, HttpClient: xmit.(*httpTransmitter).client}
+		client := &Client{InstrumentationKey: test_ikey, Endpoint: xmit.(*httpTransmitter).endpoint, HTTPClient: xmit.(*httpTransmitter).client}
 		defer client.Close(context.Background())
 
 		// Track directly off the client

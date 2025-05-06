@@ -36,7 +36,7 @@ type Client struct {
 
 	// Customized http client.
 	// If nil, it defaults to http.DefaultClient.
-	HttpClient *http.Client
+	HTTPClient *http.Client
 
 	// Tags to be sent with every telemetry item.
 	// If nil, no additional tags will be sent.
@@ -60,7 +60,7 @@ func (c *Client) init() {
 		endpoint := cmp.Or(c.Endpoint, "https://dc.services.visualstudio.com/v2/track")
 		batchSize := cmp.Or(c.MaxBatchSize, 1024)
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
-		httpClient := cmp.Or(c.HttpClient, http.DefaultClient)
+		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
 		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		c.initialized.Store(true)
