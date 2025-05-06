@@ -24,8 +24,11 @@ func TestJsonSerializerEvents(t *testing.T) {
 			Ver:  2,
 		},
 		)
-
-		j, err := parsePayload(serialize(buffer))
+		v, err := serialize(buffer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j, err := parsePayload(v)
 		if err != nil {
 			t.Errorf("Error parsing payload: %s", err.Error())
 		}

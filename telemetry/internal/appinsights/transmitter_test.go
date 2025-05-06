@@ -293,7 +293,7 @@ func TestTransmitResults(t *testing.T) {
 }
 
 func TestGetRetryItems(t *testing.T) {
-	originalPayload, originalItems := makePayload()
+	originalPayload, originalItems := makePayload(t)
 
 	res1 := &transmissionResult{
 		statusCode: 200,
@@ -328,16 +328,24 @@ func TestGetRetryItems(t *testing.T) {
 
 	payload3, items3 := res3.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
 	expected3 := []*contracts.Envelope{originalItems[5], originalItems[6]}
-	if string(payload3) != string(serialize(expected3)) || len(items3) != 2 {
+	v, err := serialize(expected3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(payload3) != string(v) || len(items3) != 2 {
 		t.Error("Unexpected result")
 	}
 }
 
-func makePayload() ([]byte, []*contracts.Envelope) {
+func makePayload(t *testing.T) ([]byte, []*contracts.Envelope) {
+	t.Helper()
 	buffer := telemetryBuffer()
 	for i := range 7 {
 		addEventData(&buffer, contracts.EventData{Name: fmt.Sprintf("msg%d", i+1), Ver: 2})
 	}
-
-	return serialize(buffer), buffer
+	v, err := serialize(buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v, buffer
 }

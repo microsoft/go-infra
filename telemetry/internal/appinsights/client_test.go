@@ -27,13 +27,9 @@ func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func BenchmarkClientBurstPerformance(b *testing.B) {
-	oldOutput := log.Writer()
-	defer log.SetOutput(oldOutput)
-
-	log.SetOutput(io.Discard)
-
 	client := &Client{
 		InstrumentationKey: test_ikey,
+		ErrorLog:           log.New(io.Discard, "", 0),
 		HTTPClient: &http.Client{
 			Transport: fakeTransport{
 				code: http.StatusOK,

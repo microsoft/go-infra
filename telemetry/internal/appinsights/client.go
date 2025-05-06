@@ -42,6 +42,11 @@ type Client struct {
 	// If nil, no additional tags will be sent.
 	Tags map[string]string
 
+	// ErrorLog specifies an optional logger for errors
+	// that occur when attempting to upload telemetry.
+	// If nil, logging is done via the log package's standard logger.
+	ErrorLog *log.Logger
+
 	channel  *inMemoryChannel
 	context  *telemetryContext
 	disabled bool
@@ -63,6 +68,9 @@ func (c *Client) init() {
 		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
 		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
+		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
+			c.ErrorLog.Printf("Warning sanitizing tags: %v", err)
+		}
 		c.initialized.Store(true)
 	})
 }
@@ -71,9 +79,6 @@ func setupContext(instrumentationKey string, tags map[string]string) *telemetryC
 	context := newTelemetryContext(instrumentationKey)
 	context.Tags["ai.internal.sdkVersion"] = sdkName + ":" + version
 	maps.Copy(context.Tags, tags)
-	for _, warn := range contracts.SanitizeTags(context.Tags) {
-		log.Printf("Telemetry tag warning: %s", warn)
-	}
 	return context
 }
 
@@ -146,6 +151,10 @@ func (c *Client) Stop() {
 func (c *Client) track(data contracts.EventData) {
 	if !c.disabled {
 		c.init()
+		ev := c.context.envelop(data)
+		if err := ev.Sanitize(); err != nil {
+			c.ErrorLog.Printf("Warning sanitizing telemetry item: %v", err)
+		}
 		c.channel.send(c.context.envelop(data))
 	}
 }

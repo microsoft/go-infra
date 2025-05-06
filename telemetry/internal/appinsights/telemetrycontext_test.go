@@ -1,8 +1,6 @@
 package appinsights
 
 import (
-	"bytes"
-	"log"
 	"strings"
 	"testing"
 
@@ -45,19 +43,13 @@ func TestSanitize(t *testing.T) {
 		"EventData.Name exceeded": 0,
 	}
 
-	// Set up listener for the warnings.
-	oldOutput := log.Writer()
-	defer log.SetOutput(oldOutput)
-
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-
 	// This may break due to hardcoded limits... Check contracts.
 	envelope := ctx.envelop(data)
 
-	out := buf.String()
+	err := envelope.Sanitize()
+	msg := err.Error()
 	for k := range found {
-		if strings.Contains(out, k) {
+		if strings.Contains(msg, k) {
 			found[k] = found[k] + 1
 		}
 	}
@@ -65,7 +57,7 @@ func TestSanitize(t *testing.T) {
 	// Make sure all the warnings were found in the output
 	for k, v := range found {
 		if v != 1 {
-			t.Errorf("Did not find a warning containing \"%s\"", k)
+			t.Errorf("Did not find a warning containing %q", k)
 		}
 	}
 

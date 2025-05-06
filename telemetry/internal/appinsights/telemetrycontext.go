@@ -1,7 +1,6 @@
 package appinsights
 
 import (
-	"log"
 	"strings"
 	"time"
 
@@ -41,15 +40,7 @@ func (context *telemetryContext) envelop(data contracts.EventData) *contracts.En
 		BaseData: data,
 	}
 	envelope.IKey = context.iKey
-
 	envelope.Time = time.Now().UTC()
-
 	envelope.Tags = context.Tags
-
-	// Sanitize.
-	for _, warn := range envelope.Sanitize() {
-		log.Printf("Telemetry data warning: %s", warn)
-	}
-
 	return envelope
 }

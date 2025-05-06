@@ -1,6 +1,9 @@
 package contracts
 
-import "strconv"
+import (
+	"errors"
+	"fmt"
+)
 
 type ContextTags map[string]string
 
@@ -32,14 +35,13 @@ var tagMaxLengths = map[string]int{
 
 // Truncates tag values that exceed their maximum supported lengths.  Returns
 // warnings for each affected field.
-func SanitizeTags(tags map[string]string) []string {
-	var warnings []string
+func SanitizeTags(tags map[string]string) error {
+	var errs []error
 	for k, v := range tags {
 		if maxlen, ok := tagMaxLengths[k]; ok && len(v) > maxlen {
 			tags[k] = v[:maxlen]
-			warnings = append(warnings, "Value for "+k+" exceeded maximum length of "+strconv.Itoa(maxlen))
+			errs = append(errs, fmt.Errorf("%s exceeded maximum length of %d", k, maxlen))
 		}
 	}
-
-	return warnings
+	return errors.Join(errs...)
 }

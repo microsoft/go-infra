@@ -5,8 +5,8 @@ import (
 	"cmp"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"slices"
 	"time"
@@ -60,23 +60,19 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 }
 
 func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
-	log.Printf("--------- Transmitting %d items ---------", len(items))
-	startTime := time.Now()
-
 	// Compress the payload
 	var postBody bytes.Buffer
 	gzipWriter := gzip.NewWriter(&postBody)
 	if _, err := gzipWriter.Write(payload); err != nil {
-		log.Printf("Failed to compress the payload: %v", err)
 		gzipWriter.Close()
-		return nil, err
+		return nil, fmt.Errorf("failed to compress the payload: %v", err)
 	}
 
 	gzipWriter.Close()
 
 	req, err := http.NewRequest(http.MethodPost, transmitter.endpoint, &postBody)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
 	req.Header.Set("Content-Encoding", "gzip")
@@ -85,20 +81,15 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.
 
 	resp, err := transmitter.client.Do(req)
 	if err != nil {
-		log.Printf("Failed to transmit telemetry: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to transmit telemetry: %v", err)
 	}
 	defer resp.Body.Close()
-
-	log.Printf("Telemetry transmitted in %v", time.Since(startTime))
-	log.Printf("Response: %d", resp.StatusCode)
 
 	result := &transmissionResult{statusCode: resp.StatusCode}
 	// Grab Retry-After header
 	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
 		if result.retryAfter, err = time.Parse(time.RFC1123, retryAfterValue); err != nil {
-			log.Printf("Failed to parse Retry-After header: %v", err)
-			return nil, err
+			return nil, fmt.Errorf("failed to parse Retry-After header: %v", err)
 		}
 	}
 
@@ -108,22 +99,8 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.
 			// Empty response is valid, possible throttling.
 			return result, nil
 		}
-		log.Printf("Failed to parse response: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
-
-	// Write diagnostics
-	log.Printf("Items accepted/received: %d/%d", result.response.ItemsAccepted, result.response.ItemsReceived)
-	if len(result.response.Errors) > 0 {
-		log.Printf("Errors:")
-		for _, err := range result.response.Errors {
-			if err.Index < len(items) {
-				log.Printf("#%d - %d %s", err.Index, err.StatusCode, err.Message)
-				log.Printf("Telemetry item:\n\t%s", string(serialize(items[err.Index:err.Index+1])))
-			}
-		}
-	}
-
 	return result, nil
 }
 

@@ -1,6 +1,9 @@
 package contracts
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // Data struct to contain both B and C sections.
 type Data struct {
@@ -64,30 +67,30 @@ type Envelope struct {
 // Truncates string fields that exceed their maximum supported sizes for this
 // object and all objects it references.  Returns a warning for each affected
 // field.
-func (data *Envelope) Sanitize() []string {
-	var warnings []string
+func (data *Envelope) Sanitize() error {
+	var errs []error
 
 	if len(data.Name) > 1024 {
 		data.Name = data.Name[:1024]
-		warnings = append(warnings, "Envelope.Name exceeded maximum length of 1024")
+		errs = append(errs, errors.New("Envelope.Name exceeded maximum length of 1024"))
 	}
 
 	if len(data.Seq) > 64 {
 		data.Seq = data.Seq[:64]
-		warnings = append(warnings, "Envelope.Seq exceeded maximum length of 64")
+		errs = append(errs, errors.New("Envelope.Seq exceeded maximum length of 64"))
 	}
 
 	if len(data.IKey) > 40 {
 		data.IKey = data.IKey[:40]
-		warnings = append(warnings, "Envelope.IKey exceeded maximum length of 40")
+		errs = append(errs, errors.New("Envelope.IKey exceeded maximum length of 40"))
 	}
 
 	if len(data.Data.BaseData.Name) > 512 {
 		data.Data.BaseData.Name = data.Data.BaseData.Name[:512]
-		warnings = append(warnings, "EventData.Name exceeded maximum length of 512")
+		errs = append(errs, errors.New("EventData.Name exceeded maximum length of 512"))
 	}
 
-	return warnings
+	return errors.Join(errs...)
 }
 
 // Creates a new Envelope instance with default values set by the schema.

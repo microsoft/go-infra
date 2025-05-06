@@ -25,6 +25,7 @@ type inMemoryChannel struct {
 	waitgroup     sync.WaitGroup
 	throttle      *throttleManager
 	transmitter   transmitter
+	errorLog      *log.Logger
 
 	closed atomic.Bool
 }
@@ -61,6 +62,22 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	go channel.acceptLoop()
 
 	return channel
+}
+
+func (channel *inMemoryChannel) log(v ...any) {
+	if channel.errorLog != nil {
+		channel.errorLog.Print(v...)
+	} else {
+		log.Print(v...)
+	}
+}
+
+func (channel *inMemoryChannel) logf(format string, args ...any) {
+	if channel.errorLog != nil {
+		channel.errorLog.Printf(format, args...)
+	} else {
+		log.Printf(format, args...)
+	}
 }
 
 // Queues a single telemetry item
@@ -290,11 +307,14 @@ func (state *inMemoryChannelState) waitThrottle() bool {
 	// be lost...  If we're exiting, then we'll just try to submit anyway.  That
 	// request may be throttled and transmitRetry will perform the backoff correctly.
 
-	log.Println("Channel is throttled, events may be dropped.")
 	throttleDone := state.channel.throttle.notifyWhenReady()
 	dropped := 0
 
-	defer log.Printf("Channel dropped %d events while throttled", dropped)
+	defer func() {
+		if dropped > 0 {
+			state.channel.logf("Channel dropped %d events while throttled", dropped)
+		}
+	}()
 
 	for {
 		select {
@@ -307,10 +327,6 @@ func (state *inMemoryChannelState) waitThrottle() bool {
 			if len(state.buffer) < state.channel.batchSize {
 				state.buffer = append(state.buffer, event)
 			} else {
-				if dropped == 0 {
-					log.Print("Buffer is full, dropping further events.")
-				}
-
 				dropped++
 			}
 
@@ -348,41 +364,46 @@ func (state *inMemoryChannelState) stop() {
 }
 
 func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope, retry bool, retryTimeout time.Duration) {
-	payload := serialize(items)
+	payload, err := serialize(items)
+	if err != nil {
+		channel.log(err)
+		if payload == nil {
+			return
+		}
+	}
 	retryTimeRemaining := retryTimeout
 
 	for _, wait := range submit_retries {
 		result, err := channel.transmitter.Transmit(payload, items)
-		if err == nil && result != nil && result.isSuccess() {
+		if err != nil {
+			channel.logf("Error transmitting payload: %v", err)
 			return
 		}
-
+		if result.isSuccess() {
+			return
+		}
 		if !retry {
-			log.Print("Refusing to retry telemetry submission (retry==false)")
 			return
 		}
 
 		// Check for success, determine if we need to retry anything
-		if result != nil {
-			if result.canRetry() {
-				// Filter down to failed items
-				payload, items = result.getRetryItems(payload, items)
-				if len(payload) == 0 || len(items) == 0 {
-					return
-				}
-			} else {
-				log.Print("Cannot retry telemetry submission")
+		if result.canRetry() {
+			// Filter down to failed items
+			payload, items = result.getRetryItems(payload, items)
+			if len(payload) == 0 || len(items) == 0 {
 				return
 			}
+		} else {
+			channel.logf("Cannot retry telemetry submission")
+			return
+		}
 
-			// Check for throttling
-			if result.isThrottled() {
-				if !result.retryAfter.IsZero() {
-					log.Printf("Channel is throttled until %s", result.retryAfter)
-					channel.throttle.retryAfter(result.retryAfter)
-				} else {
-					// TODO: Pick a time
-				}
+		// Check for throttling
+		if result.isThrottled() {
+			if !result.retryAfter.IsZero() {
+				channel.throttle.retryAfter(result.retryAfter)
+			} else {
+				// TODO: Pick a time
 			}
 		}
 
@@ -401,12 +422,10 @@ func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope, retry
 			}
 		}
 
-		log.Printf("Waiting %s to retry submission", wait)
 		time.Sleep(wait)
 
 		// Wait if the channel is throttled and we're not on a schedule
 		if channel.isThrottled() && retryTimeout == 0 {
-			log.Printf("Channel is throttled; extending wait time.")
 			ch := channel.throttle.notifyWhenReady()
 			result := <-ch
 			close(ch)
@@ -418,9 +437,9 @@ func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope, retry
 	}
 
 	// One final try
-	_, err := channel.transmitter.Transmit(payload, items)
+	_, err = channel.transmitter.Transmit(payload, items)
 	if err != nil {
-		log.Print("Gave up transmitting payload; exhausted retries")
+		channel.logf("Gave up transmitting payload; exhausted retries: %v", err)
 	}
 }
 
