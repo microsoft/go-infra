@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"compress/gzip"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"slices"
@@ -65,7 +64,7 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 	var postBody bytes.Buffer
 	gzipWriter := gzip.NewWriter(&postBody)
 	if _, err := gzipWriter.Write(payload); err != nil {
-		log.Printf("Failed to compress the payload: %s", err.Error())
+		log.Printf("Failed to compress the payload: %v", err)
 		gzipWriter.Close()
 		return nil, err
 	}
@@ -83,37 +82,29 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 
 	resp, err := transmitter.client.Do(req)
 	if err != nil {
-		log.Printf("Failed to transmit telemetry: %s", err.Error())
+		log.Printf("Failed to transmit telemetry: %v", err)
 		return nil, err
 	}
-
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Failed to read response from server: %s", err.Error())
-		return nil, err
-	}
 
 	duration := time.Since(startTime)
 
 	result := &transmissionResult{statusCode: resp.StatusCode}
 
 	// Grab Retry-After header
-	if retryAfterValue, ok := resp.Header[http.CanonicalHeaderKey("Retry-After")]; ok && len(retryAfterValue) == 1 {
-		if retryAfterTime, err := time.Parse(time.RFC1123, retryAfterValue[0]); err == nil {
+	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
+		if retryAfterTime, err := time.Parse(time.RFC1123, retryAfterValue); err == nil {
 			result.retryAfter = retryAfterTime
 		}
 	}
 
 	// Parse body, if possible
-	response := &backendResponse{}
-	if err := json.Unmarshal(body, &response); err == nil {
-		result.response = response
+	if err := json.NewDecoder(resp.Body).Decode(result.response); err != nil {
+		log.Printf("Failed to parse response: %v", err)
 	}
 
 	// Write diagnostics
-	log.Printf("Telemetry transmitted in %s", duration)
+	log.Printf("Telemetry transmitted in %v", duration)
 	log.Printf("Response: %d", result.statusCode)
 	if result.response != nil {
 		log.Printf("Items accepted/received: %d/%d", result.response.ItemsAccepted, result.response.ItemsReceived)
@@ -191,27 +182,28 @@ func (result *transmissionResult) getRetryItems(payload []byte, items telemetryB
 
 		// Find each retryable error
 		for _, responseResult := range result.response.Errors {
-			if responseResult.canRetry() {
-				// Advance ptr to start of desired line
-				for ; idx < responseResult.Index && ptr < len(payload); ptr++ {
-					if payload[ptr] == '\n' {
-						idx++
-					}
-				}
-
-				startPtr := ptr
-
-				// Read to end of line
-				for ; idx == responseResult.Index && ptr < len(payload); ptr++ {
-					if payload[ptr] == '\n' {
-						idx++
-					}
-				}
-
-				// Copy item into output buffer
-				resultPayload.Write(payload[startPtr:ptr])
-				resultItems = append(resultItems, items[responseResult.Index])
+			if !responseResult.canRetry() {
+				continue
 			}
+			// Advance ptr to start of desired line
+			for ; idx < responseResult.Index && ptr < len(payload); ptr++ {
+				if payload[ptr] == '\n' {
+					idx++
+				}
+			}
+
+			startPtr := ptr
+
+			// Read to end of line
+			for ; idx == responseResult.Index && ptr < len(payload); ptr++ {
+				if payload[ptr] == '\n' {
+					idx++
+				}
+			}
+
+			// Copy item into output buffer
+			resultPayload.Write(payload[startPtr:ptr])
+			resultItems = append(resultItems, items[responseResult.Index])
 		}
 
 		return resultPayload.Bytes(), resultItems
