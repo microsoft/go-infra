@@ -63,20 +63,15 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
-// EndpointAddress is the address of the endpoint to which telemetry is sent.
-func (channel *inMemoryChannel) EndpointAddress() string {
-	return channel.endpointAddr
-}
-
 // Queues a single telemetry item
-func (channel *inMemoryChannel) Send(item *contracts.Envelope) {
+func (channel *inMemoryChannel) send(item *contracts.Envelope) {
 	if item != nil && !channel.closed.Load() {
 		channel.collectChan <- item
 	}
 }
 
 // Forces the current queue to be sent
-func (channel *inMemoryChannel) Flush() {
+func (channel *inMemoryChannel) flush() {
 	if channel.closed.Load() {
 		return
 	}
@@ -88,7 +83,7 @@ func (channel *inMemoryChannel) Flush() {
 // Tears down the submission goroutines, closes internal channels.  Any
 // telemetry waiting to be sent is discarded.  Further calls to Send() have
 // undefined behavior.  This is a more abrupt version of Close().
-func (channel *inMemoryChannel) Stop() {
+func (channel *inMemoryChannel) stop() {
 	if channel.closed.Load() {
 		return
 	}
@@ -98,8 +93,8 @@ func (channel *inMemoryChannel) Stop() {
 }
 
 // Returns true if this channel has been throttled by the data collector.
-func (channel *inMemoryChannel) IsThrottled() bool {
-	return channel.throttle != nil && channel.throttle.IsThrottled()
+func (channel *inMemoryChannel) isThrottled() bool {
+	return channel.throttle != nil && channel.throttle.isThrottled()
 }
 
 // Flushes and tears down the submission goroutine and closes internal
@@ -119,7 +114,7 @@ func (channel *inMemoryChannel) IsThrottled() bool {
 // submit a large amount of telemetry or are prone to being throttled.  When
 // exiting, you should select on the result channel and your own timer to
 // avoid long delays.
-func (channel *inMemoryChannel) Close(timeout time.Duration) <-chan struct{} {
+func (channel *inMemoryChannel) close(timeout time.Duration) <-chan struct{} {
 	if channel.closed.Load() {
 		return nil
 	}
@@ -263,7 +258,7 @@ func (state *inMemoryChannelState) waitToSend() bool {
 // Part of channel accept loop: Check and wait on throttle, submit pending telemetry
 func (state *inMemoryChannelState) send() bool {
 	// Hold up transmission if we're being throttled
-	if !state.stopping && state.channel.throttle.IsThrottled() {
+	if !state.stopping && state.channel.throttle.isThrottled() {
 		if !state.waitThrottle() {
 			// Stopped
 			return false
@@ -296,7 +291,7 @@ func (state *inMemoryChannelState) waitThrottle() bool {
 	// request may be throttled and transmitRetry will perform the backoff correctly.
 
 	log.Println("Channel is throttled, events may be dropped.")
-	throttleDone := state.channel.throttle.NotifyWhenReady()
+	throttleDone := state.channel.throttle.notifyWhenReady()
 	dropped := 0
 
 	defer log.Printf("Channel dropped %d events while throttled", dropped)
@@ -349,7 +344,7 @@ func (state *inMemoryChannelState) stop() {
 
 	// Throttle can't close until transmitters are done using it.
 	state.channel.waitgroup.Wait()
-	state.channel.throttle.Stop()
+	state.channel.throttle.stop()
 }
 
 func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry bool, retryTimeout time.Duration) {
@@ -358,7 +353,7 @@ func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry 
 
 	for _, wait := range submit_retries {
 		result, err := channel.transmitter.Transmit(payload, items)
-		if err == nil && result != nil && result.IsSuccess() {
+		if err == nil && result != nil && result.isSuccess() {
 			return
 		}
 
@@ -369,9 +364,9 @@ func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry 
 
 		// Check for success, determine if we need to retry anything
 		if result != nil {
-			if result.CanRetry() {
+			if result.canRetry() {
 				// Filter down to failed items
-				payload, items = result.GetRetryItems(payload, items)
+				payload, items = result.getRetryItems(payload, items)
 				if len(payload) == 0 || len(items) == 0 {
 					return
 				}
@@ -381,10 +376,10 @@ func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry 
 			}
 
 			// Check for throttling
-			if result.IsThrottled() {
-				if result.retryAfter != nil {
-					log.Printf("Channel is throttled until %s", *result.retryAfter)
-					channel.throttle.RetryAfter(*result.retryAfter)
+			if result.isThrottled() {
+				if !result.retryAfter.IsZero() {
+					log.Printf("Channel is throttled until %s", result.retryAfter)
+					channel.throttle.retryAfter(result.retryAfter)
 				} else {
 					// TODO: Pick a time
 				}
@@ -410,9 +405,9 @@ func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry 
 		time.Sleep(wait)
 
 		// Wait if the channel is throttled and we're not on a schedule
-		if channel.IsThrottled() && retryTimeout == 0 {
+		if channel.isThrottled() && retryTimeout == 0 {
 			log.Printf("Channel is throttled; extending wait time.")
-			ch := channel.throttle.NotifyWhenReady()
+			ch := channel.throttle.notifyWhenReady()
 			result := <-ch
 			close(ch)
 

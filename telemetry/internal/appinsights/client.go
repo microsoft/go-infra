@@ -106,7 +106,7 @@ func (c *Client) Flush() {
 	if !c.initialized.Load() {
 		return
 	}
-	c.channel.Flush()
+	c.channel.flush()
 }
 
 // Close flushes and tears down the submission goroutine and closes internal channels.
@@ -126,7 +126,7 @@ func (c *Client) Close(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-c.channel.Close(d):
+	case <-c.channel.close(d):
 		// TODO: check for errors.
 		return nil
 	}
@@ -139,14 +139,14 @@ func (c *Client) Stop() {
 	if !c.initialized.Load() {
 		return
 	}
-	c.channel.Stop()
+	c.channel.stop()
 }
 
 // Submits the specified telemetry item.
 func (c *Client) track(data contracts.EventData) {
 	if !c.disabled {
 		c.init()
-		c.channel.Send(c.context.envelop(data))
+		c.channel.send(c.context.envelop(data))
 	}
 }
 

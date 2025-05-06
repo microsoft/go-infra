@@ -26,14 +26,14 @@ func newThrottleManager() *throttleManager {
 	return result
 }
 
-func (throttle *throttleManager) RetryAfter(t time.Time) {
+func (throttle *throttleManager) retryAfter(t time.Time) {
 	throttle.msgs <- &throttleMessage{
 		throttle:  true,
 		timestamp: t,
 	}
 }
 
-func (throttle *throttleManager) IsThrottled() bool {
+func (throttle *throttleManager) isThrottled() bool {
 	ch := make(chan bool)
 	throttle.msgs <- &throttleMessage{
 		query:  true,
@@ -45,7 +45,7 @@ func (throttle *throttleManager) IsThrottled() bool {
 	return result
 }
 
-func (throttle *throttleManager) NotifyWhenReady() chan bool {
+func (throttle *throttleManager) notifyWhenReady() chan bool {
 	result := make(chan bool, 1)
 	throttle.msgs <- &throttleMessage{
 		wait:   true,
@@ -55,7 +55,7 @@ func (throttle *throttleManager) NotifyWhenReady() chan bool {
 	return result
 }
 
-func (throttle *throttleManager) Stop() {
+func (throttle *throttleManager) stop() {
 	result := make(chan bool)
 	throttle.msgs <- &throttleMessage{
 		stop:   true,

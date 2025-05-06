@@ -20,7 +20,7 @@ func BenchmarkClientBurstPerformance(b *testing.B) {
 		client.TrackNewEvent("A message")
 	}
 
-	<-client.channel.Close(time.Minute)
+	<-client.channel.close(time.Minute)
 }
 
 func TestEndToEnd(t *testing.T) {

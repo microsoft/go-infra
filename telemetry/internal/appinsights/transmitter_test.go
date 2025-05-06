@@ -79,7 +79,7 @@ func doBasicTransmit(client transmitter, server *testServer, t *testing.T) {
 		t.Error("statusCode")
 	}
 
-	if result.retryAfter != nil {
+	if !result.retryAfter.IsZero() {
 		t.Error("retryAfter")
 	}
 
@@ -118,7 +118,7 @@ func TestFailedTransmit(t *testing.T) {
 		t.Error("statusCode")
 	}
 
-	if result.retryAfter != nil {
+	if !result.retryAfter.IsZero() {
 		t.Error("retryAfter")
 	}
 
@@ -174,11 +174,11 @@ func TestThrottledTransmit(t *testing.T) {
 		t.Fatal("response")
 	}
 
-	if result.retryAfter == nil {
+	if result.retryAfter.IsZero() {
 		t.Fatal("retryAfter")
 	}
 
-	if (*result.retryAfter).Unix() != 1502322237 {
+	if result.retryAfter.Unix() != 1502322237 {
 		t.Error("retryAfter.Unix")
 	}
 }
@@ -194,8 +194,8 @@ type resultProperties struct {
 
 func checkTransmitResult(t *testing.T, result *transmissionResult, expected *resultProperties) {
 	retryAfter := "<nil>"
-	if result.retryAfter != nil {
-		retryAfter = (*result.retryAfter).String()
+	if !result.retryAfter.IsZero() {
+		retryAfter = result.retryAfter.String()
 	}
 	response := "<nil>"
 	if result.response != nil {
@@ -203,31 +203,31 @@ func checkTransmitResult(t *testing.T, result *transmissionResult, expected *res
 	}
 	id := fmt.Sprintf("%d, retryAfter:%s, response:%s", result.statusCode, retryAfter, response)
 
-	if result.IsSuccess() != expected.isSuccess {
+	if result.isSuccess() != expected.isSuccess {
 		t.Errorf("Expected IsSuccess() == %t [%s]", expected.isSuccess, id)
 	}
 
-	if result.IsFailure() != expected.isFailure {
+	if result.isFailure() != expected.isFailure {
 		t.Errorf("Expected IsFailure() == %t [%s]", expected.isFailure, id)
 	}
 
-	if result.CanRetry() != expected.canRetry {
+	if result.canRetry() != expected.canRetry {
 		t.Errorf("Expected CanRetry() == %t [%s]", expected.canRetry, id)
 	}
 
-	if result.IsThrottled() != expected.isThrottled {
+	if result.isThrottled() != expected.isThrottled {
 		t.Errorf("Expected IsThrottled() == %t [%s]", expected.isThrottled, id)
 	}
 
-	if result.IsPartialSuccess() != expected.isPartialSuccess {
+	if result.isPartialSuccess() != expected.isPartialSuccess {
 		t.Errorf("Expected IsPartialSuccess() == %t [%s]", expected.isPartialSuccess, id)
 	}
 
 	// retryableErrors is true if CanRetry() and any error is recoverable
 	retryableErrors := false
-	if result.CanRetry() && result.response != nil {
+	if result.canRetry() && result.response != nil {
 		for _, err := range result.response.Errors {
-			if err.CanRetry() {
+			if err.canRetry() {
 				retryableErrors = true
 			}
 		}
@@ -243,7 +243,7 @@ func TestTransmitResults(t *testing.T) {
 	partialNoRetries := &backendResponse{
 		ItemsAccepted: 3,
 		ItemsReceived: 5,
-		Errors: []*itemTransmissionResult{
+		Errors: []itemTransmissionResult{
 			{Index: 2, StatusCode: 400, Message: "Bad 1"},
 			{Index: 4, StatusCode: 400, Message: "Bad 2"},
 		},
@@ -252,7 +252,7 @@ func TestTransmitResults(t *testing.T) {
 	partialSomeRetries := &backendResponse{
 		ItemsAccepted: 2,
 		ItemsReceived: 4,
-		Errors: []*itemTransmissionResult{
+		Errors: []itemTransmissionResult{
 			{Index: 2, StatusCode: 400, Message: "Bad 1"},
 			{Index: 4, StatusCode: 408, Message: "OK Later"},
 		},
@@ -261,7 +261,7 @@ func TestTransmitResults(t *testing.T) {
 	noneAccepted := &backendResponse{
 		ItemsAccepted: 0,
 		ItemsReceived: 5,
-		Errors: []*itemTransmissionResult{
+		Errors: []itemTransmissionResult{
 			{Index: 0, StatusCode: 500, Message: "Bad 1"},
 			{Index: 1, StatusCode: 500, Message: "Bad 2"},
 			{Index: 2, StatusCode: 500, Message: "Bad 3"},
@@ -273,38 +273,38 @@ func TestTransmitResults(t *testing.T) {
 	allAccepted := &backendResponse{
 		ItemsAccepted: 6,
 		ItemsReceived: 6,
-		Errors:        make([]*itemTransmissionResult, 0),
+		Errors:        make([]itemTransmissionResult, 0),
 	}
 
-	checkTransmitResult(t, &transmissionResult{200, nil, allAccepted},
+	checkTransmitResult(t, &transmissionResult{200, time.Time{}, allAccepted},
 		&resultProperties{isSuccess: true})
-	checkTransmitResult(t, &transmissionResult{206, nil, partialSomeRetries},
+	checkTransmitResult(t, &transmissionResult{206, time.Time{}, partialSomeRetries},
 		&resultProperties{isPartialSuccess: true, canRetry: true, retryableErrors: true})
-	checkTransmitResult(t, &transmissionResult{206, nil, partialNoRetries},
+	checkTransmitResult(t, &transmissionResult{206, time.Time{}, partialNoRetries},
 		&resultProperties{isPartialSuccess: true, canRetry: true})
-	checkTransmitResult(t, &transmissionResult{206, nil, noneAccepted},
+	checkTransmitResult(t, &transmissionResult{206, time.Time{}, noneAccepted},
 		&resultProperties{isPartialSuccess: true, canRetry: true, retryableErrors: true})
-	checkTransmitResult(t, &transmissionResult{206, nil, allAccepted},
+	checkTransmitResult(t, &transmissionResult{206, time.Time{}, allAccepted},
 		&resultProperties{isSuccess: true})
-	checkTransmitResult(t, &transmissionResult{400, nil, nil},
+	checkTransmitResult(t, &transmissionResult{400, time.Time{}, nil},
 		&resultProperties{isFailure: true})
-	checkTransmitResult(t, &transmissionResult{408, nil, nil},
+	checkTransmitResult(t, &transmissionResult{408, time.Time{}, nil},
 		&resultProperties{isFailure: true, canRetry: true})
-	checkTransmitResult(t, &transmissionResult{408, &retryAfter, nil},
+	checkTransmitResult(t, &transmissionResult{408, retryAfter, nil},
 		&resultProperties{isFailure: true, canRetry: true, isThrottled: true})
-	checkTransmitResult(t, &transmissionResult{429, nil, nil},
+	checkTransmitResult(t, &transmissionResult{429, time.Time{}, nil},
 		&resultProperties{isFailure: true, canRetry: true, isThrottled: true})
-	checkTransmitResult(t, &transmissionResult{429, &retryAfter, nil},
+	checkTransmitResult(t, &transmissionResult{429, retryAfter, nil},
 		&resultProperties{isFailure: true, canRetry: true, isThrottled: true})
-	checkTransmitResult(t, &transmissionResult{500, nil, nil},
+	checkTransmitResult(t, &transmissionResult{500, time.Time{}, nil},
 		&resultProperties{isFailure: true, canRetry: true})
-	checkTransmitResult(t, &transmissionResult{503, nil, nil},
+	checkTransmitResult(t, &transmissionResult{503, time.Time{}, nil},
 		&resultProperties{isFailure: true, canRetry: true})
-	checkTransmitResult(t, &transmissionResult{401, nil, nil},
+	checkTransmitResult(t, &transmissionResult{401, time.Time{}, nil},
 		&resultProperties{isFailure: true})
-	checkTransmitResult(t, &transmissionResult{408, nil, partialSomeRetries},
+	checkTransmitResult(t, &transmissionResult{408, time.Time{}, partialSomeRetries},
 		&resultProperties{isFailure: true, canRetry: true, retryableErrors: true})
-	checkTransmitResult(t, &transmissionResult{500, nil, partialSomeRetries},
+	checkTransmitResult(t, &transmissionResult{500, time.Time{}, partialSomeRetries},
 		&resultProperties{isFailure: true, canRetry: true, retryableErrors: true})
 }
 
@@ -316,14 +316,14 @@ func TestGetRetryItems(t *testing.T) {
 		response:   &backendResponse{ItemsReceived: 7, ItemsAccepted: 7},
 	}
 
-	payload1, items1 := res1.GetRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
+	payload1, items1 := res1.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
 	if len(payload1) > 0 || len(items1) > 0 {
 		t.Error("GetRetryItems shouldn't return anything")
 	}
 
 	res2 := &transmissionResult{statusCode: 408}
 
-	payload2, items2 := res2.GetRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
+	payload2, items2 := res2.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
 	if string(originalPayload) != string(payload2) || len(items2) != 7 {
 		t.Error("GetRetryItems shouldn't return anything")
 	}
@@ -333,7 +333,7 @@ func TestGetRetryItems(t *testing.T) {
 		response: &backendResponse{
 			ItemsReceived: 7,
 			ItemsAccepted: 4,
-			Errors: []*itemTransmissionResult{
+			Errors: []itemTransmissionResult{
 				{Index: 1, StatusCode: 200, Message: "OK"},
 				{Index: 3, StatusCode: 400, Message: "Bad"},
 				{Index: 5, StatusCode: 408, Message: "Later"},
@@ -342,7 +342,7 @@ func TestGetRetryItems(t *testing.T) {
 		},
 	}
 
-	payload3, items3 := res3.GetRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
+	payload3, items3 := res3.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
 	expected3 := telemetryBufferItems{originalItems[5], originalItems[6]}
 	if string(payload3) != string(expected3.serialize()) || len(items3) != 2 {
 		t.Error("Unexpected result")

@@ -235,7 +235,7 @@ func TestCloseFlush(t *testing.T) {
 	transmitter.prepResponse(200)
 
 	client.TrackNewEvent("~flushed~")
-	client.channel.Close(0)
+	client.channel.close(0)
 
 	req := transmitter.waitForRequest(t)
 	if !strings.Contains(req.payload, "~flushed~") {
@@ -253,7 +253,7 @@ func TestCloseFlushRetry(t *testing.T) {
 
 		client.TrackNewEvent("~flushed~")
 		tm := time.Now()
-		ch := client.channel.Close(time.Minute)
+		ch := client.channel.close(time.Minute)
 
 		slowTick(30)
 
@@ -295,7 +295,7 @@ func TestCloseWithOngoingRetry(t *testing.T) {
 
 		// This message will get flushed immediately
 		client.TrackNewEvent("~msg-2~")
-		ch := client.channel.Close(time.Minute)
+		ch := client.channel.close(time.Minute)
 
 		// Let 2 go out, but not the retry for 1
 		slowTick(3)
@@ -525,7 +525,7 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 		slowTick(10)
 
 		client.TrackNewEvent("~msg~")
-		ch := client.channel.Close(30 * time.Second)
+		ch := client.channel.close(30 * time.Second)
 
 		slowTick(60)
 

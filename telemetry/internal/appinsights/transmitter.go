@@ -2,12 +2,13 @@ package appinsights
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
-	"sort"
+	"slices"
 	"time"
 )
 
@@ -22,19 +23,16 @@ type httpTransmitter struct {
 
 type transmissionResult struct {
 	statusCode int
-	retryAfter *time.Time
+	retryAfter time.Time
 	response   *backendResponse
 }
 
 // Structures returned by data collector
 type backendResponse struct {
-	ItemsReceived int                     `json:"itemsReceived"`
-	ItemsAccepted int                     `json:"itemsAccepted"`
-	Errors        itemTransmissionResults `json:"errors"`
+	ItemsReceived int                      `json:"itemsReceived"`
+	ItemsAccepted int                      `json:"itemsAccepted"`
+	Errors        []itemTransmissionResult `json:"errors"`
 }
-
-// This needs to be its own type because it implements sort.Interface
-type itemTransmissionResults []*itemTransmissionResult
 
 type itemTransmissionResult struct {
 	Index      int    `json:"index"`
@@ -104,7 +102,7 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 	// Grab Retry-After header
 	if retryAfterValue, ok := resp.Header[http.CanonicalHeaderKey("Retry-After")]; ok && len(retryAfterValue) == 1 {
 		if retryAfterTime, err := time.Parse(time.RFC1123, retryAfterValue[0]); err == nil {
-			result.retryAfter = &retryAfterTime
+			result.retryAfter = retryAfterTime
 		}
 	}
 
@@ -133,7 +131,7 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 	return result, nil
 }
 
-func (result *transmissionResult) IsSuccess() bool {
+func (result *transmissionResult) isSuccess() bool {
 	return result.statusCode == successResponse ||
 		// Partial response but all items accepted
 		(result.statusCode == partialSuccessResponse &&
@@ -141,17 +139,17 @@ func (result *transmissionResult) IsSuccess() bool {
 			result.response.ItemsReceived == result.response.ItemsAccepted)
 }
 
-func (result *transmissionResult) IsFailure() bool {
+func (result *transmissionResult) isFailure() bool {
 	return result.statusCode != successResponse && result.statusCode != partialSuccessResponse
 }
 
-func (result *transmissionResult) CanRetry() bool {
-	if result.IsSuccess() {
+func (result *transmissionResult) canRetry() bool {
+	if result.isSuccess() {
 		return false
 	}
 
 	return result.statusCode == partialSuccessResponse ||
-		result.retryAfter != nil ||
+		!result.retryAfter.IsZero() ||
 		(result.statusCode == requestTimeoutResponse ||
 			result.statusCode == serviceUnavailableResponse ||
 			result.statusCode == errorResponse ||
@@ -159,19 +157,19 @@ func (result *transmissionResult) CanRetry() bool {
 			result.statusCode == tooManyRequestsOverExtendedTimeResponse)
 }
 
-func (result *transmissionResult) IsPartialSuccess() bool {
+func (result *transmissionResult) isPartialSuccess() bool {
 	return result.statusCode == partialSuccessResponse &&
 		result.response != nil &&
 		result.response.ItemsReceived != result.response.ItemsAccepted
 }
 
-func (result *transmissionResult) IsThrottled() bool {
+func (result *transmissionResult) isThrottled() bool {
 	return result.statusCode == tooManyRequestsResponse ||
 		result.statusCode == tooManyRequestsOverExtendedTimeResponse ||
-		result.retryAfter != nil
+		!result.retryAfter.IsZero()
 }
 
-func (result *itemTransmissionResult) CanRetry() bool {
+func (result itemTransmissionResult) canRetry() bool {
 	return result.StatusCode == requestTimeoutResponse ||
 		result.StatusCode == serviceUnavailableResponse ||
 		result.StatusCode == errorResponse ||
@@ -179,10 +177,12 @@ func (result *itemTransmissionResult) CanRetry() bool {
 		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResult) GetRetryItems(payload []byte, items telemetryBufferItems) ([]byte, telemetryBufferItems) {
+func (result *transmissionResult) getRetryItems(payload []byte, items telemetryBufferItems) ([]byte, telemetryBufferItems) {
 	if result.statusCode == partialSuccessResponse && result.response != nil {
 		// Make sure errors are ordered by index
-		sort.Sort(result.response.Errors)
+		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {
+			return cmp.Compare(a.Index, b.Index)
+		})
 
 		var resultPayload bytes.Buffer
 		resultItems := make(telemetryBufferItems, 0)
@@ -191,7 +191,7 @@ func (result *transmissionResult) GetRetryItems(payload []byte, items telemetryB
 
 		// Find each retryable error
 		for _, responseResult := range result.response.Errors {
-			if responseResult.CanRetry() {
+			if responseResult.canRetry() {
 				// Advance ptr to start of desired line
 				for ; idx < responseResult.Index && ptr < len(payload); ptr++ {
 					if payload[ptr] == '\n' {
@@ -215,25 +215,9 @@ func (result *transmissionResult) GetRetryItems(payload []byte, items telemetryB
 		}
 
 		return resultPayload.Bytes(), resultItems
-	} else if result.CanRetry() {
+	} else if result.canRetry() {
 		return payload, items
 	} else {
 		return payload[:0], items[:0]
 	}
-}
-
-// sort.Interface implementation for Errors[] list
-
-func (results itemTransmissionResults) Len() int {
-	return len(results)
-}
-
-func (results itemTransmissionResults) Less(i, j int) bool {
-	return results[i].Index < results[j].Index
-}
-
-func (results itemTransmissionResults) Swap(i, j int) {
-	tmp := results[i]
-	results[i] = results[j]
-	results[j] = tmp
 }
