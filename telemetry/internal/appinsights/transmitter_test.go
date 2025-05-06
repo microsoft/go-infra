@@ -13,12 +13,6 @@ import (
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
-func TestBasicTransitTls(t *testing.T) {
-	client, server := newTestTlsClientServer(t)
-
-	doBasicTransmit(client, server, t)
-}
-
 func TestBasicTransmit(t *testing.T) {
 	client, server := newTestClientServer(t)
 

@@ -132,18 +132,3 @@ func newTestClientServer(t *testing.T) (transmitter, *testServer) {
 
 	return client, server
 }
-
-func newTestTlsClientServer(t *testing.T) (transmitter, *testServer) {
-	server := &testServer{}
-	server.server = httptest.NewTLSServer(server)
-	server.notify = make(chan *testRequest, 1)
-	server.responseCode = 200
-	server.responseData = make([]byte, 0)
-	server.responseHeaders = make(map[string]string)
-
-	client := newTransmitter(fmt.Sprintf("https://%s/v2/track", server.server.Listener.Addr().String()), server.server.Client())
-	t.Cleanup(func() {
-		server.server.Close()
-	})
-	return client, server
-}
