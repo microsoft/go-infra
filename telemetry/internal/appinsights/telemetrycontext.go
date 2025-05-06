@@ -42,7 +42,7 @@ func (context *telemetryContext) envelop(data contracts.EventData) *contracts.En
 	}
 	envelope.IKey = context.iKey
 
-	envelope.Time = time.Now().UTC().Format("2006-01-02T15:04:05.999999Z")
+	envelope.Time = time.Now()
 
 	envelope.Tags = context.Tags
 

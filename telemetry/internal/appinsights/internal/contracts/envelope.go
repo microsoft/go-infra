@@ -1,5 +1,7 @@
 package contracts
 
+import "time"
+
 // Data struct to contain both B and C sections.
 type Data struct {
 	BaseType string    `json:"baseType"`
@@ -37,7 +39,7 @@ type Envelope struct {
 	// handle this, i.e. managed code consumers should not use format 'O' for
 	// parsing as it specifies a fixed length. Example:
 	// 2009-06-15T13:45:30.0000000Z.
-	Time string `json:"time"`
+	Time time.Time `json:"time"`
 
 	// Sampling rate used in application. This telemetry item represents 1 /
 	// sampleRate actual telemetry items.
@@ -68,11 +70,6 @@ func (data *Envelope) Sanitize() []string {
 	if len(data.Name) > 1024 {
 		data.Name = data.Name[:1024]
 		warnings = append(warnings, "Envelope.Name exceeded maximum length of 1024")
-	}
-
-	if len(data.Time) > 64 {
-		data.Time = data.Time[:64]
-		warnings = append(warnings, "Envelope.Time exceeded maximum length of 64")
 	}
 
 	if len(data.Seq) > 64 {
