@@ -43,7 +43,7 @@ func BenchmarkClientBurstPerformance(b *testing.B) {
 	}
 
 	for b.Loop() {
-		client.TrackNewEvent("A message")
+		client.TrackEvent("A message")
 	}
 
 	client.Close(context.Background())
@@ -62,7 +62,7 @@ func TestEndToEnd(t *testing.T) {
 		defer client.Close(context.Background())
 
 		// Track directly off the client
-		client.TrackNewEvent("client-event")
+		client.TrackEvent("client-event")
 
 		// NOTE: A lot of this is covered elsewhere, so we won't duplicate
 		// *too* much.

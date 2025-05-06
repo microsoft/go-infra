@@ -96,8 +96,8 @@ func (c *Client) NewEvent(name string) *Event {
 	}
 }
 
-// TrackNewEvent logs a user action with the specified name.
-func (c *Client) TrackNewEvent(name string) {
+// TrackEvent logs a user action with the specified name.
+func (c *Client) TrackEvent(name string) {
 	c.NewEvent(name).Inc()
 }
 
