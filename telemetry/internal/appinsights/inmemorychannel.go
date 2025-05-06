@@ -151,7 +151,7 @@ func (channel *inMemoryChannel) acceptLoop() {
 type inMemoryChannelState struct {
 	channel      *inMemoryChannel
 	stopping     bool
-	buffer       telemetryBufferItems
+	buffer       []*contracts.Envelope
 	retry        bool
 	retryTimeout time.Duration
 	callback     chan struct{}
@@ -163,7 +163,7 @@ func newInMemoryChannelState(channel *inMemoryChannel) *inMemoryChannelState {
 	timer.Stop()
 	return &inMemoryChannelState{
 		channel:  channel,
-		buffer:   make(telemetryBufferItems, 0, 16),
+		buffer:   make([]*contracts.Envelope, 0, 16),
 		stopping: false,
 		timer:    timer,
 	}
@@ -173,10 +173,10 @@ func newInMemoryChannelState(channel *inMemoryChannel) *inMemoryChannelState {
 func (state *inMemoryChannelState) start() bool {
 	if len(state.buffer) > 16 {
 		// Start out with the size of the previous buffer
-		state.buffer = make(telemetryBufferItems, 0, cap(state.buffer))
+		state.buffer = make([]*contracts.Envelope, 0, cap(state.buffer))
 	} else if len(state.buffer) > 0 {
 		// Start out with at least 16 slots
-		state.buffer = make(telemetryBufferItems, 0, 16)
+		state.buffer = make([]*contracts.Envelope, 0, 16)
 	}
 
 	// Wait for an event
@@ -273,7 +273,7 @@ func (state *inMemoryChannelState) send() bool {
 		// incremented.
 		state.channel.signalWhenDone(state.callback)
 
-		go func(buffer telemetryBufferItems, retry bool, retryTimeout time.Duration) {
+		go func(buffer []*contracts.Envelope, retry bool, retryTimeout time.Duration) {
 			defer state.channel.waitgroup.Done()
 			state.channel.transmitRetry(buffer, retry, retryTimeout)
 		}(state.buffer, state.retry, state.retryTimeout)
@@ -347,8 +347,8 @@ func (state *inMemoryChannelState) stop() {
 	state.channel.throttle.stop()
 }
 
-func (channel *inMemoryChannel) transmitRetry(items telemetryBufferItems, retry bool, retryTimeout time.Duration) {
-	payload := items.serialize()
+func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope, retry bool, retryTimeout time.Duration) {
+	payload := serialize(items)
 	retryTimeRemaining := retryTimeout
 
 	for _, wait := range submit_retries {

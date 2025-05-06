@@ -5,14 +5,17 @@ import (
 	"cmp"
 	"compress/gzip"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
 type transmitter interface {
-	Transmit(payload []byte, items telemetryBufferItems) (*transmissionResult, error)
+	Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error)
 }
 
 type httpTransmitter struct {
@@ -23,7 +26,7 @@ type httpTransmitter struct {
 type transmissionResult struct {
 	statusCode int
 	retryAfter time.Time
-	response   *backendResponse
+	response   backendResponse
 }
 
 // Structures returned by data collector
@@ -56,7 +59,7 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 	return &httpTransmitter{endpointAddress, client}
 }
 
-func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBufferItems) (*transmissionResult, error) {
+func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
 	log.Printf("--------- Transmitting %d items ---------", len(items))
 	startTime := time.Now()
 
@@ -87,34 +90,36 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items telemetryBuff
 	}
 	defer resp.Body.Close()
 
-	duration := time.Since(startTime)
+	log.Printf("Telemetry transmitted in %v", time.Since(startTime))
+	log.Printf("Response: %d", resp.StatusCode)
 
 	result := &transmissionResult{statusCode: resp.StatusCode}
-
 	// Grab Retry-After header
 	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
-		if retryAfterTime, err := time.Parse(time.RFC1123, retryAfterValue); err == nil {
-			result.retryAfter = retryAfterTime
+		if result.retryAfter, err = time.Parse(time.RFC1123, retryAfterValue); err != nil {
+			log.Printf("Failed to parse Retry-After header: %v", err)
+			return nil, err
 		}
 	}
 
 	// Parse body, if possible
-	if err := json.NewDecoder(resp.Body).Decode(result.response); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&result.response); err != nil {
+		if err == io.EOF {
+			// Empty response is valid, possible throttling.
+			return result, nil
+		}
 		log.Printf("Failed to parse response: %v", err)
+		return nil, err
 	}
 
 	// Write diagnostics
-	log.Printf("Telemetry transmitted in %v", duration)
-	log.Printf("Response: %d", result.statusCode)
-	if result.response != nil {
-		log.Printf("Items accepted/received: %d/%d", result.response.ItemsAccepted, result.response.ItemsReceived)
-		if len(result.response.Errors) > 0 {
-			log.Printf("Errors:")
-			for _, err := range result.response.Errors {
-				if err.Index < len(items) {
-					log.Printf("#%d - %d %s", err.Index, err.StatusCode, err.Message)
-					log.Printf("Telemetry item:\n\t%s", string(items[err.Index:err.Index+1].serialize()))
-				}
+	log.Printf("Items accepted/received: %d/%d", result.response.ItemsAccepted, result.response.ItemsReceived)
+	if len(result.response.Errors) > 0 {
+		log.Printf("Errors:")
+		for _, err := range result.response.Errors {
+			if err.Index < len(items) {
+				log.Printf("#%d - %d %s", err.Index, err.StatusCode, err.Message)
+				log.Printf("Telemetry item:\n\t%s", string(serialize(items[err.Index:err.Index+1])))
 			}
 		}
 	}
@@ -126,7 +131,6 @@ func (result *transmissionResult) isSuccess() bool {
 	return result.statusCode == successResponse ||
 		// Partial response but all items accepted
 		(result.statusCode == partialSuccessResponse &&
-			result.response != nil &&
 			result.response.ItemsReceived == result.response.ItemsAccepted)
 }
 
@@ -150,7 +154,6 @@ func (result *transmissionResult) canRetry() bool {
 
 func (result *transmissionResult) isPartialSuccess() bool {
 	return result.statusCode == partialSuccessResponse &&
-		result.response != nil &&
 		result.response.ItemsReceived != result.response.ItemsAccepted
 }
 
@@ -168,15 +171,15 @@ func (result itemTransmissionResult) canRetry() bool {
 		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResult) getRetryItems(payload []byte, items telemetryBufferItems) ([]byte, telemetryBufferItems) {
-	if result.statusCode == partialSuccessResponse && result.response != nil {
+func (result *transmissionResult) getRetryItems(payload []byte, items []*contracts.Envelope) ([]byte, []*contracts.Envelope) {
+	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
 		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {
 			return cmp.Compare(a.Index, b.Index)
 		})
 
 		var resultPayload bytes.Buffer
-		resultItems := make(telemetryBufferItems, 0)
+		resultItems := make([]*contracts.Envelope, 0)
 		ptr := 0
 		idx := 0
 

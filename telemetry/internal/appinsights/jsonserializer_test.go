@@ -17,16 +17,15 @@ import (
 
 func TestJsonSerializerEvents(t *testing.T) {
 	synctest.Run(func() {
-		var buffer telemetryBufferItems
+		var buffer []*contracts.Envelope
 
-		buffer.add(
-			contracts.EventData{
-				Name: "an-event",
-				Ver:  2,
-			},
+		addEventData(&buffer, contracts.EventData{
+			Name: "an-event",
+			Ver:  2,
+		},
 		)
 
-		j, err := parsePayload(buffer.serialize())
+		j, err := parsePayload(serialize(buffer))
 		if err != nil {
 			t.Errorf("Error parsing payload: %s", err.Error())
 		}

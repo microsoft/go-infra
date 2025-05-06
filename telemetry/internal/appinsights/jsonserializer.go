@@ -8,9 +8,7 @@ import (
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
-type telemetryBufferItems []*contracts.Envelope
-
-func (items telemetryBufferItems) serialize() []byte {
+func serialize(items []*contracts.Envelope) []byte {
 	var result bytes.Buffer
 	encoder := json.NewEncoder(&result)
 

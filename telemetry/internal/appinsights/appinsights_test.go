@@ -15,11 +15,11 @@ import (
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
-func telemetryBuffer(items ...contracts.EventData) telemetryBufferItems {
+func telemetryBuffer(items ...contracts.EventData) []*contracts.Envelope {
 	ctx := newTelemetryContext(test_ikey)
 	ctx.iKey = test_ikey
 
-	var result telemetryBufferItems
+	var result []*contracts.Envelope
 	for _, item := range items {
 		result = append(result, ctx.envelop(item))
 	}
@@ -27,13 +27,13 @@ func telemetryBuffer(items ...contracts.EventData) telemetryBufferItems {
 	return result
 }
 
-func (buffer *telemetryBufferItems) add(items ...contracts.EventData) {
+func addEventData(buffer *[]*contracts.Envelope, items ...contracts.EventData) {
 	*buffer = append(*buffer, telemetryBuffer(items...)...)
 }
 
 type nullTransmitter struct{}
 
-func (transmitter *nullTransmitter) Transmit(payload []byte, items telemetryBufferItems) (*transmissionResult, error) {
+func (transmitter *nullTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
 	return &transmissionResult{statusCode: successResponse}, nil
 }
 

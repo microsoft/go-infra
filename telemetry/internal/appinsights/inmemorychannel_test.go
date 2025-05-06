@@ -8,6 +8,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
 func slowTick(seconds int) {
@@ -24,8 +26,8 @@ type testTransmitter struct {
 	responses chan *transmissionResult
 }
 
-func (transmitter *testTransmitter) Transmit(payload []byte, items telemetryBufferItems) (*transmissionResult, error) {
-	itemsCopy := make(telemetryBufferItems, len(items))
+func (transmitter *testTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
+	itemsCopy := make([]*contracts.Envelope, len(items))
 	copy(itemsCopy, items)
 
 	transmitter.requests <- &testTransmission{
@@ -77,7 +79,7 @@ func (transmitter *testTransmitter) assertNoRequest(t *testing.T) {
 type testTransmission struct {
 	timestamp time.Time
 	payload   string
-	items     telemetryBufferItems
+	items     []*contracts.Envelope
 }
 
 func newTestChannelServer(client *Client) (*Client, *testTransmitter) {
@@ -400,7 +402,7 @@ func TestPartialRetry(t *testing.T) {
 
 		transmitter.responses <- &transmissionResult{
 			statusCode: 206,
-			response: &backendResponse{
+			response: backendResponse{
 				ItemsAccepted: 2,
 				ItemsReceived: 5,
 				Errors: []itemTransmissionResult{
