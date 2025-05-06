@@ -31,12 +31,6 @@ func addEventData(buffer *[]*contracts.Envelope, items ...contracts.EventData) {
 	*buffer = append(*buffer, telemetryBuffer(items...)...)
 }
 
-type nullTransmitter struct{}
-
-func (transmitter *nullTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
-	return &transmissionResult{statusCode: successResponse}, nil
-}
-
 type testServer struct {
 	server *httptest.Server
 	notify chan *testRequest

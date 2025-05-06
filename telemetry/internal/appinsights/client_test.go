@@ -7,20 +7,46 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"log"
+	"net/http"
 	"testing"
 	"testing/synctest"
-	"time"
 )
 
-func BenchmarkClientBurstPerformance(b *testing.B) {
-	client := &Client{InstrumentationKey: test_ikey}
-	client.channel.transmitter = &nullTransmitter{}
+type fakeTransport struct {
+	code int
+	body []byte
+	err  error
+}
 
-	for i := 0; i < b.N; i++ {
+func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: t.code,
+		Body:       io.NopCloser(bytes.NewBuffer(t.body)),
+	}, t.err
+}
+
+func BenchmarkClientBurstPerformance(b *testing.B) {
+	oldOutput := log.Writer()
+	defer log.SetOutput(oldOutput)
+
+	log.SetOutput(io.Discard)
+
+	client := &Client{
+		InstrumentationKey: test_ikey,
+		HTTPClient: &http.Client{
+			Transport: fakeTransport{
+				code: http.StatusOK,
+				body: []byte(`{"itemsReceived":4, "itemsAccepted":4, "errors":[]}`),
+			},
+		},
+	}
+
+	for b.Loop() {
 		client.TrackNewEvent("A message")
 	}
 
-	<-client.channel.close(time.Minute)
+	client.Close(context.Background())
 }
 
 func TestEndToEnd(t *testing.T) {
