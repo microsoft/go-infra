@@ -74,6 +74,8 @@ func (c *Client) init() {
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
 			c.channel.logf("Warning sanitizing tags: %v", err)
 		}
+
+		go c.channel.acceptLoop()
 		c.initialized.Store(true)
 	})
 }

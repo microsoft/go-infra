@@ -25,25 +25,21 @@ type batchItem struct {
 // inMemoryChannel stores events exclusively in memory.
 // Presently the only telemetry channel implementation available.
 type inMemoryChannel struct {
-	endpointAddr    string
-	collectChan     chan *contracts.Envelope
-	flushChan       chan *flushMessage
-	retryChan       chan *retryMessage
-	batchSize       int
-	batchInterval   time.Duration
-	waitgroup       sync.WaitGroup
-	throttled       atomic.Bool
+	endpointAddr  string
+	batchSize     int
+	batchInterval time.Duration
+	errorLog      *log.Logger
+
+	collectChan chan *contracts.Envelope
+	flushChan   chan struct{}
+	retryChan   chan retryMessage
+
 	transmitter     transmitter
-	errorLog        *log.Logger
 	cancelCtx       context.Context
 	cancelCauseFunc context.CancelCauseFunc
+	throttled       atomic.Bool
 	closed          atomic.Bool
-}
-
-type flushMessage struct {
-	// If specified, a message will be sent on this channel when all pending telemetry items have been submitted
-	callback chan struct{}
-	close    bool
+	inflight        atomic.Int64
 }
 
 type retryMessage struct {
@@ -57,18 +53,15 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	// Set up the channel
 	channel := &inMemoryChannel{
 		endpointAddr:  endpointUrl,
-		collectChan:   make(chan *contracts.Envelope),
-		flushChan:     make(chan *flushMessage),
-		retryChan:     make(chan *retryMessage),
 		batchSize:     batchSize,
 		batchInterval: batchInterval,
-		transmitter:   newTransmitter(endpointUrl, httpClient),
 		errorLog:      errorLog,
+		collectChan:   make(chan *contracts.Envelope),
+		flushChan:     make(chan struct{}),
+		retryChan:     make(chan retryMessage),
+		transmitter:   newTransmitter(endpointUrl, httpClient),
 	}
 	channel.cancelCtx, channel.cancelCauseFunc = context.WithCancelCause(context.Background())
-
-	go channel.acceptLoop()
-
 	return channel
 }
 
@@ -100,26 +93,25 @@ func (channel *inMemoryChannel) flush() {
 	if channel.closed.Load() {
 		return
 	}
-	channel.flushChan <- &flushMessage{}
+	channel.flushChan <- struct{}{}
 }
 
 func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []batchItem) {
-	if channel.closed.Load() {
-		return
-	}
-	channel.retryChan <- &retryMessage{throttled, retryAfter, items}
+	// Retry even if the channel is closed to allow for
+	// retrying items that were already sent.
+	channel.retryChan <- retryMessage{throttled, retryAfter, items}
 }
 
 var errStopped = errors.New("client stopped")
+var errClosed = errors.New("client closed")
 
 func (channel *inMemoryChannel) stop() {
 	if channel.closed.Load() {
 		return
 	}
 
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cancel(errStopped)
-	channel.cancelCauseFunc(context.Cause(ctx))
+	channel.closed.Store(true)
+	channel.cancelCauseFunc(errStopped)
 }
 
 // Flushes and tears down the submission goroutine and closes internal
@@ -131,22 +123,18 @@ func (channel *inMemoryChannel) close(ctx context.Context) {
 		return
 	}
 
-	callback := make(chan struct{})
-	channel.flushChan <- &flushMessage{
-		callback: callback,
-		close:    true,
-	}
+	channel.flushChan <- struct{}{}
+	channel.closed.Store(true)
 	select {
 	case <-ctx.Done():
 		channel.cancelCauseFunc(context.Cause(ctx))
-	case <-callback:
+	case <-channel.cancelCtx.Done():
 		// Successfully flushed
 	}
 }
 
 func (channel *inMemoryChannel) acceptLoop() {
 	channel.start()
-	channel.closed.Store(true)
 }
 
 // Part of channel accept loop: Initialize buffer and accept first message, handle controls.
@@ -181,19 +169,13 @@ func (channel *inMemoryChannel) start() {
 				timer.Reset(channel.batchInterval)
 			}
 
-		case flush := <-channel.flushChan:
-			if !flush.close && channel.throttled.Load() {
-				// Ignore the flush request if we are throttled and
-				// the flush is not closing.
-				// If closing, try sending the items one last time.
+		case <-channel.flushChan:
+			if channel.throttled.Load() {
+				// Ignore the flush request if we are throttled.
 				continue
 			}
 			timer.Stop()
-			channel.signalWhenDone(flush.callback)
 			channel.sendBatch(items)
-			if flush.close {
-				return
-			}
 			items = items[:0]
 
 		case <-timer.C:
@@ -237,6 +219,7 @@ func (channel *inMemoryChannel) start() {
 			}
 
 		case <-channel.cancelCtx.Done():
+			// This is the only path to exit the loop.
 			timer.Stop()
 			return
 		}
@@ -255,7 +238,8 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	if len(items) == 0 {
 		return
 	}
-	channel.waitgroup.Add(1)
+
+	channel.inflight.Add(1)
 
 	// Copy the items to a temporary buffer to let the caller
 	// reuse the item slice.
@@ -266,8 +250,14 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	// Start a goroutine to transmit the items without blocking
 	// the accept loop.
 	go func() {
-		defer channel.waitgroup.Done()
-		defer itemsBuf.Put(buf)
+		defer func() {
+			itemsBuf.Put(buf)
+			if channel.inflight.Add(-1) <= 0 {
+				if channel.closed.Load() {
+					channel.cancelCauseFunc(errClosed)
+				}
+			}
+		}()
 		channel.transmitRetry(*buf)
 	}()
 }
@@ -306,14 +296,4 @@ func (channel *inMemoryChannel) transmitRetry(items []batchItem) {
 	}
 
 	channel.retry(throttled, result.retryAfter, items)
-}
-
-func (channel *inMemoryChannel) signalWhenDone(callback chan struct{}) {
-	if callback == nil {
-		return
-	}
-	go func() {
-		channel.waitgroup.Wait()
-		close(callback)
-	}()
 }
