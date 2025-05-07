@@ -15,19 +15,19 @@ import (
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
-func telemetryBuffer(items ...contracts.EventData) []*contracts.Envelope {
+func telemetryBuffer(items ...contracts.EventData) []batchItem {
 	ctx := newTelemetryContext(test_ikey)
 	ctx.iKey = test_ikey
 
-	var result []*contracts.Envelope
+	var result []batchItem
 	for _, item := range items {
-		result = append(result, ctx.envelop(item))
+		result = append(result, batchItem{item: ctx.envelop(item)})
 	}
 
 	return result
 }
 
-func addEventData(buffer *[]*contracts.Envelope, items ...contracts.EventData) {
+func addEventData(buffer *[]batchItem, items ...contracts.EventData) {
 	*buffer = append(*buffer, telemetryBuffer(items...)...)
 }
 

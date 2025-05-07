@@ -17,7 +17,7 @@ import (
 
 func TestJsonSerializerEvents(t *testing.T) {
 	synctest.Run(func() {
-		var buffer []*contracts.Envelope
+		var buffer []batchItem
 
 		addEventData(&buffer, contracts.EventData{
 			Name: "an-event",

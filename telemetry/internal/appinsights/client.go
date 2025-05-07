@@ -72,7 +72,7 @@ func (c *Client) init() {
 		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.ErrorLog)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
-			c.ErrorLog.Printf("Warning sanitizing tags: %v", err)
+			c.channel.logf("Warning sanitizing tags: %v", err)
 		}
 		c.initialized.Store(true)
 	})
@@ -134,14 +134,17 @@ func (c *Client) Stop() {
 }
 
 // Submits the specified telemetry item.
-func (c *Client) track(data contracts.EventData) {
-	if !c.disabled {
-		c.init()
-		ev := c.context.envelop(data)
-		if err := ev.Sanitize(); err != nil {
-			c.ErrorLog.Printf("Warning sanitizing telemetry item: %v", err)
-		}
-		c.channel.send(c.context.envelop(data))
+func (c *Client) track(data contracts.EventData, n uint64) {
+	if c.disabled || n == 0 {
+		return
+	}
+	c.init()
+	ev := c.context.envelop(data)
+	if err := ev.Sanitize(); err != nil {
+		c.channel.logf("Warning sanitizing telemetry item: %v", err)
+	}
+	for range n {
+		c.channel.send(ev)
 	}
 }
 
@@ -158,13 +161,8 @@ func (e *Event) Inc() {
 
 // Add adds n to the counter. n cannot be negative, as counts cannot decrease.
 func (e *Event) Add(n uint64) {
-	if n == 0 {
-		return
-	}
-	for range n {
-		e.client.track(contracts.EventData{
-			Name: e.name,
-			Ver:  2,
-		})
-	}
+	e.client.track(contracts.EventData{
+		Name: e.name,
+		Ver:  2,
+	}, n)
 }

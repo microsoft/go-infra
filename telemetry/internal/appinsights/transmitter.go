@@ -15,12 +15,10 @@ import (
 	"net/http"
 	"slices"
 	"time"
-
-	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
 type transmitter interface {
-	Transmit(ctx context.Context, payload []byte, items []*contracts.Envelope) (*transmissionResult, error)
+	transmit(ctx context.Context, payload []byte, items []batchItem) (*transmissionResult, error)
 }
 
 type httpTransmitter struct {
@@ -64,7 +62,7 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 	return &httpTransmitter{endpointAddress, client}
 }
 
-func (transmitter *httpTransmitter) Transmit(ctx context.Context, payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
+func (transmitter *httpTransmitter) transmit(ctx context.Context, payload []byte, items []batchItem) (*transmissionResult, error) {
 	// Compress the payload
 	var postBody bytes.Buffer
 	gzipWriter := gzip.NewWriter(&postBody)
@@ -153,7 +151,7 @@ func (result itemTransmissionResult) canRetry() bool {
 		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResult) getRetryItems(payload []byte, items []*contracts.Envelope) ([]byte, []*contracts.Envelope) {
+func (result *transmissionResult) getRetryItems(payload []byte, items []batchItem) ([]byte, []batchItem) {
 	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
 		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {
@@ -161,7 +159,7 @@ func (result *transmissionResult) getRetryItems(payload []byte, items []*contrac
 		})
 
 		var resultPayload bytes.Buffer
-		resultItems := make([]*contracts.Envelope, 0)
+		resultItems := make([]batchItem, 0)
 		ptr := 0
 		idx := 0
 

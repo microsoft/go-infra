@@ -7,18 +7,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
-	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
-func serialize(items []*contracts.Envelope) ([]byte, error) {
+func serialize(items []batchItem) ([]byte, error) {
 	var result bytes.Buffer
 	encoder := json.NewEncoder(&result)
 
 	var nfail int
 	for _, item := range items {
 		end := result.Len()
-		if err := encoder.Encode(item); err != nil {
+		if err := encoder.Encode(item.item); err != nil {
 			nfail++
 			result.Truncate(end)
 		}

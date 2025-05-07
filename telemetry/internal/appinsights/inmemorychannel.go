@@ -16,6 +16,12 @@ import (
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
+// batchItem is a telemetry item that is sent in a batch.
+type batchItem struct {
+	item    *contracts.Envelope
+	retries int
+}
+
 // inMemoryChannel stores events exclusively in memory.
 // Presently the only telemetry channel implementation available.
 type inMemoryChannel struct {
@@ -43,7 +49,7 @@ type flushMessage struct {
 type retryMessage struct {
 	throttled  bool
 	retryAfter time.Time
-	items      []*contracts.Envelope
+	items      []batchItem
 }
 
 // newInMemoryChannel creates an inMemoryChannel instance and starts a background submission goroutine.
@@ -97,7 +103,7 @@ func (channel *inMemoryChannel) flush() {
 	channel.flushChan <- &flushMessage{}
 }
 
-func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []*contracts.Envelope) {
+func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []batchItem) {
 	if channel.closed.Load() {
 		return
 	}
@@ -145,27 +151,27 @@ func (channel *inMemoryChannel) acceptLoop() {
 
 // Part of channel accept loop: Initialize buffer and accept first message, handle controls.
 func (channel *inMemoryChannel) start() {
-	items := make([]*contracts.Envelope, 0, channel.batchSize)
+	items := make([]batchItem, 0, channel.batchSize)
 	timer := time.NewTimer(time.Hour)
 	timer.Stop() // Stop timer until we need it.
 	var dropped int
 	for {
 		select {
-		case event := <-channel.collectChan:
-			if event == nil {
+		case item := <-channel.collectChan:
+			if item == nil {
 				panic("received nil event")
 			}
 			if channel.throttled.Load() {
 				// Check if there is space to add the item to the batch.
 				// If not, then drop the event.
 				if len(items) < channel.batchSize {
-					items = append(items, event)
+					items = append(items, batchItem{item, 0})
 				} else {
 					dropped++
 				}
 				continue
 			}
-			items = append(items, event)
+			items = append(items, batchItem{item, 0})
 			if len(items) >= channel.batchSize {
 				timer.Stop()
 				channel.sendBatch(items)
@@ -206,11 +212,11 @@ func (channel *inMemoryChannel) start() {
 
 		case msg := <-channel.retryChan:
 			// Delete items that have been retried more than 2 times.
-			msg.items = slices.DeleteFunc(msg.items, func(item *contracts.Envelope) bool {
-				return item.Retries > 2
+			msg.items = slices.DeleteFunc(msg.items, func(item batchItem) bool {
+				return item.retries > 2
 			})
 			for _, item := range msg.items {
-				item.Retries++
+				item.retries++
 			}
 			// If there is not enough space in the batch, drop the items.
 			space := channel.batchSize - len(items)
@@ -239,13 +245,13 @@ func (channel *inMemoryChannel) start() {
 
 var itemsBuf = sync.Pool{
 	New: func() any {
-		buf := make([]*contracts.Envelope, 0, 1024)
+		buf := make([]batchItem, 0, 1024)
 		return &buf
 	},
 }
 
 // Part of channel accept loop: Check and wait on throttle, submit pending telemetry
-func (channel *inMemoryChannel) sendBatch(items []*contracts.Envelope) {
+func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	if len(items) == 0 {
 		return
 	}
@@ -253,7 +259,7 @@ func (channel *inMemoryChannel) sendBatch(items []*contracts.Envelope) {
 
 	// Copy the items to a temporary buffer to let the caller
 	// reuse the item slice.
-	buf := itemsBuf.Get().(*[]*contracts.Envelope)
+	buf := itemsBuf.Get().(*[]batchItem)
 	*buf = (*buf)[:0]
 	*buf = append(*buf, items...)
 
@@ -266,7 +272,7 @@ func (channel *inMemoryChannel) sendBatch(items []*contracts.Envelope) {
 	}()
 }
 
-func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope) {
+func (channel *inMemoryChannel) transmitRetry(items []batchItem) {
 	payload, err := serialize(items)
 	if err != nil {
 		channel.log(err)
@@ -275,7 +281,7 @@ func (channel *inMemoryChannel) transmitRetry(items []*contracts.Envelope) {
 		}
 	}
 
-	result, err := channel.transmitter.Transmit(channel.cancelCtx, payload, items)
+	result, err := channel.transmitter.transmit(channel.cancelCtx, payload, items)
 	if err != nil {
 		channel.logf("Error transmitting payload: %v", err)
 		return

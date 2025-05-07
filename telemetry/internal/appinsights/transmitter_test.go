@@ -277,7 +277,7 @@ func TestGetRetryItems(t *testing.T) {
 	}
 
 	payload3, items3 := res3.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
-	expected3 := []*contracts.Envelope{originalItems[5], originalItems[6]}
+	expected3 := []batchItem{originalItems[5], originalItems[6]}
 	v, err := serialize(expected3)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +287,7 @@ func TestGetRetryItems(t *testing.T) {
 	}
 }
 
-func makePayload(t *testing.T) ([]byte, []*contracts.Envelope) {
+func makePayload(t *testing.T) ([]byte, []batchItem) {
 	t.Helper()
 	buffer := telemetryBuffer()
 	for i := range 7 {
