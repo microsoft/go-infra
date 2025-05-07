@@ -22,10 +22,10 @@ const ten_seconds = 10 * time.Second
 
 type testTransmitter struct {
 	requests  chan *testTransmission
-	responses chan *transmissionResult
+	responses chan *transmissionResponse
 }
 
-func (transmitter *testTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResult, error) {
+func (transmitter *testTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResponse, error) {
 	itemsCopy := make([]batchItem, len(items))
 	copy(itemsCopy, items)
 
@@ -55,14 +55,14 @@ func (transmitter *testTransmitter) Close() {
 
 func (transmitter *testTransmitter) prepResponse(statusCodes ...int) {
 	for _, code := range statusCodes {
-		transmitter.responses <- &transmissionResult{statusCode: code}
+		transmitter.responses <- &transmissionResponse{statusCode: code}
 	}
 }
 
 func (transmitter *testTransmitter) prepThrottle(after time.Duration) time.Time {
 	retryAfter := time.Now().Add(after)
 
-	transmitter.responses <- &transmissionResult{
+	transmitter.responses <- &transmissionResponse{
 		statusCode: 408,
 		retryAfter: retryAfter,
 	}
@@ -94,7 +94,7 @@ type testTransmission struct {
 func newTestChannelServer(client *Client) (*Client, *testTransmitter) {
 	transmitter := &testTransmitter{
 		requests:  make(chan *testTransmission, 16),
-		responses: make(chan *transmissionResult, 16),
+		responses: make(chan *transmissionResponse, 16),
 	}
 
 	if client == nil {
@@ -364,7 +364,7 @@ func TestPartialRetry(t *testing.T) {
 		client.TrackEvent("~bad-1~")
 		client.TrackEvent("~retry-2~")
 
-		transmitter.responses <- &transmissionResult{
+		transmitter.responses <- &transmissionResponse{
 			statusCode: 206,
 			response: backendResponse{
 				ItemsAccepted: 2,
@@ -478,7 +478,7 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 		}()
 
 		tm := time.Now()
-		transmitter.prepThrottle(time.Minute)
+		retryAfter := transmitter.prepThrottle(time.Minute)
 
 		transmitter.prepResponse(200, 200)
 
@@ -496,7 +496,7 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 		}
 
 		req2 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
+		assertTimeApprox(t, req2.timestamp, retryAfter)
 		if !strings.Contains(req2.payload, "~msg~") || !strings.Contains(req2.payload, "~throttled~") || len(req2.items) != 2 {
 			t.Error("Unexpected payload")
 		}

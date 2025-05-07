@@ -18,7 +18,7 @@ import (
 )
 
 type transmitter interface {
-	transmit(ctx context.Context, items []batchItem) (*transmissionResult, error)
+	transmit(ctx context.Context, items []batchItem) (*transmissionResponse, error)
 }
 
 type httpTransmitter struct {
@@ -26,7 +26,7 @@ type httpTransmitter struct {
 	client   *http.Client
 }
 
-type transmissionResult struct {
+type transmissionResponse struct {
 	statusCode int
 	retryAfter time.Time
 	response   backendResponse
@@ -62,7 +62,7 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 	return &httpTransmitter{endpointAddress, client}
 }
 
-func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResult, error) {
+func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResponse, error) {
 	// Serialize the items. It could be that some items can't be serialized,
 	// in which case we will skip them and return an error together with the
 	// transmission result.
@@ -96,7 +96,7 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 	}
 	defer resp.Body.Close()
 
-	result := &transmissionResult{statusCode: resp.StatusCode}
+	result := &transmissionResponse{statusCode: resp.StatusCode}
 	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
 		if result.retryAfter, err = time.Parse(time.RFC1123, retryAfterValue); err != nil {
 			return nil, fmt.Errorf("failed to parse Retry-After header: %v", err)
@@ -112,18 +112,18 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 	return result, jsonErr
 }
 
-func (result *transmissionResult) isSuccess() bool {
+func (result *transmissionResponse) isSuccess() bool {
 	return result.statusCode == successResponse ||
 		// Partial response but all items accepted
 		(result.statusCode == partialSuccessResponse &&
 			result.response.ItemsReceived == result.response.ItemsAccepted)
 }
 
-func (result *transmissionResult) isFailure() bool {
+func (result *transmissionResponse) isFailure() bool {
 	return result.statusCode != successResponse && result.statusCode != partialSuccessResponse
 }
 
-func (result *transmissionResult) canRetry() bool {
+func (result *transmissionResponse) canRetry() bool {
 	if result.isSuccess() {
 		return false
 	}
@@ -137,12 +137,12 @@ func (result *transmissionResult) canRetry() bool {
 			result.statusCode == tooManyRequestsOverExtendedTimeResponse)
 }
 
-func (result *transmissionResult) isPartialSuccess() bool {
+func (result *transmissionResponse) isPartialSuccess() bool {
 	return result.statusCode == partialSuccessResponse &&
 		result.response.ItemsReceived != result.response.ItemsAccepted
 }
 
-func (result *transmissionResult) isThrottled() bool {
+func (result *transmissionResponse) isThrottled() bool {
 	return result.statusCode == tooManyRequestsResponse ||
 		result.statusCode == tooManyRequestsOverExtendedTimeResponse ||
 		!result.retryAfter.IsZero()
@@ -156,7 +156,7 @@ func (result itemTransmissionResult) canRetry() bool {
 		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResult) getRetryItems(items []batchItem) []batchItem {
+func (result *transmissionResponse) getRetryItems(items []batchItem) []batchItem {
 	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
 		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {

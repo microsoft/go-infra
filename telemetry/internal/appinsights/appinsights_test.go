@@ -1,12 +1,16 @@
 package appinsights
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -15,67 +19,115 @@ import (
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
-func telemetryItems(items ...contracts.EventData) []batchItem {
-	ctx := newTelemetryContext(test_ikey)
+func envelopes(names ...string) []*contracts.Envelope {
+	ctx := setupContext(test_ikey, nil)
 	ctx.iKey = test_ikey
 
-	var result []batchItem
-	for _, item := range items {
-		result = append(result, batchItem{item: ctx.envelop(item)})
+	var result []*contracts.Envelope
+	for _, name := range names {
+		result = append(result, ctx.envelop(
+			contracts.EventData{
+				Name: name,
+				Ver:  2,
+			},
+		))
 	}
 
 	return result
 }
 
-func addEventData(buffer *[]batchItem, items ...contracts.EventData) {
-	*buffer = append(*buffer, telemetryItems(items...)...)
+func batchItems(names ...string) []batchItem {
+	events := envelopes(names...)
+	items := make([]batchItem, len(events))
+	for i, event := range events {
+		items[i] = batchItem{item: event}
+	}
+	return items
+}
+
+type serverResponse struct {
+	statusCode int
+	retryAfter time.Time
+	body       backendResponse
+	want       []*contracts.Envelope
 }
 
 type testServer struct {
+	t      *testing.T
 	server *httptest.Server
-	notify chan *testRequest
 
-	responseData    []byte
-	responseCode    int
-	responseHeaders map[string]string
+	responses []serverResponse
 }
 
-type testRequest struct {
-	request *http.Request
-	body    []byte
+func newTestServer(t *testing.T, responses ...serverResponse) *testServer {
+	t.Helper()
+	server := &testServer{
+		t:         t,
+		responses: responses,
+	}
+	return server
 }
 
 func (server *testServer) Close() {
+	if len(server.responses) > 0 {
+		server.t.Errorf("not all responses were consumed, remaining: %d", len(server.responses))
+	}
+	// Close the server to prevent leaks
 	server.server.Close()
-	close(server.notify)
 }
 
-func (server *testServer) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
-	body, _ := io.ReadAll(req.Body)
+func (srv *testServer) ServeHTTP(writer http.ResponseWriter, req *http.Request) {
+	var resp serverResponse
+	resp, srv.responses = srv.responses[0], srv.responses[1:]
 
-	hdr := writer.Header()
-	for k, v := range server.responseHeaders {
-		hdr[k] = []string{v}
+	if req.Method != http.MethodPost {
+		srv.t.Errorf("request.Method want POST, got %s", req.Method)
 	}
 
-	writer.WriteHeader(server.responseCode)
-	writer.Write(server.responseData)
-
-	server.notify <- &testRequest{
-		request: req,
-		body:    body,
+	if encoding := req.Header.Get("Content-Encoding"); encoding != "gzip" {
+		srv.t.Errorf("request.Content-Encoding want gzip, got %s", encoding)
 	}
-}
 
-func (server *testServer) waitForRequest(t *testing.T) *testRequest {
-	t.Helper()
-	select {
-	case req := <-server.notify:
-		return req
-	case <-time.After(time.Second):
-		t.Fatal("Server did not receive request within a second")
-		return nil /* not reached */
+	// Decompress payload
+	reader, err := gzip.NewReader(req.Body)
+	if err != nil {
+		srv.t.Errorf("couldn't create gzip reader: %v", err)
 	}
+	defer reader.Close()
+	dec := json.NewDecoder(reader)
+	var items []*contracts.Envelope
+	for {
+		var item contracts.Envelope
+		if err := dec.Decode(&item); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			srv.t.Errorf("couldn't decode payload: %v", err)
+			break
+		}
+		items = append(items, &item)
+	}
+
+	if len(items) != len(resp.want) {
+		srv.t.Errorf("request body length mismatch, want %d, got %d", len(resp.want), len(items))
+	} else {
+		for i, item := range items {
+			compareEnvelopes(srv.t, item, resp.want[i])
+		}
+	}
+
+	body, err := json.Marshal(resp.body)
+	if err != nil {
+		srv.t.Errorf("couldn't encode response: %v", err)
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	if !resp.retryAfter.IsZero() {
+		writer.Header().Set("Retry-After", resp.retryAfter.Format(http.TimeFormat))
+	}
+
+	writer.WriteHeader(resp.statusCode)
+	writer.Write(body)
 }
 
 type fakeListener struct {
@@ -94,12 +146,8 @@ func (li *fakeListener) Accept() (net.Conn, error) {
 func (li *fakeListener) Close() error   { return nil }
 func (li *fakeListener) Addr() net.Addr { return li.addr }
 
-func newTestClientServer(t *testing.T) (*Client, *testServer) {
-	server := &testServer{}
-	server.notify = make(chan *testRequest, 1)
-	server.responseCode = 200
-	server.responseData = make([]byte, 0)
-	server.responseHeaders = make(map[string]string)
+func newTestClientServer(t *testing.T, responses ...serverResponse) (*Client, *testServer) {
+	server := newTestServer(t, responses...)
 
 	srvConn, cliConn := net.Pipe()
 	li := &fakeListener{
@@ -132,4 +180,24 @@ func newTestClientServer(t *testing.T) (*Client, *testServer) {
 		},
 	}
 	return client, server
+}
+
+func check(t *testing.T, name string, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s mismatch, want %v, got %v", name, want, got)
+	}
+}
+
+func compareEnvelopes(t *testing.T, got, want *contracts.Envelope) {
+	t.Helper()
+	check(t, "iKey", got.IKey, want.IKey)
+	check(t, "name", got.Name, want.Name)
+	check(t, "time", got.Time, want.Time)
+	check(t, "sampleRate", got.SampleRate, want.SampleRate)
+	check(t, "ver", got.Ver, want.Ver)
+	check(t, "seq", got.Seq, want.Seq)
+	check(t, "tags", got.Tags, want.Tags)
+	check(t, "data.baseType", got.Data.BaseType, want.Data.BaseType)
+	check(t, "data.baseData", got.Data.BaseData, want.Data.BaseData)
 }

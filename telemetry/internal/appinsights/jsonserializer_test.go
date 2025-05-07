@@ -11,20 +11,12 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
-
-	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
 func TestJsonSerializerEvents(t *testing.T) {
 	synctest.Run(func() {
-		var buffer []batchItem
-
-		addEventData(&buffer, contracts.EventData{
-			Name: "an-event",
-			Ver:  2,
-		},
-		)
-		v, err := serialize(buffer)
+		event := batchItems("an-event")
+		v, err := serialize([]batchItem{event[0]})
 		if err != nil {
 			t.Fatal(err)
 		}
