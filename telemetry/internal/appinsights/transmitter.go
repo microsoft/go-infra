@@ -18,7 +18,7 @@ import (
 )
 
 type transmitter interface {
-	transmit(ctx context.Context, payload []byte, items []batchItem) (*transmissionResult, error)
+	transmit(ctx context.Context, items []batchItem) (*transmissionResult, error)
 }
 
 type httpTransmitter struct {
@@ -62,7 +62,15 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 	return &httpTransmitter{endpointAddress, client}
 }
 
-func (transmitter *httpTransmitter) transmit(ctx context.Context, payload []byte, items []batchItem) (*transmissionResult, error) {
+func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResult, error) {
+	// Serialize the items. It could be that some items can't be serialized,
+	// in which case we will skip them and return an error together with the
+	// transmission result.
+	payload, jsonErr := serialize(items)
+	if jsonErr != nil && payload == nil {
+		return nil, jsonErr
+	}
+
 	// Compress the payload
 	var postBody bytes.Buffer
 	gzipWriter := gzip.NewWriter(&postBody)
@@ -89,22 +97,19 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, payload []byte
 	defer resp.Body.Close()
 
 	result := &transmissionResult{statusCode: resp.StatusCode}
-	// Grab Retry-After header
 	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
 		if result.retryAfter, err = time.Parse(time.RFC1123, retryAfterValue); err != nil {
 			return nil, fmt.Errorf("failed to parse Retry-After header: %v", err)
 		}
 	}
-
-	// Parse body, if possible
 	if err := json.NewDecoder(resp.Body).Decode(&result.response); err != nil {
 		if errors.Is(err, io.EOF) {
-			// Empty response is valid, possible throttling.
+			// Empty response is valid, possibly throttling.
 			return result, nil
 		}
 		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
-	return result, nil
+	return result, jsonErr
 }
 
 func (result *transmissionResult) isSuccess() bool {
@@ -151,48 +156,28 @@ func (result itemTransmissionResult) canRetry() bool {
 		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResult) getRetryItems(payload []byte, items []batchItem) ([]byte, []batchItem) {
+func (result *transmissionResult) getRetryItems(items []batchItem) []batchItem {
 	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
 		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {
 			return cmp.Compare(a.Index, b.Index)
 		})
 
-		var resultPayload bytes.Buffer
-		resultItems := make([]batchItem, 0)
-		ptr := 0
-		idx := 0
-
+		resultItems := make([]batchItem, 0, len(result.response.Errors))
 		// Find each retryable error
 		for _, responseResult := range result.response.Errors {
 			if !responseResult.canRetry() {
 				continue
 			}
-			// Advance ptr to start of desired line
-			for ; idx < responseResult.Index && ptr < len(payload); ptr++ {
-				if payload[ptr] == '\n' {
-					idx++
-				}
+			if responseResult.Index >= len(items) {
+				continue
 			}
-
-			startPtr := ptr
-
-			// Read to end of line
-			for ; idx == responseResult.Index && ptr < len(payload); ptr++ {
-				if payload[ptr] == '\n' {
-					idx++
-				}
-			}
-
-			// Copy item into output buffer
-			resultPayload.Write(payload[startPtr:ptr])
 			resultItems = append(resultItems, items[responseResult.Index])
 		}
 
-		return resultPayload.Bytes(), resultItems
+		return resultItems
 	} else if result.canRetry() {
-		return payload, items
-	} else {
-		return payload[:0], items[:0]
+		return items
 	}
+	return nil
 }

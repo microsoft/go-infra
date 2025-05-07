@@ -270,18 +270,12 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 // transmitRetry transmits the payload and retries if necessary.
 // Returns true if the payload has been scheduled for retry.
 func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
-	payload, err := serialize(items)
-	if err != nil {
-		channel.log(err)
-		if payload == nil {
-			return false
-		}
-	}
-
-	result, err := channel.transmitter.transmit(channel.cancelCtx, payload, items)
+	result, err := channel.transmitter.transmit(channel.cancelCtx, items)
 	if err != nil {
 		channel.logf("Error transmitting payload: %v", err)
-		return false
+		if result == nil {
+			return false
+		}
 	}
 	if result.isSuccess() {
 		return false
@@ -296,7 +290,7 @@ func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
 	}
 
 	// Filter down to failed items.
-	payload, items = result.getRetryItems(payload, items)
+	items = result.getRetryItems(items)
 
 	// Delete items that have been retried more than 2 times.
 	items = slices.DeleteFunc(items, func(item batchItem) bool {
@@ -305,7 +299,8 @@ func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
 	if len(items) == 0 {
 		return false
 	}
-	for _, item := range items {
+	for i := range items {
+		item := &items[i]
 		item.retries++
 	}
 

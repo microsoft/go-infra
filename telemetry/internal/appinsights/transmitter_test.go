@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func TestFailedTransmit(t *testing.T) {
 	client.ErrorLog = log.New(&errbuf, "", 0)
 	client.MaxBatchSize = 3
 
-	server.responseCode = errorResponse
+	server.responseCode = 403
 	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":0, "errors":[{"index": 2, "statusCode": 403, "message": "Hello"}]}`)
 	server.responseHeaders["Content-type"] = "application/json"
 	client.TrackEvent("foobar0")
@@ -87,7 +88,7 @@ func TestFailedTransmit(t *testing.T) {
 	client.Close(t.Context())
 
 	errstr := errbuf.String()
-	if errstr != "Failed to transmit payload: code=403, received=3, accepted=0, canRetry=true, throttled=false\n" {
+	if errstr != "Failed to transmit payload: code=403, received=3, accepted=0, canRetry=false, throttled=false\n" {
 		t.Errorf("unexpected error: %s", errstr)
 	}
 }
@@ -214,22 +215,25 @@ func TestTransmitResults(t *testing.T) {
 }
 
 func TestGetRetryItems(t *testing.T) {
-	originalPayload, originalItems := makePayload(t)
+	originalItems := telemetryItems()
+	for i := range 7 {
+		addEventData(&originalItems, contracts.EventData{Name: fmt.Sprintf("msg%d", i+1), Ver: 2})
+	}
 
 	res1 := &transmissionResult{
 		statusCode: 200,
 		response:   backendResponse{ItemsReceived: 7, ItemsAccepted: 7},
 	}
 
-	payload1, items1 := res1.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
-	if len(payload1) > 0 || len(items1) > 0 {
+	items1 := res1.getRetryItems(slices.Clone(originalItems))
+	if len(items1) > 0 {
 		t.Error("GetRetryItems shouldn't return anything")
 	}
 
 	res2 := &transmissionResult{statusCode: 408}
 
-	payload2, items2 := res2.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
-	if string(originalPayload) != string(payload2) || len(items2) != 7 {
+	items2 := res2.getRetryItems(slices.Clone(originalItems))
+	if !reflect.DeepEqual(originalItems, items2) {
 		t.Error("GetRetryItems shouldn't return anything")
 	}
 
@@ -247,26 +251,9 @@ func TestGetRetryItems(t *testing.T) {
 		},
 	}
 
-	payload3, items3 := res3.getRetryItems(bytes.Clone(originalPayload), slices.Clone(originalItems))
+	items3 := res3.getRetryItems(slices.Clone(originalItems))
 	expected3 := []batchItem{originalItems[5], originalItems[6]}
-	v, err := serialize(expected3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(payload3) != string(v) || len(items3) != 2 {
+	if !reflect.DeepEqual(expected3, items3) {
 		t.Error("Unexpected result")
 	}
-}
-
-func makePayload(t *testing.T) ([]byte, []batchItem) {
-	t.Helper()
-	buffer := telemetryBuffer()
-	for i := range 7 {
-		addEventData(&buffer, contracts.EventData{Name: fmt.Sprintf("msg%d", i+1), Ver: 2})
-	}
-	v, err := serialize(buffer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return v, buffer
 }

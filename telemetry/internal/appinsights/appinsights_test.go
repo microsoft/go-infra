@@ -15,7 +15,7 @@ import (
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
-func telemetryBuffer(items ...contracts.EventData) []batchItem {
+func telemetryItems(items ...contracts.EventData) []batchItem {
 	ctx := newTelemetryContext(test_ikey)
 	ctx.iKey = test_ikey
 
@@ -28,7 +28,7 @@ func telemetryBuffer(items ...contracts.EventData) []batchItem {
 }
 
 func addEventData(buffer *[]batchItem, items ...contracts.EventData) {
-	*buffer = append(*buffer, telemetryBuffer(items...)...)
+	*buffer = append(*buffer, telemetryItems(items...)...)
 }
 
 type testServer struct {

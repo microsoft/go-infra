@@ -25,9 +25,14 @@ type testTransmitter struct {
 	responses chan *transmissionResult
 }
 
-func (transmitter *testTransmitter) transmit(ctx context.Context, payload []byte, items []batchItem) (*transmissionResult, error) {
+func (transmitter *testTransmitter) transmit(ctx context.Context, items []batchItem) (*transmissionResult, error) {
 	itemsCopy := make([]batchItem, len(items))
 	copy(itemsCopy, items)
+
+	payload, err := serialize(items)
+	if err != nil {
+		return nil, err
+	}
 
 	transmitter.requests <- &testTransmission{
 		payload:   string(payload),
