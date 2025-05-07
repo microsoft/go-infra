@@ -94,7 +94,7 @@ func (li *fakeListener) Accept() (net.Conn, error) {
 func (li *fakeListener) Close() error   { return nil }
 func (li *fakeListener) Addr() net.Addr { return li.addr }
 
-func newTestClientServer(t *testing.T) (transmitter, *testServer) {
+func newTestClientServer(t *testing.T) (*Client, *testServer) {
 	server := &testServer{}
 	server.notify = make(chan *testRequest, 1)
 	server.responseCode = 200
@@ -120,15 +120,16 @@ func newTestClientServer(t *testing.T) (transmitter, *testServer) {
 		cliConn.Close()
 		server.server.Close()
 	})
-	tr := &http.Transport{
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return cliConn, nil
+	client := &Client{
+		InstrumentationKey: test_ikey,
+		Endpoint:           fmt.Sprintf("%s/v2/track", server.server.URL),
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return cliConn, nil
+				},
+			},
 		},
 	}
-
-	client := newTransmitter(fmt.Sprintf("%s/v2/track", server.server.URL), &http.Client{
-		Transport: tr,
-	})
-
 	return client, server
 }

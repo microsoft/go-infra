@@ -62,6 +62,9 @@ type Envelope struct {
 
 	// Telemetry data item.
 	Data Data `json:"data"`
+
+	// Retries is the number of times this telemetry item has been tried to upload.
+	Retries int `json:"-"`
 }
 
 // Truncates string fields that exceed their maximum supported sizes for this

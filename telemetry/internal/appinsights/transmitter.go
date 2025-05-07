@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,7 @@ import (
 )
 
 type transmitter interface {
-	Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error)
+	Transmit(ctx context.Context, payload []byte, items []*contracts.Envelope) (*transmissionResult, error)
 }
 
 type httpTransmitter struct {
@@ -59,7 +60,7 @@ func newTransmitter(endpointAddress string, client *http.Client) transmitter {
 	return &httpTransmitter{endpointAddress, client}
 }
 
-func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
+func (transmitter *httpTransmitter) Transmit(ctx context.Context, payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
 	// Compress the payload
 	var postBody bytes.Buffer
 	gzipWriter := gzip.NewWriter(&postBody)
@@ -70,7 +71,7 @@ func (transmitter *httpTransmitter) Transmit(payload []byte, items []*contracts.
 
 	gzipWriter.Close()
 
-	req, err := http.NewRequest(http.MethodPost, transmitter.endpoint, &postBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, transmitter.endpoint, &postBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %v", err)
 	}

@@ -3,6 +3,7 @@
 package appinsights
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ type testTransmitter struct {
 	responses chan *transmissionResult
 }
 
-func (transmitter *testTransmitter) Transmit(payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
+func (transmitter *testTransmitter) Transmit(ctx context.Context, payload []byte, items []*contracts.Envelope) (*transmissionResult, error) {
 	itemsCopy := make([]*contracts.Envelope, len(items))
 	copy(itemsCopy, items)
 
@@ -36,7 +37,12 @@ func (transmitter *testTransmitter) Transmit(payload []byte, items []*contracts.
 		timestamp: time.Now(),
 	}
 
-	return <-transmitter.responses, nil
+	select {
+	case <-ctx.Done():
+		return nil, context.Cause(ctx)
+	case resp := <-transmitter.responses:
+		return resp, nil
+	}
 }
 
 func (transmitter *testTransmitter) Close() {
@@ -109,25 +115,13 @@ func assertTimeApprox(t *testing.T, x, y time.Time) {
 	}
 }
 
-func assertNotClosed(t *testing.T, ch <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-ch:
-		t.Fatal("Close signal was not expected to be received")
-	default:
-	}
-}
-
-func waitForClose(t *testing.T, ch <-chan struct{}) {
-	t.Helper()
-	<-ch
-}
-
 func TestSimpleSubmit(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		client.TrackEvent("~msg~")
 		tm := time.Now()
@@ -147,8 +141,10 @@ func TestSimpleSubmit(t *testing.T) {
 func TestMultipleSubmit(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		transmitter.prepResponse(200, 200)
 
@@ -184,8 +180,10 @@ func TestMultipleSubmit(t *testing.T) {
 func TestFlush(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		transmitter.prepResponse(200, 200)
 
@@ -217,8 +215,10 @@ func TestFlush(t *testing.T) {
 func TestStop(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		transmitter.prepResponse(200)
 
@@ -231,13 +231,15 @@ func TestStop(t *testing.T) {
 
 func TestCloseFlush(t *testing.T) {
 	client, transmitter := newTestChannelServer(nil)
-	defer transmitter.Close()
-	defer client.Stop()
+	defer func() {
+		client.Close(t.Context())
+		transmitter.Close()
+	}()
 
 	transmitter.prepResponse(200)
 
 	client.TrackEvent("~flushed~")
-	client.channel.close(0)
+	client.Close(t.Context())
 
 	req := transmitter.waitForRequest(t)
 	if !strings.Contains(req.payload, "~flushed~") {
@@ -249,17 +251,17 @@ func TestCloseFlushRetry(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
 		defer transmitter.Close()
-		defer client.Stop()
 
 		transmitter.prepResponse(500, 200)
 
 		client.TrackEvent("~flushed~")
+		client.Flush()
+
 		tm := time.Now()
-		ch := client.channel.close(time.Minute)
 
 		slowTick(30)
 
-		waitForClose(t, ch)
+		client.Close(t.Context())
 
 		req1 := transmitter.waitForRequest(t)
 		if !strings.Contains(req1.payload, "~flushed~") {
@@ -273,59 +275,14 @@ func TestCloseFlushRetry(t *testing.T) {
 			t.Error("Unexpected payload")
 		}
 
-		assertTimeApprox(t, req2.timestamp, tm.Add(submit_retries[0]))
-	})
-}
-
-func TestCloseWithOngoingRetry(t *testing.T) {
-	synctest.Run(func() {
-		client, transmitter := newTestChannelServer(nil)
-		defer transmitter.Close()
-		defer client.Stop()
-
-		transmitter.prepResponse(408, 200, 200)
-
-		// This message should get stuck, retried
-		client.TrackEvent("~msg-1~")
-		slowTick(11)
-
-		// Check first one came through
-		req1 := transmitter.waitForRequest(t)
-		if !strings.Contains(req1.payload, "~msg-1~") {
-			t.Error("First message unexpected payload")
-		}
-
-		// This message will get flushed immediately
-		client.TrackEvent("~msg-2~")
-		ch := client.channel.close(time.Minute)
-
-		// Let 2 go out, but not the retry for 1
-		slowTick(3)
-
-		assertNotClosed(t, ch)
-
-		req2 := transmitter.waitForRequest(t)
-		if !strings.Contains(req2.payload, "~msg-2~") {
-			t.Error("Second message unexpected payload")
-		}
-
-		// Then, let's wait for the first message to go out...
-		slowTick(20)
-
-		waitForClose(t, ch)
-
-		req3 := transmitter.waitForRequest(t)
-		if !strings.Contains(req3.payload, "~msg-1~") {
-			t.Error("Third message unexpected payload")
-		}
+		assertTimeApprox(t, req2.timestamp, tm.Add(client.MaxBatchInterval))
 	})
 }
 
 func TestSendOnBufferFull(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
-		defer transmitter.Close()
-		defer client.Stop()
+		defer client.Close(t.Context())
 
 		transmitter.prepResponse(200, 200)
 
@@ -359,8 +316,10 @@ func TestSendOnBufferFull(t *testing.T) {
 func TestRetryOnFailure(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer client.Stop()
-		defer transmitter.Close()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		transmitter.prepResponse(500, 200)
 
@@ -384,15 +343,17 @@ func TestRetryOnFailure(t *testing.T) {
 			t.Error("Unexpected payload")
 		}
 
-		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(client.MaxBatchInterval))
 	})
 }
 
 func TestPartialRetry(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(nil)
-		defer client.Stop()
-		defer transmitter.Close()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		client.TrackEvent("~ok-1~")
 		client.TrackEvent("~retry-1~")
@@ -426,7 +387,7 @@ func TestPartialRetry(t *testing.T) {
 		}
 
 		req2 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(submit_retries[0]))
+		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds).Add(client.MaxBatchInterval))
 		if len(req2.items) != 2 {
 			t.Error("Unexpected payload")
 		}
@@ -440,8 +401,10 @@ func TestPartialRetry(t *testing.T) {
 func TestThrottleDropsMessages(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
-		defer client.Stop()
-		defer transmitter.Close()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		tm := time.Now()
 		retryAfter := transmitter.prepThrottle(time.Minute)
@@ -462,17 +425,9 @@ func TestThrottleDropsMessages(t *testing.T) {
 			t.Error("Unexpected payload")
 		}
 
-		// Humm.. this might break- these two could flip places. But I haven't seen it happen yet.
-
 		req2 := transmitter.waitForRequest(t)
 		assertTimeApprox(t, req2.timestamp, retryAfter)
-		if len(req2.items) != 1 || !strings.Contains(req2.payload, "~throttled~") || strings.Contains(req2.payload, "~msg-") {
-			t.Error("Unexpected payload")
-		}
-
-		req3 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req3.timestamp, retryAfter)
-		if len(req3.items) != 4 || strings.Contains(req3.payload, "~throttled-") || !strings.Contains(req3.payload, "~msg-") {
+		if len(req2.items) != 4 || strings.Contains(req2.payload, "~throttled-") || !strings.Contains(req2.payload, "~msg-") {
 			t.Error("Unexpected payload")
 		}
 
@@ -483,8 +438,10 @@ func TestThrottleDropsMessages(t *testing.T) {
 func TestThrottleCannotFlush(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
-		defer client.Stop()
-		defer transmitter.Close()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		tm := time.Now()
 		retryAfter := transmitter.prepThrottle(time.Minute)
@@ -505,9 +462,6 @@ func TestThrottleCannotFlush(t *testing.T) {
 		req2 := transmitter.waitForRequest(t)
 		assertTimeApprox(t, req2.timestamp, retryAfter)
 
-		req3 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req3.timestamp, retryAfter)
-
 		transmitter.assertNoRequest(t)
 	})
 }
@@ -515,11 +469,13 @@ func TestThrottleCannotFlush(t *testing.T) {
 func TestThrottleFlushesOnClose(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		tm := time.Now()
-		retryAfter := transmitter.prepThrottle(time.Minute)
+		transmitter.prepThrottle(time.Minute)
 
 		transmitter.prepResponse(200, 200)
 
@@ -527,11 +483,8 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 		slowTick(10)
 
 		client.TrackEvent("~msg~")
-		ch := client.channel.close(30 * time.Second)
 
-		slowTick(60)
-
-		waitForClose(t, ch)
+		client.Close(t.Context())
 
 		req1 := transmitter.waitForRequest(t)
 		assertTimeApprox(t, req1.timestamp, tm.Add(ten_seconds))
@@ -541,13 +494,7 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 
 		req2 := transmitter.waitForRequest(t)
 		assertTimeApprox(t, req2.timestamp, tm.Add(ten_seconds))
-		if !strings.Contains(req2.payload, "~msg~") || len(req2.items) != 1 {
-			t.Error("Unexpected payload")
-		}
-
-		req3 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req3.timestamp, retryAfter)
-		if !strings.Contains(req3.payload, "~throttled~") || len(req3.items) != 1 {
+		if !strings.Contains(req2.payload, "~msg~") || !strings.Contains(req2.payload, "~throttled~") || len(req2.items) != 2 {
 			t.Error("Unexpected payload")
 		}
 
@@ -558,66 +505,22 @@ func TestThrottleFlushesOnClose(t *testing.T) {
 func TestThrottleAbandonsMessageOnStop(t *testing.T) {
 	synctest.Run(func() {
 		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 4})
-		defer transmitter.Close()
-		defer client.Stop()
+		defer func() {
+			client.Close(t.Context())
+			transmitter.Close()
+		}()
 
 		transmitter.prepThrottle(time.Minute)
-		transmitter.prepResponse(200, 200, 200, 200)
 
 		client.TrackEvent("~throttled~")
 		slowTick(10)
 		client.TrackEvent("~dropped~")
-		slowTick(10)
 		client.Stop()
-		slowTick(45)
 
-		// ~throttled~ will get retried after throttle is done; ~dropped~ should get lost.
-		for range 2 {
-			req := transmitter.waitForRequest(t)
-			if strings.Contains(req.payload, "~dropped~") || len(req.items) != 1 {
-				t.Fatal("Dropped should have never been sent")
-			}
+		req := transmitter.waitForRequest(t)
+		if strings.Contains(req.payload, "~dropped~") || len(req.items) != 1 {
+			t.Fatal("Dropped should have never been sent")
 		}
-
-		transmitter.assertNoRequest(t)
-	})
-}
-
-func TestThrottleStacking(t *testing.T) {
-	synctest.Run(func() {
-		client, transmitter := newTestChannelServer(&Client{MaxBatchSize: 1})
-		defer transmitter.Close()
-		defer client.Stop()
-
-		// It's easy to hit a race in this test. There are two places that check for
-		// a throttle: one in the channel accept loop, the other in transmitRetry.
-		// For this test, I want both to hit the one in transmitRetry and then each
-		// make further attempts in lock-step from there.
-
-		start := time.Now()
-		client.TrackEvent("~throttle-1~")
-		client.TrackEvent("~throttle-2~")
-
-		// Per above, give both time to get to transmitRetry, then send out responses
-		// simultaneously.
-		slowTick(10)
-
-		transmitter.prepThrottle(20 * time.Second)
-		second_tm := transmitter.prepThrottle(time.Minute)
-
-		transmitter.prepResponse(200, 200, 200)
-
-		slowTick(65)
-
-		req1 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req1.timestamp, start)
-		req2 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req2.timestamp, start)
-
-		req3 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req3.timestamp, second_tm)
-		req4 := transmitter.waitForRequest(t)
-		assertTimeApprox(t, req4.timestamp, second_tm)
 
 		transmitter.assertNoRequest(t)
 	})

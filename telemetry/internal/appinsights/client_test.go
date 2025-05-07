@@ -5,7 +5,6 @@ package appinsights
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"io"
 	"log"
 	"net/http"
@@ -42,20 +41,19 @@ func BenchmarkClientBurstPerformance(b *testing.B) {
 		client.TrackEvent("A message")
 	}
 
-	client.Close(context.Background())
+	client.Close(b.Context())
 }
 
 func TestEndToEnd(t *testing.T) {
 	synctest.Run(func() {
-		xmit, server := newTestClientServer(t)
+		client, server := newTestClientServer(t)
 		defer server.Close()
 
 		// Set up server response
 		server.responseData = []byte(`{"itemsReceived":4, "itemsAccepted":4, "errors":[]}`)
 		server.responseHeaders["Content-type"] = "application/json"
 
-		client := &Client{InstrumentationKey: test_ikey, Endpoint: xmit.(*httpTransmitter).endpoint, HTTPClient: xmit.(*httpTransmitter).client}
-		defer client.Close(context.Background())
+		defer client.Close(t.Context())
 
 		// Track directly off the client
 		client.TrackEvent("client-event")
@@ -69,30 +67,30 @@ func TestEndToEnd(t *testing.T) {
 
 		// GZIP magic number
 		if len(req.body) < 2 || req.body[0] != 0x1f || req.body[1] != 0x8b {
-			t.Fatal("Missing gzip magic number")
+			t.Fatal("missing gzip magic number")
 		}
 
 		// Decompress
 		reader, err := gzip.NewReader(bytes.NewReader(req.body))
 		if err != nil {
-			t.Fatalf("Coudln't create gzip reader: %s", err.Error())
+			t.Fatalf("couldn't't create gzip reader: %s", err.Error())
 		}
 
 		// Read payload
 		body, err := io.ReadAll(reader)
 		reader.Close()
 		if err != nil {
-			t.Fatalf("Couldn't read compressed data: %s", err.Error())
+			t.Fatalf("couldn't read compressed data: %s", err.Error())
 		}
 
 		// Check out payload
 		j, err := parsePayload(body)
 		if err != nil {
-			t.Errorf("Error parsing payload: %s", err.Error())
+			t.Errorf("error parsing payload: %s", err.Error())
 		}
 
 		if len(j) != 1 {
-			t.Fatal("Unexpected event count")
+			t.Fatal("unexpected event count, expected 1, got", len(j))
 		}
 
 		j[0].assertPath(t, "iKey", test_ikey)

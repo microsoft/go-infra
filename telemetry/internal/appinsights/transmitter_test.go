@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"slices"
 	"testing"
@@ -15,23 +16,22 @@ import (
 
 func TestBasicTransmit(t *testing.T) {
 	client, server := newTestClientServer(t)
-
-	doBasicTransmit(client, server, t)
-}
-
-func doBasicTransmit(client transmitter, server *testServer, t *testing.T) {
 	defer server.Close()
 
-	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":5, "errors":[]}`)
+	var errbuf bytes.Buffer
+	client.ErrorLog = log.New(&errbuf, "", 0)
+	client.MaxBatchSize = 3
+
+	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":3, "errors":[]}`)
 	server.responseHeaders["Content-type"] = "application/json"
-	result, err := client.Transmit([]byte("foobar"), make([]*contracts.Envelope, 0))
-	if err != nil {
-		fmt.Println(err.Error())
-	}
+	client.TrackEvent("foobar0")
+	client.TrackEvent("foobar1")
+	client.TrackEvent("foobar2")
+	defer client.Close(t.Context())
 	req := server.waitForRequest(t)
 
-	if err != nil {
-		t.Errorf("err: %s", err.Error())
+	if errbuf.Len() != 0 {
+		t.Errorf("err: %s", errbuf.String())
 	}
 
 	if req.request.Method != "POST" {
@@ -40,12 +40,12 @@ func doBasicTransmit(client transmitter, server *testServer, t *testing.T) {
 
 	cencoding := req.request.Header[http.CanonicalHeaderKey("Content-Encoding")]
 	if len(cencoding) != 1 || cencoding[0] != "gzip" {
-		t.Errorf("Content-encoding: %q", cencoding)
+		t.Errorf("content-encoding: %q", cencoding)
 	}
 
 	// Check for gzip magic number
 	if len(req.body) < 2 || req.body[0] != 0x1f || req.body[1] != 0x8b {
-		t.Fatal("Missing gzip magic number")
+		t.Fatal("missing gzip magic number")
 	}
 
 	// Decompress payload
@@ -60,33 +60,13 @@ func doBasicTransmit(client transmitter, server *testServer, t *testing.T) {
 		t.Fatalf("Couldn't read compressed data: %s", err.Error())
 	}
 
-	if string(body) != "foobar" {
-		t.Error("body")
+	if !bytes.Contains(body, []byte("foobar")) {
+		t.Error("missing foobar")
 	}
 
 	ctype := req.request.Header[http.CanonicalHeaderKey("Content-Type")]
 	if len(ctype) != 1 || ctype[0] != "application/x-json-stream" {
-		t.Errorf("Content-type: %q", ctype)
-	}
-
-	if result.statusCode != 200 {
-		t.Error("statusCode")
-	}
-
-	if !result.retryAfter.IsZero() {
-		t.Error("retryAfter")
-	}
-
-	if result.response.ItemsReceived != 3 {
-		t.Error("ItemsReceived")
-	}
-
-	if result.response.ItemsAccepted != 5 {
-		t.Error("ItemsAccepted")
-	}
-
-	if len(result.response.Errors) != 0 {
-		t.Error("response.Errors")
+		t.Errorf("content-type: %q", ctype)
 	}
 }
 
@@ -94,46 +74,24 @@ func TestFailedTransmit(t *testing.T) {
 	client, server := newTestClientServer(t)
 	defer server.Close()
 
+	var errbuf bytes.Buffer
+	client.ErrorLog = log.New(&errbuf, "", 0)
+	client.MaxBatchSize = 3
+
 	server.responseCode = errorResponse
 	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":0, "errors":[{"index": 2, "statusCode": 500, "message": "Hello"}]}`)
 	server.responseHeaders["Content-type"] = "application/json"
-	result, err := client.Transmit([]byte("foobar"), make([]*contracts.Envelope, 0))
-	server.waitForRequest(t)
+	client.TrackEvent("foobar0")
+	client.TrackEvent("foobar1")
+	client.TrackEvent("foobar2")
+	client.Close(t.Context())
 
-	if err != nil {
-		t.Errorf("err: %s", err.Error())
+	errstr := errbuf.String()
+	if errstr == "" {
+		t.Fatal("error expected")
 	}
-
-	if result.statusCode != errorResponse {
-		t.Error("statusCode")
-	}
-
-	if !result.retryAfter.IsZero() {
-		t.Error("retryAfter")
-	}
-
-	if result.response.ItemsReceived != 3 {
-		t.Error("ItemsReceived")
-	}
-
-	if result.response.ItemsAccepted != 0 {
-		t.Error("ItemsAccepted")
-	}
-
-	if len(result.response.Errors) != 1 {
-		t.Fatal("len(Errors)")
-	}
-
-	if result.response.Errors[0].Index != 2 {
-		t.Error("Errors[0].index")
-	}
-
-	if result.response.Errors[0].StatusCode != errorResponse {
-		t.Error("Errors[0].statusCode")
-	}
-
-	if result.response.Errors[0].Message != "Hello" {
-		t.Error("Errors[0].message")
+	if errstr != "Failed to transmit payload: code=500, received=3, accepted=0, canRetry=true, throttled=false\n" {
+		t.Errorf("unexpected error: %s", errstr)
 	}
 }
 
@@ -141,27 +99,25 @@ func TestThrottledTransmit(t *testing.T) {
 	client, server := newTestClientServer(t)
 	defer server.Close()
 
+	var errbuf bytes.Buffer
+	client.ErrorLog = log.New(&errbuf, "", 0)
+	client.MaxBatchSize = 3
+
 	server.responseCode = errorResponse
 	server.responseData = make([]byte, 0)
 	server.responseHeaders["Content-type"] = "application/json"
 	server.responseHeaders["retry-after"] = "Wed, 09 Aug 2017 23:43:57 UTC"
-	result, err := client.Transmit([]byte("foobar"), make([]*contracts.Envelope, 0))
-	server.waitForRequest(t)
+	client.TrackEvent("foobar0")
+	client.TrackEvent("foobar1")
+	client.TrackEvent("foobar2")
+	client.Close(t.Context())
 
-	if err != nil {
-		t.Fatal(err)
+	errstr := errbuf.String()
+	if errstr == "" {
+		t.Fatal("error expected")
 	}
-
-	if result.statusCode != errorResponse {
-		t.Error("statusCode")
-	}
-
-	if result.retryAfter.IsZero() {
-		t.Fatal("retryAfter")
-	}
-
-	if result.retryAfter.Unix() != 1502322237 {
-		t.Error("retryAfter.Unix")
+	if errstr != "Failed to transmit payload: code=500, received=0, accepted=0, canRetry=true, throttled=true\n" {
+		t.Errorf("unexpected error: %s", errstr)
 	}
 }
 

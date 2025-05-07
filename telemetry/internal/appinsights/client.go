@@ -66,7 +66,7 @@ func (c *Client) init() {
 		batchSize := cmp.Or(c.MaxBatchSize, 1024)
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
 		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
-		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
+		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.ErrorLog)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
 			c.ErrorLog.Printf("Warning sanitizing tags: %v", err)
@@ -116,34 +116,17 @@ func (c *Client) Flush() {
 
 // Close flushes and tears down the submission goroutine and closes internal channels.
 // Waits until all pending telemetry items have been submitted.
-func (c *Client) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) {
 	if !c.initialized.Load() {
-		return nil
+		return
 	}
-	var d time.Duration
-	if timeout, ok := ctx.Deadline(); ok {
-		d = time.Until(timeout)
-		if d == 0 {
-			// Don't confuse the user with a zero duration.
-			d = -1
-		}
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c.channel.close(d):
-		// TODO: check for errors.
-		return nil
-	}
+	c.channel.close(ctx)
 }
 
 // Tears down the submission goroutines, closes internal channels.
 // Any telemetry waiting to be sent is discarded.
 // This is a more abrupt version of [Client.Close].
 func (c *Client) Stop() {
-	if !c.initialized.Load() {
-		return
-	}
 	c.channel.stop()
 }
 
