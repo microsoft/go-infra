@@ -96,7 +96,7 @@ func (transmitter *httpTransmitter) Transmit(ctx context.Context, payload []byte
 
 	// Parse body, if possible
 	if err := json.NewDecoder(resp.Body).Decode(&result.response); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			// Empty response is valid, possible throttling.
 			return result, nil
 		}

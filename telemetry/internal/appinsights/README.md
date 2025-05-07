@@ -7,5 +7,6 @@ These are the changes made to the original package:
 
 - Remove all external dependencies.
 - Remove all telemetry types except for `Event`.
+- Remove most unused features, including `Event` features.
 - Simplify the API.
 - Modernize the code.

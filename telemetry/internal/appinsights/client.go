@@ -123,7 +123,7 @@ func (c *Client) Close(ctx context.Context) {
 	c.channel.close(ctx)
 }
 
-// Tears down the submission goroutines, closes internal channels.
+// Stop tears down the submission goroutines, closes internal channels.
 // Any telemetry waiting to be sent is discarded.
 // This is a more abrupt version of [Client.Close].
 func (c *Client) Stop() {
