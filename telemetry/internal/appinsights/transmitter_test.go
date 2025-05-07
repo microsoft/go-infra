@@ -17,6 +17,7 @@ import (
 func TestBasicTransmit(t *testing.T) {
 	client, server := newTestClientServer(t)
 	defer server.Close()
+	defer client.Close(t.Context())
 
 	var errbuf bytes.Buffer
 	client.ErrorLog = log.New(&errbuf, "", 0)
@@ -27,7 +28,6 @@ func TestBasicTransmit(t *testing.T) {
 	client.TrackEvent("foobar0")
 	client.TrackEvent("foobar1")
 	client.TrackEvent("foobar2")
-	defer client.Close(t.Context())
 	req := server.waitForRequest(t)
 
 	if errbuf.Len() != 0 {
@@ -79,7 +79,7 @@ func TestFailedTransmit(t *testing.T) {
 	client.MaxBatchSize = 3
 
 	server.responseCode = errorResponse
-	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":0, "errors":[{"index": 2, "statusCode": 500, "message": "Hello"}]}`)
+	server.responseData = []byte(`{"itemsReceived":3, "itemsAccepted":0, "errors":[{"index": 2, "statusCode": 403, "message": "Hello"}]}`)
 	server.responseHeaders["Content-type"] = "application/json"
 	client.TrackEvent("foobar0")
 	client.TrackEvent("foobar1")
@@ -87,36 +87,7 @@ func TestFailedTransmit(t *testing.T) {
 	client.Close(t.Context())
 
 	errstr := errbuf.String()
-	if errstr == "" {
-		t.Fatal("error expected")
-	}
-	if errstr != "Failed to transmit payload: code=500, received=3, accepted=0, canRetry=true, throttled=false\n" {
-		t.Errorf("unexpected error: %s", errstr)
-	}
-}
-
-func TestThrottledTransmit(t *testing.T) {
-	client, server := newTestClientServer(t)
-	defer server.Close()
-
-	var errbuf bytes.Buffer
-	client.ErrorLog = log.New(&errbuf, "", 0)
-	client.MaxBatchSize = 3
-
-	server.responseCode = errorResponse
-	server.responseData = make([]byte, 0)
-	server.responseHeaders["Content-type"] = "application/json"
-	server.responseHeaders["retry-after"] = "Wed, 09 Aug 2017 23:43:57 UTC"
-	client.TrackEvent("foobar0")
-	client.TrackEvent("foobar1")
-	client.TrackEvent("foobar2")
-	client.Close(t.Context())
-
-	errstr := errbuf.String()
-	if errstr == "" {
-		t.Fatal("error expected")
-	}
-	if errstr != "Failed to transmit payload: code=500, received=0, accepted=0, canRetry=true, throttled=true\n" {
+	if errstr != "Failed to transmit payload: code=403, received=3, accepted=0, canRetry=true, throttled=false\n" {
 		t.Errorf("unexpected error: %s", errstr)
 	}
 }

@@ -34,12 +34,17 @@ type inMemoryChannel struct {
 	flushChan   chan struct{}
 	retryChan   chan retryMessage
 
-	transmitter     transmitter
+	transmitter transmitter
+
+	// Use a context instead of a channel to
+	// allow propagating the cancellation to the
+	// transmitter and to the underlying HTTP client.
 	cancelCtx       context.Context
 	cancelCauseFunc context.CancelCauseFunc
-	throttled       atomic.Bool
-	closed          atomic.Bool
-	inflight        atomic.Int64
+
+	throttled atomic.Bool
+	closed    atomic.Bool
+	inflight  atomic.Int64
 }
 
 type retryMessage struct {
@@ -123,8 +128,8 @@ func (channel *inMemoryChannel) close(ctx context.Context) {
 		return
 	}
 
-	channel.flushChan <- struct{}{}
 	channel.closed.Store(true)
+	channel.flushChan <- struct{}{}
 	select {
 	case <-ctx.Done():
 		channel.cancelCauseFunc(context.Cause(ctx))
@@ -193,13 +198,6 @@ func (channel *inMemoryChannel) start() {
 			timer.Reset(channel.batchInterval)
 
 		case msg := <-channel.retryChan:
-			// Delete items that have been retried more than 2 times.
-			msg.items = slices.DeleteFunc(msg.items, func(item batchItem) bool {
-				return item.retries > 2
-			})
-			for _, item := range msg.items {
-				item.retries++
-			}
 			// If there is not enough space in the batch, drop the items.
 			space := channel.batchSize - len(items)
 			if space < len(msg.items) {
@@ -236,6 +234,9 @@ var itemsBuf = sync.Pool{
 // Part of channel accept loop: Check and wait on throttle, submit pending telemetry
 func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	if len(items) == 0 {
+		if channel.inflight.Load() <= 0 && channel.closed.Load() {
+			channel.cancelCauseFunc(errClosed)
+		}
 		return
 	}
 
@@ -250,50 +251,64 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	// Start a goroutine to transmit the items without blocking
 	// the accept loop.
 	go func() {
+		var retry bool
 		defer func() {
 			itemsBuf.Put(buf)
 			if channel.inflight.Add(-1) <= 0 {
-				if channel.closed.Load() {
+				if !retry && channel.closed.Load() {
+					// Cancel the accept loop if we are closed,
+					// as all inflight items have been sent.
+					// Don't cancel the loop if we are retrying.
 					channel.cancelCauseFunc(errClosed)
 				}
 			}
 		}()
-		channel.transmitRetry(*buf)
+		retry = channel.transmitRetry(*buf)
 	}()
 }
 
-func (channel *inMemoryChannel) transmitRetry(items []batchItem) {
+// transmitRetry transmits the payload and retries if necessary.
+// Returns true if the payload has been scheduled for retry.
+func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
 	payload, err := serialize(items)
 	if err != nil {
 		channel.log(err)
 		if payload == nil {
-			return
+			return false
 		}
 	}
 
 	result, err := channel.transmitter.transmit(channel.cancelCtx, payload, items)
 	if err != nil {
 		channel.logf("Error transmitting payload: %v", err)
-		return
+		return false
 	}
 	if result.isSuccess() {
-		return
+		return false
 	}
 	canRetry := result.canRetry()
 	throttled := result.isThrottled()
 	channel.logf("Failed to transmit payload: code=%v, received=%d, accepted=%d, canRetry=%t, throttled=%t",
 		result.statusCode, result.response.ItemsReceived, result.response.ItemsAccepted, canRetry, throttled)
 
-	// Determine if we need to retry anything.
-	if canRetry {
-		// Filter down to failed items.
-		payload, items = result.getRetryItems(payload, items)
-		if len(payload) == 0 || len(items) == 0 {
-			return
-		}
-	} else {
-		return
+	if !canRetry {
+		return false
+	}
+
+	// Filter down to failed items.
+	payload, items = result.getRetryItems(payload, items)
+
+	// Delete items that have been retried more than 2 times.
+	items = slices.DeleteFunc(items, func(item batchItem) bool {
+		return item.retries > 2
+	})
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		item.retries++
 	}
 
 	channel.retry(throttled, result.retryAfter, items)
+	return true
 }
