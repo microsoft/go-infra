@@ -42,9 +42,11 @@ type inMemoryChannel struct {
 	cancelCtx       context.Context
 	cancelCauseFunc context.CancelCauseFunc
 
-	throttled atomic.Bool
-	closed    atomic.Bool
-	inflight  atomic.Int64
+	throttled   atomic.Bool
+	closed      atomic.Bool
+	sendQueue   []*[]batchItem
+	sendQueueMu sync.Mutex
+	sendMu      sync.Mutex
 }
 
 type retryMessage struct {
@@ -195,7 +197,6 @@ func (channel *inMemoryChannel) start() {
 			}
 			channel.sendBatch(items)
 			items = items[:0]
-			timer.Reset(channel.batchInterval)
 
 		case msg := <-channel.retryChan:
 			// If there is not enough space in the batch, drop the items.
@@ -231,46 +232,55 @@ var itemsBuf = sync.Pool{
 	},
 }
 
-// Part of channel accept loop: Check and wait on throttle, submit pending telemetry
+// sendBatch schedules a batch of items for transmission.
 func (channel *inMemoryChannel) sendBatch(items []batchItem) {
+	channel.sendQueueMu.Lock()
+	defer channel.sendQueueMu.Unlock()
+
 	if len(items) == 0 {
-		if channel.inflight.Load() <= 0 && channel.closed.Load() {
+		// Cancel the accept loop if we are closed and the queue is empty.
+		if len(channel.sendQueue) == 0 && channel.closed.Load() {
 			channel.cancelCauseFunc(errClosed)
 		}
 		return
 	}
-
-	channel.inflight.Add(1)
 
 	// Copy the items to a temporary buffer to let the caller
 	// reuse the item slice.
 	buf := itemsBuf.Get().(*[]batchItem)
 	*buf = (*buf)[:0]
 	*buf = append(*buf, items...)
+	channel.sendQueue = append(channel.sendQueue, buf)
 
 	// Start a goroutine to transmit the items without blocking
 	// the accept loop.
 	go func() {
-		var retry bool
-		defer func() {
-			itemsBuf.Put(buf)
-			if channel.inflight.Add(-1) <= 0 {
-				if !retry && channel.closed.Load() {
-					// Cancel the accept loop if we are closed,
-					// as all inflight items have been sent.
-					// Don't cancel the loop if we are retrying.
-					channel.cancelCauseFunc(errClosed)
-				}
-			}
-		}()
-		retry = channel.transmitRetry(*buf)
+		retry := channel.transmitRetry()
+		channel.sendQueueMu.Lock()
+		defer channel.sendQueueMu.Unlock()
+		if !retry && len(channel.sendQueue) == 0 && channel.closed.Load() {
+			// Cancel the accept loop if we are closed and the queue is empty.
+			channel.cancelCauseFunc(errClosed)
+		}
 	}()
 }
 
-// transmitRetry transmits the payload and retries if necessary.
-// Returns true if the payload has been scheduled for retry.
-func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
-	result, err := channel.transmitter.transmit(channel.cancelCtx, items)
+// transmitRetry pops the first item from the queue and transmits it.
+// If the transmission fails, it retries the items that can be retried.
+// Returns true if some items were retried.
+func (channel *inMemoryChannel) transmitRetry() bool {
+	// Allow only one goroutine to transmit at a time.
+	channel.sendMu.Lock()
+	defer channel.sendMu.Unlock()
+
+	// Pop the first item from the queue.
+	channel.sendQueueMu.Lock()
+	itemsPtr := channel.sendQueue[0]
+	channel.sendQueue = channel.sendQueue[1:]
+	channel.sendQueueMu.Unlock()
+	itemsBuf.Put(itemsPtr)
+
+	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
 		channel.logf("Error transmitting payload: %v", err)
 		if result == nil {
@@ -290,20 +300,20 @@ func (channel *inMemoryChannel) transmitRetry(items []batchItem) bool {
 	}
 
 	// Filter down to failed items.
-	items = result.getRetryItems(items)
+	retryItems := result.getRetryItems(*itemsPtr)
 
 	// Delete items that have been retried more than 2 times.
-	items = slices.DeleteFunc(items, func(item batchItem) bool {
+	retryItems = slices.DeleteFunc(retryItems, func(item batchItem) bool {
 		return item.retries > 2
 	})
-	if len(items) == 0 {
+	if len(retryItems) == 0 {
 		return false
 	}
-	for i := range items {
-		item := &items[i]
+	for i := range retryItems {
+		item := &retryItems[i]
 		item.retries++
 	}
 
-	channel.retry(throttled, result.retryAfter, items)
+	channel.retry(throttled, result.retryAfter, retryItems)
 	return true
 }

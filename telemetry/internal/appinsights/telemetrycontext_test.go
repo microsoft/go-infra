@@ -7,6 +7,8 @@ import (
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
+const test_ikey = "01234567-0000-89ab-cdef-000000000000"
+
 func TestDefaultTags(t *testing.T) {
 	context := newTelemetryContext(test_ikey)
 	context.Tags["test"] = "OK"

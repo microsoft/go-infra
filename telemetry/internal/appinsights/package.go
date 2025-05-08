@@ -7,6 +7,7 @@
 package appinsights
 
 const (
-	sdkName = "go-infra/telemetry"
-	version = "v0.0.1"
+	sdkName         = "go-infra/telemetry"
+	Version         = "v0.0.1"
+	internalVersion = sdkName + ":" + Version
 )

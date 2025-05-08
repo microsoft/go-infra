@@ -82,7 +82,7 @@ func (c *Client) init() {
 
 func setupContext(instrumentationKey string, tags map[string]string) *telemetryContext {
 	context := newTelemetryContext(instrumentationKey)
-	context.Tags["ai.internal.sdkVersion"] = sdkName + ":" + version
+	context.Tags["ai.internal.sdkVersion"] = internalVersion
 	maps.Copy(context.Tags, tags)
 	return context
 }

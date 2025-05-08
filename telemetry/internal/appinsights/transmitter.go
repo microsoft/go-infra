@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
 
 type transmitter interface {
@@ -29,20 +31,7 @@ type httpTransmitter struct {
 type transmissionResponse struct {
 	statusCode int
 	retryAfter time.Time
-	response   backendResponse
-}
-
-// Structures returned by data collector
-type backendResponse struct {
-	ItemsReceived int                      `json:"itemsReceived"`
-	ItemsAccepted int                      `json:"itemsAccepted"`
-	Errors        []itemTransmissionResult `json:"errors"`
-}
-
-type itemTransmissionResult struct {
-	Index      int    `json:"index"`
-	StatusCode int    `json:"statusCode"`
-	Message    string `json:"message"`
+	response   contracts.BackendResponse
 }
 
 const (
@@ -137,36 +126,31 @@ func (result *transmissionResponse) canRetry() bool {
 			result.statusCode == tooManyRequestsOverExtendedTimeResponse)
 }
 
-func (result *transmissionResponse) isPartialSuccess() bool {
-	return result.statusCode == partialSuccessResponse &&
-		result.response.ItemsReceived != result.response.ItemsAccepted
-}
-
 func (result *transmissionResponse) isThrottled() bool {
 	return result.statusCode == tooManyRequestsResponse ||
 		result.statusCode == tooManyRequestsOverExtendedTimeResponse ||
 		!result.retryAfter.IsZero()
 }
 
-func (result itemTransmissionResult) canRetry() bool {
-	return result.StatusCode == requestTimeoutResponse ||
-		result.StatusCode == serviceUnavailableResponse ||
-		result.StatusCode == errorResponse ||
-		result.StatusCode == tooManyRequestsResponse ||
-		result.StatusCode == tooManyRequestsOverExtendedTimeResponse
+func canRetryBackendError(berror contracts.BackendResponseError) bool {
+	return berror.StatusCode == requestTimeoutResponse ||
+		berror.StatusCode == serviceUnavailableResponse ||
+		berror.StatusCode == errorResponse ||
+		berror.StatusCode == tooManyRequestsResponse ||
+		berror.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
 func (result *transmissionResponse) getRetryItems(items []batchItem) []batchItem {
 	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
-		slices.SortFunc(result.response.Errors, func(a, b itemTransmissionResult) int {
+		slices.SortFunc(result.response.Errors, func(a, b contracts.BackendResponseError) int {
 			return cmp.Compare(a.Index, b.Index)
 		})
 
 		resultItems := make([]batchItem, 0, len(result.response.Errors))
 		// Find each retryable error
 		for _, responseResult := range result.response.Errors {
-			if !responseResult.canRetry() {
+			if !canRetryBackendError(responseResult) {
 				continue
 			}
 			if responseResult.Index >= len(items) {
