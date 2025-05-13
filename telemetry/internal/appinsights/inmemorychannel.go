@@ -72,14 +72,6 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
-func (channel *inMemoryChannel) log(v ...any) {
-	if channel.errorLog != nil {
-		channel.errorLog.Print(v...)
-	} else {
-		log.Print(v...)
-	}
-}
-
 func (channel *inMemoryChannel) logf(format string, args ...any) {
 	if channel.errorLog != nil {
 		channel.errorLog.Printf(format, args...)
