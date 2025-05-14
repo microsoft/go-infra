@@ -121,10 +121,10 @@ func (channel *inMemoryChannel) stop() {
 	channel.cancelCauseFunc(errStopped)
 }
 
-// Flushes and tears down the submission goroutine and closes internal
-// channels.  Returns a channel that is closed when all pending telemetry
-// items have been submitted and it is safe to shut down without losing
-// telemetry.
+// close flushes and tears down the submission goroutine and closes internal
+// channels. Returns when all pending telemetry items have been submitted
+// (it is then safe to shut down without losing telemetry) or when
+// the context is canceled.
 func (channel *inMemoryChannel) close(ctx context.Context) {
 	if channel.closed.Load() {
 		return
