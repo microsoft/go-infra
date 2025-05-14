@@ -47,6 +47,8 @@ type inMemoryChannel struct {
 	sendQueue   []*[]batchItem
 	sendQueueMu sync.Mutex
 	sendMu      sync.Mutex
+
+	itemsBuf sync.Pool
 }
 
 type retryMessage struct {
@@ -67,6 +69,12 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 		flushChan:     make(chan struct{}),
 		retryChan:     make(chan retryMessage),
 		transmitter:   newTransmitter(endpointUrl, httpClient),
+		itemsBuf: sync.Pool{
+			New: func() any {
+				buf := make([]batchItem, 0, batchSize)
+				return &buf
+			},
+		},
 	}
 	channel.cancelCtx, channel.cancelCauseFunc = context.WithCancelCause(context.Background())
 	return channel
@@ -217,13 +225,6 @@ func (channel *inMemoryChannel) start() {
 	}
 }
 
-var itemsBuf = sync.Pool{
-	New: func() any {
-		buf := make([]batchItem, 0, 1024)
-		return &buf
-	},
-}
-
 // sendBatch schedules a batch of items for transmission.
 func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	channel.sendQueueMu.Lock()
@@ -238,8 +239,10 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	}
 
 	// Copy the items to a temporary buffer to let the caller
-	// reuse the item slice.
-	buf := itemsBuf.Get().(*[]batchItem)
+	// reuse the item slice. The size of items is capped to the
+	// maximum batch size, so the length of the polled buffer
+	// can't grow unbounded.
+	buf := channel.itemsBuf.Get().(*[]batchItem)
 	*buf = (*buf)[:0]
 	*buf = append(*buf, items...)
 	channel.sendQueue = append(channel.sendQueue, buf)
@@ -270,7 +273,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	itemsPtr := channel.sendQueue[0]
 	channel.sendQueue = channel.sendQueue[1:]
 	channel.sendQueueMu.Unlock()
-	itemsBuf.Put(itemsPtr)
+	channel.itemsBuf.Put(itemsPtr)
 
 	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {

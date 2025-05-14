@@ -14,7 +14,7 @@ type Data struct {
 	BaseData EventData `json:"baseData"`
 }
 
-// Instances of Event represent structured event records that can be grouped
+// EventData represents structured event records that can be grouped
 // and searched by their properties. Event data item also creates a metric of
 // event count by name.
 type EventData struct {
@@ -26,7 +26,7 @@ type EventData struct {
 	Name string `json:"name"`
 }
 
-// System variables for a telemetry item.
+// Envelope is the telemetry payload that is sent to the Application Insights.
 type Envelope struct {
 	// Envelope version. For internal use only. By assigning this the default, it
 	// will not be serialized within the payload unless changed to a value other
@@ -67,8 +67,8 @@ type Envelope struct {
 	Data Data `json:"data"`
 }
 
-// Truncates string fields that exceed their maximum supported sizes for this
-// object and all objects it references.  Returns a warning for each affected
+// Sanitize truncates string fields that exceed their maximum supported sizes for this
+// object and all objects it references. Returns a warning for each affected
 // field.
 func (data *Envelope) Sanitize() error {
 	var errs []error
@@ -96,7 +96,7 @@ func (data *Envelope) Sanitize() error {
 	return errors.Join(errs...)
 }
 
-// Creates a new Envelope instance with default values set by the schema.
+// NewEnvelope creates a new [Envelope] instance with default values set by the schema.
 func NewEnvelope() *Envelope {
 	return &Envelope{
 		Ver:        1,

@@ -68,7 +68,9 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 		return nil, fmt.Errorf("failed to compress the payload: %v", err)
 	}
 
-	gzipWriter.Close()
+	if err := gzipWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %v", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, transmitter.endpoint, &postBody)
 	if err != nil {
