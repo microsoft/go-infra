@@ -13,7 +13,7 @@ jobs:
       clean: all
     pool:
       # Use generic recent LTS.
-      vmImage: ubuntu-20.04
+      vmImage: ubuntu-22.04
     steps:
       - template: steps/checkout-unix-task.yml
       - template: steps/init-go.yml
@@ -22,6 +22,13 @@ jobs:
       - script: |
           go test -json ./... > $(Build.StagingDirectory)/TestResults.json
         displayName: Test
+        
+      - script: |
+          go test -json -race ./... > $(Build.StagingDirectory)/TestResults.json
+        displayName: Test Telemetry
+        workingDirectory: $(Build.SourcesDirectory)/telemetry
+        env:
+          GOEXPERIMENT: synctest
 
       - script: |
           go run ./cmd/json2junit -in $(Build.StagingDirectory)/TestResults.json -out $(Build.StagingDirectory)/TestResults.xml
@@ -49,7 +56,7 @@ jobs:
     parameters:
       name: TestFuzz1x
       pool:
-        vmImage: ubuntu-20.04
+        vmImage: ubuntu-22.04
       platform: linux-amd64
       useMicrosoftGo: false
       # 1x runs the tests only once. It uses the first entry in the corpus so won't generate any
