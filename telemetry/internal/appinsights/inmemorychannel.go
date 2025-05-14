@@ -273,7 +273,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	itemsPtr := channel.sendQueue[0]
 	channel.sendQueue = channel.sendQueue[1:]
 	channel.sendQueueMu.Unlock()
-	channel.itemsBuf.Put(itemsPtr)
+	defer channel.itemsBuf.Put(itemsPtr)
 
 	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
