@@ -94,9 +94,8 @@ func Start(cfg Config) {
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxBatchInterval:   cfg.MaxBatchInterval,
 		Tags: map[string]string{
-			"msgo.go.goos":    runtime.GOOS,
-			"msgo.go.goarch":  runtime.GOARCH,
-			"msgo.go.version": ver,
+			"ai.application.ver": ver,
+			"ai.device.model":    runtime.GOOS + "/" + runtime.GOARCH,
 		},
 		UploadFilter: uploadFilter,
 	}
