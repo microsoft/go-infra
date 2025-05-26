@@ -15,27 +15,17 @@
   "Programs": [
     {
       "Name": "golang.org/x/tools/gopls",
-      "Versions": [
-        "v0.10.1",
-        "v0.11.0"
-      ],
       "Counters": [
         {
-          "Name": "editor:{emacs,vim,vscode,other}",
-          "Rate": 0.01
+          "Name": "editor:{emacs,vim,vscode,other}"
         }
       ]
     },
     {
       "Name": "cmd/go",
-      "Versions": [
-        "v0.10.1",
-        "v0.11.0"
-      ],
       "Counters": [
         {
-          "Name": "go/buildcache/miss:{0,0.1,0.2,0.5,1,10,100,2,20,5,50}",
-          "Rate": 0.01
+          "Name": "go/buildcache/miss:{0,0.1,0.2,0.5,1,10,100,2,20,5,50}"
         }
       ]
     }
