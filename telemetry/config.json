@@ -60,9 +60,6 @@
 			"Counters": [
 				{
 					"Name": "go/invocations"
-				},
-				{
-					"Name": "go/build/flag/buildmode:{archive,c-archive,c-shared,default,exe,pie,shared,plugin}"
 				}
 			]
 		}
