@@ -1,0 +1,70 @@
+{
+	"GOOS": [
+		"aix",
+		"android",
+		"darwin",
+		"dragonfly",
+		"freebsd",
+		"hurd",
+		"illumos",
+		"ios",
+		"js",
+		"linux",
+		"nacl",
+		"netbsd",
+		"openbsd",
+		"plan9",
+		"solaris",
+		"wasip1",
+		"windows",
+		"zos"
+	],
+	"GOARCH": [
+		"386",
+		"amd64",
+		"amd64p32",
+		"arm",
+		"arm64",
+		"arm64be",
+		"armbe",
+		"loong64",
+		"mips",
+		"mips64",
+		"mips64le",
+		"mips64p32",
+		"mips64p32le",
+		"mipsle",
+		"ppc",
+		"ppc64",
+		"ppc64le",
+		"riscv",
+		"riscv64",
+		"s390",
+		"s390x",
+		"sparc",
+		"sparc64",
+		"wasm"
+	],
+	"GoVersion": [
+		"go1.24rc1",
+		"go1.24rc2",
+		"go1.24rc3",
+		"go1.24.0",
+		"go1.24.1",
+		"go1.24.2",
+		"go1.24.3"
+	],
+	"Programs": [
+		{
+			"Name": "cmd/go",
+			"Counters": [
+				{
+					"Name": "go/invocations"
+				},
+				{
+					"Name": "go/build/flag/buildmode:{archive,c-archive,c-shared,default,exe,pie,shared,plugin}"
+				}
+			]
+		}
+	]
+}
