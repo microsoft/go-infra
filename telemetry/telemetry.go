@@ -94,8 +94,8 @@ func Start(cfg Config) {
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxBatchInterval:   cfg.MaxBatchInterval,
 		Tags: map[string]string{
-			"ai.application.ver": ver,
-			"ai.device.model":    runtime.GOOS + "/" + runtime.GOARCH,
+			"ai.application.ver":  ver,
+			"ai.device.osVersion": runtime.GOOS + "/" + runtime.GOARCH,
 		},
 		UploadFilter: uploadFilter,
 	}
