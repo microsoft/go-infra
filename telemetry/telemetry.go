@@ -96,6 +96,7 @@ func Start(cfg Config) {
 		Tags: map[string]string{
 			"ai.application.ver":  ver,
 			"ai.device.osVersion": runtime.GOOS + "/" + runtime.GOARCH,
+			"ai.cloud.role":       prog,
 		},
 		UploadFilter: uploadFilter,
 	}
