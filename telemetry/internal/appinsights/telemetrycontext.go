@@ -4,7 +4,6 @@
 package appinsights
 
 import (
-	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
@@ -28,7 +27,7 @@ type telemetryContext struct {
 func newTelemetryContext(ikey string) *telemetryContext {
 	return &telemetryContext{
 		iKey:     ikey,
-		nameIKey: "Microsoft.ApplicationInsights." + strings.Replace(ikey, "-", "", -1) + ".Event",
+		nameIKey: "Microsoft.ApplicationInsights.Event",
 		Tags:     make(contracts.ContextTags),
 	}
 }

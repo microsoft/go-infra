@@ -111,7 +111,7 @@ func startTelemetry(t *testing.T, cfg config.UploadConfig, uploads int) {
 		t.Fatal(err)
 	}
 	cfgFilePath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(cfgFilePath, cfgData, 0644); err != nil {
+	if err := os.WriteFile(cfgFilePath, cfgData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	telemetry.Start(telemetry.Config{
