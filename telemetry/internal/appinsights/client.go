@@ -72,7 +72,12 @@ func (c *Client) init() {
 		batchSize := cmp.Or(c.MaxBatchSize, 1024)
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
 		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
-		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.ErrorLog)
+		errorLog := c.ErrorLog
+		if errorLog == nil {
+			std := log.Default()
+			errorLog = log.New(std.Writer(), std.Prefix()+"appinsights: ", std.Flags())
+		}
+		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, errorLog)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
 			c.channel.logf("Warning sanitizing tags: %v", err)

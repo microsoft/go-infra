@@ -81,11 +81,7 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 }
 
 func (channel *inMemoryChannel) logf(format string, args ...any) {
-	if channel.errorLog != nil {
-		channel.errorLog.Printf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
+	channel.errorLog.Printf(format, args...)
 }
 
 // Queues a single telemetry item
