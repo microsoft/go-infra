@@ -50,9 +50,12 @@ type Client struct {
 	// If nil, logging is done via the log package's standard logger.
 	ErrorLog *log.Logger
 
-	channel  *inMemoryChannel
-	context  *telemetryContext
-	disabled bool
+	// Function to filter out telemetry items by name before they are sent.
+	// If nil, all telemetry items are sent.
+	UploadFilter func(name string) bool
+
+	channel *inMemoryChannel
+	context *telemetryContext
 
 	initialized atomic.Bool
 	initOnce    sync.Once
@@ -85,17 +88,6 @@ func setupContext(instrumentationKey string, tags map[string]string) *telemetryC
 	context.Tags["ai.internal.sdkVersion"] = internalVersion
 	maps.Copy(context.Tags, tags)
 	return context
-}
-
-// Enabled returns true if this client is enabled and will accept telemetry.
-func (c *Client) Enabled() bool {
-	return !c.disabled
-}
-
-// SetEnabled enables or disables the client. When disabled, telemetry is
-// silently swallowed by the client. Defaults to enabled.
-func (c *Client) SetEnabled(enabled bool) {
-	c.disabled = !enabled
 }
 
 // NewEvent creates a new event with the specified name.
@@ -136,8 +128,8 @@ func (c *Client) Stop() {
 }
 
 // Submits the specified telemetry item.
-func (c *Client) track(data contracts.EventData, n uint64) {
-	if c.disabled || n == 0 {
+func (c *Client) track(data contracts.EventData, n int64) {
+	if n == 0 || (c.UploadFilter != nil && !c.UploadFilter(data.Name)) {
 		return
 	}
 	c.init()
@@ -162,7 +154,10 @@ func (e *Event) Inc() {
 }
 
 // Add adds n to the counter. n cannot be negative, as counts cannot decrease.
-func (e *Event) Add(n uint64) {
+func (e *Event) Add(n int64) {
+	if e == nil || e.client == nil {
+		return
+	}
 	e.client.track(contracts.EventData{
 		Name: e.name,
 		Ver:  2,

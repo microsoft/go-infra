@@ -4,7 +4,6 @@
 package appinsights
 
 import (
-	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
@@ -17,9 +16,6 @@ type telemetryContext struct {
 	// Instrumentation key
 	iKey string
 
-	// Stripped-down instrumentation key used in envelope name
-	nameIKey string
-
 	// Collection of tag data to attach to the telemetry item.
 	Tags contracts.ContextTags
 }
@@ -27,9 +23,8 @@ type telemetryContext struct {
 // newTelemetryContext creates a new, empty telemetryContext.
 func newTelemetryContext(ikey string) *telemetryContext {
 	return &telemetryContext{
-		iKey:     ikey,
-		nameIKey: "Microsoft.ApplicationInsights." + strings.Replace(ikey, "-", "", -1) + ".Event",
-		Tags:     make(contracts.ContextTags),
+		iKey: ikey,
+		Tags: make(contracts.ContextTags),
 	}
 }
 
@@ -37,7 +32,7 @@ func newTelemetryContext(ikey string) *telemetryContext {
 // context.
 func (context *telemetryContext) envelop(data contracts.EventData) *contracts.Envelope {
 	envelope := contracts.NewEnvelope()
-	envelope.Name = context.nameIKey
+	envelope.Name = "Microsoft.ApplicationInsights.Event"
 	envelope.Data = contracts.Data{
 		BaseType: "EventData",
 		BaseData: data,

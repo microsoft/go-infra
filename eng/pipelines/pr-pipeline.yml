@@ -20,11 +20,11 @@ jobs:
       - template: steps/set-bot-git-author.yml
 
       - script: |
-          go test -json ./... > $(Build.StagingDirectory)/TestResults.json
+          go test -json ./... >> $(Build.StagingDirectory)/TestResults.json
         displayName: Test
         
       - script: |
-          go test -json -race ./... > $(Build.StagingDirectory)/TestResults.json
+          go test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
         displayName: Test Telemetry
         workingDirectory: $(Build.SourcesDirectory)/telemetry
         env:
