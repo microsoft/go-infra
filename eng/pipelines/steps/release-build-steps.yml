@@ -137,6 +137,28 @@ steps:
           start: true
           reason: queued build
 
+  - ${{ elseif eq(parameters.emptyPollNumber, 4) }}:
+
+    # Now we have poll3MicrosoftGoBuildID
+    - script: |
+        releasego wait-build \
+          -id '$(poll3MicrosoftGoBuildID)' \
+          -org 'https://dev.azure.com/dnceng/' \
+          -proj 'internal' \
+          -azdopat '$(System.AccessToken)'
+      displayName: ⌚ Wait for internal build
+      timeoutInMinutes: 180
+
+    - template: ../steps/report.yml
+      parameters:
+        releaseIssue: ${{ parameters.releaseIssue }}
+        version: ${{ parameters.releaseVersion }}
+        condition: succeeded()
+        buildPipeline: microsoft-go
+        buildID: $(poll3MicrosoftGoBuildID)
+        buildStatus: Succeeded
+        reason: completed internal build
+
     - ${{ if eq(parameters.runCanary, true) }}:
       - script: |
           releasego build-pipeline \
@@ -159,28 +181,6 @@ steps:
           buildStatus: '?'
           start: true
           reason: queued build
-
-  - ${{ elseif eq(parameters.emptyPollNumber, 4) }}:
-
-    # Now we have poll3MicrosoftGoBuildID
-    - script: |
-        releasego wait-build \
-          -id '$(poll3MicrosoftGoBuildID)' \
-          -org 'https://dev.azure.com/dnceng/' \
-          -proj 'internal' \
-          -azdopat '$(System.AccessToken)'
-      displayName: ⌚ Wait for internal build
-      timeoutInMinutes: 180
-
-    - template: ../steps/report.yml
-      parameters:
-        releaseIssue: ${{ parameters.releaseIssue }}
-        version: ${{ parameters.releaseVersion }}
-        condition: succeeded()
-        buildPipeline: microsoft-go
-        buildID: $(poll3MicrosoftGoBuildID)
-        buildStatus: Succeeded
-        reason: completed internal build
 
     # Download build asset JSON from completed internal build to update go-images with.
     - task: DownloadPipelineArtifact@2
