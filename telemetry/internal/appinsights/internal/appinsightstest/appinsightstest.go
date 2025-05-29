@@ -18,7 +18,6 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,7 +30,7 @@ import (
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
-var envelopeName = "Microsoft.ApplicationInsights." + strings.Replace(test_ikey, "-", "", -1) + ".Event"
+var envelopeName = "Microsoft.ApplicationInsights.Event"
 
 // ActionType represents the type of action to be performed by the client.
 type ActionType int
