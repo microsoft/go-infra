@@ -108,6 +108,14 @@ func (c *Client) TrackEvent(name string) {
 	c.NewEvent(name).Inc()
 }
 
+func (c *Client) TrackEventWithProperties(name string, properties map[string]string) {
+	c.track(contracts.EventData{
+		Name:       name,
+		Ver:        2,
+		Properties: properties,
+	}, 1)
+}
+
 // Forces the current queue to be sent.
 func (c *Client) Flush() {
 	if !c.initialized.Load() {

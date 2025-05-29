@@ -5,7 +5,6 @@ package telemetry
 
 import (
 	"context"
-	"crypto/rand"
 	_ "embed"
 	"fmt"
 	"runtime"
@@ -96,23 +95,17 @@ func Start(cfg Config) {
 		}
 	}
 
-	// Generate a random session ID to uniquely identify this telemetry session.
-	var sessionID [32]byte
-	rand.Read(sessionID[:])
-
-	telemetry.Client = &appinsights.Client{
+	telemetry.Init(&appinsights.Client{
 		InstrumentationKey: cfg.InstrumentationKey,
 		Endpoint:           cfg.Endpoint,
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxBatchInterval:   cfg.MaxBatchInterval,
 		Tags: map[string]string{
-			"ai.application.ver":  ver,
-			"ai.device.osVersion": runtime.GOOS + "/" + runtime.GOARCH,
-			"ai.cloud.role":       prog,
-			"ai.session.id":       fmt.Sprintf("%x", sessionID[:]),
+			"ai.application.ver": ver,
+			"ai.cloud.role":      prog,
 		},
 		UploadFilter: uploadFilter,
-	}
+	})
 }
 
 // Close closes the telemetry client and flushes any remaining telemetry data.

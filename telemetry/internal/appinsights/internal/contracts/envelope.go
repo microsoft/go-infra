@@ -24,6 +24,9 @@ type EventData struct {
 	// Event name. Keep it low cardinality to allow proper grouping and useful
 	// metrics.
 	Name string `json:"name"`
+
+	// Properties is a collection of custom properties for this specific event.
+	Properties map[string]string `json:"properties,omitempty"`
 }
 
 // Envelope is the telemetry payload that is sent to the Application Insights.
@@ -76,6 +79,20 @@ func (data *Envelope) Sanitize() error {
 	if len(data.Name) > 1024 {
 		data.Name = data.Name[:1024]
 		errs = append(errs, errors.New("Envelope.Name exceeded maximum length of 1024"))
+	}
+
+	if props := data.Data.BaseData.Properties; len(props) > 0 {
+		for k, v := range props {
+			if len(v) > 8192 {
+				props[k] = v[:8192]
+				errs = append(errs, errors.New("EventData.Properties has value with length exceeding max of 8192: "+k))
+			}
+			if len(k) > 150 {
+				props[k[:150]] = props[k]
+				delete(props, k)
+				errs = append(errs, errors.New("EventData.Properties has key with length exceeding max of 150: "+k))
+			}
+		}
 	}
 
 	if len(data.Seq) > 64 {
