@@ -41,6 +41,10 @@ type Config struct {
 	// UploadConfigPath is the path to the telemetry upload configuration file.
 	// If empty, the default configuration embedded in the binary will be used.
 	UploadConfigPath string
+
+	// Allow uploading telemetry for Go development versions even if the
+	// upload configuration does not explicitly include them.
+	AllowGoDevel bool
 }
 
 //go:embed config.json
@@ -59,6 +63,9 @@ func Start(cfg Config) {
 	}
 	if err != nil {
 		panic(fmt.Errorf("failed to unmarshal telemetry config: %v", err))
+	}
+	if cfg.AllowGoDevel {
+		uploadConfig.GoVersion = append(uploadConfig.GoVersion, "devel")
 	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
