@@ -62,7 +62,5 @@ func Close(ctx context.Context) {
 
 // TrackEvent sends a telemetry event with the specified name and properties.
 func TrackEvent(name string, properties map[string]string) {
-	if telemetry.Client != nil {
-		telemetry.Client.TrackEventWithProperties(name, properties)
-	}
+	telemetry.Client.TrackEvent(name, properties)
 }

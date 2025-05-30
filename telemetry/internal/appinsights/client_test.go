@@ -389,7 +389,7 @@ func BenchmarkClientBurstPerformance(b *testing.B) {
 	}
 
 	for b.Loop() {
-		client.TrackEvent("A message")
+		client.TrackEvent("A message", nil)
 	}
 
 	client.Close(b.Context())

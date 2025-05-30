@@ -96,24 +96,19 @@ func setupContext(instrumentationKey string, tags map[string]string) *telemetryC
 }
 
 // NewEvent creates a new event with the specified name.
-func (c *Client) NewEvent(name string) *Event {
+// If c is nil, returns a usable Event that does not send any telemetry.
+func (c *Client) NewEvent(name string, properties map[string]string) *Event {
 	return &Event{
-		name:   name,
-		client: c,
+		name:       name,
+		client:     c,
+		properties: properties,
 	}
 }
 
 // TrackEvent logs a user action with the specified name.
-func (c *Client) TrackEvent(name string) {
-	c.NewEvent(name).Inc()
-}
-
-func (c *Client) TrackEventWithProperties(name string, properties map[string]string) {
-	c.track(contracts.EventData{
-		Name:       name,
-		Ver:        2,
-		Properties: properties,
-	}, 1)
+// If c is nil, nothing is logged.
+func (c *Client) TrackEvent(name string, properties map[string]string) {
+	c.NewEvent(name, properties).Inc()
 }
 
 // Forces the current queue to be sent.
@@ -157,8 +152,9 @@ func (c *Client) track(data contracts.EventData, n int64) {
 
 // Event represents an event to be tracked.
 type Event struct {
-	name   string
-	client *Client
+	name       string
+	client     *Client
+	properties map[string]string
 }
 
 // Inc adds 1 to the counter.
@@ -172,7 +168,8 @@ func (e *Event) Add(n int64) {
 		return
 	}
 	e.client.track(contracts.EventData{
-		Name: e.name,
-		Ver:  2,
+		Name:       e.name,
+		Ver:        2,
+		Properties: e.properties,
 	}, n)
 }
