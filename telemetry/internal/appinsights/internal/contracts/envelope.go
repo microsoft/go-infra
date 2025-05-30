@@ -5,6 +5,7 @@ package contracts
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -85,12 +86,12 @@ func (data *Envelope) Sanitize() error {
 		for k, v := range props {
 			if len(v) > 8192 {
 				props[k] = v[:8192]
-				errs = append(errs, errors.New("EventData.Properties has value with length exceeding max of 8192: "+k))
+				errs = append(errs, fmt.Errorf("EventData.Properties has value with length exceeding max of 8192: %v", v))
 			}
 			if len(k) > 150 {
 				props[k[:150]] = props[k]
 				delete(props, k)
-				errs = append(errs, errors.New("EventData.Properties has key with length exceeding max of 150: "+k))
+				errs = append(errs, fmt.Errorf("EventData.Properties has key with length exceeding max of 150: %v", k))
 			}
 		}
 	}
