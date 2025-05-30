@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+//go:build goexperiment.synctest
+
 // This package contains test utilities for the Application Insights SDK.
 package appinsightstest
 
@@ -63,7 +65,7 @@ func (a Action) do(c *Client) {
 		c.server.mu.Lock()
 		c.server.events = append(c.server.events, newEvent(name))
 		c.server.mu.Unlock()
-		c.client.TrackEvent(name)
+		c.client.TrackEvent(name, nil)
 	case FlushAction:
 		c.client.Flush()
 	case StopAction:

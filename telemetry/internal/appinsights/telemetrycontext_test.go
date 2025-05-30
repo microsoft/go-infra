@@ -68,3 +68,55 @@ func TestSanitize(t *testing.T) {
 		t.Error("Event name was not truncated")
 	}
 }
+
+func TestSanitizeProperties(t *testing.T) {
+	longKey := strings.Repeat("X", 300)
+	longValue := strings.Repeat("Z", 9000)
+
+	data := contracts.EventData{
+		Name: "Test",
+		Ver:  2,
+		Properties: map[string]string{
+			longKey: longValue,
+			"ok":    "OK",
+		},
+	}
+
+	ctx := newTelemetryContext(test_ikey)
+
+	found := map[string]int{
+		"EventData.Properties has value with length exceeding max": 0,
+		"EventData.Properties has key with length exceeding max":   0,
+	}
+
+	envelope := ctx.envelop(data)
+
+	err := envelope.Sanitize()
+	msg := err.Error()
+	for k := range found {
+		if strings.Contains(msg, k) {
+			found[k] = found[k] + 1
+		}
+	}
+
+	for k, v := range found {
+		if v != 1 {
+			t.Errorf("Did not find a warning containing %q", k)
+		}
+	}
+
+	ps := envelope.Data.BaseData.Properties
+	if _, ok := ps[longKey]; ok {
+		t.Error("Property with long key was not removed")
+	}
+	if v, ok := ps[longKey[:150]]; ok {
+		if v != longValue[:8192] {
+			t.Error("Property value was not truncated")
+		}
+	} else {
+		t.Error("Property with truncated key was not added")
+	}
+	if ps["ok"] != "OK" {
+		t.Error("Property with short key was changed")
+	}
+}
