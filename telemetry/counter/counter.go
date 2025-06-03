@@ -27,7 +27,7 @@ func Add(name string, n int64) {
 
 // New returns a counter with the given name.
 func New(name string) *Counter {
-	return telemetry.Client.NewEvent(name)
+	return telemetry.Client.NewEvent(name, nil)
 }
 
 // CountFlags creates a counter for every flag that is set
