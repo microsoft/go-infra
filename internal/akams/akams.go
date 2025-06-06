@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 )
@@ -137,9 +138,11 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 	// First try to create all links.
 	err := c.CreateBulk(ctx, links)
 	if err == nil {
+		log.Printf("Created %d links successfully", len(links))
 		// All links were created successfully.
 		return nil
 	}
+	log.Printf("Got an error response when creating %d links: some may already exist. Checking... (%v)", len(links), err)
 	// Bad request error is returned when some links already exist.
 	if e, ok := err.(*ResponseError); !ok || e.StatusCode != http.StatusBadRequest {
 		return err
@@ -158,17 +161,31 @@ func (c *Client) CreateOrUpdateBulk(ctx context.Context, links []CreateLinkReque
 			toUpdate = append(toUpdate, l.ToUpdateLinkRequest())
 		}
 	}
+	writeSummary := func(v any) {
+		data, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			log.Printf("Failed to marshal summary: %v", err)
+			return
+		}
+		log.Printf("---- Summary:\n%s\n----", string(data))
+	}
+	log.Printf("Identified %d/%d links to create:", len(toCreate), len(links))
+	writeSummary(toCreate)
+	log.Printf("Identified %d/%d links to update:", len(toUpdate), len(links))
+	writeSummary(toUpdate)
 	// Create the links that don't exist and update the ones that do.
 	if len(toCreate) != 0 {
 		if err := c.CreateBulk(ctx, toCreate); err != nil {
 			return err
 		}
 	}
+	log.Printf("Created %d links successfully", len(toCreate))
 	if len(toUpdate) != 0 {
 		if err := c.UpdateBulk(ctx, toUpdate); err != nil {
 			return err
 		}
 	}
+	log.Printf("Updated %d links successfully", len(toUpdate))
 	return nil
 }
 
