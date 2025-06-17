@@ -185,7 +185,7 @@ func (r Remote) GetOwnerSlashRepo() string {
 // into the 'response' parameter, based on the structure of 'response'.
 func sendJSONRequest(request *http.Request, response interface{}) (status int, err error) {
 	request.Header.Add("Accept", "application/vnd.github.v3+json")
-	fmt.Printf("Sending request: %v %v\n", request.Method, request.URL)
+	fmt.Printf("Sending request: %v %v\n", request.Method, request.URL) // CodeQL [SM03994] Logs are only visible to the user who ran the command.
 
 	httpResponse, err := client.Do(request)
 	if err != nil {
