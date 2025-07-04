@@ -11,10 +11,9 @@ import (
 
 // An UploadConfig controls what data is uploaded.
 type UploadConfig struct {
-	GOOS      []string
-	GOARCH    []string
-	GoVersion []string
-	Programs  []*ProgramConfig
+	GOOS     []string
+	GOARCH   []string
+	Programs []*ProgramConfig
 }
 
 // A ProgramConfig contains the configuration for a single program.
