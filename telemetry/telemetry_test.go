@@ -40,13 +40,6 @@ func TestTelemetryWrongGOARCH(t *testing.T) {
 	testTelemetry(t, uploadConfig, 0)
 }
 
-func TestTelemetryWrongGoVersion(t *testing.T) {
-	uploadConfig := baseUploadConfig(t)
-	uploadConfig.GoVersion = []string{"not-a-real-go-version"} // intentionally wrong
-
-	testTelemetry(t, uploadConfig, 0)
-}
-
 func TestTelemetryWrongGoProgram(t *testing.T) {
 	uploadConfig := baseUploadConfig(t)
 	uploadConfig.Programs[0].Name = "not-a-real-program" // intentionally wrong
@@ -73,11 +66,10 @@ func baseUploadConfig(t *testing.T) config.UploadConfig {
 	if !ok {
 		t.Fatal("failed to read build info")
 	}
-	ver, prog := itelemetry.ProgramInfo(bi)
+	_, prog := itelemetry.ProgramInfo(bi)
 	return config.UploadConfig{
-		GOOS:      []string{runtime.GOOS},
-		GOARCH:    []string{runtime.GOARCH},
-		GoVersion: []string{ver},
+		GOOS:   []string{runtime.GOOS},
+		GOARCH: []string{runtime.GOARCH},
 		Programs: []*config.ProgramConfig{
 			{
 				Name: prog,
@@ -119,5 +111,6 @@ func startTelemetry(t *testing.T, cfg config.UploadConfig, uploads int) {
 		Endpoint:           httptestServer.URL,
 		MaxBatchSize:       1,
 		UploadConfigPath:   cfgFilePath,
+		AllowGoDevel:       true,
 	})
 }

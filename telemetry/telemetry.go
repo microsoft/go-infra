@@ -63,20 +63,23 @@ func Start(cfg Config) {
 	if err != nil {
 		panic(fmt.Errorf("failed to unmarshal telemetry config: %v", err))
 	}
-	if cfg.AllowGoDevel {
-		uploadConfig.GoVersion = append(uploadConfig.GoVersion, "devel")
+	if !slices.Contains(uploadConfig.GOOS, runtime.GOOS) ||
+		!slices.Contains(uploadConfig.GOARCH, runtime.GOARCH) {
+		// Only start telemetry if the current GOOS and GOARCH
+		// are supported by the telemetry configuration.
+		return
 	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		panic("failed to read build info for telemetry")
 	}
 	ver, prog := telemetry.ProgramInfo(bi)
-	if !slices.Contains(uploadConfig.GOOS, runtime.GOOS) ||
-		!slices.Contains(uploadConfig.GOARCH, runtime.GOARCH) ||
-		!slices.Contains(uploadConfig.GoVersion, ver) {
-		// Only start telemetry if the current GOOS, GOARCH, and Go version
-		// are supported by the telemetry configuration.
-		return
+	if ver == "devel" {
+		if !cfg.AllowGoDevel {
+			// If the Go version is a development version and we are not allowing
+			// development versions, do not start telemetry.
+			return
+		}
 	}
 
 	progIdx := slices.IndexFunc(uploadConfig.Programs, func(p *config.ProgramConfig) bool {
