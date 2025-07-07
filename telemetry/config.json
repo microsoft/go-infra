@@ -45,15 +45,6 @@
 		"sparc64",
 		"wasm"
 	],
-	"GoVersion": [
-		"go1.24rc1",
-		"go1.24rc2",
-		"go1.24rc3",
-		"go1.24.0",
-		"go1.24.1",
-		"go1.24.2",
-		"go1.24.3"
-	],
 	"Programs": [
 		{
 			"Name": "cmd/go",
