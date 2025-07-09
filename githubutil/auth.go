@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -137,7 +138,7 @@ func (a GitHubAppAuther) GetIdentity() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return response.GetName(), nil
+	return response.GetSlug(), nil
 }
 
 func (a GitHubAppAuther) getInstallationToken() (string, time.Time, error) {
@@ -160,6 +161,10 @@ func generateInstallationToken(ctx context.Context, clientID string, installatio
 
 	return *installationToken.Token, installationToken.ExpiresAt.Time, nil
 }
+
+// NewJWTTokenDebugLogger is printed to when generating a JWT token. Assign this
+// to a logger if debug output is desired. Defaults to discarding output.
+var NewJWTTokenDebugLogger *log.Logger = log.New(io.Discard, "", 0)
 
 // GenerateJWT generates a JWT for a GitHub App.
 func generateJWT(clientID, privateKey string) (string, error) {
@@ -184,10 +189,10 @@ func generateJWT(clientID, privateKey string) (string, error) {
 		ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
 		Issuer:    clientID,
 	}
-	fmt.Printf("%#v\n", claims)
+	NewJWTTokenDebugLogger.Printf("%#v\n", claims)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	fmt.Printf("%#v\n", token)
+	NewJWTTokenDebugLogger.Printf("%#v\n", token)
 	signedToken, err := token.SignedString(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign JWT: %v", err)

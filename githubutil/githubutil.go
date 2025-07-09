@@ -129,6 +129,8 @@ func BindGitHubAuthFlags(user string) *GitHubAuthFlags {
 }
 
 // NewClient returns a GitHub client based on the flags (e.g. PAT, GitHub App).
+//
+// If not enough information is present in f, returns ErrNoAuthProvided.
 func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error) {
 	if *f.GitHubPat != "" {
 		return NewClient(ctx, *f.GitHubPat)
@@ -145,6 +147,18 @@ func (f *GitHubAuthFlags) NewClient(ctx context.Context) (*github.Client, error)
 				*f.GitHubAppInstallation,
 				*f.GitHubAppPrivateKey)
 		}
+	}
+	return nil, ErrNoAuthProvided
+}
+
+// NewAppClient returns a GitHub client for the GitHub App, not the installation
+// of the app. This client can be used to get information about the app itself,
+// like its name.
+//
+// If not enough information is present in f, returns ErrNoAuthProvided.
+func (f *GitHubAuthFlags) NewAppClient(ctx context.Context) (*github.Client, error) {
+	if *f.GitHubAppClientID != "" && *f.GitHubAppPrivateKey != "" {
+		return newAppClient(ctx, *f.GitHubAppClientID, *f.GitHubAppPrivateKey)
 	}
 	return nil, ErrNoAuthProvided
 }
