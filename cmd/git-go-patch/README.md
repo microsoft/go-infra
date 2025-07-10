@@ -42,6 +42,23 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 1. Use `git go-patch apply` to apply patches onto the submodule as a series of commits.
 1. Navigate into the submodule.
 1. Edit the commits as desired. We recommend using an **interactive rebase** ([Pro Git guide](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History#_changing_multiple)) ([Git docs](https://git-scm.com/docs/git-rebase#_interactive_mode)) started by `git go-patch rebase`. A few recommended editing workflows are:
+
+### Option A: Streamlined workflow with `rebase-interactive`
+
+Use `git go-patch rebase-interactive` for a guided, automated workflow:
+
+1. Run `git go-patch apply` (if not already done)
+1. Run `git go-patch rebase-interactive`
+   * This opens a new terminal session in the submodule directory
+   * The prompt shows `(git-go-patch)` to remind you of the special mode
+   * Run `git rebase -i <base-commit>` to start your interactive rebase
+   * Make your changes, resolve conflicts, etc.
+   * Optionally run `code .` to open VS Code in the submodule context
+   * When finished, type `exit` to close the terminal
+   * The tool automatically runs `git go-patch extract` to save your changes
+
+### Option B: Manual workflow
+
    * Commit-then-rebase:
      1. Make some changes in the submodule and create commits.
      1. Use `git go-patch rebase` to start an interactive rebase of the commits that include the patch changes and your changes.
