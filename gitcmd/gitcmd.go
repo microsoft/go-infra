@@ -95,7 +95,8 @@ func CheckoutRevToTargetDir(dir, rev, path, targetDir string) error {
 			}
 			return fmt.Errorf("failed to read next tar entry: %v", err)
 		}
-		if !filepath.IsLocal(hdr.Name) {
+		name := hdr.Name
+		if !filepath.IsLocal(name) {
 			continue
 		}
 		// Don't create dirs when specified, just make them when necessary.
@@ -105,7 +106,7 @@ func CheckoutRevToTargetDir(dir, rev, path, targetDir string) error {
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		targetPath := filepath.Join(targetDir, hdr.Name)
+		targetPath := filepath.Join(targetDir, name)
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return fmt.Errorf("failed to create directory for %q: %v", targetPath, err)
 		}
