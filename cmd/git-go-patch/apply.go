@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/subcmd"
 	"github.com/microsoft/go-infra/submodule"
@@ -136,18 +136,7 @@ func getCurrentCommit(goDir string) (string, error) {
 }
 
 func getTargetSubmoduleCommit(rootDir, submoduleDir string) (string, error) {
-	cmd := exec.Command("git", "ls-tree", "HEAD", submoduleDir)
-	cmd.Dir = rootDir
-	// Format, from Git docs: "<mode> SP <type> SP <object> TAB <file>"
-	lsOut, err := executil.SpaceTrimmedCombinedOutput(cmd)
-	if err != nil {
-		return "", err
-	}
-	treeData := strings.Fields(lsOut)
-	if len(treeData) <= 2 {
-		return "", fmt.Errorf("output from git ls-tree doesn't contain enough fields: %v", lsOut)
-	}
-	return treeData[2], nil
+	return gitcmd.GetSubmoduleCommitAtRev(rootDir, submoduleDir, "HEAD")
 }
 
 func ensureSubmoduleCommitNotDirty(config *patch.FoundConfig) error {

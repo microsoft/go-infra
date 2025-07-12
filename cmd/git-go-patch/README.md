@@ -88,6 +88,22 @@ Then, you can create new commits to try the rebase again.
 
 The [Reset Demystified](https://git-scm.com/book/en/v2/Git-Tools-Reset-Demystified) chapter of the Pro Git book may be helpful to understand the state of the Git repository, the index, and the working directory during each step of the recovery process.
 
+## Review a PR's patch file changes
+
+When reviewing a pull request that modifies patch files, it can be difficult to understand what the actual changes are by just looking at the diff in GitHub.
+The `git go-patch review` subcommand helps by setting up the changes locally for easier review.
+
+This command:
+1. Prompts for a GitHub PR URL
+1. Fetches PR information from GitHub
+1. Applies the base branch patches with a special "before" marker
+1. Applies the PR branch patches with a special "after" marker
+1. Sets up a diff in the Git stage that shows exactly what changes the PR introduces
+
+After running the command, you can review the changes using `git diff --cached` in the submodule directory or your IDE's Git tools to see a clean presentation of what the PR changes in context.
+
+For more control over each part of the process, or to review changes that aren't in a GitHub PR, use the `git go-patch apply` `-before` and `-after` flags, then `git go-patch stage-diff`.
+
 ## Fix up patch files after a submodule update
 
 Every so often, you need to update your submodule to the latest version of the upstream repo.

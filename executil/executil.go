@@ -21,7 +21,11 @@ func Run(c *exec.Cmd) error {
 
 // RunQuiet logs the command line and runs the given command, but sends the output to os.DevNull.
 func RunQuiet(c *exec.Cmd) error {
-	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
+	var in string
+	if c.Dir != "" {
+		in = fmt.Sprintf(" in %#q", c.Dir)
+	}
+	fmt.Printf("---- Running command: %v %v%s\n", c.Path, c.Args, in)
 	return c.Run()
 }
 
