@@ -6,7 +6,11 @@
 package gitcmd
 
 import (
+	"archive/tar"
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -57,6 +61,69 @@ func Show(dir, rev string) (string, error) {
 // See https://git-scm.com/docs/git-show#_pretty_formats
 func ShowQuietPretty(dir, format, rev string) (string, error) {
 	return CombinedOutput(dir, "show", "--quiet", "--pretty=format:"+format, strings.TrimSpace(rev))
+}
+
+// GetSubmoduleCommitAtRev returns the commit hash of the submodule at the given
+// revision. submoduleDir may be absolute or relative to dir.
+func GetSubmoduleCommitAtRev(dir, submoduleDir, rev string) (string, error) {
+	output, err := CombinedOutput(dir, "ls-tree", rev, submoduleDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get submodule commit at %q: %v", rev, err)
+	}
+
+	// Format, from Git docs: "<mode> SP <type> SP <object> TAB <file>"
+	fields := strings.Fields(output)
+	if len(fields) <= 2 {
+		return "", fmt.Errorf("output from git ls-tree doesn't contain enough fields: %q", output)
+	}
+	return fields[2], nil
+}
+
+// CheckoutRevToTargetDir checks out the given path/subdir of the repository at
+// the given revision into the target directory.
+func CheckoutRevToTargetDir(dir, rev, path, targetDir string) error {
+	data, err := executil.Dir(dir, "git", "archive", "--format=tar", rev, "--", path).Output()
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %v", err)
+	}
+	r := tar.NewReader(bytes.NewReader(data))
+	for {
+		hdr, err := r.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break // End of archive.
+			}
+			return fmt.Errorf("failed to read next tar entry: %v", err)
+		}
+		name := hdr.Name
+		if !filepath.IsLocal(name) {
+			continue
+		}
+		// Don't create dirs when specified, just make them when necessary.
+		if hdr.FileInfo().IsDir() {
+			continue
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		targetPath := filepath.Join(targetDir, name)
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return fmt.Errorf("failed to create directory for %q: %v", targetPath, err)
+		}
+		f, err := os.Create(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to create file %q: %v", targetPath, err)
+		}
+		_, err = io.Copy(f, r)
+		closeErr := f.Close()
+		if err != nil {
+			return fmt.Errorf("failed to copy data to %q: %v", targetPath, err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("failed to close file %q: %v", targetPath, closeErr)
+		}
+	}
+	return nil
 }
 
 // GetGlobalAuthor returns the author that a new Git commit would be written by, based (only!) on
