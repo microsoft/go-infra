@@ -119,7 +119,11 @@ func handleReviewGH(p subcmd.ParseFunc) error {
 	if !*yes {
 		fmt.Printf("Are you sure you want to stage the changes? (y/N): ")
 		var confirmation string
-		fmt.Scanln(&confirmation)
+		_, err := fmt.Scanln(&confirmation)
+		if err != nil {
+			return fmt.Errorf("failed to read confirmation: %v", err)
+		}
+		confirmation = strings.TrimSpace(confirmation)
 		if strings.ToLower(confirmation) != "y" {
 			log.Println("Review aborted by user.")
 			return nil
@@ -175,14 +179,23 @@ func handleReviewGH(p subcmd.ParseFunc) error {
 		return fmt.Errorf("failed to create temporary directory for patches: %v", err)
 	}
 	if !*keepWork {
-		defer os.RemoveAll(tempDir) // Best effort cleanup.
+		defer func() {
+			// Best effort cleanup.
+			err := os.RemoveAll(tempDir)
+			if err != nil {
+				log.Printf("Failed to remove temporary directory %q: %v", tempDir, err)
+			}
+		}()
 	}
 
 	headPatchDir := filepath.Join(tempDir, "head")
-	os.MkdirAll(headPatchDir, 0o755)
-
+	if err := os.MkdirAll(headPatchDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create temporary patch directory for head: %v", err)
+	}
 	basePatchDir := filepath.Join(tempDir, "base")
-	os.MkdirAll(basePatchDir, 0o755)
+	if err := os.MkdirAll(basePatchDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create temporary patch directory for base: %v", err)
+	}
 
 	// Check out patch files into temp dir.
 	//
@@ -256,10 +269,12 @@ func resetSubmoduleTo(rootDir, goDir, commit string, force bool) error {
 
 func applyPatchCommits(goDir, patchDir string) error {
 	args := []string{"am", "--whitespace=nowarn"}
-	patch.WalkPatches(patchDir, func(file string) error {
+	if err := patch.WalkPatches(patchDir, func(file string) error {
 		args = append(args, file)
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to walk patches: %v", err)
+	}
 	return gitcmd.Run(goDir, args...)
 }
 
