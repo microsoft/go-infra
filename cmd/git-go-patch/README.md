@@ -23,6 +23,17 @@ go install github.com/microsoft/go-infra/cmd/git-go-patch@latest
 > [!NOTE]
 > Make sure `git-go-patch` is accessible in your shell's `PATH` variable. You may need to add `$GOPATH/bin` to your `PATH`. Use `go env GOPATH` to locate it.
 
+## Cross-Platform Shell Support
+
+The interactive shell feature (`rebase -shell`) works on both Unix and Windows:
+
+* **Unix/Linux/macOS**: Uses your `$SHELL` environment variable, defaults to `/bin/bash`
+* **Windows**: Uses your `%COMSPEC%` environment variable, defaults to `cmd.exe`
+
+The shell prompt is automatically updated to show `(git-go-patch)` to indicate you're in the interactive mode:
+* Unix shells: Updates the `PS1` environment variable
+* Windows Command Prompt: Updates the `PROMPT` environment variable
+
 Then, run the command to see the help documentation:
 
 ```
@@ -43,19 +54,30 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 1. Navigate into the submodule.
 1. Edit the commits as desired. We recommend using an **interactive rebase** ([Pro Git guide](https://git-scm.com/book/en/v2/Git-Tools-Rewriting-History#_changing_multiple)) ([Git docs](https://git-scm.com/docs/git-rebase#_interactive_mode)) started by `git go-patch rebase`. A few recommended editing workflows are:
 
-### Option A: Streamlined workflow with `rebase-interactive`
+### Option A: Streamlined workflow with `rebase -shell`
 
-Use `git go-patch rebase-interactive` for a guided, automated workflow:
+Use `git go-patch rebase -shell` for a guided, automated workflow:
 
 1. Run `git go-patch apply` (if not already done)
-1. Run `git go-patch rebase-interactive`
-   * This opens a new terminal session in the submodule directory
+1. Run `git go-patch rebase -shell`
+   * This opens a new shell session in the submodule directory
    * The prompt shows `(git-go-patch)` to remind you of the special mode
-   * Run `git rebase -i <base-commit>` to start your interactive rebase
+   * Run `git rebase -i` with the suggested base commit to start your interactive rebase
    * Make your changes, resolve conflicts, etc.
    * Optionally run `code .` to open VS Code in the submodule context
-   * When finished, type `exit` to close the terminal
-   * The tool automatically runs `git go-patch extract` to save your changes
+1. When finished, type `exit` to close the shell and automatically extract changes
+   * To skip automatic extraction, exit with a non-zero code: `exit 1`
+   * The tool automatically runs `git go-patch extract` if you exit successfully (exit code 0)
+
+**Controlling extraction with exit codes:**
+* Exit with code 0 (normal `exit`): Automatically runs `git go-patch extract`
+* Exit with non-zero code (`exit 1`): Skips extraction, you handle it manually later
+* Use `--skip-extract` flag: Disables extraction regardless of exit code
+
+**Safety protections:**
+* The tool prevents nested git-go-patch shell sessions
+* Detects ongoing git operations (rebase, merge, cherry-pick) and warns before proceeding
+* Cross-platform shell support (Windows cmd/PowerShell, Unix bash/zsh/etc.)
 
 ### Option B: Manual workflow
 
