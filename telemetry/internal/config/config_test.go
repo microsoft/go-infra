@@ -4,7 +4,6 @@
 package config
 
 import (
-	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,10 +11,7 @@ import (
 )
 
 func TestConfig(t *testing.T) {
-	f, err := os.Open(filepath.FromSlash("../../config.json"))
-	if os.IsNotExist(err) {
-		t.Skip("config file not found")
-	}
+	f, err := os.Open(filepath.FromSlash("../../config/config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
