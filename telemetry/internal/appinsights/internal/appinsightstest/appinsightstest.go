@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//go:build goexperiment.synctest
+//go:build goexperiment.synctest || go1.25
 
 // This package contains test utilities for the Application Insights SDK.
 package appinsightstest
