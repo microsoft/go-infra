@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"testing"
@@ -102,15 +100,11 @@ func startTelemetry(t *testing.T, cfg config.UploadConfig, uploads int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfgFilePath := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(cfgFilePath, cfgData, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	telemetry.Start(telemetry.Config{
 		InstrumentationKey: "fake-key",
 		Endpoint:           httptestServer.URL,
 		MaxBatchSize:       1,
-		UploadConfigPath:   cfgFilePath,
+		UploadConfig:       cfgData,
 		AllowGoDevel:       true,
 	})
 }
