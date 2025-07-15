@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//go:build goexperiment.synctest
+//go:build (go1.24 && goexperiment.synctest) || go1.25
 
 package appinsights_test
 
@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights"
@@ -29,7 +28,7 @@ type testPlan struct {
 }
 
 func (plan testPlan) run(t *testing.T) {
-	synctest.Run(func() {
+	syncRun(t, func(t *testing.T) {
 		client := appinsightstest.New(t, plan.actions, plan.responses...)
 		client.SetMaxBatchSize(plan.maxBatchSize)
 		client.SetMaxBatchInterval(plan.maxBatchInterval)
@@ -44,6 +43,7 @@ func TestClientNoUpload(t *testing.T) {
 		maxBatchSize: 2,
 		actions: []appinsightstest.Action{
 			{Type: appinsightstest.TrackAction},
+			{Type: appinsightstest.StopAction},
 		},
 	}
 	plan.run(t)
