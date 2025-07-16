@@ -54,11 +54,15 @@ func handleStageDiff(p subcmd.ParseFunc) error {
 	}
 	_, goDir := config.FullProjectRoots()
 
+	return runStageDiff(goDir, stageDiffBeforeBranch, stageDiffAfterBranch)
+}
+
+func runStageDiff(goDir, beforeBranch, afterBranch string) error {
 	// Set up stage.
-	if err := executil.Run(executil.Dir(goDir, "git", "checkout", "--detach", stageDiffAfterBranch)); err != nil {
+	if err := executil.Run(executil.Dir(goDir, "git", "checkout", "--detach", afterBranch)); err != nil {
 		return err
 	}
 
 	// Move to the "before" commit, but keep the "after" stage.
-	return executil.Run(executil.Dir(goDir, "git", "reset", "--soft", stageDiffBeforeBranch))
+	return executil.Run(executil.Dir(goDir, "git", "reset", "--soft", beforeBranch))
 }
