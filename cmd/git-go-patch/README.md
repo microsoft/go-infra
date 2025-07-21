@@ -33,6 +33,7 @@ The interactive shell feature (`rebase -shell`) works on both Unix and Windows:
 The shell prompt is automatically updated to show `(git-go-patch)` to indicate you're in the interactive mode:
 * Unix shells: Updates the `PS1` environment variable
 * Windows Command Prompt: Updates the `PROMPT` environment variable
+* Powershell is not currently supported
 
 Then, run the command to see the help documentation:
 
@@ -62,29 +63,21 @@ Use `git go-patch rebase -shell` for a guided, automated workflow:
 1. Run `git go-patch rebase -shell`
    * This opens a new shell session in the submodule directory
    * The prompt shows `(git-go-patch)` to remind you of the special mode
-   * Run `git rebase -i` with the suggested base commit to start your interactive rebase
+   * An interactive rebase starts automatically with the suggested base commit
    * Make your changes, resolve conflicts, etc.
    * Optionally run `code .` to open VS Code in the submodule context
-1. When finished, type `exit` to close the shell and automatically extract changes
-   * To skip automatic extraction, exit with a non-zero code: `exit 1`
-   * The tool automatically runs `git go-patch extract` if you exit successfully (exit code 0)
-
-**Controlling extraction with exit codes:**
-* Exit with code 0 (normal `exit`): Automatically runs `git go-patch extract`
-* Exit with non-zero code (`exit 1`): Skips extraction, you handle it manually later
-* Use `--skip-extract` flag: Disables extraction regardless of exit code
-
-**Safety protections:**
-* The tool prevents nested git-go-patch shell sessions
-* Detects ongoing git operations (rebase, merge, cherry-pick) and warns before proceeding
-* Cross-platform shell support (Windows cmd/PowerShell, Unix bash/zsh/etc.)
+   * When finished, type `exit` to close the shell
+   * **Exit behavior:**
+     * Exit with code 0 (normal `exit`): Automatically runs `git go-patch extract`
+     * Exit with non-zero code (`exit 1`): Skips extraction, you handle it manually later
+     * Use `--skip-extract` flag: Disables extraction regardless of exit code
 
 ### Option B: Manual workflow
 
    * Commit-then-rebase:
      1. Make some changes in the submodule and create commits.
      1. Use `git go-patch rebase` to start an interactive rebase of the commits that include the patch changes and your changes.
-        * This command runs `git rebase -i` with with the necessary base commit.
+        * This command runs `git go-patch rebase` with with the necessary base commit.
         * Reorder the list to put each of your commits under the patch file that it applies to.
         * For each commit, choose `squash` if you want to edit the commit message or `fixup` if you don't. Use `pick` if you want to create a new patch file.
      1. Follow the usual interactive rebase process.
