@@ -23,6 +23,10 @@ type Config struct {
 	// This key is required and must be set before sending any telemetry.
 	InstrumentationKey string
 
+	// UploadConfig is the json-encoded telemetry upload configuration.
+	// This parameter is required.
+	UploadConfig []byte
+
 	// The endpoint URL to which telemetry will be sent.
 	// If empty, it defaults to https://dc.services.visualstudio.com/v2/track.
 	Endpoint string
@@ -37,29 +41,19 @@ type Config struct {
 	// If zero, it defaults to 10 seconds.
 	MaxBatchInterval time.Duration
 
-	// UploadConfigPath is the path to the telemetry upload configuration file.
-	// If empty, the default configuration embedded in the binary will be used.
-	UploadConfigPath string
-
 	// Allow uploading telemetry for Go development versions even if the
 	// upload configuration does not explicitly include them.
 	AllowGoDevel bool
 }
 
-//go:embed config.json
-var uploadConfigData []byte
-
 var countersToUpload map[string]struct{}
 
 // Start initializes telemetry using the specified configuration.
 func Start(cfg Config) {
-	var uploadConfig *config.UploadConfig
-	var err error
-	if cfg.UploadConfigPath != "" {
-		uploadConfig, err = config.ReadConfig(cfg.UploadConfigPath)
-	} else {
-		uploadConfig, err = config.UnmarshalConfig(uploadConfigData)
+	if cfg.UploadConfig == nil {
+		panic("UploadConfigPath must be set in telemetry.Config")
 	}
+	uploadConfig, err := config.UnmarshalConfig(cfg.UploadConfig)
 	if err != nil {
 		panic(fmt.Errorf("failed to unmarshal telemetry config: %v", err))
 	}

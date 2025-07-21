@@ -51,6 +51,9 @@
 			"Counters": [
 				{
 					"Name": "go/invocations"
+				},
+				{
+					"Name": "go/goexperiment:{ms_tls_config_schannel,systemcrypto,nosystemcrypto,opensslcrypto,cngcrypto,darwincrypto}"
 				}
 			]
 		}
