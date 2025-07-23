@@ -227,6 +227,11 @@ func (channel *inMemoryChannel) start() {
 
 		case <-channel.cancelCtx.Done():
 			// This is the only path to exit the loop.
+			channel.sendQueueMu.Lock()
+			defer channel.sendQueueMu.Unlock()
+			if len(channel.sendQueue) > 0 {
+				channel.error(fmt.Errorf("failed to transmit %d telemetry items: %w", len(channel.sendQueue), context.Cause(channel.cancelCtx)))
+			}
 			timer.Stop()
 			return
 		}
@@ -279,10 +284,17 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	// Pop the first item from the queue.
 	channel.sendQueueMu.Lock()
 	itemsPtr := channel.sendQueue[0]
-	channel.sendQueue = channel.sendQueue[1:]
 	channel.sendQueueMu.Unlock()
-	defer channel.itemsBuf.Put(itemsPtr)
 
+	defer func() {
+		// Defer removing the item from the queue so
+		// that we can report an error if the channel
+		// is closed before the transmission completes.
+		channel.sendQueueMu.Lock()
+		channel.sendQueue = channel.sendQueue[1:]
+		channel.sendQueueMu.Unlock()
+		channel.itemsBuf.Put(itemsPtr)
+	}()
 	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
 		channel.error(fmt.Errorf("failed to transmit %d telemetry items: %v", len(*itemsPtr), err))

@@ -107,6 +107,7 @@ func TestClientInterval(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 		},
+		itemsIgnored: 1,
 	}
 	plan.run(t)
 }
@@ -124,6 +125,7 @@ func TestClientIntervalMultiple(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusOK, EventIndices: []int{2}},
 		},
+		itemsIgnored: 1,
 	}
 	plan.run(t)
 }
@@ -182,6 +184,7 @@ func TestClientBatchIntervalFlush(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{5}},    // interval
 			{StatusCode: http.StatusOK, EventIndices: []int{6}},    // flush
 		},
+		itemsIgnored: 1,
 	}
 	plan.run(t)
 }
