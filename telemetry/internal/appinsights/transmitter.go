@@ -142,28 +142,45 @@ func canRetryBackendError(berror contracts.BackendResponseError) bool {
 		berror.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResponse) getRetryItems(items []batchItem) []batchItem {
+func (result *transmissionResponse) getRetryItems(items []batchItem) (succed, failed int, retries []batchItem) {
+	defer func() {
+		for i := len(retries) - 1; i >= 0; i-- {
+			item := &retries[i]
+			// If the item has been retried too many times, we consider it failed.
+			if item.retries > 2 {
+				retries = retries[:i]
+				failed++
+				continue
+			}
+			item.retries++
+		}
+	}()
 	if result.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
 		slices.SortFunc(result.response.Errors, func(a, b contracts.BackendResponseError) int {
 			return cmp.Compare(a.Index, b.Index)
 		})
 
-		resultItems := make([]batchItem, 0, len(result.response.Errors))
+		retries = make([]batchItem, 0, len(result.response.Errors))
 		// Find each retryable error
 		for _, responseResult := range result.response.Errors {
+			if responseResult.StatusCode == successResponse {
+				succed++
+				continue
+			}
 			if !canRetryBackendError(responseResult) {
+				failed++
 				continue
 			}
 			if responseResult.Index >= len(items) {
 				continue
 			}
-			resultItems = append(resultItems, items[responseResult.Index])
+			retries = append(retries, items[responseResult.Index])
 		}
 
-		return resultItems
+		return succed, failed, retries
 	} else if result.canRetry() {
-		return items
+		return 0, 0, items
 	}
-	return nil
+	return 0, len(items), nil
 }

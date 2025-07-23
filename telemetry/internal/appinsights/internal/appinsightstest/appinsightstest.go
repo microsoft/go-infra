@@ -48,7 +48,6 @@ type Action struct {
 	Type    ActionType
 	Delay   time.Duration
 	Context context.Context
-	Error   string // Expected error to be returned by the action, if any.
 }
 
 func (a Action) do(c *Client) {
@@ -58,7 +57,6 @@ func (a Action) do(c *Client) {
 	}
 
 	c.n++
-	var err error
 	switch a.Type {
 	case TrackAction:
 		name := "msg_" + strconv.Itoa(c.n)
@@ -69,23 +67,16 @@ func (a Action) do(c *Client) {
 	case FlushAction:
 		c.client.Flush()
 	case StopAction:
-		err = c.client.Stop()
+		c.client.Stop()
 	case CloseAction:
 		if a.Context == nil {
 			a.Context = context.Background()
 		}
-		err = c.client.Close(a.Context)
+		c.client.Close(a.Context)
 	case SleepAction:
 		// Slept above.
 	default:
 		panic(fmt.Sprintf("unknown action type: %d", a.Type))
-	}
-	var errStr string
-	if err != nil {
-		errStr = err.Error()
-	}
-	if errStr != a.Error {
-		c.t.Errorf("action %d: expected error %v, got %v", c.n, a.Error, err)
 	}
 }
 
@@ -116,8 +107,9 @@ type Client struct {
 	server  *testServer
 	actions []Action
 
-	n      int
-	closed bool
+	n        int
+	closed   bool
+	closeErr error
 }
 
 // New creates a new test client with the specified actions and responses.
@@ -170,7 +162,7 @@ func (c *Client) Act() {
 // Close closes the client and waits for all actions to be executed.
 func (c *Client) Close(ctx context.Context) error {
 	if c.closed {
-		return nil
+		return c.closeErr
 	}
 	rem := len(c.actions) - c.n
 	if rem > 0 {
@@ -180,6 +172,7 @@ func (c *Client) Close(ctx context.Context) error {
 	c.server.close()
 	err := c.client.Close(ctx)
 	c.closed = true
+	c.closeErr = err
 	return err
 }
 

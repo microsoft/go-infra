@@ -26,7 +26,7 @@ type testPlan struct {
 	maxBatchInterval time.Duration
 	actions          []appinsightstest.Action
 	responses        []appinsightstest.ServerResponse
-	itemsIgnored     int
+	itemsFailed      int
 }
 
 func (plan testPlan) run(t *testing.T) {
@@ -37,8 +37,8 @@ func (plan testPlan) run(t *testing.T) {
 
 		client.Act()
 		err := client.Close(t.Context())
-		if plan.itemsIgnored > 0 {
-			want := fmt.Sprintf(`failed to transmit %d telemetry items:`, plan.itemsIgnored)
+		if plan.itemsFailed > 0 {
+			want := fmt.Sprintf(`failed to transmit %d telemetry items`, plan.itemsFailed)
 			if err == nil {
 				t.Errorf("expected error %q, got nil", want)
 			} else if !strings.Contains(err.Error(), want) {
@@ -57,6 +57,7 @@ func TestClientNoUpload(t *testing.T) {
 			{Type: appinsightstest.TrackAction},
 			{Type: appinsightstest.StopAction},
 		},
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -72,7 +73,7 @@ func TestClientBatch(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 		},
-		itemsIgnored: 1,
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -91,7 +92,7 @@ func TestClientBatchMultiple(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusOK, EventIndices: []int{2, 3}},
 		},
-		itemsIgnored: 1,
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -107,7 +108,7 @@ func TestClientInterval(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 		},
-		itemsIgnored: 1,
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -125,7 +126,7 @@ func TestClientIntervalMultiple(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusOK, EventIndices: []int{2}},
 		},
-		itemsIgnored: 1,
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -184,7 +185,7 @@ func TestClientBatchIntervalFlush(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{5}},    // interval
 			{StatusCode: http.StatusOK, EventIndices: []int{6}},    // flush
 		},
-		itemsIgnored: 1,
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -199,6 +200,7 @@ func TestClientFailNoRetry(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusBadRequest, EventIndices: []int{0, 1}},
 		},
+		itemsFailed: 2,
 	}
 	plan.run(t)
 }
@@ -236,6 +238,7 @@ func TestClientFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 		},
+		itemsFailed: 2,
 	}
 	plan.run(t)
 }
@@ -259,6 +262,7 @@ func TestClientPartialFailNoRetry(t *testing.T) {
 				},
 			},
 		},
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -309,6 +313,7 @@ func TestClientPartialFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 		},
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -321,6 +326,7 @@ func TestClientFlushAfterStop(t *testing.T) {
 			{Type: appinsightstest.StopAction},
 			{Type: appinsightstest.FlushAction},
 		},
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
@@ -334,7 +340,7 @@ func TestClientThrottle(t *testing.T) {
 			{Type: appinsightstest.FlushAction},
 			{Type: appinsightstest.TrackAction, Delay: 5 * time.Second}, // dropped
 			{Type: appinsightstest.FlushAction},
-			{Type: appinsightstest.CloseAction, Error: "dropped 1 telemetry items due to throttling"},
+			{Type: appinsightstest.CloseAction},
 		},
 		responses: []appinsightstest.ServerResponse{
 			{
@@ -344,6 +350,7 @@ func TestClientThrottle(t *testing.T) {
 			},
 			{StatusCode: http.StatusOK, EventIndices: []int{0}},
 		},
+		itemsFailed: 1,
 	}
 	plan.run(t)
 }
