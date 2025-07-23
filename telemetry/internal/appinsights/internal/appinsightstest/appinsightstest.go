@@ -7,14 +7,12 @@
 package appinsightstest
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +48,7 @@ type Action struct {
 	Type    ActionType
 	Delay   time.Duration
 	Context context.Context
+	Error   string // Expected error to be returned by the action, if any.
 }
 
 func (a Action) do(c *Client) {
@@ -59,6 +58,7 @@ func (a Action) do(c *Client) {
 	}
 
 	c.n++
+	var err error
 	switch a.Type {
 	case TrackAction:
 		name := "msg_" + strconv.Itoa(c.n)
@@ -69,16 +69,23 @@ func (a Action) do(c *Client) {
 	case FlushAction:
 		c.client.Flush()
 	case StopAction:
-		c.client.Stop()
+		err = c.client.Stop()
 	case CloseAction:
 		if a.Context == nil {
 			a.Context = context.Background()
 		}
-		c.client.Close(a.Context)
+		err = c.client.Close(a.Context)
 	case SleepAction:
 		// Slept above.
 	default:
 		panic(fmt.Sprintf("unknown action type: %d", a.Type))
+	}
+	var errStr string
+	if err != nil {
+		errStr = err.Error()
+	}
+	if errStr != a.Error {
+		c.t.Errorf("action %d: expected error %v, got %v", c.n, a.Error, err)
 	}
 }
 
@@ -108,7 +115,6 @@ type Client struct {
 	client  *appinsights.Client
 	server  *testServer
 	actions []Action
-	buf     *bytes.Buffer
 
 	n      int
 	closed bool
@@ -122,13 +128,11 @@ type Client struct {
 // to avoid unintended uploads during the test. Use [Client.SetMaxBatchSize]
 // and [Client.SetMaxBatchInterval] to set them to a specific value.
 func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
-	errbuf := &bytes.Buffer{}
 	server := newTestServer(t, responses...)
 	client := &appinsights.Client{
 		InstrumentationKey: test_ikey,
 		Endpoint:           fmt.Sprintf("%s/v2/track", server.srv.URL),
 		HTTPClient:         server.srv.Client(),
-		ErrorLog:           log.New(errbuf, "", 0),
 		MaxBatchSize:       1024,
 		MaxBatchInterval:   100 * time.Hour,
 	}
@@ -136,7 +140,6 @@ func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
 		t:       t,
 		client:  client,
 		server:  server,
-		buf:     errbuf,
 		actions: actions,
 	}
 }
@@ -165,9 +168,9 @@ func (c *Client) Act() {
 }
 
 // Close closes the client and waits for all actions to be executed.
-func (c *Client) Close(ctx context.Context) {
+func (c *Client) Close(ctx context.Context) error {
 	if c.closed {
-		return
+		return nil
 	}
 	rem := len(c.actions) - c.n
 	if rem > 0 {
@@ -175,13 +178,9 @@ func (c *Client) Close(ctx context.Context) {
 	}
 	// Close the server before the client to ensure that we detect outstanding requests as errors.
 	c.server.close()
-	c.client.Close(ctx)
+	err := c.client.Close(ctx)
 	c.closed = true
-}
-
-// ErrorOutput returns the error output captured during the test.
-func (c *Client) ErrorOutput() string {
-	return c.buf.String()
+	return err
 }
 
 // ServerResponse represents a response from the test server.

@@ -7,9 +7,10 @@ package appinsights_test
 
 import (
 	"bytes"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ type testPlan struct {
 	maxBatchInterval time.Duration
 	actions          []appinsightstest.Action
 	responses        []appinsightstest.ServerResponse
+	itemsIgnored     int
 }
 
 func (plan testPlan) run(t *testing.T) {
@@ -34,7 +36,17 @@ func (plan testPlan) run(t *testing.T) {
 		client.SetMaxBatchInterval(plan.maxBatchInterval)
 
 		client.Act()
-		client.Close(t.Context())
+		err := client.Close(t.Context())
+		if plan.itemsIgnored > 0 {
+			want := fmt.Sprintf(`failed to transmit %d telemetry items:`, plan.itemsIgnored)
+			if err == nil {
+				t.Errorf("expected error %q, got nil", want)
+			} else if !strings.Contains(err.Error(), want) {
+				t.Errorf("expected error %q, got %q", want, err)
+			}
+		} else if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
 	})
 }
 
@@ -60,6 +72,7 @@ func TestClientBatch(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 		},
+		itemsIgnored: 1,
 	}
 	plan.run(t)
 }
@@ -78,6 +91,7 @@ func TestClientBatchMultiple(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusOK, EventIndices: []int{2, 3}},
 		},
+		itemsIgnored: 1,
 	}
 	plan.run(t)
 }
@@ -317,7 +331,7 @@ func TestClientThrottle(t *testing.T) {
 			{Type: appinsightstest.FlushAction},
 			{Type: appinsightstest.TrackAction, Delay: 5 * time.Second}, // dropped
 			{Type: appinsightstest.FlushAction},
-			{Type: appinsightstest.CloseAction},
+			{Type: appinsightstest.CloseAction, Error: "dropped 1 telemetry items due to throttling"},
 		},
 		responses: []appinsightstest.ServerResponse{
 			{
@@ -379,7 +393,6 @@ func (t fakeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func BenchmarkClientBurstPerformance(b *testing.B) {
 	client := &appinsights.Client{
 		InstrumentationKey: test_ikey,
-		ErrorLog:           log.New(io.Discard, "", 0),
 		HTTPClient: &http.Client{
 			Transport: fakeTransport{
 				code: http.StatusOK,

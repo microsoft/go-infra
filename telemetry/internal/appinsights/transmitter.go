@@ -83,7 +83,7 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 
 	resp, err := transmitter.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to transmit telemetry: %v", err)
+		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
 
