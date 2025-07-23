@@ -24,11 +24,12 @@ jobs:
         displayName: Test
         
       - script: |
-          go test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
+          # The telemetry package requires synctest, which is not production-ready until Go 1.25.
+          go install golang.org/dl/go1.25rc2@latest
+          go1.25rc2 download
+          go1.25rc2 test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
         displayName: Test Telemetry
         workingDirectory: $(Build.SourcesDirectory)/telemetry
-        env:
-          GOEXPERIMENT: synctest
 
       - script: |
           go run ./cmd/json2junit -in $(Build.StagingDirectory)/TestResults.json -out $(Build.StagingDirectory)/TestResults.xml
