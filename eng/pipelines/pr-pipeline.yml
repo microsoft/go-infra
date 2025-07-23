@@ -25,9 +25,8 @@ jobs:
         
       - script: |
           # The telemetry package requires synctest, which is not production-ready until Go 1.25.
-          go install golang.org/dl/go1.25rc2@latest
-          go1.25rc2 download
-          go1.25rc2 test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
+          go run golang.org/dl/go1.25rc2@latest download
+          go run golang.org/dl/go1.25rc2@latest test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
         displayName: Test Telemetry
         workingDirectory: $(Build.SourcesDirectory)/telemetry
 
