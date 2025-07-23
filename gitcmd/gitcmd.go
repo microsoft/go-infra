@@ -99,6 +99,10 @@ func CheckoutRevToTargetDir(dir, rev, path, targetDir string) error {
 		if !filepath.IsLocal(name) {
 			continue
 		}
+		// Additional check to prevent directory traversal attacks
+		if strings.Contains(name, "..") {
+			continue
+		}
 		// Don't create dirs when specified, just make them when necessary.
 		if hdr.FileInfo().IsDir() {
 			continue
