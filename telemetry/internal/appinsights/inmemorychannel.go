@@ -6,7 +6,7 @@ package appinsights
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -27,7 +27,7 @@ type inMemoryChannel struct {
 	endpointAddr  string
 	batchSize     int
 	batchInterval time.Duration
-	errorLog      *log.Logger
+	logger        *slog.Logger
 
 	collectChan chan *contracts.Envelope
 	flushChan   chan struct{}
@@ -58,13 +58,13 @@ type retryMessage struct {
 }
 
 // newInMemoryChannel creates an inMemoryChannel instance and starts a background submission goroutine.
-func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client, errorLog *log.Logger) *inMemoryChannel {
+func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client, logger *slog.Logger) *inMemoryChannel {
 	// Set up the channel
 	channel := &inMemoryChannel{
 		endpointAddr:  endpointUrl,
 		batchSize:     batchSize,
 		batchInterval: batchInterval,
-		errorLog:      errorLog,
+		logger:        logger,
 		collectChan:   make(chan *contracts.Envelope),
 		flushChan:     make(chan struct{}),
 		retryChan:     make(chan retryMessage),
@@ -80,8 +80,18 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
-func (channel *inMemoryChannel) logf(format string, args ...any) {
-	channel.errorLog.Printf(format, args...)
+func (channel *inMemoryChannel) warn(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Warn(msg, args...)
+}
+
+func (channel *inMemoryChannel) error(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Error(msg, args...)
 }
 
 // Queues a single telemetry item
@@ -140,7 +150,7 @@ func (channel *inMemoryChannel) close(ctx context.Context) {
 
 func (channel *inMemoryChannel) checkInflight() {
 	if inflight := channel.inflight.Load(); inflight > 0 {
-		channel.logf("failed to transmit %d telemetry items: %v", inflight, context.Cause(channel.cancelCtx))
+		channel.error("failed to transmit telemetry items", "count", inflight, "error", context.Cause(channel.cancelCtx))
 	}
 }
 
@@ -197,7 +207,7 @@ func (channel *inMemoryChannel) start() {
 				// so if we get here, then we're no longer throttled.
 				channel.throttled.Store(false)
 				if dropped > 0 {
-					channel.logf("failed to transmit %d telemetry items", dropped)
+					channel.error("failed to transmit telemetry items", "count", dropped, "error", "throttled")
 					dropped = 0
 				}
 			}
@@ -283,7 +293,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	var succed, failed int
 	defer func() {
 		if failed > 0 {
-			channel.logf("failed to transmit %d telemetry items", failed)
+			channel.error("failed to transmit telemetry items", "count", failed, "error", context.Cause(channel.cancelCtx))
 		}
 		channel.inflight.Add(-int64(failed + succed))
 		channel.itemsBuf.Put(itemsPtr)

@@ -7,7 +7,7 @@ package appinsights
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights"
@@ -34,10 +34,9 @@ type Config struct {
 	// If zero, it defaults to 10 seconds.
 	MaxBatchInterval time.Duration
 
-	// ErrorLog specifies an optional logger for errors
-	// that occur when attempting to upload telemetry.
-	// If nil, errors are not logged.
-	ErrorLog *log.Logger
+	// Logger specifies a structured logger.
+	// If nil nothing is logged.
+	Logger *slog.Logger
 }
 
 // Start initializes telemetry using the specified configuration.
@@ -47,7 +46,7 @@ func Start(cfg Config) {
 		Endpoint:           cfg.Endpoint,
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxBatchInterval:   cfg.MaxBatchInterval,
-		ErrorLog:           cfg.ErrorLog,
+		Logger:             cfg.Logger,
 	})
 }
 

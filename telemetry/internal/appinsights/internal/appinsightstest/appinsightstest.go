@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -123,12 +123,16 @@ type Client struct {
 // and [Client.SetMaxBatchInterval] to set them to a specific value.
 func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
 	errbuf := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(errbuf, &slog.HandlerOptions{
+		Level: slog.LevelError,
+	}))
+
 	server := newTestServer(t, responses...)
 	client := &appinsights.Client{
 		InstrumentationKey: test_ikey,
 		Endpoint:           fmt.Sprintf("%s/v2/track", server.srv.URL),
 		HTTPClient:         server.srv.Client(),
-		ErrorLog:           log.New(errbuf, "", 0),
+		Logger:             logger,
 		MaxBatchSize:       1024,
 		MaxBatchInterval:   100 * time.Hour,
 	}

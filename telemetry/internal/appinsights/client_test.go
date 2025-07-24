@@ -41,7 +41,7 @@ func (plan testPlan) run(t *testing.T) {
 		synctest.Wait()
 		out := client.ErrorOutput()
 		if plan.itemsFailed > 0 {
-			want := fmt.Sprintf(`failed to transmit %d telemetry items`, plan.itemsFailed)
+			want := fmt.Sprintf(`msg="failed to transmit telemetry items" count=%d`, plan.itemsFailed)
 			if len(out) == 0 {
 				t.Errorf("expected error %q, got nil", want)
 			} else if !strings.Contains(out, want) {
