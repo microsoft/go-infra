@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights"
@@ -36,16 +37,18 @@ func (plan testPlan) run(t *testing.T) {
 		client.SetMaxBatchInterval(plan.maxBatchInterval)
 
 		client.Act()
-		err := client.Close(t.Context())
+		client.Close(t.Context())
+		synctest.Wait()
+		out := client.ErrorOutput()
 		if plan.itemsFailed > 0 {
 			want := fmt.Sprintf(`failed to transmit %d telemetry items`, plan.itemsFailed)
-			if err == nil {
+			if len(out) == 0 {
 				t.Errorf("expected error %q, got nil", want)
-			} else if !strings.Contains(err.Error(), want) {
-				t.Errorf("expected error %q, got %q", want, err)
+			} else if !strings.Contains(out, want) {
+				t.Errorf("expected error %q, got %q", want, out)
 			}
-		} else if err != nil {
-			t.Errorf("unexpected error: %v", err)
+		} else if len(out) > 0 {
+			t.Errorf("unexpected error: %v", out)
 		}
 	})
 }

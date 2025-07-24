@@ -6,7 +6,7 @@ package appinsights
 import (
 	"cmp"
 	"context"
-	"fmt"
+	"log"
 	"maps"
 	"net/http"
 	"sync"
@@ -45,6 +45,11 @@ type Client struct {
 	// If nil, no additional tags will be sent.
 	Tags map[string]string
 
+	// ErrorLog specifies an optional logger for errors
+	// that occur when attempting to upload telemetry.
+	// If nil, errors are not logged.
+	ErrorLog *log.Logger
+
 	// Function to filter out telemetry items by name before they are sent.
 	// If nil, all telemetry items are sent.
 	UploadFilter func(name string) bool
@@ -67,10 +72,10 @@ func (c *Client) init() {
 		batchSize := cmp.Or(c.MaxBatchSize, 1024)
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
 		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
-		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient)
+		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.ErrorLog)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
-			c.channel.error(fmt.Errorf("warning sanitizing tags: %v", err))
+			c.channel.logf("warning sanitizing tags: %v", err)
 		}
 
 		go c.channel.acceptLoop()
@@ -111,20 +116,18 @@ func (c *Client) Flush() {
 
 // Close flushes and tears down the submission goroutine and closes internal channels.
 // Waits until all pending telemetry items have been submitted.
-// Returns all errors accumulated during the upload process.
-func (c *Client) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) {
 	if !c.initialized.Load() {
-		return nil
+		return
 	}
-	return c.channel.close(ctx)
+	c.channel.close(ctx)
 }
 
 // Stop tears down the submission goroutines, closes internal channels.
 // Any telemetry waiting to be sent is discarded.
 // This is a more abrupt version of [Client.Close].
-// Returns all errors accumulated during the upload process.
-func (c *Client) Stop() error {
-	return c.channel.stop()
+func (c *Client) Stop() {
+	c.channel.stop()
 }
 
 // Submits the specified telemetry item.
@@ -135,7 +138,7 @@ func (c *Client) track(data contracts.EventData, n int64) {
 	c.init()
 	ev := c.context.envelop(data)
 	if err := ev.Sanitize(); err != nil {
-		c.channel.error(fmt.Errorf("warning sanitizing telemetry item: %v", err))
+		c.channel.logf("warning sanitizing telemetry item: %v", err)
 	}
 	for range n {
 		c.channel.send(ev)

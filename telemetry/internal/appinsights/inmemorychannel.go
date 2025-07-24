@@ -6,7 +6,7 @@ package appinsights
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -27,6 +27,7 @@ type inMemoryChannel struct {
 	endpointAddr  string
 	batchSize     int
 	batchInterval time.Duration
+	errorLog      *log.Logger
 
 	collectChan chan *contracts.Envelope
 	flushChan   chan struct{}
@@ -48,10 +49,6 @@ type inMemoryChannel struct {
 	inflight    atomic.Int64 // Number of items currently being sent.
 
 	itemsBuf sync.Pool
-
-	// errorLog is used to log errors that occur during transmission.
-	errorsMu sync.Mutex
-	errors   []error
 }
 
 type retryMessage struct {
@@ -61,12 +58,13 @@ type retryMessage struct {
 }
 
 // newInMemoryChannel creates an inMemoryChannel instance and starts a background submission goroutine.
-func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client) *inMemoryChannel {
+func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client, errorLog *log.Logger) *inMemoryChannel {
 	// Set up the channel
 	channel := &inMemoryChannel{
 		endpointAddr:  endpointUrl,
 		batchSize:     batchSize,
 		batchInterval: batchInterval,
+		errorLog:      errorLog,
 		collectChan:   make(chan *contracts.Envelope),
 		flushChan:     make(chan struct{}),
 		retryChan:     make(chan retryMessage),
@@ -82,16 +80,8 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
-func (channel *inMemoryChannel) error(err error) {
-	channel.errorsMu.Lock()
-	defer channel.errorsMu.Unlock()
-	channel.errors = append(channel.errors, err)
-}
-
-func (channel *inMemoryChannel) getError() error {
-	channel.errorsMu.Lock()
-	defer channel.errorsMu.Unlock()
-	return errors.Join(channel.errors...)
+func (channel *inMemoryChannel) logf(format string, args ...any) {
+	channel.errorLog.Printf(format, args...)
 }
 
 // Queues a single telemetry item
@@ -118,24 +108,23 @@ func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, item
 var errStopped = errors.New("client stopped")
 var errClosed = errors.New("client closed")
 
-func (channel *inMemoryChannel) stop() error {
+func (channel *inMemoryChannel) stop() {
 	if channel.closed.Load() {
-		return channel.getError()
+		return
 	}
 
 	channel.closed.Store(true)
 	channel.cancelCauseFunc(errStopped)
 	channel.checkInflight()
-	return channel.getError()
 }
 
 // close flushes and tears down the submission goroutine and closes internal
 // channels. Returns when all pending telemetry items have been submitted
 // (it is then safe to shut down without losing telemetry) or when
 // the context is canceled.
-func (channel *inMemoryChannel) close(ctx context.Context) error {
+func (channel *inMemoryChannel) close(ctx context.Context) {
 	if channel.closed.Load() {
-		return channel.getError()
+		return
 	}
 
 	channel.closed.Store(true)
@@ -147,12 +136,11 @@ func (channel *inMemoryChannel) close(ctx context.Context) error {
 		// Successfully flushed
 	}
 	channel.checkInflight()
-	return channel.getError()
 }
 
 func (channel *inMemoryChannel) checkInflight() {
 	if inflight := channel.inflight.Load(); inflight > 0 {
-		channel.error(fmt.Errorf("failed to transmit %d telemetry items: %w", inflight, context.Cause(channel.cancelCtx)))
+		channel.logf("failed to transmit %d telemetry items: %v", inflight, context.Cause(channel.cancelCtx))
 	}
 }
 
@@ -209,7 +197,7 @@ func (channel *inMemoryChannel) start() {
 				// so if we get here, then we're no longer throttled.
 				channel.throttled.Store(false)
 				if dropped > 0 {
-					channel.error(fmt.Errorf("failed to transmit %d telemetry items", dropped))
+					channel.logf("failed to transmit %d telemetry items", dropped)
 					dropped = 0
 				}
 			}
@@ -295,7 +283,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	var succed, failed int
 	defer func() {
 		if failed > 0 {
-			channel.error(fmt.Errorf("failed to transmit %d telemetry items", failed))
+			channel.logf("failed to transmit %d telemetry items", failed)
 		}
 		channel.inflight.Add(-int64(failed + succed))
 		channel.itemsBuf.Put(itemsPtr)

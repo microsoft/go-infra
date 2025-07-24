@@ -7,12 +7,14 @@
 package appinsightstest
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -106,10 +108,10 @@ type Client struct {
 	client  *appinsights.Client
 	server  *testServer
 	actions []Action
+	buf     *bytes.Buffer
 
-	n        int
-	closed   bool
-	closeErr error
+	n      int
+	closed bool
 }
 
 // New creates a new test client with the specified actions and responses.
@@ -120,11 +122,13 @@ type Client struct {
 // to avoid unintended uploads during the test. Use [Client.SetMaxBatchSize]
 // and [Client.SetMaxBatchInterval] to set them to a specific value.
 func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
+	errbuf := &bytes.Buffer{}
 	server := newTestServer(t, responses...)
 	client := &appinsights.Client{
 		InstrumentationKey: test_ikey,
 		Endpoint:           fmt.Sprintf("%s/v2/track", server.srv.URL),
 		HTTPClient:         server.srv.Client(),
+		ErrorLog:           log.New(errbuf, "", 0),
 		MaxBatchSize:       1024,
 		MaxBatchInterval:   100 * time.Hour,
 	}
@@ -132,6 +136,7 @@ func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
 		t:       t,
 		client:  client,
 		server:  server,
+		buf:     errbuf,
 		actions: actions,
 	}
 }
@@ -160,9 +165,9 @@ func (c *Client) Act() {
 }
 
 // Close closes the client and waits for all actions to be executed.
-func (c *Client) Close(ctx context.Context) error {
+func (c *Client) Close(ctx context.Context) {
 	if c.closed {
-		return c.closeErr
+		return
 	}
 	rem := len(c.actions) - c.n
 	if rem > 0 {
@@ -170,10 +175,13 @@ func (c *Client) Close(ctx context.Context) error {
 	}
 	// Close the server before the client to ensure that we detect outstanding requests as errors.
 	c.server.close()
-	err := c.client.Close(ctx)
+	c.client.Close(ctx)
 	c.closed = true
-	c.closeErr = err
-	return err
+}
+
+// ErrorOutput returns the error output captured during the test.
+func (c *Client) ErrorOutput() string {
+	return c.buf.String()
 }
 
 // ServerResponse represents a response from the test server.

@@ -5,8 +5,8 @@ package telemetry
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
+	"log"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -44,6 +44,11 @@ type Config struct {
 	// Allow uploading telemetry for Go development versions even if the
 	// upload configuration does not explicitly include them.
 	AllowGoDevel bool
+
+	// ErrorLog specifies an optional logger for errors
+	// that occur when attempting to upload telemetry.
+	// If nil, errors are not logged.
+	ErrorLog *log.Logger
 }
 
 var countersToUpload map[string]struct{}
@@ -102,6 +107,7 @@ func Start(cfg Config) {
 			"ai.cloud.role":      prog,
 		},
 		UploadFilter: uploadFilter,
+		ErrorLog:     cfg.ErrorLog,
 	})
 }
 

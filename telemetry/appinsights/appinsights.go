@@ -7,6 +7,7 @@ package appinsights
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights"
@@ -32,6 +33,11 @@ type Config struct {
 	// Maximum time to wait before sending a batch of telemetry.
 	// If zero, it defaults to 10 seconds.
 	MaxBatchInterval time.Duration
+
+	// ErrorLog specifies an optional logger for errors
+	// that occur when attempting to upload telemetry.
+	// If nil, errors are not logged.
+	ErrorLog *log.Logger
 }
 
 // Start initializes telemetry using the specified configuration.
@@ -41,18 +47,18 @@ func Start(cfg Config) {
 		Endpoint:           cfg.Endpoint,
 		MaxBatchSize:       cfg.MaxBatchSize,
 		MaxBatchInterval:   cfg.MaxBatchInterval,
+		ErrorLog:           cfg.ErrorLog,
 	})
 }
 
 // Close closes the telemetry client and flushes any remaining telemetry data.
 // It should be called when the application is shutting down to ensure all
 // telemetry data is sent before the program exits.
-// It returns any errors that occurred during the upload process.
-func Close(ctx context.Context) error {
+func Close(ctx context.Context) {
 	if telemetry.Client == nil {
-		return nil
+		return
 	}
-	return telemetry.Client.Close(ctx)
+	telemetry.Client.Close(ctx)
 }
 
 // TrackEvent sends a telemetry event with the specified name and properties.
