@@ -165,6 +165,7 @@ func (c *Client) SetMaxBatchInterval(interval time.Duration) {
 func (c *Client) Act() {
 	for _, action := range c.actions {
 		action.do(c)
+		synctest.Wait()
 	}
 }
 

@@ -30,7 +30,7 @@ type testPlan struct {
 	itemsPending     int
 	itemsRejected    int
 	itemsFailed      int
-	itemsThrottled   int
+	itemsDropped     int
 }
 
 func (plan testPlan) run(t *testing.T) {
@@ -43,7 +43,7 @@ func (plan testPlan) run(t *testing.T) {
 		client.Close(t.Context())
 		synctest.Wait()
 		out := client.ErrorOutput()
-		if plan.itemsPending == 0 && plan.itemsRejected == 0 && plan.itemsFailed == 0 && plan.itemsThrottled == 0 {
+		if plan.itemsPending == 0 && plan.itemsRejected == 0 && plan.itemsFailed == 0 && plan.itemsDropped == 0 {
 			if len(out) != 0 {
 				t.Errorf("unexpected error: %v", out)
 			}
@@ -51,7 +51,7 @@ func (plan testPlan) run(t *testing.T) {
 		testItems(t, "client closed with pending items", plan.itemsPending, out)
 		testItems(t, "server rejected items", plan.itemsRejected, out)
 		testItems(t, "upload request failed", plan.itemsFailed, out)
-		testItems(t, "items dropped due to throttling", plan.itemsThrottled, out)
+		testItems(t, "items dropped due to throttling", plan.itemsDropped, out)
 	})
 }
 
@@ -370,7 +370,7 @@ func TestClientThrottle(t *testing.T) {
 			},
 			{StatusCode: http.StatusOK, EventIndices: []int{0}},
 		},
-		itemsThrottled: 1,
+		itemsDropped: 1,
 	}
 	plan.run(t)
 }
