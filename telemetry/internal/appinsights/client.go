@@ -74,7 +74,7 @@ func (c *Client) init() {
 		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.Logger)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
-			c.channel.warn("warning sanitizing tags", "error", err)
+			c.channel.warn("tags have been sanitized", "error", err)
 		}
 
 		go c.channel.acceptLoop()
@@ -137,7 +137,7 @@ func (c *Client) track(data contracts.EventData, n int64) {
 	c.init()
 	ev := c.context.envelop(data)
 	if err := ev.Sanitize(); err != nil {
-		c.channel.warn("warning sanitizing telemetry item", "error", err)
+		c.channel.warn("tags have been sanitized", "error", err)
 	}
 	for range n {
 		c.channel.send(ev)
