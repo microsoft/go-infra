@@ -110,10 +110,6 @@ func (result *transmissionResponse) isSuccess() bool {
 			result.response.ItemsReceived == result.response.ItemsAccepted)
 }
 
-func (result *transmissionResponse) isFailure() bool {
-	return result.statusCode != successResponse && result.statusCode != partialSuccessResponse
-}
-
 func (result *transmissionResponse) canRetry() bool {
 	if result.isSuccess() {
 		return false

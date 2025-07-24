@@ -27,7 +27,10 @@ type testPlan struct {
 	maxBatchInterval time.Duration
 	actions          []appinsightstest.Action
 	responses        []appinsightstest.ServerResponse
+	itemsPending     int
+	itemsRejected    int
 	itemsFailed      int
+	itemsThrottled   int
 }
 
 func (plan testPlan) run(t *testing.T) {
@@ -40,17 +43,28 @@ func (plan testPlan) run(t *testing.T) {
 		client.Close(t.Context())
 		synctest.Wait()
 		out := client.ErrorOutput()
-		if plan.itemsFailed > 0 {
-			want := fmt.Sprintf(`msg="failed to transmit telemetry items" count=%d`, plan.itemsFailed)
-			if len(out) == 0 {
-				t.Errorf("expected error %q, got nil", want)
-			} else if !strings.Contains(out, want) {
-				t.Errorf("expected error %q, got %q", want, out)
+		if plan.itemsPending == 0 && plan.itemsRejected == 0 && plan.itemsFailed == 0 && plan.itemsThrottled == 0 {
+			if len(out) != 0 {
+				t.Errorf("unexpected error: %v", out)
 			}
-		} else if len(out) > 0 {
-			t.Errorf("unexpected error: %v", out)
 		}
+		testItems(t, "client closed with pending items", plan.itemsPending, out)
+		testItems(t, "server rejected items", plan.itemsRejected, out)
+		testItems(t, "upload request failed", plan.itemsFailed, out)
+		testItems(t, "items dropped due to throttling", plan.itemsThrottled, out)
 	})
+}
+
+func testItems(t *testing.T, msg string, n int, got string) {
+	t.Helper()
+	if n > 0 {
+		want := fmt.Sprintf(`msg="telemetry: %s" itemsLost=%d`, msg, n)
+		if !strings.Contains(got, want) {
+			t.Errorf("expected error %q, got %q", want, got)
+		}
+	} else if strings.Contains(got, msg) {
+		t.Errorf("expected no error for %q", msg)
+	}
 }
 
 func TestClientNoUpload(t *testing.T) {
@@ -60,7 +74,7 @@ func TestClientNoUpload(t *testing.T) {
 			{Type: appinsightstest.TrackAction},
 			{Type: appinsightstest.StopAction},
 		},
-		itemsFailed: 1,
+		itemsPending: 1,
 	}
 	plan.run(t)
 }
@@ -111,7 +125,8 @@ func TestClientInterval(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 		},
-		itemsFailed: 1,
+		itemsFailed:  1,
+		itemsPending: 1,
 	}
 	plan.run(t)
 }
@@ -129,7 +144,8 @@ func TestClientIntervalMultiple(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusOK, EventIndices: []int{2}},
 		},
-		itemsFailed: 1,
+		itemsFailed:  1,
+		itemsPending: 1,
 	}
 	plan.run(t)
 }
@@ -188,7 +204,8 @@ func TestClientBatchIntervalFlush(t *testing.T) {
 			{StatusCode: http.StatusOK, EventIndices: []int{5}},    // interval
 			{StatusCode: http.StatusOK, EventIndices: []int{6}},    // flush
 		},
-		itemsFailed: 1,
+		itemsPending: 1,
+		itemsFailed:  1,
 	}
 	plan.run(t)
 }
@@ -203,7 +220,7 @@ func TestClientFailNoRetry(t *testing.T) {
 		responses: []appinsightstest.ServerResponse{
 			{StatusCode: http.StatusBadRequest, EventIndices: []int{0, 1}},
 		},
-		itemsFailed: 2,
+		itemsRejected: 2,
 	}
 	plan.run(t)
 }
@@ -241,7 +258,7 @@ func TestClientFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 		},
-		itemsFailed: 2,
+		itemsRejected: 2,
 	}
 	plan.run(t)
 }
@@ -265,7 +282,7 @@ func TestClientPartialFailNoRetry(t *testing.T) {
 				},
 			},
 		},
-		itemsFailed: 1,
+		itemsRejected: 1,
 	}
 	plan.run(t)
 }
@@ -316,7 +333,7 @@ func TestClientPartialFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 		},
-		itemsFailed: 1,
+		itemsRejected: 1,
 	}
 	plan.run(t)
 }
@@ -329,7 +346,7 @@ func TestClientFlushAfterStop(t *testing.T) {
 			{Type: appinsightstest.StopAction},
 			{Type: appinsightstest.FlushAction},
 		},
-		itemsFailed: 1,
+		itemsPending: 1,
 	}
 	plan.run(t)
 }
@@ -353,7 +370,7 @@ func TestClientThrottle(t *testing.T) {
 			},
 			{StatusCode: http.StatusOK, EventIndices: []int{0}},
 		},
-		itemsFailed: 1,
+		itemsThrottled: 1,
 	}
 	plan.run(t)
 }

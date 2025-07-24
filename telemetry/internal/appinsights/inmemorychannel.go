@@ -80,18 +80,25 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
+func (channel *inMemoryChannel) info(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Info("telemetry: "+msg, args...)
+}
+
 func (channel *inMemoryChannel) warn(msg string, args ...any) {
 	if channel.logger == nil {
 		return
 	}
-	channel.logger.Warn(msg, args...)
+	channel.logger.Warn("telemetry: "+msg, args...)
 }
 
 func (channel *inMemoryChannel) error(msg string, args ...any) {
 	if channel.logger == nil {
 		return
 	}
-	channel.logger.Error(msg, args...)
+	channel.logger.Error("telemetry: "+msg, args...)
 }
 
 // Queues a single telemetry item
@@ -150,7 +157,7 @@ func (channel *inMemoryChannel) close(ctx context.Context) {
 
 func (channel *inMemoryChannel) checkInflight() {
 	if inflight := channel.inflight.Load(); inflight > 0 {
-		channel.error("failed to transmit telemetry items", "count", inflight, "error", context.Cause(channel.cancelCtx))
+		channel.error("client closed with pending items", "itemsLost", inflight)
 	}
 }
 
@@ -207,7 +214,7 @@ func (channel *inMemoryChannel) start() {
 				// so if we get here, then we're no longer throttled.
 				channel.throttled.Store(false)
 				if dropped > 0 {
-					channel.error("failed to transmit telemetry items", "count", dropped, "error", "throttled")
+					channel.error("items dropped due to throttling", "itemsLost", dropped)
 					dropped = 0
 				}
 			}
@@ -215,6 +222,7 @@ func (channel *inMemoryChannel) start() {
 			items = items[:0]
 
 		case msg := <-channel.retryChan:
+			channel.info("items enqueued for retry", "count", len(msg.items), "throttled", msg.throttled, "retryAfter", msg.retryAfter)
 			// If there is not enough space in the batch, drop the items.
 			space := channel.batchSize - len(items)
 			if space < len(msg.items) {
@@ -290,48 +298,29 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	channel.sendQueue = channel.sendQueue[1:]
 	channel.sendQueueMu.Unlock()
 
-	var succed, failed int
-	defer func() {
-		if failed > 0 {
-			channel.error("failed to transmit telemetry items", "count", failed, "error", context.Cause(channel.cancelCtx))
-		}
-		channel.inflight.Add(-int64(failed + succed))
-		channel.itemsBuf.Put(itemsPtr)
-	}()
+	defer channel.itemsBuf.Put(itemsPtr)
 	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
-		failed = len(*itemsPtr)
 		if result == nil {
+			channel.inflight.Add(-int64(len(*itemsPtr)))
+			channel.error("upload request failed", "itemsLost", len(*itemsPtr), "error", err)
 			return false
 		}
 	}
 	if result.isSuccess() {
-		succed = len(*itemsPtr)
-		return false
-	}
-	canRetry := result.canRetry()
-	throttled := result.isThrottled()
-	channel.warn(
-		"failed to transmit telemetry items",
-		"code", result.statusCode,
-		"received", result.response.ItemsReceived,
-		"accepted", result.response.ItemsAccepted,
-		"canRetry", canRetry,
-		"throttled", throttled,
-	)
-
-	if !canRetry {
-		failed = len(*itemsPtr)
+		channel.inflight.Add(-int64(len(*itemsPtr)))
 		return false
 	}
 
 	// Filter down to failed items.
-	var retryItems []batchItem
-	succed, failed, retryItems = result.getRetryItems(*itemsPtr)
+	succed, failed, retryItems := result.getRetryItems(*itemsPtr)
+	channel.inflight.Add(-int64(succed + failed))
+	if failed > 0 {
+		channel.error("server rejected items", "itemsLost", failed, "statusCode", result.statusCode)
+	}
 	if len(retryItems) == 0 {
 		return false
 	}
-
-	channel.retry(throttled, result.retryAfter, retryItems)
+	channel.retry(result.isThrottled(), result.retryAfter, retryItems)
 	return true
 }
