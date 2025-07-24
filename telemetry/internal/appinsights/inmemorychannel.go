@@ -311,6 +311,14 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	}
 	canRetry := result.canRetry()
 	throttled := result.isThrottled()
+	channel.warn(
+		"failed to transmit telemetry items",
+		"code", result.statusCode,
+		"received", result.response.ItemsReceived,
+		"accepted", result.response.ItemsAccepted,
+		"canRetry", canRetry,
+		"throttled", throttled,
+	)
 
 	if !canRetry {
 		failed = len(*itemsPtr)
