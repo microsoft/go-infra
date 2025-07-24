@@ -356,11 +356,10 @@ func TestClientThrottle(t *testing.T) {
 		maxBatchSize:     1,
 		maxBatchInterval: 1 * time.Second,
 		actions: []appinsightstest.Action{
-			{Type: appinsightstest.TrackAction}, // throttled
-			{Type: appinsightstest.FlushAction},
-			{Type: appinsightstest.TrackAction, Delay: 5 * time.Second}, // dropped
-			{Type: appinsightstest.FlushAction},
-			{Type: appinsightstest.CloseAction},
+			{Type: appinsightstest.TrackAction},                         // throttled
+			{Type: appinsightstest.FlushAction},                         // flush ignored due to throttling
+			{Type: appinsightstest.TrackAction},                         // dropped
+			{Type: appinsightstest.SleepAction, Delay: 5 * time.Second}, // wait for retry
 		},
 		responses: []appinsightstest.ServerResponse{
 			{

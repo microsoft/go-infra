@@ -345,7 +345,7 @@ func (srv *testServer) ServeHTTP(writer http.ResponseWriter, req *http.Request) 
 
 	writer.Header().Set("Content-Type", "application/json")
 	if resp.RetryDelay != 0 {
-		writer.Header().Set("Retry-After", time.Now().Add(resp.RetryDelay).Format(http.TimeFormat))
+		writer.Header().Set("Retry-After", time.Now().Add(resp.RetryDelay).UTC().Format(http.TimeFormat))
 	}
 
 	writer.WriteHeader(resp.StatusCode)
