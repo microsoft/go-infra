@@ -54,6 +54,9 @@
 				},
 				{
 					"Name": "go/goexperiment:{ms_tls_config_schannel,systemcrypto,nosystemcrypto,opensslcrypto,cngcrypto,darwincrypto}"
+				},
+				{
+					"Name": "go/subcommand:{build,install,run}"
 				}
 			]
 		}
