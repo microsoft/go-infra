@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -123,12 +123,16 @@ type Client struct {
 // and [Client.SetMaxBatchInterval] to set them to a specific value.
 func New(t *testing.T, actions []Action, responses ...ServerResponse) *Client {
 	errbuf := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(errbuf, &slog.HandlerOptions{
+		Level: slog.LevelError,
+	}))
+
 	server := newTestServer(t, responses...)
 	client := &appinsights.Client{
 		InstrumentationKey: test_ikey,
 		Endpoint:           fmt.Sprintf("%s/v2/track", server.srv.URL),
 		HTTPClient:         server.srv.Client(),
-		ErrorLog:           log.New(errbuf, "", 0),
+		Logger:             logger,
 		MaxBatchSize:       1024,
 		MaxBatchInterval:   100 * time.Hour,
 	}
@@ -161,6 +165,7 @@ func (c *Client) SetMaxBatchInterval(interval time.Duration) {
 func (c *Client) Act() {
 	for _, action := range c.actions {
 		action.do(c)
+		synctest.Wait()
 	}
 }
 
@@ -340,7 +345,7 @@ func (srv *testServer) ServeHTTP(writer http.ResponseWriter, req *http.Request) 
 
 	writer.Header().Set("Content-Type", "application/json")
 	if resp.RetryDelay != 0 {
-		writer.Header().Set("Retry-After", time.Now().Add(resp.RetryDelay).Format(http.TimeFormat))
+		writer.Header().Set("Retry-After", time.Now().Add(resp.RetryDelay).UTC().Format(http.TimeFormat))
 	}
 
 	writer.WriteHeader(resp.StatusCode)
