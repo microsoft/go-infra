@@ -313,7 +313,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	}
 
 	// Filter down to failed items.
-	succed, failed, retryItems := result.getRetryItems(*itemsPtr)
+	succeed, failed, retryItems := result.getRetryItems(*itemsPtr)
 	channel.inflight.Add(-int64(succed + failed))
 	if failed > 0 {
 		channel.error("server rejected items", "itemsLost", failed, "statusCode", result.statusCode)

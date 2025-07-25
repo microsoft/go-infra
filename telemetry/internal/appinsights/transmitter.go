@@ -138,7 +138,7 @@ func canRetryBackendError(berror contracts.BackendResponseError) bool {
 		berror.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResponse) getRetryItems(items []batchItem) (succed, failed int, retries []batchItem) {
+func (result *transmissionResponse) getRetryItems(items []batchItem) (succeed, failed int, retries []batchItem) {
 	defer func() {
 		for i := len(retries) - 1; i >= 0; i-- {
 			item := &retries[i]
