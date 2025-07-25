@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -299,28 +300,42 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	channel.sendQueueMu.Unlock()
 
 	defer channel.itemsBuf.Put(itemsPtr)
-	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
+	resp, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
-		if result == nil {
+		if resp == nil {
 			channel.inflight.Add(-int64(len(*itemsPtr)))
 			channel.error("upload request failed", "itemsLost", len(*itemsPtr), "error", err)
 			return false
 		}
 	}
-	if result.isSuccess() {
+	if resp.isSuccess() {
 		channel.inflight.Add(-int64(len(*itemsPtr)))
 		return false
 	}
 
-	// Filter down to failed items.
-	succeed, failed, retryItems := result.getRetryItems(*itemsPtr)
-	channel.inflight.Add(-int64(succed + failed))
+	// If the response is not successful, check if we can retry.
+	succeed, failed, retryItems := resp.result(*itemsPtr)
+
+	// Remove items that have been retried too many times.
+	retries := len(retryItems)
+	retryItems = slices.DeleteFunc(retryItems, func(item batchItem) bool {
+		return item.retries > 2
+	})
+	for i := range retryItems {
+		retryItems[i].retries++
+	}
+
+	dropped := retries - len(retryItems)
+	channel.inflight.Add(-int64(succeed + failed + dropped))
 	if failed > 0 {
-		channel.error("server rejected items", "itemsLost", failed, "statusCode", result.statusCode)
+		channel.error("server rejected items", "itemsLost", failed, "statusCode", resp.statusCode)
+	}
+	if dropped > 0 {
+		channel.error("items dropped due to retry limit", "itemsLost", dropped)
 	}
 	if len(retryItems) == 0 {
 		return false
 	}
-	channel.retry(result.isThrottled(), result.retryAfter, retryItems)
+	channel.retry(resp.isThrottled(), resp.retryAfter, retryItems)
 	return true
 }

@@ -103,31 +103,31 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 	return result, jsonErr
 }
 
-func (result *transmissionResponse) isSuccess() bool {
-	return result.statusCode == successResponse ||
+func (resp *transmissionResponse) isSuccess() bool {
+	return resp.statusCode == successResponse ||
 		// Partial response but all items accepted
-		(result.statusCode == partialSuccessResponse &&
-			result.response.ItemsReceived == result.response.ItemsAccepted)
+		(resp.statusCode == partialSuccessResponse &&
+			resp.response.ItemsReceived == resp.response.ItemsAccepted)
 }
 
-func (result *transmissionResponse) canRetry() bool {
-	if result.isSuccess() {
+func (resp *transmissionResponse) canRetry() bool {
+	if resp.isSuccess() {
 		return false
 	}
 
-	return result.statusCode == partialSuccessResponse ||
-		!result.retryAfter.IsZero() ||
-		(result.statusCode == requestTimeoutResponse ||
-			result.statusCode == serviceUnavailableResponse ||
-			result.statusCode == errorResponse ||
-			result.statusCode == tooManyRequestsResponse ||
-			result.statusCode == tooManyRequestsOverExtendedTimeResponse)
+	return resp.statusCode == partialSuccessResponse ||
+		!resp.retryAfter.IsZero() ||
+		(resp.statusCode == requestTimeoutResponse ||
+			resp.statusCode == serviceUnavailableResponse ||
+			resp.statusCode == errorResponse ||
+			resp.statusCode == tooManyRequestsResponse ||
+			resp.statusCode == tooManyRequestsOverExtendedTimeResponse)
 }
 
-func (result *transmissionResponse) isThrottled() bool {
-	return result.statusCode == tooManyRequestsResponse ||
-		result.statusCode == tooManyRequestsOverExtendedTimeResponse ||
-		!result.retryAfter.IsZero()
+func (resp *transmissionResponse) isThrottled() bool {
+	return resp.statusCode == tooManyRequestsResponse ||
+		resp.statusCode == tooManyRequestsOverExtendedTimeResponse ||
+		!resp.retryAfter.IsZero()
 }
 
 func canRetryBackendError(berror contracts.BackendResponseError) bool {
@@ -138,30 +138,20 @@ func canRetryBackendError(berror contracts.BackendResponseError) bool {
 		berror.StatusCode == tooManyRequestsOverExtendedTimeResponse
 }
 
-func (result *transmissionResponse) getRetryItems(items []batchItem) (succeed, failed int, retries []batchItem) {
-	defer func() {
-		for i := len(retries) - 1; i >= 0; i-- {
-			item := &retries[i]
-			// If the item has been retried too many times, we consider it failed.
-			if item.retries > 2 {
-				retries = retries[:i]
-				failed++
-				continue
-			}
-			item.retries++
-		}
-	}()
-	if result.statusCode == partialSuccessResponse {
+// result returns the number of succeeded and failed items, and a list of items that can be retried.
+// Items is the complete list of result that was sent.
+func (resp *transmissionResponse) result(items []batchItem) (succeed, failed int, retries []batchItem) {
+	if resp.statusCode == partialSuccessResponse {
 		// Make sure errors are ordered by index
-		slices.SortFunc(result.response.Errors, func(a, b contracts.BackendResponseError) int {
+		slices.SortFunc(resp.response.Errors, func(a, b contracts.BackendResponseError) int {
 			return cmp.Compare(a.Index, b.Index)
 		})
 
-		retries = make([]batchItem, 0, len(result.response.Errors))
+		retries = make([]batchItem, 0, len(resp.response.Errors))
 		// Find each retryable error
-		for _, responseResult := range result.response.Errors {
+		for _, responseResult := range resp.response.Errors {
 			if responseResult.StatusCode == successResponse {
-				succed++
+				succeed++
 				continue
 			}
 			if !canRetryBackendError(responseResult) {
@@ -174,8 +164,8 @@ func (result *transmissionResponse) getRetryItems(items []batchItem) (succeed, f
 			retries = append(retries, items[responseResult.Index])
 		}
 
-		return succed, failed, retries
-	} else if result.canRetry() {
+		return succeed, failed, retries
+	} else if resp.canRetry() {
 		return 0, 0, items
 	}
 	return 0, len(items), nil

@@ -23,14 +23,15 @@ import (
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
 
 type testPlan struct {
-	maxBatchSize     int
-	maxBatchInterval time.Duration
-	actions          []appinsightstest.Action
-	responses        []appinsightstest.ServerResponse
-	itemsPending     int
-	itemsRejected    int
-	itemsFailed      int
-	itemsDropped     int
+	maxBatchSize         int
+	maxBatchInterval     time.Duration
+	actions              []appinsightstest.Action
+	responses            []appinsightstest.ServerResponse
+	itemsPending         int
+	itemsRejected        int
+	itemsFailed          int
+	itemsDroppedThrottle int
+	itemsDroppedRetry    int
 }
 
 func (plan testPlan) run(t *testing.T) {
@@ -43,7 +44,9 @@ func (plan testPlan) run(t *testing.T) {
 		client.Close(t.Context())
 		synctest.Wait()
 		out := client.ErrorOutput()
-		if plan.itemsPending == 0 && plan.itemsRejected == 0 && plan.itemsFailed == 0 && plan.itemsDropped == 0 {
+		if plan.itemsPending == 0 && plan.itemsRejected == 0 && plan.itemsFailed == 0 &&
+			plan.itemsDroppedThrottle == 0 && plan.itemsDroppedRetry == 0 {
+
 			if len(out) != 0 {
 				t.Errorf("unexpected error: %v", out)
 			}
@@ -51,7 +54,8 @@ func (plan testPlan) run(t *testing.T) {
 		testItems(t, "client closed with pending items", plan.itemsPending, out)
 		testItems(t, "server rejected items", plan.itemsRejected, out)
 		testItems(t, "upload request failed", plan.itemsFailed, out)
-		testItems(t, "items dropped due to throttling", plan.itemsDropped, out)
+		testItems(t, "items dropped due to throttling", plan.itemsDroppedThrottle, out)
+		testItems(t, "items dropped due to retry limit", plan.itemsDroppedRetry, out)
 	})
 }
 
@@ -258,7 +262,7 @@ func TestClientFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0, 1}},
 		},
-		itemsRejected: 2,
+		itemsDroppedRetry: 2,
 	}
 	plan.run(t)
 }
@@ -333,7 +337,7 @@ func TestClientPartialFailRetry(t *testing.T) {
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 			{StatusCode: http.StatusInternalServerError, EventIndices: []int{0}},
 		},
-		itemsRejected: 1,
+		itemsDroppedRetry: 1,
 	}
 	plan.run(t)
 }
@@ -369,7 +373,7 @@ func TestClientThrottle(t *testing.T) {
 			},
 			{StatusCode: http.StatusOK, EventIndices: []int{0}},
 		},
-		itemsDropped: 1,
+		itemsDroppedThrottle: 1,
 	}
 	plan.run(t)
 }
