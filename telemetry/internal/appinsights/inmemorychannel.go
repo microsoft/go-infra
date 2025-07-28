@@ -314,7 +314,7 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	}
 
 	// If the response is not successful, check if we can retry.
-	succeed, failed, retryItems := resp.result(*itemsPtr)
+	succCount, failCount, retryItems := resp.result(*itemsPtr)
 
 	// Remove items that have been retried too many times.
 	retries := len(retryItems)
@@ -326,9 +326,9 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	}
 
 	dropped := retries - len(retryItems)
-	channel.inflight.Add(-int64(succeed + failed + dropped))
-	if failed > 0 {
-		channel.error("server rejected items", "itemsLost", failed, "statusCode", resp.statusCode)
+	channel.inflight.Add(-int64(succCount + failCount + dropped))
+	if failCount > 0 {
+		channel.error("server rejected items", "itemsLost", failCount, "statusCode", resp.statusCode)
 	}
 	if dropped > 0 {
 		channel.error("items dropped due to retry limit", "itemsLost", dropped)
