@@ -5,8 +5,8 @@ package telemetry
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -44,6 +44,10 @@ type Config struct {
 	// Allow uploading telemetry for Go development versions even if the
 	// upload configuration does not explicitly include them.
 	AllowGoDevel bool
+
+	// Logger specifies a structured logger.
+	// If nil nothing is logged.
+	Logger *slog.Logger
 }
 
 var countersToUpload map[string]struct{}
@@ -102,6 +106,7 @@ func Start(cfg Config) {
 			"ai.cloud.role":      prog,
 		},
 		UploadFilter: uploadFilter,
+		Logger:       cfg.Logger,
 	})
 }
 

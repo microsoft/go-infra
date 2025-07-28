@@ -6,7 +6,7 @@ package appinsights
 import (
 	"cmp"
 	"context"
-	"log"
+	"log/slog"
 	"maps"
 	"net/http"
 	"sync"
@@ -45,10 +45,9 @@ type Client struct {
 	// If nil, no additional tags will be sent.
 	Tags map[string]string
 
-	// ErrorLog specifies an optional logger for errors
-	// that occur when attempting to upload telemetry.
-	// If nil, logging is done via the log package's standard logger.
-	ErrorLog *log.Logger
+	// Logger specifies a structured logger.
+	// If nil nothing is logged.
+	Logger *slog.Logger
 
 	// Function to filter out telemetry items by name before they are sent.
 	// If nil, all telemetry items are sent.
@@ -72,15 +71,10 @@ func (c *Client) init() {
 		batchSize := cmp.Or(c.MaxBatchSize, 1024)
 		batchInterval := cmp.Or(c.MaxBatchInterval, 10*time.Second)
 		httpClient := cmp.Or(c.HTTPClient, http.DefaultClient)
-		errorLog := c.ErrorLog
-		if errorLog == nil {
-			std := log.Default()
-			errorLog = log.New(std.Writer(), std.Prefix()+"appinsights: ", std.Flags())
-		}
-		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, errorLog)
+		c.channel = newInMemoryChannel(endpoint, batchSize, batchInterval, httpClient, c.Logger)
 		c.context = setupContext(c.InstrumentationKey, c.Tags)
 		if err := contracts.SanitizeTags(c.context.Tags); err != nil {
-			c.channel.logf("Warning sanitizing tags: %v", err)
+			c.channel.warn("tags were not sanitary and have been sanitized", "error", err)
 		}
 
 		go c.channel.acceptLoop()
@@ -143,7 +137,7 @@ func (c *Client) track(data contracts.EventData, n int64) {
 	c.init()
 	ev := c.context.envelop(data)
 	if err := ev.Sanitize(); err != nil {
-		c.channel.logf("Warning sanitizing telemetry item: %v", err)
+		c.channel.warn("tags were not sanitary and have been sanitized", "error", err)
 	}
 	for range n {
 		c.channel.send(ev)

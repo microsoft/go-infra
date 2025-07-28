@@ -6,7 +6,7 @@ package appinsights
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sync"
@@ -28,7 +28,7 @@ type inMemoryChannel struct {
 	endpointAddr  string
 	batchSize     int
 	batchInterval time.Duration
-	errorLog      *log.Logger
+	logger        *slog.Logger
 
 	collectChan chan *contracts.Envelope
 	flushChan   chan struct{}
@@ -47,6 +47,7 @@ type inMemoryChannel struct {
 	sendQueue   []*[]batchItem
 	sendQueueMu sync.Mutex
 	sendMu      sync.Mutex
+	inflight    atomic.Int64 // Number of items currently being sent.
 
 	itemsBuf sync.Pool
 }
@@ -58,13 +59,13 @@ type retryMessage struct {
 }
 
 // newInMemoryChannel creates an inMemoryChannel instance and starts a background submission goroutine.
-func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client, errorLog *log.Logger) *inMemoryChannel {
+func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Duration, httpClient *http.Client, logger *slog.Logger) *inMemoryChannel {
 	// Set up the channel
 	channel := &inMemoryChannel{
 		endpointAddr:  endpointUrl,
 		batchSize:     batchSize,
 		batchInterval: batchInterval,
-		errorLog:      errorLog,
+		logger:        logger,
 		collectChan:   make(chan *contracts.Envelope),
 		flushChan:     make(chan struct{}),
 		retryChan:     make(chan retryMessage),
@@ -80,8 +81,25 @@ func newInMemoryChannel(endpointUrl string, batchSize int, batchInterval time.Du
 	return channel
 }
 
-func (channel *inMemoryChannel) logf(format string, args ...any) {
-	channel.errorLog.Printf(format, args...)
+func (channel *inMemoryChannel) info(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Info("telemetry: "+msg, args...)
+}
+
+func (channel *inMemoryChannel) warn(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Warn("telemetry: "+msg, args...)
+}
+
+func (channel *inMemoryChannel) error(msg string, args ...any) {
+	if channel.logger == nil {
+		return
+	}
+	channel.logger.Error("telemetry: "+msg, args...)
 }
 
 // Queues a single telemetry item
@@ -115,6 +133,7 @@ func (channel *inMemoryChannel) stop() {
 
 	channel.closed.Store(true)
 	channel.cancelCauseFunc(errStopped)
+	channel.checkInflight()
 }
 
 // close flushes and tears down the submission goroutine and closes internal
@@ -133,6 +152,13 @@ func (channel *inMemoryChannel) close(ctx context.Context) {
 		channel.cancelCauseFunc(context.Cause(ctx))
 	case <-channel.cancelCtx.Done():
 		// Successfully flushed
+	}
+	channel.checkInflight()
+}
+
+func (channel *inMemoryChannel) checkInflight() {
+	if inflight := channel.inflight.Load(); inflight > 0 {
+		channel.error("client closed with pending items", "itemsLost", inflight)
 	}
 }
 
@@ -156,12 +182,14 @@ func (channel *inMemoryChannel) start() {
 				// Check if there is space to add the item to the batch.
 				// If not, then drop the event.
 				if len(items) < channel.batchSize {
+					channel.inflight.Add(1)
 					items = append(items, batchItem{item, 0})
 				} else {
 					dropped++
 				}
 				continue
 			}
+			channel.inflight.Add(1)
 			items = append(items, batchItem{item, 0})
 			if len(items) >= channel.batchSize {
 				timer.Stop()
@@ -187,7 +215,7 @@ func (channel *inMemoryChannel) start() {
 				// so if we get here, then we're no longer throttled.
 				channel.throttled.Store(false)
 				if dropped > 0 {
-					channel.logf("Dropped %d telemetry items due to throttling", dropped)
+					channel.error("items dropped due to throttling", "itemsLost", dropped)
 					dropped = 0
 				}
 			}
@@ -195,6 +223,7 @@ func (channel *inMemoryChannel) start() {
 			items = items[:0]
 
 		case msg := <-channel.retryChan:
+			channel.info("items enqueued for retry", "count", len(msg.items), "throttled", msg.throttled, "retryAfter", msg.retryAfter)
 			// If there is not enough space in the batch, drop the items.
 			space := channel.batchSize - len(items)
 			if space < len(msg.items) {
@@ -269,42 +298,44 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	itemsPtr := channel.sendQueue[0]
 	channel.sendQueue = channel.sendQueue[1:]
 	channel.sendQueueMu.Unlock()
-	defer channel.itemsBuf.Put(itemsPtr)
 
-	result, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
+	defer channel.itemsBuf.Put(itemsPtr)
+	resp, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
 	if err != nil {
-		channel.logf("Error transmitting payload: %v", err)
-		if result == nil {
+		if resp == nil {
+			channel.inflight.Add(-int64(len(*itemsPtr)))
+			channel.error("upload request failed", "itemsLost", len(*itemsPtr), "error", err)
 			return false
 		}
 	}
-	if result.isSuccess() {
-		return false
-	}
-	canRetry := result.canRetry()
-	throttled := result.isThrottled()
-	channel.logf("Failed to transmit payload: code=%v, received=%d, accepted=%d, canRetry=%t, throttled=%t",
-		result.statusCode, result.response.ItemsReceived, result.response.ItemsAccepted, canRetry, throttled)
-
-	if !canRetry {
+	if resp.isSuccess() {
+		channel.inflight.Add(-int64(len(*itemsPtr)))
 		return false
 	}
 
-	// Filter down to failed items.
-	retryItems := result.getRetryItems(*itemsPtr)
+	// If the response is not successful, check if we can retry.
+	succCount, failCount, retryItems := resp.result(*itemsPtr)
 
-	// Delete items that have been retried more than 2 times.
+	// Remove items that have been retried too many times.
+	retries := len(retryItems)
 	retryItems = slices.DeleteFunc(retryItems, func(item batchItem) bool {
 		return item.retries > 2
 	})
+	for i := range retryItems {
+		retryItems[i].retries++
+	}
+
+	dropped := retries - len(retryItems)
+	channel.inflight.Add(-int64(succCount + failCount + dropped))
+	if failCount > 0 {
+		channel.error("server rejected items", "itemsLost", failCount, "statusCode", resp.statusCode)
+	}
+	if dropped > 0 {
+		channel.error("items dropped due to retry limit", "itemsLost", dropped)
+	}
 	if len(retryItems) == 0 {
 		return false
 	}
-	for i := range retryItems {
-		item := &retryItems[i]
-		item.retries++
-	}
-
-	channel.retry(throttled, result.retryAfter, retryItems)
+	channel.retry(resp.isThrottled(), resp.retryAfter, retryItems)
 	return true
 }
