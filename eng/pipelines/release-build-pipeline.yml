@@ -39,7 +39,7 @@ parameters:
   - name: runCanary
     displayName: Trigger go-canary pipeline
     type: boolean
-    default: false
+    default: true
   - name: runTag
     displayName: Tag the release.
     type: boolean
