@@ -88,7 +88,7 @@ func CheckoutRevToTargetDir(dir, rev, path, targetDir string) error {
 	}
 	r := tar.NewReader(bytes.NewReader(data))
 	for {
-		hdr, err := r.Next()
+		hdr, err := r.Next() // CodeQL [SM03409] false positive: this will be fixed in the CodeQL CLI (https://github.com/github/codeql/issues/20043)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break // End of archive.
