@@ -72,7 +72,17 @@ extends:
         suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
       tsa:
         enabled: ${{ not(parameters.disableTSA) }}
-        configFile: $(Build.SourcesDirectory)/.config/tsa/tsaoptions.json
+        config:
+          codebaseName: 'Go'
+          notificationAliases:
+            - 'golangdev@microsoft.com'
+          codebaseAdmins:
+            - 'redmond\golangdev'
+          instanceUrl: 'https://devdiv.visualstudio.com/'
+          projectName: 'DEVDIV'
+          areaPath: 'DevDiv\GoLang'
+          iterationPath: 'DevDiv'
+          allTools: true
       sourceRepositoriesToScan:
         include:
           - repository: GoMirror
