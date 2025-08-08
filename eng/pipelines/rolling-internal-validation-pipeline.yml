@@ -6,6 +6,8 @@
 # For go-infra: CodeQL on active branch.
 # For internal go-mirror: CG on active branches.
 
+# https://dev.azure.com/dnceng/internal/_build?definitionId=1356
+
 trigger: none
 pr: none
 schedules:
