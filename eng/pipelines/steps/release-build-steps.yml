@@ -69,33 +69,22 @@ steps:
       displayName: ⌚ Wait for internal mirror
       timeoutInMinutes: 16 # See https://github.com/microsoft/go-lab/issues/124
 
-    # When queueing a build, AzDO requires the given Commit is reachable from Branch, and the
-    # default Branch is "microsoft/main". So, we need to figure out the release branch name
-    # and save it as a variable to pass it to AzDO.
+    # Wait until a build is automatically started for the merged commit. We
+    # don't trigger the build ourselves because manual builds that do signing
+    # require approval through a manual, time-consuming procedure.
     #
-    # Testing adds a complication: testing commits won't be found in the actual release
-    # branches, so we need a way to override. This is done using BuildPipelineFullBranchName
-    # from the variable group. For actual releases, it should have the value
-    # "refs/heads/microsoft/$(UpstreamTargetBranchName)". But in a testing variable group, it
-    # can point at any ordinary dev branch that has the sync commit.
+    # If a build starts but can't be found by this command, the release runner
+    # can retry the pipeline with the build ID manually filled in.
     - script: |
-        releasego get-target-branch \
-          -version '${{ parameters.releaseVersion }}' \
-          -set-azdo-variable-branch-name UpstreamTargetBranchName
-      displayName: Get target branch containing commit
-
-    - script: |
-        releasego build-pipeline \
+        releasego wait-ci-trigger \
           -commit '$(poll2MicrosoftGoCommitHash)' \
-          -branch '$(BuildPipelineFullBranchName)' \
-          -id '$(GoPipelineID)' \
+          -pipeline-id '$(GoPipelineID)' \
+          -repository-id microsoft-go \
           -org 'https://dev.azure.com/dnceng/' \
           -proj 'internal' \
           -azdopat '$(System.AccessToken)' \
-          -set-azdo-variable poll3MicrosoftGoBuildID \
-          p releaseVersion '${{ parameters.releaseVersion }}' \
-          pOptional publishReleaseStudio true
-      displayName: 🚀 Run microsoft/go internal build
+          -set-azdo-variable poll3MicrosoftGoBuildID
+      displayName: ⌚ Find microsoft/go internal CI build
 
     - template: ../steps/report.yml
       parameters:
@@ -109,7 +98,7 @@ steps:
         reason: queued build
 
     - ${{ if eq(parameters.runInnerloop, true) }}:
-      # Above, we launched the official build. Now launch innerloop tests. We actually
+      # Above, we found the official build. Now launch innerloop tests. We actually
       # don't poll this build here: it's a release pipeline, so it reports its own
       # status to the release issue. This also means it runs in parallel.
       - script: |
