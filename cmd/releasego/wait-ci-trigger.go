@@ -110,8 +110,8 @@ func handleWaitCITrigger(p subcmd.ParseFunc) error {
 		}
 
 		statuses = slices.DeleteFunc(statuses, func(s git.GitStatus) bool {
-			if s.Context == nil {
-				return false
+			if s.Context == nil || s.Context.Name == nil {
+				return true
 			}
 			return *s.Context.Name != "build/"+*pipeline.Name
 		})
