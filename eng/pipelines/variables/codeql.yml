@@ -1,0 +1,10 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+variables:
+  - name: Codeql.PublishDatabase
+    value: true
+  - name: Codeql.PublishDatabaseLog
+    value: true
+  - name: Codeql.PublishDatabaseLog
+    value: true
