@@ -5,8 +5,7 @@
 
 variables:
   # Go1ESOfficial compile-time variable. Indicates that this is in the official
-  # pipeline. For example, image usage may be restricted, and the artifacts may
-  # be signed by a followup step, if this is the rolling build.
+  # pipeline.
   #
   # Check for not ending in (unofficial), rather than ending in (official).
   # Existing official pipeline names doing signing are "stuck" with their old
