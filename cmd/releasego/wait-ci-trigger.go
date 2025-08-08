@@ -105,7 +105,7 @@ func handleWaitCITrigger(p subcmd.ParseFunc) error {
 		if len(statuses) == topLimit {
 			return fmt.Errorf(
 				"found %d statuses for commit %q, which is the maximum number that could be returned. "+
-					"There may be more. It's not expected that there are this many statuses and this is likely a deeper problem.",
+					"There may be more. It's not expected that there are this many statuses and this is likely a deeper problem",
 				topLimit, *commit)
 		}
 
