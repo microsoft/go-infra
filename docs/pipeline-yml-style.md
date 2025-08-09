@@ -38,7 +38,7 @@ The workaround we use in microsoft/go CI to avoid wasting time is to use one sta
 
 ## Dynamic vs. typed template parameter declarations
 
-Most of our templates use dynamic template parameters. These look like:
+Some of our templates use dynamic template parameters. These look like:
 
 ```yml
 parameters:
@@ -51,7 +51,7 @@ In this mode, additional parameters can be passed when using a `- template: ...`
 
 A workaround is to instead use `${{ if eq(parameters.orange, true) }}` to (it seems) perform the implicit cast on both sides.
 
-Some templates instead use typed parameters:
+In general, typed parameters are preferable:
 
 ```yml
 parameters:
@@ -90,7 +90,67 @@ parameters:
 
 AzDO supports [variable templates](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops#variable-templates-with-parameter), but it's hard to determine where variables defined this way are usable. For example, a macro expansion `$(example)` will evaluate to define a job's pool name, but not the demands on that pool. A runtime expression `$[example]` will not evaluate in either case. A template expression `${{ example }}` will always work.
 
-For universal applicability, we use templates to share logic and values between stages. Another benefit is early evaluation: we can sometimes catch errors in the queue dialog (rather than at build-time), saving dev time.
+For universal applicability, we prefer templates and `parameters` (rather than `matrix` and `variables`) to share logic and values between stages.
+Another benefit of templates is early evaluation: we can sometimes catch errors in the queue dialog (rather than at build-time), saving dev iteration time.
+
+### Compile-time variable usage
+
+In a given YAML file, you can use `${{ variables['example'] }}` to access a variable defined in that file, or in a variable template used by the file.
+You can even use a previously defined variable to determine the value of a new variable within the sames `variables` block.
+This can be useful to calculate some values that would otherwise require deep template nesting.
+
+However, these variables don't generally pass through to jobs/stages template files.
+The behavior makes it appear that jobs and stages templates have their own `variables` scope that shadows the caller's `variables`.
+
+We tried to pass in the pipeline `variables` to job/stage `variables` using `parameters` and re-expansion.
+This partially works.
+However, because it requires piping variables through as `parameters` and a decent amount of duplicated logic to re-insert as `variables`, so we might as well just use the `parameters`.
+We can still use `variables` to perform chained reuse, but values that come from the parent might need to be accessed from `parameters` rather than `variables`.
+
+Templates are (generally) evaluated in text order.
+This determines whether `variables` is available as `${{ variables[...] }}` or not.
+
+## Pipeline templates to reduce duplication with official/unofficial split
+
+In some cases, we can use these blocks to maintain both the official and unofficial pipeline in the same yml file:
+
+```yml
+extends:
+  ${{ if variables['Go1ESOfficial'] }}:
+    template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ else }}:
+    template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+```
+
+```yml
+extends:
+  ${{ if variables['Go1ESOfficial'] }}:
+    template: azure-pipelines/MicroBuild.1ES.Official.yml@MicroBuildTemplate
+  ${{ else }}:
+    template: azure-pipelines/MicroBuild.1ES.Unofficial.yml@MicroBuildTemplate
+```
+
+(With [`pipeline.yml`](https://github.com/microsoft/go/blob/9ab06144d6e90e1686f7916bb6acc46134f0bd72/eng/pipeline/variables/pipeline.yml) variables template.)
+
+However, in other cases, we need to make separate pipeline entrypoint files.
+This happens when the build trigger can't be overridden by the Azure Pipelines UI.
+
+For example, the CI trigger can be disabled in the AzDO UI.
+A scheduled trigger can't be disabled: it can only be overridden to a different schedule, and the schedule must have some triggers in it.
+
+We can use `extends:` to share some logic, but not all.
+
+* A pipeline template can't define `variables`, so they must be duplicated in each entrypoint yml.
+  * Mitigation: we can use templates to define variables. But this is harder for devs: more files to keep in mind, and a decision to be made of whether making a template file is actually worthwhile.
+* The template can't define runtime `parameters`, so these must also be duplicated.
+  * Mitigation: pipelines with scheduled triggers typically don't have runtime `parameters`, because a human won't be running it manually.
+* The template can define `resources`.
+
+For consistency and a reasonable migration path for existing pipelines, we use this set of files when necessary:
+
+* `foo-pipeline.yml` - The original file for the `foo` pipeline. This is changed to use `extends: foo.yml`.
+* `foo-pipeline-unofficial.yml` - A new file for the unofficial `foo` pipeline to point to, with modified triggers.
+* `foo.yml` - The shared template file. Not intended to be usable as a pipeline entrypoint on its own.
 
 ## Editing tools
 

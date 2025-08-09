@@ -1,0 +1,28 @@
+# Copyright (c) Microsoft Corporation.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# This pipeline runs rolling validation.
+# For go-infra: CodeQL on active branch.
+# For internal go-mirror: CG on active branches.
+
+# https://dev.azure.com/dnceng/internal/_build?definitionId=1496
+
+trigger: none
+pr: none
+schedules: []
+
+variables:
+  - template: variables/pipeline.yml
+  - template: variables/codeql.yml
+  # The default cadence is ok for official branches. The cadence is per-branch.
+  # For a dev build, the cadence would prevent dev iteration.
+  # https://eng.ms/docs/cloud-ai-platform/devdiv/one-engineering-system-1es/1es-docs/codeql/codeql-general-faq#how-do-i-check-if-my-project-is-onboarded
+  - name: Codeql.Cadence
+    value: 0
+
+extends:
+  template: rolling-internal-validation.yml
+  parameters:
+    enableCodeQL: true
+    disableTSA: true

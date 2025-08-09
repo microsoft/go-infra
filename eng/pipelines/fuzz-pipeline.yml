@@ -3,6 +3,8 @@
 
 # Run fuzz tests internally on a schedule.
 
+# https://dev.azure.com/dnceng/internal/_build?definitionId=1182
+
 trigger: none
 pr: none
 schedules:

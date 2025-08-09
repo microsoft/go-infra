@@ -3,6 +3,8 @@
 
 # This pipeline validates PRs. It builds the repo and runs inner loop tests.
 
+# https://dev.azure.com/dnceng-public/public/_build?definitionId=197
+
 trigger: none
 pr:
   - main

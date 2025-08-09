@@ -1,17 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# https://dev.azure.com/dnceng/internal/_build?definitionId=1061
+# https://dev.azure.com/dnceng/internal/_build?definitionId=1495
 
 trigger: none
 pr: none
-schedules:
-  - cron: '0 16 * * Mon,Wed,Fri'
-    displayName: Sync from upstream three times a week
-    branches:
-      include:
-        - main
-    always: true
+schedules: []
 
 variables:
   - group: Microsoft-GoLang-bot
