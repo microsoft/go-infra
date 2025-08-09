@@ -136,7 +136,7 @@ steps:
           -proj 'internal' \
           -azdopat '$(System.AccessToken)'
       displayName: ⌚ Wait for internal build
-      timeoutInMinutes: 180
+      timeoutInMinutes: 240
 
     - template: ../steps/report.yml
       parameters:

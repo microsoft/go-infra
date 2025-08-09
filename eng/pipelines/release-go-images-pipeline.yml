@@ -178,7 +178,7 @@ extends:
                           -proj 'internal' \
                           -azdopat '$(System.AccessToken)'
                       displayName: ⌚ Wait for go-images build
-                      timeoutInMinutes: 120
+                      timeoutInMinutes: 180
 
                 - ${{ if eq(parameters.runPublishAnnouncement, true) }}:
                   - script: |
