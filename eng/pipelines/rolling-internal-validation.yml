@@ -1,0 +1,111 @@
+# Copyright (c) Microsoft Corporation.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# This pipeline runs rolling validation.
+# For go-infra: CodeQL on active branch.
+# For internal go-mirror: CG on active branches.
+
+parameters:
+  - name: enableCodeQL
+    displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications in dev branches.'
+    type: boolean
+    default: false
+  - name: disableTSA
+    displayName: '[Debug input] Disable TSA reporting. Use to try modifications in dev branches.'
+    type: boolean
+    default: false
+
+resources:
+  repositories:
+
+    - repository: GoMirror
+      type: git
+      name: internal/microsoft-go-mirror
+      trigger:
+        branches:
+          include:
+            - master
+            - release-branch.go*
+
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    pool:
+      name: NetCore1ESPool-Internal
+      image: 1es-windows-2022
+      os: windows
+    sdl:
+      codeql:
+        enabledOnNonDefaultBranches: ${{ parameters.enableCodeQL }}
+        language: go
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
+      tsa:
+        enabled: ${{ not(parameters.disableTSA) }}
+        config:
+          codebaseName: 'Go'
+          notificationAliases:
+            - 'golangdev@microsoft.com'
+          codebaseAdmins:
+            - 'redmond\golangdev'
+          instanceUrl: 'https://devdiv.visualstudio.com/'
+          projectName: 'DEVDIV'
+          areaPath: 'DevDiv\GoLang'
+          iterationPath: 'DevDiv'
+          allTools: true
+      sourceRepositoriesToScan:
+        include:
+          - repository: GoMirror
+
+    stages:
+      # Don't run CodeQL if this is triggered by a push to GoMirror.
+      - ${{ if in(variables['Build.Reason'], 'Schedule', 'Manual') }}:
+        - stage: GoInfraCodeQL
+          displayName: go-infra CodeQL
+          dependsOn: []
+          jobs:
+            - job: Analyze
+              workspace:
+                clean: all
+              steps:
+                - checkout: self
+
+                - task: GoTool@0
+                  inputs:
+                    version: 1.24.1
+
+                - script: |
+                    go build ./...
+                  displayName: go
+
+      - stage: MirrorCG
+        displayName: go-mirror CG
+        dependsOn: []
+        jobs:
+          - job: MirrorCG
+            workspace:
+              clean: all
+            variables:
+              - name: RepositoryUrl
+                value: $[resources.repositories.GoMirror.url]
+              - name: RepositoryVersion
+                value: $[resources.repositories.GoMirror.version]
+              # We check out the repository ourselves, so we need to manually
+              # specify the repository information.
+              - name: CG_ADO_BUILD_REPOSITORY_URI
+                value: $[resources.repositories.GoMirror.url]
+              - name: CG_ADO_BUILD_SOURCEBRANCH
+                value: $[resources.repositories.GoMirror.ref]
+              - name: CG_ADO_BUILD_SOURCEVERSION
+                value: $[resources.repositories.GoMirror.version]
+            steps:
+              - template: /eng/pipelines/steps/checkout-windows-task.yml@self
+                parameters:
+                  Build.Repository.Uri: $(RepositoryUrl)
+                  Build.SourceVersion: $(RepositoryVersion)
