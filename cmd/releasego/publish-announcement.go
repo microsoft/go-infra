@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -19,7 +20,10 @@ import (
 	"time"
 	"unicode"
 
+	gh "github.com/google/go-github/v65/github"
+
 	"github.com/microsoft/go-infra/githubutil"
+	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/internal/infrasort"
 	"github.com/microsoft/go-infra/subcmd"
@@ -200,10 +204,53 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
 	}
 
-	// Create a feature branch and open a PR to main instead of pushing directly.
-	branchName := fmt.Sprintf("blog/%s", releaseInfo.Slug)
-	if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil && !errors.Is(err, githubutil.ErrBranchExists) {
-		return fmt.Errorf("failed to create branch %s: %w", branchName, err)
+	// Create a feature branch (gitpr convention: dev/<purpose>/<name>) and open a PR to main.
+	prSet := gitpr.PRRefSet{Name: releaseInfo.Slug, Purpose: "blog"}
+	branchName := prSet.PRBranch()
+
+	// Ensure branch exists: if not, create from main.
+	var branchExists bool
+	if err := githubutil.Retry(func() error {
+		_, resp, err := client.Git.GetRef(ctx, org, repo, "refs/heads/"+branchName)
+		if err != nil {
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return nil // not found -> we'll create it
+			}
+			return err
+		}
+		branchExists = true
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed checking branch existence: %w", err)
+	}
+	if !branchExists {
+		var base *gh.Reference
+		if err := githubutil.Retry(func() error {
+			ref, _, err := client.Git.GetRef(ctx, org, repo, "refs/heads/main")
+			if err != nil {
+				return err
+			}
+			base = ref
+			return nil
+		}); err != nil {
+			return fmt.Errorf("failed to get base ref main: %w", err)
+		}
+
+		newRef := &gh.Reference{Ref: gh.String("refs/heads/" + branchName), Object: &gh.GitObject{SHA: base.Object.SHA}}
+		if err := githubutil.Retry(func() error {
+			_, _, err := client.Git.CreateRef(ctx, org, repo, newRef)
+			if err != nil {
+				var eresp *gh.ErrorResponse
+				if errors.As(err, &eresp) && eresp.Response != nil && eresp.Response.StatusCode == http.StatusUnprocessableEntity {
+					// Branch already exists due to race; treat as success.
+					return nil
+				}
+				return err
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("failed to create branch %s: %w", branchName, err)
+		}
 	}
 
 	if err := githubutil.Retry(func() error {
@@ -223,10 +270,15 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return err
 	}
 
-	prTitle := releaseInfo.Title
-	prBody := "Automated PR: add Microsoft Go release announcement."
-	if _, err := githubutil.CreatePullRequest(ctx, client, org, repo, branchName, "main", prTitle, prBody); err != nil && !errors.Is(err, githubutil.ErrPRExists) {
-		return fmt.Errorf("error creating pull request: %w", err)
+	// Create PR using gitpr.
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub auther: %w", err)
+	}
+	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
+	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title, "Automated PR: add Microsoft Go release announcement.")
+	if _, err := gitpr.PostGitHub(ownerRepo, prReq, auther); err != nil && !errors.Is(err, gitpr.ErrPRAlreadyExists) {
+		return fmt.Errorf("error creating pull request with gitpr: %w", err)
 	}
 
 	return nil
