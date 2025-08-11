@@ -68,6 +68,7 @@ trigger: none
 pr: none
 
 variables:
+  - template: variables/pipeline.yml
   - group: go-akams-config
   - group: go-akams-auth
   - group: Microsoft-GoLang-bot
@@ -84,7 +85,10 @@ resources:
       ref: refs/tags/release
 
 extends:
-  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ if variables['Go1ESOfficial'] }}:
+    template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ else }}:
+    template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
   parameters:
     sdl:
       sourceAnalysisPool:

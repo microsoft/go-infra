@@ -38,6 +38,7 @@ trigger: none
 pr: none
 
 variables:
+  - template: variables/pipeline.yml
   - group: Microsoft-GoLang-bot
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
@@ -50,7 +51,10 @@ resources:
       ref: refs/tags/release
 
 extends:
-  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ if variables['Go1ESOfficial'] }}:
+    template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ else }}:
+    template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
   parameters:
     sdl:
       sourceAnalysisPool:
