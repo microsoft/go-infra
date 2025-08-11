@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -19,8 +18,6 @@ import (
 	"text/template"
 	"time"
 	"unicode"
-
-	gh "github.com/google/go-github/v65/github"
 
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
@@ -207,51 +204,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	// Create a feature branch (gitpr convention: dev/<purpose>/<name>) and open a PR to main.
 	prSet := gitpr.PRRefSet{Name: releaseInfo.Slug, Purpose: "blog"}
 	branchName := prSet.PRBranch()
-
-	// Ensure branch exists: if not, create from main.
-	var branchExists bool
-	if err := githubutil.Retry(func() error {
-		_, resp, err := client.Git.GetRef(ctx, org, repo, "refs/heads/"+branchName)
-		if err != nil {
-			if resp != nil && resp.StatusCode == http.StatusNotFound {
-				return nil // not found -> we'll create it
-			}
-			return err
-		}
-		branchExists = true
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed checking branch existence: %w", err)
-	}
-	if !branchExists {
-		var base *gh.Reference
-		if err := githubutil.Retry(func() error {
-			ref, _, err := client.Git.GetRef(ctx, org, repo, "refs/heads/main")
-			if err != nil {
-				return err
-			}
-			base = ref
-			return nil
-		}); err != nil {
-			return fmt.Errorf("failed to get base ref main: %w", err)
-		}
-
-		newRef := &gh.Reference{Ref: gh.String("refs/heads/" + branchName), Object: &gh.GitObject{SHA: base.Object.SHA}}
-		if err := githubutil.Retry(func() error {
-			_, _, err := client.Git.CreateRef(ctx, org, repo, newRef)
-			if err != nil {
-				var eresp *gh.ErrorResponse
-				if errors.As(err, &eresp) && eresp.Response != nil && eresp.Response.StatusCode == http.StatusUnprocessableEntity {
-					// Branch already exists due to race; treat as success.
-					return nil
-				}
-				return err
-			}
-			return nil
-		}); err != nil {
-			return fmt.Errorf("failed to create branch %s: %w", branchName, err)
-		}
-	}
 
 	if err := githubutil.Retry(func() error {
 		if err := githubutil.UploadFile(
