@@ -200,23 +200,33 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
 	}
 
+	// Create a feature branch and open a PR to main instead of pushing directly.
+	branchName := fmt.Sprintf("blog/%s", releaseInfo.Slug)
+	if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil && !errors.Is(err, githubutil.ErrBranchExists) {
+		return fmt.Errorf("failed to create branch %s: %w", branchName, err)
+	}
+
 	if err := githubutil.Retry(func() error {
-		// Upload the announcement to the go-devblog repositoryy main branch with proper commit message
 		if err := githubutil.UploadFile(
 			ctx,
 			client,
 			org,
 			repo,
-			"main",
+			branchName,
 			blogFilePath,
-			fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
+			fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
 			content.Bytes()); err != nil {
-			return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
+			return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
 		}
-
 		return nil
 	}); err != nil {
-		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
+		return err
+	}
+
+	prTitle := releaseInfo.Title
+	prBody := "Automated PR: add Microsoft Go release announcement."
+	if _, err := githubutil.CreatePullRequest(ctx, client, org, repo, branchName, "main", prTitle, prBody); err != nil && !errors.Is(err, githubutil.ErrPRExists) {
+		return fmt.Errorf("error creating pull request: %w", err)
 	}
 
 	return nil

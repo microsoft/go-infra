@@ -44,6 +44,10 @@ var (
 	// This error is not used if any of the flags are set, e.g. if app auth is partially
 	// configured. This indicates an issue with the command call and needs to be fixed.
 	ErrNoAuthProvided = errors.New("no GitHub authentication provided")
+	// ErrBranchExists indicates that the requested branch already exists.
+	ErrBranchExists = errors.New("branch already exists")
+	// ErrPRExists indicates that a pull request already exists for the given head/base.
+	ErrPRExists = errors.New("pull request already exists for the specified head and base")
 )
 
 // NewClient creates a GitHub client using the given personal access token.
@@ -440,3 +444,106 @@ const (
 	TreeModeSubmodule  = "160000"
 	TreeModeGitlink    = "120000"
 )
+
+// CreateBranch creates a branch named branchName from baseRef (e.g., "main").
+// If the branch already exists, returns ErrBranchExists.
+func CreateBranch(ctx context.Context, client *github.Client, owner, repo, branchName, baseRef string) error {
+	// Look up the base ref SHA
+	var base *github.Reference
+	if err := Retry(func() error {
+		ref, _, err := client.Git.GetRef(ctx, owner, repo, "refs/heads/"+baseRef)
+		if err != nil {
+			return err
+		}
+		base = ref
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to get base ref %s: %w", baseRef, err)
+	}
+
+	// Try to create the new ref
+	newRef := &github.Reference{
+		Ref: github.String("refs/heads/" + branchName),
+		Object: &github.GitObject{
+			SHA: base.Object.SHA,
+		},
+	}
+
+	if err := Retry(func() error {
+		_, _, err := client.Git.CreateRef(ctx, owner, repo, newRef)
+		if err != nil {
+			var errResp *github.ErrorResponse
+			if errors.As(err, &errResp) && errResp.Response != nil && errResp.Response.StatusCode == http.StatusUnprocessableEntity {
+				// This usually means the ref exists already
+				return ErrBranchExists
+			}
+			return err
+		}
+		return nil
+	}); err != nil {
+		if errors.Is(err, ErrBranchExists) {
+			return ErrBranchExists
+		}
+		return fmt.Errorf("failed to create branch %s from %s: %w", branchName, baseRef, err)
+	}
+
+	return nil
+}
+
+// CreatePullRequest creates a pull request from head to base in the given repo.
+//   - head can be either "branch" (same repo) or "owner:branch" (cross-repo).
+//   - If an open PR already exists matching the same head/base, the existing PR is returned
+//     alongside an ErrPRExists error (use errors.Is(err, ErrPRExists) to detect).
+func CreatePullRequest(
+	ctx context.Context,
+	client *github.Client,
+	owner, repo, head, base, title, body string,
+) (*github.PullRequest, error) {
+	// Normalize head for list filtering: API expects "owner:branch".
+	listHead := head
+	if !strings.Contains(listHead, ":") {
+		listHead = owner + ":" + head
+	}
+
+	// Check existing open PRs
+	var existing []*github.PullRequest
+	if err := Retry(func() error {
+		opts := &github.PullRequestListOptions{
+			State:       "open",
+			Head:        listHead,
+			Base:        base,
+			ListOptions: github.ListOptions{PerPage: 100},
+		}
+		prs, _, err := client.PullRequests.List(ctx, owner, repo, opts)
+		if err != nil {
+			return err
+		}
+		existing = prs
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if len(existing) > 0 {
+		return existing[0], fmt.Errorf("%w: #%d", ErrPRExists, existing[0].GetNumber())
+	}
+
+	// Create PR
+	var pr *github.PullRequest
+	if err := Retry(func() error {
+		newPR := &github.NewPullRequest{
+			Title: &title,
+			Head:  &head,
+			Base:  &base,
+			Body:  &body,
+		}
+		created, _, err := client.PullRequests.Create(ctx, owner, repo, newPR)
+		if err != nil {
+			return err
+		}
+		pr = created
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return pr, nil
+}
