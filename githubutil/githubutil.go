@@ -282,6 +282,18 @@ func FetchEachPage(f func(options github.ListOptions) (*github.Response, error))
 	}
 }
 
+func CreateBranch(ctx context.Context, client *github.Client, owner, repo, branchName, baseBranch string) error {
+	err := Retry(func() error {
+		_, _, err := client.Git.CreateRef(ctx, owner, repo, &github.Reference{
+			Ref:    github.String("refs/heads/" + branchName),
+			Object: &github.GitObject{SHA: github.String(baseBranch)},
+		})
+		return err
+	})
+
+	return err
+}
+
 // UploadFile is a function that will upload a file to a given repository.
 func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
 	err := Retry(func() error {

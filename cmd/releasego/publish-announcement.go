@@ -206,6 +206,15 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	branchName := prSet.PRBranch()
 
 	if err := githubutil.Retry(func() error {
+		if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil {
+			return fmt.Errorf("error creating branch %s: %w", branchName, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if err := githubutil.Retry(func() error {
 		if err := githubutil.UploadFile(
 			ctx,
 			client,
