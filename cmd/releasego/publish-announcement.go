@@ -238,8 +238,23 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
 	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title, "Automated PR: add Microsoft Go release announcement.")
-	if _, err := gitpr.PostGitHub(ownerRepo, prReq, auther); err != nil && !errors.Is(err, gitpr.ErrPRAlreadyExists) {
+	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
+	if err != nil && !errors.Is(err, gitpr.ErrPRAlreadyExists) {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
+	}
+
+	// For the rest of the method, the PR now exists.
+	existingPR := &gitpr.ExistingPR{
+		ID:     createdPR.NodeID,
+		Number: createdPR.Number,
+	}
+
+	if err = gitpr.ApprovePR(existingPR.ID, auther); err != nil {
+		return err
+	}
+
+	if err = gitpr.EnablePRAutoMerge(existingPR.ID, auther); err != nil {
+		return err
 	}
 
 	return nil
