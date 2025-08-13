@@ -243,17 +243,11 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
 	}
 
-	// For the rest of the method, the PR now exists.
-	existingPR := &gitpr.ExistingPR{
-		ID:     createdPR.NodeID,
-		Number: createdPR.Number,
-	}
-
-	if err = gitpr.ApprovePR(existingPR.ID, auther); err != nil {
+	if err = gitpr.ApprovePR(createdPR.NodeID, auther); err != nil {
 		return err
 	}
 
-	if err = gitpr.EnablePRAutoMerge(existingPR.ID, auther); err != nil {
+	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, auther); err != nil {
 		return err
 	}
 
