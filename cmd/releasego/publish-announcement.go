@@ -232,11 +232,11 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
 	}
 
-	if err = gitpr.ApprovePR(createdPR.NodeID, reviewAuther); err != nil {
+	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, reviewAuther); err != nil {
 		return err
 	}
 
-	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, reviewAuther); err != nil {
+	if err = gitpr.ApprovePR(createdPR.NodeID, reviewAuther); err != nil {
 		return err
 	}
 
