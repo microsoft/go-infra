@@ -202,7 +202,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	// Create a feature branch (gitpr convention: dev/<purpose>/<name>) and open a PR to main.
-	prSet := gitpr.PRRefSet{Name: "main", Purpose: "blog"}
+	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("blog-%d", time.Now().Unix())}
 	branchName := prSet.PRBranch()
 
 	if err := githubutil.Retry(func() error {
@@ -239,7 +239,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
 	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title, "Automated PR: add Microsoft Go release announcement.")
 	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
-	if err != nil && !errors.Is(err, gitpr.ErrPRAlreadyExists) {
+	if err != nil {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
 	}
 
