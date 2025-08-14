@@ -232,7 +232,8 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("failed to get GitHub auther: %w", err)
 	}
 	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
-	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title, "Automated PR: add Microsoft Go release announcement.")
+	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title,
+		"**Automated Pull Request:** Adds the Microsoft Go release announcement.\nThis PR was generated automatically using the [` + \"`publish-announcement.go`\" + `](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/publish-announcement.go) script.")
 	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
 	if err != nil {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
