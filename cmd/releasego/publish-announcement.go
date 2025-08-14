@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -142,7 +141,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	var releaseVersions string
 	var author string
 	var security bool
-	var dryRun bool
 	var org string
 	var repo string
 
@@ -150,10 +148,9 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release.")
 	flag.StringVar(&author, "author", "", "GitHub username of the author of the blog post. This will be used to attribute the post to the correct author in WordPress.")
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
-	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push blog post to GitHub.")
 	flag.StringVar(&org, "org", "microsoft", "The GitHub organization to push the blog post to.")
 	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository name to push the blog post to.")
-	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
+	f := buildmodel.BindPRFlags()
 
 	if err := p(); err != nil {
 		return err
@@ -173,20 +170,14 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
 
 	ctx := context.Background()
-	client, err := gitHubAuthFlags.NewClient(ctx)
+	client, err := f.Auth.NewClient(ctx)
 	if err != nil {
 		return err
 	}
 
-	reviewAuther, err := buildmodel.BindPRFlags().ReviewerAuth.NewAuther()
+	reviewAuther, err := f.ReviewerAuth.NewAuther()
 	if err != nil {
 		return fmt.Errorf("failed to get GitHub review auther: %w", err)
-	}
-
-	if dryRun {
-		fmt.Printf("Would have submitted at path '%s'\n", generateBlogFilePath(releaseDate, releaseInfo.Slug))
-		fmt.Println("=====")
-		return releaseInfo.WriteAnnouncement(os.Stdout)
 	}
 
 	content := new(bytes.Buffer)
@@ -228,12 +219,12 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	// Create PR using gitpr.
-	auther, err := gitHubAuthFlags.NewAuther()
+	auther, err := f.Auth.NewAuther()
 	if err != nil {
 		return fmt.Errorf("failed to get GitHub auther: %w", err)
 	}
 
-	reviewAuther, err = buildmodel.BindPRFlags().ReviewerAuth.NewAuther()
+	reviewAuther, err = f.ReviewerAuth.NewAuther()
 	if err != nil {
 		return fmt.Errorf("failed to get GitHub review auther: %w", err)
 	}
