@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -177,6 +178,11 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return err
 	}
 
+	reviewAuther, err := buildmodel.BindPRFlags().ReviewerAuth.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub review auther: %w", err)
+	}
+
 	if dryRun {
 		fmt.Printf("Would have submitted at path '%s'\n", generateBlogFilePath(releaseDate, releaseInfo.Slug))
 		fmt.Println("=====")
@@ -209,21 +215,16 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("error creating branch %s: %w", branchName, err)
 	}
 
-	if err := githubutil.Retry(func() error {
-		if err := githubutil.UploadFile(
-			ctx,
-			client,
-			org,
-			repo,
-			branchName,
-			blogFilePath,
-			fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
-			content.Bytes()); err != nil {
-			return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
-		}
-		return nil
-	}); err != nil {
-		return err
+	if err := githubutil.UploadFile(
+		ctx,
+		client,
+		org,
+		repo,
+		branchName,
+		blogFilePath,
+		fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
+		content.Bytes()); err != nil {
+		return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
 	}
 
 	// Create PR using gitpr.
@@ -231,6 +232,12 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to get GitHub auther: %w", err)
 	}
+
+	reviewAuther, err = buildmodel.BindPRFlags().ReviewerAuth.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub review auther: %w", err)
+	}
+
 	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
 	prReq := prSet.CreateGitHubPR(org, releaseInfo.Title,
 		"**Automated Pull Request:** Adds the Microsoft Go release announcement.\nThis PR was generated automatically using the [\"`publish-announcement.go`\"](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/publish-announcement.go) script.")
@@ -239,11 +246,11 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("error creating pull request with gitpr: %w", err)
 	}
 
-	if err = gitpr.ApprovePR(createdPR.NodeID, auther); err != nil {
+	if err = gitpr.ApprovePR(createdPR.NodeID, reviewAuther); err != nil {
 		return err
 	}
 
-	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, auther); err != nil {
+	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, reviewAuther); err != nil {
 		return err
 	}
 
