@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/microsoft/go-infra/githubutil"
+	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/internal/infrasort"
 	"github.com/microsoft/go-infra/subcmd"
@@ -152,9 +153,27 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.StringVar(&org, "org", "microsoft", "The GitHub organization to push the blog post to.")
 	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository name to push the blog post to.")
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
+	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
 
 	if err := p(); err != nil {
 		return err
+	}
+
+	ctx := context.Background()
+
+	client, err := gitHubAuthFlags.NewClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub auther: %w", err)
+	}
+
+	reviewAuther, err := gitHubReviewerAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub review auther: %w", err)
 	}
 
 	const inputLayout = "2006-01-02"
@@ -169,12 +188,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
-
-	ctx := context.Background()
-	client, err := gitHubAuthFlags.NewClient(ctx)
-	if err != nil {
-		return err
-	}
 
 	if dryRun {
 		fmt.Printf("Would have submitted at path '%s'\n", generateBlogFilePath(releaseDate, releaseInfo.Slug))
@@ -200,23 +213,43 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		return fmt.Errorf("file %s already exists in go-devblog repository", blogFilePath)
 	}
 
-	if err := githubutil.Retry(func() error {
-		// Upload the announcement to the go-devblog repositoryy main branch with proper commit message
-		if err := githubutil.UploadFile(
-			ctx,
-			client,
-			org,
-			repo,
-			"main",
-			blogFilePath,
-			fmt.Sprintf("Add new blog post for new release in %s", releaseDate.Format("2006-01-02")),
-			content.Bytes()); err != nil {
-			return fmt.Errorf("error uploading file to go-devblog repository : %w", err)
-		}
+	// Create a feature branch (gitpr convention: dev/<purpose>/<name>) and open a PR to main.
+	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("blog/%s/%d", releaseInfo.Slug, time.Now().Unix())}
+	branchName := prSet.PRBranch()
 
-		return nil
-	}); err != nil {
-		return fmt.Errorf("error checking if file exists in go-devblog repository : %w", err)
+	if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil {
+		return fmt.Errorf("error creating branch %s: %w", branchName, err)
+	}
+
+	if err := githubutil.UploadFile(
+		ctx,
+		client,
+		org,
+		repo,
+		branchName,
+		blogFilePath,
+		fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
+		content.Bytes()); err != nil {
+		return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
+	}
+
+	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
+	prReq := prSet.CreateGitHubPR(
+		org,
+		releaseInfo.Title,
+		"**Automated Pull Request:** Adds the Microsoft Go release announcement.\n"+
+			"This PR was generated automatically using the [\"`publish-announcement.go`\"](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/publish-announcement.go) script.")
+	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
+	if err != nil {
+		return fmt.Errorf("error creating pull request with gitpr: %w", err)
+	}
+
+	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, reviewAuther); err != nil {
+		return err
+	}
+
+	if err = gitpr.ApprovePR(createdPR.NodeID, reviewAuther); err != nil {
+		return err
 	}
 
 	return nil

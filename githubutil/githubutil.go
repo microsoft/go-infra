@@ -282,6 +282,43 @@ func FetchEachPage(f func(options github.ListOptions) (*github.Response, error))
 	}
 }
 
+func CreateBranch(ctx context.Context, client *github.Client, owner, repo, branchName, baseBranch string) error {
+	// 1) Look up the base branch ref to get its commit SHA
+	var baseSHA string
+	if err := Retry(func() error {
+		ref, _, err := client.Git.GetRef(ctx, owner, repo, "heads/"+baseBranch)
+		if err != nil {
+			return err
+		}
+		baseSHA = ref.GetObject().GetSHA()
+		return nil
+	}); err != nil {
+		return fmt.Errorf("resolve base branch %q: %w", baseBranch, err)
+	}
+
+	// 2) Create the new branch at that SHA
+	if err := Retry(func() error {
+		_, _, err := client.Git.CreateRef(ctx, owner, repo, &github.Reference{
+			Ref:    github.String("refs/heads/" + branchName),
+			Object: &github.GitObject{SHA: github.String(baseSHA)},
+		})
+		return err
+	}); err != nil {
+		// Optional: decode common 422 cases
+		var eresp *github.ErrorResponse
+		if errors.As(err, &eresp) && eresp.Response.StatusCode == http.StatusUnprocessableEntity {
+			for _, ge := range eresp.Errors {
+				if strings.EqualFold(ge.Code, "already_exists") {
+					return fmt.Errorf("branch %q already exists", branchName)
+				}
+			}
+		}
+		return fmt.Errorf("create branch %q from %q: %w", branchName, baseBranch, err)
+	}
+
+	return nil
+}
+
 // UploadFile is a function that will upload a file to a given repository.
 func UploadFile(ctx context.Context, client *github.Client, owner, repo, branch, path, message string, content []byte) error {
 	err := Retry(func() error {
