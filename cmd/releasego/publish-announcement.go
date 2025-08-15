@@ -214,7 +214,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	// Create a feature branch (gitpr convention: dev/<purpose>/<name>) and open a PR to main.
-	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("blog-%d", time.Now().Unix())}
+	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("blog/%s/%d", releaseInfo.Slug, time.Now().Unix())}
 	branchName := prSet.PRBranch()
 
 	if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil {
