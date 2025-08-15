@@ -18,7 +18,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/microsoft/go-infra/buildmodel"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -150,10 +149,28 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	flag.BoolVar(&security, "security", false, "Specify if the release is a security release. Use this flag to mark the release as a security update. Defaults to false.")
 	flag.StringVar(&org, "org", "microsoft", "The GitHub organization to push the blog post to.")
 	flag.StringVar(&repo, "repo", "go-devblog", "The GitHub repository name to push the blog post to.")
-	f := buildmodel.BindPRFlags()
+	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
+	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
 
 	if err := p(); err != nil {
 		return err
+	}
+
+	ctx := context.Background()
+
+	client, err := gitHubAuthFlags.NewClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub auther: %w", err)
+	}
+
+	reviewAuther, err := gitHubReviewerAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub review auther: %w", err)
 	}
 
 	const inputLayout = "2006-01-02"
@@ -168,17 +185,6 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
-
-	ctx := context.Background()
-	client, err := f.Auth.NewClient(ctx)
-	if err != nil {
-		return err
-	}
-
-	reviewAuther, err := f.ReviewerAuth.NewAuther()
-	if err != nil {
-		return fmt.Errorf("failed to get GitHub review auther: %w", err)
-	}
 
 	content := new(bytes.Buffer)
 	if err := releaseInfo.WriteAnnouncement(content); err != nil {
@@ -215,14 +221,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		blogFilePath,
 		fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
 		content.Bytes()); err != nil {
-
 		return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
-	}
-
-	// Create PR using gitpr.
-	auther, err := f.Auth.NewAuther()
-	if err != nil {
-		return fmt.Errorf("failed to get GitHub auther: %w", err)
 	}
 
 	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
