@@ -215,6 +215,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 		blogFilePath,
 		fmt.Sprintf("Add blog post: %s", releaseInfo.Title),
 		content.Bytes()); err != nil {
+
 		return fmt.Errorf("error uploading file to branch %s: %w", branchName, err)
 	}
 
