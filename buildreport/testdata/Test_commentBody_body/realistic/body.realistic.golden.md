@@ -4,13 +4,13 @@ Text before the report.
 
 ## 1.18.2-1
 
-### microsoft-go
+### microsoft-go (official)
 
 | ID | Status | Started | Last Report |
 | --- | :---: | --- | --- |
 | [12345](https://example.org/) | ❌ | 2012-03-28 01:02 UTC | 2012-03-28 01:07 UTC |
 
-### microsoft-go-infra-release-build
+### microsoft-go-infra-release-build (official)
 
 | ID | Status | Started | Last Report |
 | --- | :---: | --- | --- |
@@ -19,7 +19,7 @@ Text before the report.
 | [1238](https://example.org/) | 🏃 | 2012-03-28 01:02 UTC | 2012-03-28 01:07 UTC |
 | [1300](https://example.org/) | ⌚ | 2012-03-28 01:02 UTC | 2012-03-28 01:07 UTC |
 
-### microsoft-go-infra-release-go-images
+### microsoft-go-infra-release-go-images (official)
 
 | ID | Status | Started | Last Report |
 | --- | :---: | --- | --- |
@@ -27,7 +27,7 @@ Text before the report.
 
 ## 1.18.2-1-fips
 
-### microsoft-go-infra-release-build
+### microsoft-go-infra-release-build (official)
 
 | ID | Status | Started | Last Report |
 | --- | :---: | --- | --- |
@@ -35,7 +35,7 @@ Text before the report.
 
 ## 1.19.1-1
 
-### microsoft-go-infra-release-build
+### microsoft-go-infra-release-build (official)
 
 | ID | Status | Started | Last Report |
 | --- | :---: | --- | --- |
@@ -48,7 +48,7 @@ Text before the report.
   {
     "ID": "12345",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go",
+    "Name": "microsoft-go (official)",
     "URL": "https://example.org/",
     "Status": "❌",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -57,7 +57,7 @@ Text before the report.
   {
     "ID": "1233",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "❌",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -66,7 +66,7 @@ Text before the report.
   {
     "ID": "1234",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "✅",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -75,7 +75,7 @@ Text before the report.
   {
     "ID": "1238",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "🏃",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -84,7 +84,7 @@ Text before the report.
   {
     "ID": "1300",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "⌚",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -93,7 +93,7 @@ Text before the report.
   {
     "ID": "1500",
     "Version": "1.18.2-1",
-    "Name": "microsoft-go-infra-release-go-images",
+    "Name": "microsoft-go-infra-release-go-images (official)",
     "URL": "https://example.org/",
     "Status": "🏃",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -102,7 +102,7 @@ Text before the report.
   {
     "ID": "1239",
     "Version": "1.18.2-1-fips",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "❌",
     "LastUpdate": "2012-03-28T01:07:03Z",
@@ -111,7 +111,7 @@ Text before the report.
   {
     "ID": "1900",
     "Version": "1.19.1-1",
-    "Name": "microsoft-go-infra-release-build",
+    "Name": "microsoft-go-infra-release-build (official)",
     "URL": "https://example.org/",
     "Status": "⌚",
     "LastUpdate": "2012-03-28T01:07:03Z",

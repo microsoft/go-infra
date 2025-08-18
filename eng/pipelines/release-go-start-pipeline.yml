@@ -114,7 +114,7 @@ extends:
                       releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
                       version: ${{ version }}
                       condition: succeeded()
-                      buildPipeline: microsoft-go-infra-release-build
+                      buildPipeline: microsoft-go-infra-release-build (official)
                       buildID: $(GO_RELEASE_BUILDID)
                       buildStatus: NotStarted
                       start: true
@@ -139,7 +139,7 @@ extends:
                   parameters:
                     releaseIssue: $(GO_RELEASE_DAY_ISSUE_NUMBER)
                     condition: succeeded()
-                    buildPipeline: microsoft-go-infra-release-go-images
+                    buildPipeline: microsoft-go-infra-release-go-images (official)
                     buildID: $(GO_RELEASE_IMAGES_BUILDID)
                     buildStatus: NotStarted
                     start: true

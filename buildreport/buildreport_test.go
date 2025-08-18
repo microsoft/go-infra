@@ -72,20 +72,26 @@ func Test_commentBody_body(t *testing.T) {
 		{
 			"realistic",
 			[]State{
-				newState("1.18.2-1", "1234", "microsoft-go-infra-release-build", SymbolSucceeded),
-				newState("1.18.2-1", "1238", "microsoft-go-infra-release-build", SymbolInProgress),
-				newState("1.18.2-1", "1500", "microsoft-go-infra-release-go-images", SymbolInProgress),
-				newState("1.19.1-1", "1900", "microsoft-go-infra-release-build", SymbolNotStarted),
-				newState("1.18.2-1-fips", "1239", "microsoft-go-infra-release-build", SymbolFailed),
-				newState("1.18.2-1", "1233", "microsoft-go-infra-release-build", SymbolFailed),
-				newState("1.18.2-1", "1300", "microsoft-go-infra-release-build", SymbolNotStarted),
-				newState("1.18.2-1", "12345", "microsoft-go", SymbolFailed),
+				newState("1.18.2-1", "1234", "microsoft-go-infra-release-build (official)", SymbolSucceeded),
+				newState("1.18.2-1", "1238", "microsoft-go-infra-release-build (official)", SymbolInProgress),
+				newState("1.18.2-1", "1500", "microsoft-go-infra-release-go-images (official)", SymbolInProgress),
+				newState("1.19.1-1", "1900", "microsoft-go-infra-release-build (official)", SymbolNotStarted),
+				newState("1.18.2-1-fips", "1239", "microsoft-go-infra-release-build (official)", SymbolFailed),
+				newState("1.18.2-1", "1233", "microsoft-go-infra-release-build (official)", SymbolFailed),
+				newState("1.18.2-1", "1300", "microsoft-go-infra-release-build (official)", SymbolNotStarted),
+				newState("1.18.2-1", "12345", "microsoft-go (official)", SymbolFailed),
 			},
 		},
 		{"none", nil},
 		{
 			"no-version",
-			[]State{newState("", "1234", "microsoft-go-infra-start", SymbolInProgress)},
+			[]State{newState("", "1234", "microsoft-go-infra-start (official)", SymbolInProgress)},
+		},
+		{
+			"name-mismatch",
+			[]State{
+				newState("1.18.2-1", "1234", "microsoft-go-infra-release", SymbolSucceeded),
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -117,7 +123,7 @@ func Test_commentBody_body_UpdateExisting(t *testing.T) {
 		reports: []State{
 			{
 				Version: "1.2.3",
-				Name:    "microsoft-go",
+				Name:    microsoftGoPipelineName,
 				ID:      "1234",
 				Status:  SymbolInProgress,
 				// This test makes sure StartTime isn't updated, but Status and LastUpdate are.
@@ -150,6 +156,8 @@ func Test_State_notificationPreamble(t *testing.T) {
 		{"go-new-branch", releaseBuildPipelineName, "1.21.0-1", SymbolSucceeded},
 		{"go-servicing", releaseBuildPipelineName, "1.21.3-1", SymbolSucceeded},
 		{"images", releaseImagesPipelineName, "1.21.1-1", SymbolSucceeded},
+		{"azure-linux", releaseUpdateAzureLinuxPipelineName, "1.21.1-1", SymbolSucceeded},
+		{"name-mismatch", "microsoft-golang", "1.21.1-1", SymbolSucceeded},
 		{"failed", releaseBuildPipelineName, "1.21.1-1", SymbolFailed},
 	}
 	for _, tt := range tests {
