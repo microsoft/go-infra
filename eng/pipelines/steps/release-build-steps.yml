@@ -120,7 +120,7 @@ steps:
           releaseIssue: ${{ parameters.releaseIssue }}
           version: ${{ parameters.releaseVersion }}
           condition: succeeded()
-          buildPipeline: microsoft-go-infra-release-innerloop
+          buildPipeline: microsoft-go-infra-release-innerloop (official)
           buildID: $(MicrosoftGoReleaseInnerloopBuildID)
           buildStatus: '?'
           start: true
@@ -165,7 +165,7 @@ steps:
           releaseIssue: ${{ parameters.releaseIssue }}
           version: ${{ parameters.releaseVersion }}
           condition: succeeded()
-          buildPipeline: microsoft-go-canary
+          buildPipeline: microsoft-go-canary (unofficial)
           buildID: $(MicrosoftGoCanaryBuildID)
           buildStatus: '?'
           start: true

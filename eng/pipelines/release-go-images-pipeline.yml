@@ -167,7 +167,7 @@ extends:
                       parameters:
                         releaseIssue: ${{ parameters.releaseIssue }}
                         condition: succeeded()
-                        buildPipeline: microsoft-go-images
+                        buildPipeline: microsoft-go-images (official)
                         buildID: $(poll2MicrosoftGoImagesBuildID)
                         buildStatus: '?'
                         start: true
@@ -206,7 +206,7 @@ extends:
                   parameters:
                     releaseIssue: ${{ parameters.releaseIssue }}
                     condition: succeeded()
-                    buildPipeline: microsoft-go-images
+                    buildPipeline: microsoft-go-images (official)
                     buildID: $(poll2MicrosoftGoImagesBuildID)
                     buildStatus: Succeeded
                     reason: completed internal build

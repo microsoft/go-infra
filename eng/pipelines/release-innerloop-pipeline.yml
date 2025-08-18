@@ -109,7 +109,7 @@ extends:
                       releaseIssue: ${{ parameters.releaseIssue }}
                       version: ${{ parameters.releaseVersion }}
                       condition: succeeded()
-                      buildPipeline: microsoft-go-innerloop
+                      buildPipeline: microsoft-go-innerloop (unofficial)
                       buildID: $(poll1MicrosoftGoInnerloopBuildID)
                       buildStatus: '?'
                       start: true
@@ -129,6 +129,6 @@ extends:
                     releaseIssue: ${{ parameters.releaseIssue }}
                     version: ${{ parameters.releaseVersion }}
                     condition: and(ne('$(poll1MicrosoftGoInnerloopBuildID)', 'nil'), succeededOrFailed())
-                    buildPipeline: microsoft-go-innerloop
+                    buildPipeline: microsoft-go-innerloop (unofficial)
                     buildID: $(poll1MicrosoftGoInnerloopBuildID)
                     reason: innerloop status
