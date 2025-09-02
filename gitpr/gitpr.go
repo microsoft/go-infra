@@ -334,7 +334,31 @@ func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables m
 		return err
 	}
 
-	return sendJSONRequestSuccessful(httpRequest, result)
+	// Custom handler for GraphQL errors
+	var graphQLResponse struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	err = sendJSONRequestSuccessful(httpRequest, &graphQLResponse)
+	if err != nil {
+		return err
+	}
+	if len(graphQLResponse.Errors) > 0 {
+		var messages []string
+		for _, e := range graphQLResponse.Errors {
+			messages = append(messages, e.Message)
+		}
+		return fmt.Errorf("GraphQL errors: %s", strings.Join(messages, "; "))
+	}
+	// Unmarshal Data into result
+	if result != nil {
+		if err := json.Unmarshal(graphQLResponse.Data, result); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func MutateGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]interface{}) error {
