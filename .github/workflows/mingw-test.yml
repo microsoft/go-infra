@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ windows-2022, windows-2025 ]
-        go-version: [ 1.23.x, 1.22.x ]
+        go-version: [ 1.24.x, 1.25.x ]
         mingw-version:
           - '-source nixman -version 13.2.0-rt_v11-rev0 -arch x86_64 -threading posix -exception seh -runtime msvcrt'
     runs-on: ${{ matrix.os }}
