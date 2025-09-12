@@ -89,8 +89,8 @@ type ConfigEntry struct {
 	GoVersionFileContent string
 
 	// GoMicrosoftRevisionFileContent is empty, or the Microsoft revision (1, 2, ...) that the
-	// microsoft/go build should use after the sync. If 1, removes the MICROSOFT_REVISION file if
-	// one exists. If 2 or more, creates a MICROSOFT_REVISION file to specify it.
+	// microsoft/go build should use after the sync. Empty leaves the MICROSOFT_REVISION file alone,
+	// any other value creates/updates the MICROSOFT_REVISION file.
 	GoMicrosoftRevisionFileContent string
 }
 

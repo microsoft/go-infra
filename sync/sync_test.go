@@ -96,7 +96,7 @@ func Test_MakeBranchPRs_VersionUpdate(t *testing.T) {
 			true,
 			makeFlags(false),
 			"go1.18.2", "1",
-			"go1.18.2", "",
+			"go1.18.2", "1",
 		},
 		{
 			"update rev1 version (boring branch) with create-branches enabled",
@@ -106,7 +106,7 @@ func Test_MakeBranchPRs_VersionUpdate(t *testing.T) {
 			// flag doesn't cause errors in ordinary cases.
 			makeFlags(true),
 			"go1.18.2", "1",
-			"go1.18.2", "",
+			"go1.18.2", "1",
 		},
 		{
 			"remove version",

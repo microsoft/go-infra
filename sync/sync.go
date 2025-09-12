@@ -569,14 +569,8 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 			// Ensure the Microsoft revision file is what we expect it to be. If there is no
 			// expected revision, leave it alone.
-			if entry.GoMicrosoftRevisionFileContent != "" {
-				var content string
-				// We only need a MICROSOFT_REVISION file for revisions > 1 (the default/minimum).
-				if entry.GoMicrosoftRevisionFileContent != "1" {
-					content = entry.GoMicrosoftRevisionFileContent
-				}
-
-				if err := updateFile(filepath.Join(dir, "MICROSOFT_REVISION"), content); err != nil {
+			if rev := entry.GoMicrosoftRevisionFileContent; rev != "" {
+				if err := updateFile(filepath.Join(dir, "MICROSOFT_REVISION"), rev); err != nil {
 					return nil, err
 				}
 			}
