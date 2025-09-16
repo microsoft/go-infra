@@ -50,7 +50,7 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 	}
 
 	var checkers []func() (bool, error)
-	for _, version := range strings.Split(*versionList, ",") {
+	for version := range strings.SplitSeq(*versionList, ",") {
 		v := goversion.New(version)
 		tag := marRepo + ":" + v.MajorMinor()
 

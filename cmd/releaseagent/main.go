@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"slices"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/goversion"
@@ -39,10 +40,8 @@ func BindInputFlags() *releasesteps.Input {
 			if v.Major != "1" {
 				return fmt.Errorf("major version must be 1, got %q in %q", v.Major, v)
 			}
-			for _, existing := range i.Versions {
-				if existing == s {
-					return fmt.Errorf("duplicate version passed: %q", s)
-				}
+			if slices.Contains(i.Versions, s) {
+				return fmt.Errorf("duplicate version passed: %q", s)
 			}
 
 			i.Versions = append(i.Versions, v.Full())

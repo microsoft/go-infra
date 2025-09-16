@@ -195,8 +195,8 @@ func sendBuildPipelineRunRequest(ctx context.Context, client *http.Client, azdoF
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]interface{}{
-		"definition": map[string]interface{}{
+	body := map[string]any{
+		"definition": map[string]any{
 			"id": request.DefinitionID,
 		},
 		"sourceBranch":       request.SourceBranch,

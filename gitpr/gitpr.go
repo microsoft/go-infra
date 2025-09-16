@@ -183,7 +183,7 @@ func (r Remote) GetOwnerSlashRepo() string {
 
 // sendJSONRequest sends a request for JSON information. The JSON response is unmarshalled (parsed)
 // into the 'response' parameter, based on the structure of 'response'.
-func sendJSONRequest(request *http.Request, response interface{}) (status int, err error) {
+func sendJSONRequest(request *http.Request, response any) (status int, err error) {
 	request.Header.Add("Accept", "application/vnd.github.v3+json")
 	fmt.Printf("Sending request: %v %v\n", request.Method, request.URL) // CodeQL [SM03994] Logs are only visible to the user who ran the command.
 
@@ -214,7 +214,7 @@ func sendJSONRequest(request *http.Request, response interface{}) (status int, e
 
 // sendJSONRequestSuccessful sends a request for JSON information via sendJSONRequest and verifies
 // the status code is success.
-func sendJSONRequestSuccessful(request *http.Request, response interface{}) error {
+func sendJSONRequestSuccessful(request *http.Request, response any) error {
 	status, err := sendJSONRequest(request, response)
 	if err != nil {
 		return err
@@ -313,10 +313,10 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, auther githubutil.HTTP
 	return &response.GitHubResponse, nil
 }
 
-func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]interface{}, result interface{}) error {
+func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]any, result any) error {
 	queryBytes, err := json.Marshal(&struct {
-		Query     string                 `json:"query"`
-		Variables map[string]interface{} `json:"variables,omitempty"`
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables,omitempty"`
 	}{
 		query,
 		variables,
@@ -337,7 +337,7 @@ func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables m
 	return sendJSONRequestSuccessful(httpRequest, result)
 }
 
-func MutateGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]interface{}) error {
+func MutateGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]any) error {
 	// Queries and mutations use the same API. But with a mutation, the results aren't useful to us.
 	return QueryGraphQL(auther, query, variables, &struct{}{})
 }
@@ -375,7 +375,7 @@ func FindExistingPR(r *GitHubRequest, head, target *Remote, headBranch, submitte
 			}
 		}
 	}`
-	variables := map[string]interface{}{
+	variables := map[string]any{
 		"repoOwner":   target.GetOwner(),
 		"repoName":    target.GetRepo(),
 		"headRefName": headBranch,
@@ -465,7 +465,7 @@ func ApprovePR(nodeID string, auther githubutil.HTTPRequestAuther) error {
 					clientMutationId
 				}
 			}`,
-		map[string]interface{}{"nodeID": nodeID})
+		map[string]any{"nodeID": nodeID})
 }
 
 // EnablePRAutoMerge enables PR automerge on the target GraphQL PR node ID.
@@ -477,7 +477,7 @@ func EnablePRAutoMerge(nodeID string, auther githubutil.HTTPRequestAuther) error
 				clientMutationId
 			}
 		}`,
-		map[string]interface{}{"nodeID": nodeID})
+		map[string]any{"nodeID": nodeID})
 }
 
 // createRefspec makes a refspec that will fetch or push a branch "source" to "dest". The args must

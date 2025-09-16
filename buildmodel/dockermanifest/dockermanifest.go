@@ -15,11 +15,11 @@ type Manifest struct {
 	// Readme can be an object with more details, or a string path. This was recently changed from a
 	// string to an object in the .NET Docker infra's model. For now, be flexible in the go-images
 	// model: we only need to persist the value, not manipulate it.
-	Readme    interface{}            `json:"readme"`
-	Registry  string                 `json:"registry"`
-	Variables map[string]interface{} `json:"variables"`
-	Includes  []string               `json:"includes"`
-	Repos     []*Repo                `json:"repos"`
+	Readme    any            `json:"readme"`
+	Registry  string         `json:"registry"`
+	Variables map[string]any `json:"variables"`
+	Includes  []string       `json:"includes"`
+	Repos     []*Repo        `json:"repos"`
 }
 
 // Repo is a Docker repository: the 'oss/go/microsoft/golang' part of a tag name.

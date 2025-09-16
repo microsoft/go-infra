@@ -31,7 +31,7 @@ func diagnose(p subcmd.ParseFunc) error {
 	fmt.Println(strings.Repeat("-", 80))
 	fmt.Println("PATH entries:")
 	var pathDirs []string
-	for _, p := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+	for p := range strings.SplitSeq(os.Getenv("PATH"), string(os.PathListSeparator)) {
 		fmt.Println("  " + p)
 		pathDirs = append(pathDirs, p)
 	}
