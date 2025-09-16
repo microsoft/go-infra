@@ -4,11 +4,11 @@
 The script works with Windows PowerShell and PowerShell (`pwsh`) and can install all [supported prebuilt Microsoft build of Go toolset platforms](https://github.com/microsoft/go?tab=readme-ov-file#download-and-install).
 It installs the Microsoft build of Go toolset into a directory of your choice, or defaults to a directory in the user-specific data directory.
 
-See `go-install.ps1 -h` for more information about the parameters and defaults.
+Run `go-install.ps1 -h` to see more information about its parameters and defaults.
 
 The script is intended for use in CI/CD pipelines or to reproduce the results of those CI/CD pipelines locally.
 
-There is a utility command [`goinstallscript`, documented later in this readme](#githubcommicrosoftgo-infragoinstallscript), that helps install `go-install.ps1` and keep it up to date.
+Use [`github.com/microsoft/go-infra/goinstallscript`](#githubcommicrosoftgo-infragoinstallscript) to ensure `go-install.ps1` is up to date.
 
 ## Prerequisites
 
@@ -20,103 +20,113 @@ On Windows, either Windows PowerShell or PowerShell can be used.
 > PowerShell was formerly known as PowerShell Core.
 > Now [Windows PowerShell and PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/what-is-windows-powershell) are the names used by Microsoft for these products.
 
+## Installing the script
+
+We recommend following the instructions for [`github.com/microsoft/go-infra/goinstallscript`](#githubcommicrosoftgo-infragoinstallscript) to set up the script in your repository.
+If you have specific requirements for the location or name of the script, it can be renamed or placed anywhere without affecting its functionality.
+
 ## Usage
 
-Run the script using the `pwsh` command:
+For any platform: run the script using the `pwsh` command:
 
 ```bash
 pwsh ./go-install.ps1
 ```
 
-If you use a PowerShell terminal, you can also choose to run the script directly:
-
-```
-.\go-install.ps1
-```
-
-Running the script directly allows the script to change the terminal's `PATH` so the installed Go binary is then available in the current session as `go`.
-
-Note that in typical CI/CD pipelines, each step is run in a fresh process and the `PATH` change will not be preserved.
-If you're using Azure Pipelines, see the help message for `-AzurePipelinePath`.
+If you're using Azure Pipelines, pass `-AzurePipelinePath` to make `go` commands work in future steps.
 
 Pass `-h` to show help.
 
-## Where to put the script
-
-The script can be placed in the root of your repository or in a subdirectory.
-It can be run from a different directory with no effect on the results.
-The script can be renamed and will still function properly.
-
-To copy the script and set up a mechanism to keep it up to date, use the `goinstallscript` command.
+> [!NOTE]
+> If you use a PowerShell terminal, you can choose to run the script directly:
+>
+> ```
+> .\go-install.ps1
+> ```
+>
+> Running the script directly has a benefit: it allows the script to change the terminal's `PATH` so the installed Go binary is then available in the current PowerShell session as `go`.
+>
+> Note that in typical CI/CD pipelines, each step is run in a fresh process and the `PATH` change will not be preserved in future steps.
+> For that, use `-AzurePipelinePath` or preserve the `PATH` change in another way.
 
 # github.com/microsoft/go-infra/goinstallscript
 
 The `goinstallscript` command helps install `go-install.ps1` and keep it up to date.
 
-### Set up `goinstallscript`
+## Set up `goinstallscript` in your repository
 
-In your Go module, run:
-
-```
-go get github.com/microsoft/go-infra/goinstallscript@latest
-```
-
-Then, in the directory of your choice inside your module, run:
+Open a terminal in the directory inside your Go module where you want to store the `go-install.ps1` script.
+Then, run these commands to get the latest version of the module and run `goinstallscript`:
 
 ```
+go get -tool github.com/microsoft/go-infra/goinstallscript@latest
 go run github.com/microsoft/go-infra/goinstallscript
 ```
 
-Pass `-h` for more information about the parameters and defaults.
+This creates `go-install.ps1` in the current directory.
+
+Run `go run github.com/microsoft/go-infra/goinstallscript -h` for more information about the parameters and defaults.
 
 > [!NOTE]
-> It is not recommended to use `go install` to install the `goinstallscript` command.
+> We recommend against using `go install` to install the `goinstallscript` command.
 > The PowerShell script's content is embedded in the binary, so running an old build of `goinstallscript` may create a file with an unexpected version of the script.
 >
-> By using `go run`, you ensure the script always matches the expected version in the `go.mod` dependency.
+> By using `go run`, you ensure the script matches the expected version specified by your `go.mod` file.
 
-One more step is needed to prevent `go mod tidy` from removing the new dependency from your `go.mod` file.
-Add a `tools/tools.go` file to your module with the following content:
+## Updating the script using `goinstallscript`
 
-```go
-//go:build tools
+To update the script, run the two `go` commands again in the directory where the script is stored:
 
-package tools
-
-import (
-	_ "github.com/microsoft/go-infra/goinstallscript/powershell"
-)
+```
+go get -tool github.com/microsoft/go-infra/goinstallscript@latest
+go run github.com/microsoft/go-infra/goinstallscript
 ```
 
 > [!NOTE]
-> This is a well-known workaround to pin the version of a tool in a Go module.
-> See the [Go wiki](https://go.dev/wiki/Modules#how-can-i-track-tool-dependencies-for-a-module) for more information.
->
-> If you already have a file that serves this purpose for other tools, you can add the import to that file instead.
+> There is no need to run the update command every time you want a new version of the Microsoft build of Go toolset.
+> Updates to the script are rare, and only occur when the lookup or download processes themselves change or a bug is found in the script's logic.
 
-### Updating the script using `goinstallscript`
+## Set up a CI step that checks for updates
+
+First, make sure [dependabot](https://github.com/dependabot) or a similar Go module update tool is working.
+It will submit PRs that update the `github.com/microsoft/go-infra/goinstallscript` dependency when a new version is released.
+
+Unfortunately, the `go-install.ps1` script isn't integrated directly with dependabot, so it's necessary to add a CI test case that alerts a developer when an update to the script itself is necessary.
+
+Two ways to add the test case are [adding a CI step](#adding-a-ci-step-to-check-for-updates) or [adding a Go test](#adding-a-go-test-to-check-for-updates).
 
 > [!NOTE]
-> It isn't necessary to update the script to get new builds of the Microsoft build of Go toolset.
-> Updates to the script are rare, and only occur when the lookup or download processes themselves change.
+> We maintain `github.com/microsoft/go-infra/goinstallscript` as an independent module from the rest of `github.com/microsoft/go-infra` to minimize the number of updates and keep your maintenance burden low.
 
-To update the script, run the `go get` and `go run` commands again in the directory where the script is stored.
+### Adding a CI step to check for updates
 
-### Set up a CI test to ensure the script is up to date
-
-First, make sure dependabot is working.
-It will submit PRs that update the microsoft/go-infra dependency automatically.
-
-The script isn't integrated directly with dependabot, so it's necessary to add a test case that alerts a developer when a manual update is necessary.
-This is done by adding a CI step that runs the following command in the directory where the script is stored:
+Add a CI step that runs the following command in the directory where the script is stored:
 
 ```
 go run github.com/microsoft/go-infra/goinstallscript -check
 ```
 
-The CI step will fail if the script is not up to date because the command returns a nonzero exit code.
+`goinstallscript -check` exits with code 0 (success) if the script is up to date, and code 2 (failure) if the script is out of date.
+CI reads the exit code, so this step is all that's necessary to perform the check.
 
-### Reacting to a `-check` failure
+The error message includes instructions for updating the script, which a developer needs to follow when an error occurs.
 
-If the CI step fails, the script is out of date.
-Check out the dependabot branch and use the `go run` command again to overwrite the script content with the updated version.
+### Adding a Go test to check for updates
+
+In the directory where your `go-install.ps1` script is stored, run this command to generate a Go test file `goinstallscript/goinstallscript_test.go` that checks whether the script is up to date:
+
+```
+go run github.com/microsoft/go-infra/goinstallscript/cmd/creategotest
+```
+
+The generated test then runs during `go test ./...`.
+If your CI already runs tests, this approach means no adjustment to your CI steps is necessary to run this check.
+
+The test failure message includes instructions for updating the script, which a developer needs to follow when an error occurs.
+
+> [!NOTE]
+> If you want to create the file yourself or integrate it into an existing test file instead, you can use the generated file's template as a reference: [`goinstallscript_test.go`](./cmd/creategotest/_template/goinstallscript_test.go).
+
+# Support
+
+Report issues and ask questions by filing an issue in the [microsoft/go](https://github.com/microsoft/go) repository.

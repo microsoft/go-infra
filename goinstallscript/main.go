@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -49,20 +50,37 @@ func run() error {
 }
 
 func runCheck(name string) error {
-	existing, err := os.ReadFile(name)
+	// Get absolute path for clarity in messages.
+	absWd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
+
+	existing, err := os.ReadFile(name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("file %#q does not exist in %#q", name, absWd)
+		}
+		return err
+	}
 	if string(existing) == powershell.Content {
-		fmt.Println("Check ok: " + name + " file matches expected content.")
+		fmt.Printf("Check ok: file %#q matches expected content.\n", name)
 		return nil
 	}
 	// Accept CRLF as well. The user might be using autocrlf on Windows.
 	if strings.ReplaceAll(string(existing), "\r\n", "\n") == powershell.Content {
-		fmt.Println("Check ok: " + name + " file contains CRLF line endings but otherwise matches expected content.")
+		fmt.Printf("Check ok: file %#q contains CRLF line endings but otherwise matches expected content.\n", name)
 		return nil
 	}
-	fmt.Println("Check failed: " + name + " file differs from expected content.")
+	fmt.Printf("Check failed: file %#q has unexpected content.\n", name)
+
+	fmt.Printf("To update it, go to %#q and run:\n", absWd)
+	var nameArg string
+	if name != powershell.Name {
+		nameArg = " -name " + name
+	}
+	fmt.Printf("  go run github.com/microsoft/go-infra/goinstallscript%v\n", nameArg)
+
 	os.Exit(2)
 	panic("unreachable: command should have exited with status 2")
 }
