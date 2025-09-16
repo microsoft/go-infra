@@ -132,8 +132,8 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 			// because CI splits up platform builds onto independent machines based on Windows
 			// version, and the nanoserver image build needs to access the windowsservercore image.
 			nanoserverPrefix := "nanoserver-"
-			if strings.HasPrefix(osVersion, nanoserverPrefix) {
-				windowsVersion := strings.TrimPrefix(osVersion, nanoserverPrefix)
+			if after, ok := strings.CutPrefix(osVersion, nanoserverPrefix); ok {
+				windowsVersion := after
 				buildArgs = map[string]string{
 					// nanoserver doesn't have good download capability, so it copies the Go install
 					// from the windowsservercore image.
@@ -214,7 +214,7 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 		manifest = &dockermanifest.Manifest{
 			Readme:    "README.md",
 			Registry:  "mcr.microsoft.com",
-			Variables: map[string]interface{}{},
+			Variables: map[string]any{},
 			Includes:  []string{},
 		}
 	}
@@ -348,7 +348,7 @@ func joinTag(s ...string) string {
 	}
 	var b strings.Builder
 	first := true
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		if s[i] == "" {
 			continue
 		}

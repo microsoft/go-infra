@@ -434,7 +434,7 @@ func PATScopes(ctx context.Context, client *github.Client) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		for _, s := range strings.Split(resp.Header.Get("X-OAuth-Scopes"), ",") {
+		for s := range strings.SplitSeq(resp.Header.Get("X-OAuth-Scopes"), ",") {
 			scopes = append(scopes, strings.TrimSpace(s))
 		}
 		return nil

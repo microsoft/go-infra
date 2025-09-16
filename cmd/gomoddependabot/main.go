@@ -143,7 +143,7 @@ func findGoModuleDirs(root string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, line := range strings.Split(out, "\x00") {
+	for line := range strings.SplitSeq(out, "\x00") {
 		// Normalize paths like "go.mod" and "foo/bar/go.mod" to what dependabot
 		// expects: "/" and "foo/bar" respectively.
 		line = "/" + line

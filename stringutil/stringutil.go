@@ -49,7 +49,7 @@ func CutLast(s, sep string) (before, after string, found bool) {
 }
 
 // ReadJSONFile reads one JSON value from the specified file. Supports BOM.
-func ReadJSONFile(path string, i interface{}) (err error) {
+func ReadJSONFile(path string, i any) (err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("unable to open JSON file %v for reading: %w", path, err)
@@ -69,7 +69,7 @@ func ReadJSONFile(path string, i interface{}) (err error) {
 }
 
 // WriteJSONFile writes one specified value to a file as indented JSON with a trailing newline.
-func WriteJSONFile(path string, i interface{}) (err error) {
+func WriteJSONFile(path string, i any) (err error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("unable to open JSON file %v for writing: %w", path, err)

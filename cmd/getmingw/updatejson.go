@@ -173,7 +173,6 @@ func updateJson(p subcmd.ParseFunc) error {
 	}
 	var wg sync.WaitGroup
 	for _, b := range newBuilds {
-		b := b
 		log.Printf("Creating checksum for %v", b.URL)
 		wg.Add(1)
 		go func() {

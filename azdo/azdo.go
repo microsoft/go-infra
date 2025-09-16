@@ -54,11 +54,11 @@ func (c *ClientFlags) NewConnection() *azuredevops.Connection {
 
 // GetBuildWebURL finds the web/UI URL (not API endpoint URL) in the given AzDO Build, if it exists.
 func GetBuildWebURL(b *build.Build) (string, bool) {
-	links, ok := b.Links.(map[string]interface{})
+	links, ok := b.Links.(map[string]any)
 	if !ok {
 		return "", false
 	}
-	web, ok := links["web"].(map[string]interface{})
+	web, ok := links["web"].(map[string]any)
 	if !ok {
 		return "", false
 	}

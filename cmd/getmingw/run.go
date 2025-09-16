@@ -84,7 +84,6 @@ func run(p subcmd.ParseFunc) error {
 	// Download (if necessary) up front.
 	var wg sync.WaitGroup
 	for _, b := range matches {
-		b := b
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

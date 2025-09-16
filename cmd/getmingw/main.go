@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -91,15 +92,9 @@ func filter(builds map[string]build) []*build {
 		if len(msf.Values) == 0 {
 			return true
 		}
-		for _, s := range msf.Values {
-			if s == v {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(msf.Values, v)
 	}
 	for _, b := range builds {
-		b := b
 		if match(&sources, b.Source) &&
 			match(&versions, b.Version) &&
 			match(&arches, b.Arch) &&
