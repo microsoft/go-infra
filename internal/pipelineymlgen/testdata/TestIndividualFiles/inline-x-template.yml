@@ -1,0 +1,3 @@
+# Inline what was given in data as "x". This is useful for testing how various
+# types of templates are inlined without creating a bunch of specific templates.
+${ yml .x }

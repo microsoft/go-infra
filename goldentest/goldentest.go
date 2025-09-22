@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -25,16 +26,33 @@ import (
 var update = flag.Bool("update", false, "Update the golden files instead of failing.")
 
 // Check looks for a file at testdata/{t.Name()}/[goldenPath], compares [actual] against the
-// content, and causes the test to fail if it's incorrect. If "-update" or "-args update" is passed
-// to the "go test" command, instead of failing, writes [actual] to the file.
+// content, and causes the test to fail if it's incorrect.
+//
+// If [goldenPath] starts with '*', it is replaced with {t.Name()} and the path used is
+// testdata/[goldenpath]. Use this if dirs aren't useful for organization.
+//
+// If "-update" or "-args update" is passed to the "go test" command, instead of failing, writes
+// [actual] to the file.
 func Check(t *testing.T, goldenPath, actual string) {
+	t.Helper()
+
+	path := "testdata"
+	if after, ok := strings.CutPrefix(goldenPath, "*"); ok {
+		path = filepath.Join(path, t.Name()+after)
+	} else {
+		path = filepath.Join(path, t.Name(), goldenPath)
+	}
+
+	CheckFullPath(t, path, actual)
+}
+
+// CheckFullPath behaves like Check, but takes a full path to the golden file.
+func CheckFullPath(t *testing.T, path, actual string) {
 	t.Helper()
 
 	if slices.Contains(flag.Args(), "update") {
 		*update = true
 	}
-
-	path := filepath.Join("testdata", t.Name(), goldenPath)
 
 	if *update {
 		if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {

@@ -1,0 +1,22 @@
+# Test if/elseif/else chains.
+- ${ inlineif true }:
+    ifs in a row: 1
+- ${ inlineif true }:
+    ifs in a row: 2
+- ${ inlineif true }:
+    ifs in a row: 3
+
+- result-if:
+  - ${ inlineif true }: success
+  - ${ inlineelseif true }: fail
+  - ${ inlineelse }: fail
+
+- result-elseif:
+  - ${ inlineif false }: fail
+  - ${ inlineelseif true }: success
+  - ${ inlineelse }: fail
+
+- result-else:
+  - ${ inlineif false }: fail
+  - ${ inlineelseif false }: fail
+  - ${ inlineelse }: success

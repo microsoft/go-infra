@@ -1,0 +1,9 @@
+# Local template within nested directory
+stage: LocalStage
+displayName: "Local Stage for ${ .component }"
+jobs:
+  - job: LocalJob
+    displayName: "Local job for ${ .component }"
+    steps:
+      - script: echo "Local nested template for ${ .component }"
+        displayName: "Local ${ .component }"

@@ -1,0 +1,24 @@
+# Test with repository-absolute path inlinetemplate (starts with /)
+pipelineymlgen:
+  data:
+    service: "GlobalService"
+    useSharedTemplates: true
+  output: self
+---
+
+trigger:
+  branches:
+    include:
+      - main
+
+stages:
+  - stage: Deploy
+    displayName: "Deploy ${ .service }"
+    jobs:
+      - job: DeployJob
+        steps:
+          - script: echo "Deploying ${ .service }"
+            displayName: "Deploy ${ .service }"
+  
+  - ${ inlineif .useSharedTemplates }:
+      ${ inlinetemplate "global/cleanup-stage.gen.yml" }

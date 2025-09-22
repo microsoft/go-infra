@@ -1,0 +1,2 @@
+failed to evaluate `testdata/TestIndividualFileErrors/inlineif-in-scalar.gen.yml` content (with config): 
+	eval "Document" at testdata/TestIndividualFileErrors/inlineif-in-scalar.gen.yml:1:1 failed: converting doc content result to YAML node: during final conversion of result to YAML node(s): conditional found in unexpected location: *pipelineymlgen.evalIf

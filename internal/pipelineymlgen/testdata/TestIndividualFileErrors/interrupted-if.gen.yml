@@ -1,0 +1,5 @@
+${ inlineif true }:
+  a: 1
+interruption: 2
+${ inlineelse }:
+  ifs in a row: 3

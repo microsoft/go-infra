@@ -1,0 +1,17 @@
+# In the yml tree, a condition on a sequence is actually a mapping with the
+# sequence as its content. So, two indents are logical, for a self-consistent
+# YAML style.
+example1:
+  - ${ inlineif true }:
+      - step 1
+      - step 2
+  - ${ inlineelse }:
+      - step 1 implemented differently
+
+# However, Azure Pipelines YAML encourages indenting only once. This also works.
+example2:
+  - ${ inlineif true }:
+    - step 1
+    - step 2
+  - ${ inlineelse }:
+    - step 1 implemented differently

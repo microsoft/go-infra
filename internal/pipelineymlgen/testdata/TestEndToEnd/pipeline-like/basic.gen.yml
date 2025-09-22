@@ -1,0 +1,31 @@
+# Basic template test
+pipelineymlgen:
+  data:
+    greeting: "Hello World"
+    version: "1.0"
+    environment: "test"
+  output: self
+---
+
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  buildConfiguration: ${ .environment }
+  displayName: "Build ${ .version }"
+
+stages:
+  - stage: Build
+    displayName: "Build Stage - ${ .greeting }"
+    variables:
+      version: ${ .version }
+    jobs:
+      - job: BuildJob
+        displayName: "Build Job for ${ .environment }"
+        steps:
+          - script: echo "Building version ${ .version }"
+            displayName: "Build ${ .version }"
+          - script: echo "Environment is ${ .environment }"
+            displayName: Environment Info
