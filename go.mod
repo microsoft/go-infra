@@ -25,4 +25,5 @@ require (
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
+	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 )

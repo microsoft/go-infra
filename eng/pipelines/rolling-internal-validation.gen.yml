@@ -6,15 +6,40 @@
 # For go-infra: CodeQL on active branch.
 # For internal go-mirror: CG on active branches.
 
+${ pipelineymlgen }:
+  output:
+    - file: rolling-internal-validation-pipeline-unofficial.yml
+      data:
+        official: false
+    - file: rolling-internal-validation-pipeline.yml
+      data:
+        official: true
+
 parameters:
   - name: enableCodeQL
     displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications in dev branches.'
     type: boolean
-    default: false
+    default: ${ not .official }
   - name: disableTSA
     displayName: '[Debug input] Disable TSA reporting. Use to try modifications in dev branches.'
     type: boolean
-    default: false
+    default: ${ not .official }
+
+trigger: none
+pr: none
+${ inlineif .official }:
+  schedules:
+    - cron: '45 11 * * 2'
+      displayName: Periodic Validation
+      branches:
+        include:
+          - main
+${ else }:
+  schedules: []
+
+variables:
+  - template: variables/pipeline.yml
+  - template: variables/codeql.yml
 
 resources:
   repositories:
@@ -34,7 +59,10 @@ resources:
       ref: refs/tags/release
 
 extends:
-  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ if ${ .official } }}:
+    template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  ${{ else }}:
+    template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
   parameters:
     pool:
       name: NetCore1ESPool-Internal
