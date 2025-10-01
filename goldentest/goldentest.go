@@ -28,8 +28,9 @@ var update = flag.Bool("update", false, "Update the golden files instead of fail
 // Check looks for a file at testdata/{t.Name()}/[goldenPath], compares [actual] against the
 // content, and causes the test to fail if it's incorrect.
 //
-// If [goldenPath] starts with '*', it is replaced with {t.Name()} and the path used is
-// testdata/[goldenpath]. Use this if dirs aren't useful for organization.
+// If [goldenPath] starts with '*' and optionally has some characters after, the content is instead
+// looked for at testdata/{t.Name()}[after]. Use this if dirs aren't useful for organization.
+// After the '*' is typically a file extension, or perhaps extra context clues.
 //
 // If "-update" or "-args update" is passed to the "go test" command, instead of failing, writes
 // [actual] to the file.
