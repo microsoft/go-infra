@@ -446,10 +446,9 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 						return fail(fmt.Errorf("evaluating condition result value: %w", err))
 					}
 					toInsert = append(toInsert, v)
-				} else {
-					// Skip this mapping pair entirely.
-					// False condition, or we already took a true condition branch.
 				}
+				// Otherwise, skip this mapping pair entirely.
+				// False condition, or we already took a true condition branch.
 			}
 		}
 		if !isCondition {
@@ -465,11 +464,12 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 
 			switch node.Kind {
 			case yaml.ScalarNode:
-				if n.Kind == 0 {
+				switch n.Kind {
+				case 0:
 					n.Kind = yaml.ScalarNode
-				} else if n.Kind == yaml.ScalarNode {
+				case yaml.ScalarNode:
 					return fail(fmt.Errorf("attempted to insert multiple scalars into mapping"))
-				} else {
+				default:
 					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
 				}
 				n.Value = node.Value

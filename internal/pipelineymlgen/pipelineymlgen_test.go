@@ -188,7 +188,6 @@ func copyTestData(t *testing.T, srcDir, destDir string) {
 
 		return os.WriteFile(destPath, srcFile, info.Mode())
 	})
-
 	if err != nil {
 		t.Fatalf("Failed to copy test data: %v", err)
 	}
