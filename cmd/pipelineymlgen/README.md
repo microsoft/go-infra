@@ -77,17 +77,8 @@ If not, ignores the node and its children.
 The value is only evaluated if the condition is true.
 (Shortcircuiting.)
 
-> [!IMPORTANT]
-> The "array-ness" of the child must match the "array-ness" of the `inlineif` node.
-> This prevents syntax conflicts with surrounding yml nodes.
-> This rule applies to all inlining commands.
-
 No specific next sibling or `end` command is required.
 This command is aware of yml syntax.
-
-> [!NOTE]
-> The `inlineelseif` and `elseinline` commands associated with this `inlineif` may be anywhere after the `inlineif` node (but not after another `inline*` function) according to an in-order traversal of the YAML node tree.
-> This is done to simplify the implementation: use traversal order rather than deep structural analysis.
 
 ### `inlineelseif <pipeline>`
 
@@ -97,9 +88,6 @@ Must be an immediate next sibling of an `inlineif` node or another `inlineelseif
 The condition is only evaluated if the previous conditions were all unsatisfied.
 The value is only evaluated if the condition is true.
 (Shortcircuiting.)
-
-> [!NOTE]
-> The pipeline is always evaluated, even if the `inlineif` condition is true.
 
 ### `elseinline`
 
@@ -118,14 +106,14 @@ Insert the result of `pipeline` as YAML-encoded data.
 Inline the `.yml` file at `path`.
 If the file is `gen.yml`, evaluate it and inline the result.
 
-If this node has an object child, it is used as the initial value of `data` before evaluating the template.
+If this node has an object child, it is merged into `data` before evaluating the template.
 
-More technically: if the node is a the key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
+More technically: if the node is a key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
 
 ### Sprig functions
 
 Most Sprig functions functions are included.
-Specifically, `HermeticTxtFuncMap`.
+Specifically, `HermeticTxtFuncMap`, the reproducible functions.
 
 See [Sprig documentation](https://masterminds.github.io/sprig/) for more details.
 
@@ -140,6 +128,10 @@ pipelineymlgen:
   data:
     greeting: "Hi" # Can be referred to as `${ .greeting }` in the document.
 ```
+
+> [!TIP]
+> `inlinetemplate` (and other functions) may be used inside the `pipelineymlgen` document.
+> You can use this to share common data and logic.
 
 If the `pipelineymlgen` command is evaluating the file (not `inlinetemplate`), `output` is also considered.
 Instead of discarding the result, it's written to the specified file:
@@ -166,9 +158,5 @@ pipelineymlgen:
         official: true
 ```
 
-> [!TIP]
-> `inlinetemplate` (and other functions) may be used inside a `pipelineymlgen` document.
-> You can use this to share data.
-
 > [!NOTE]
-> Multiple-file output is designed to reduce the number of files necessary, making it easier to manage tightly related pipelines.
+> Multiple-file output (rather than requiring one `gen.yml` file per output) is intended to reduce the number of files necessary, making it easier to manage a group of tightly related pipelines.
