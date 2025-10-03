@@ -1,0 +1,9 @@
+- ifs in a row: 1
+- ifs in a row: 2
+- ifs in a row: 3
+- result-if:
+    - success
+- result-elseif:
+    - success
+- result-else:
+    - success

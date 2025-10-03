@@ -1,0 +1,2 @@
+failed to evaluate `testdata/TestIndividualFileErrors/missing-if.gen.yml` content (with config): 
+	eval "Document" at testdata/TestIndividualFileErrors/missing-if.gen.yml:1:1 failed: converting doc content result to YAML node: during final conversion of mapping to YAML node(s): evaluating condition: inlineelse without preceding inlineif

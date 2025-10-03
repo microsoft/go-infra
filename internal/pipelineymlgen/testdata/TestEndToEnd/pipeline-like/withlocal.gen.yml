@@ -1,0 +1,20 @@
+# Test with local path inlinetemplate (relative to .gen.yml file)
+pipelineymlgen:
+  data:
+    projectName: "LocalProject"
+    includeBuild: true
+  output: self
+---
+
+trigger: none
+
+stages:
+  - stage: Setup
+    jobs:
+      - job: SetupJob
+        steps:
+          - script: echo "Setting up ${ .projectName }"
+            displayName: Setup
+  
+  - ${ inlineif .includeBuild }:
+      ${ inlinetemplate "shared/build-stage.gen.yml" }

@@ -1,7 +1,36 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# official: https://dev.azure.com/dnceng/internal/_build?definitionId=1061
+# unofficial: https://dev.azure.com/dnceng/internal/_build?definitionId=1495
+
+pipelineymlgen:
+  output:
+    - file: upstream-sync-pipeline-unofficial.yml
+      data:
+        official: false
+    - file: upstream-sync-pipeline.yml
+      data:
+        official: true
+---
+
 parameters: []
+
+trigger: none
+pr: none
+schedules:
+  - ${ inlineif .official }:
+    - cron: '0 16 * * Mon,Wed,Fri'
+      displayName: Sync from upstream three times a week
+      branches:
+        include:
+          - main
+      always: true
+
+variables:
+  - group: Microsoft-GoLang-bot
+  - group: DotNet-VSTS-Infra-Access
+  - template: variables/pipeline.yml
 
 resources:
   repositories:
@@ -11,9 +40,9 @@ resources:
       ref: refs/tags/release
 
 extends:
-  ${{ if variables['Go1ESOfficial'] }}:
+  ${ inlineif .official }:
     template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
-  ${{ else }}:
+  ${ inlineelse }:
     template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
   parameters:
     sdl:

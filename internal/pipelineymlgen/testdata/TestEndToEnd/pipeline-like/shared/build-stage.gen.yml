@@ -1,0 +1,11 @@
+# Shared build stage template (local to parent directory)
+stage: Build
+displayName: "Build ${ .projectName }"
+jobs:
+  - job: BuildJob
+    displayName: "Building ${ .projectName }"
+    steps:
+      - script: echo "Local template building ${ .projectName }"
+        displayName: "Build ${ .projectName }"
+      - script: echo "Compile and test"
+        displayName: Compile

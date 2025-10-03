@@ -1,0 +1,3 @@
+failed to evaluate `testdata/TestIndividualFileErrors/invalid-function.gen.yml` content (with config): 
+	eval "Document" at testdata/TestIndividualFileErrors/invalid-function.gen.yml:1:1 failed: evaluating document content: 
+	eval "Scalar" at testdata/TestIndividualFileErrors/invalid-function.gen.yml:1:1 failed: evaluating scalar expression: executing expressions: evaluating expression "${ unknownoperation .foo }": evaluating expression "unknownoperation .foo": failed to parse template: template: pipelineymlgenexpr:1: function "unknownoperation" not defined

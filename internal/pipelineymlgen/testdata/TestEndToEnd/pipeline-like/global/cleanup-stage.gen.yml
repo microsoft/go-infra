@@ -1,0 +1,10 @@
+stage: Cleanup
+displayName: "Cleanup for ${ .service }"
+jobs:
+  - job: CleanupJob
+    displayName: "Cleanup ${ .service }"
+    steps:
+      - script: echo "Global template cleaning up ${ .service }"
+        displayName: "Cleanup ${ .service }"
+      - script: echo "Remove temporary files"
+        displayName: "Remove temps"

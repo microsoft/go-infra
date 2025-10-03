@@ -1,0 +1,26 @@
+# This could be considered ambiguous. Which inlineif will inlineelse match with?
+#
+# Only the "step 1" inlines result in sequences that should be inserted. The
+# small step inlines a scalar. Perhaps it seems like that means it should be in
+# a different connditional chain.
+#
+# It isn't clear whether these situations will ever come up in real template
+# code. It seems unlikely for this pattern to be useful.
+example1:
+  - step 1
+  - step 2
+  - step 1 implemented differently # This is included!
+  - final step
+# In this example, the small step has multiple conditions. This actually means
+# it's not considered part of the sequence's conditional chain.
+example2:
+  - step 1
+  - step 2
+  - small step implemented differently
+  # An inlineelse in a seq element now would result in an error because the
+  # previous element doesn't count as conditional element of the sequence, and
+  # we can't skip over it.
+  #
+  # - ${ inlineelse }:
+  #     - step 1 implemented differently
+  - final step

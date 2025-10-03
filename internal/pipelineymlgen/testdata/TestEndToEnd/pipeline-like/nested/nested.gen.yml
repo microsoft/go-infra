@@ -1,0 +1,26 @@
+# Nested directory test to ensure path resolution works correctly
+pipelineymlgen:
+  data:
+    component: "NestedComponent"
+    useLocal: true
+    useGlobal: true
+  output: self
+---
+
+trigger: none
+
+stages:
+  - stage: Test
+    displayName: "Test ${ .component }"
+    jobs:
+      - job: TestJob
+        steps:
+          - script: echo "Testing ${ .component }"
+            displayName: "Test ${ .component }"
+
+  - ${ inlineif .useLocal }:
+      ${ inlinetemplate "local-template.gen.yml" }
+
+  - ${ inlineif .useGlobal }:
+      ${ inlinetemplate "../global/cleanup-stage.gen.yml" }:
+        service: global-service
