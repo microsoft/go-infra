@@ -2,7 +2,7 @@
 
 > Is this a brand new major version without a release branch set up in microsoft/go? For example, 1.19beta1, 1.19rc1, and 1.19 might be the first time releasing major version "19". If so, you need to create the release branch before continuing with this document. See [new-release-branch.md](new-release-branch.md). 
 
-Open the [microsoft-go-infra-release-start](https://dev.azure.com/dnceng/internal/_build?definitionId=1153) pipeline definition. You will use it to kick off the release day.
+Open the [microsoft-go-infra-release-start](https://dev.azure.com/dnceng/internal/_build?definitionId=1153) pipeline definition. Short URL: https://aka.ms/goship. You will use it to kick off the release day.
 
 Click "Run pipeline" and fill the fields:
 
