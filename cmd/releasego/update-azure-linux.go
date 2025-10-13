@@ -63,7 +63,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	flag.StringVar(&upstream, "upstream", "microsoft", "The owner of the Azure Linux repository.")
 	flag.StringVar(&owner, "owner", "microsoft", "The owner of the repository to create the dev branch in.")
 	flag.StringVar(&repo, "repo", "azurelinux", "The upstream repository name to update.")
-	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch to download files from.")
+	flag.StringVar(&baseBranch, "base-branch", "refs/heads/3.0-dev", "The base branch.")
 	flag.StringVar(&updateBranch, "update-branch", "", "The target branch to update files in.")
 	flag.BoolVar(&latestMajor, "latest-major", false, "This is the latest major version, so update 'golang.spec' instead of 'golang-1.<N>.spec'.")
 	flag.StringVar(&notify, "notify", "", "A GitHub user to tag in the PR body and request that they finalize the PR, or empty. The value 'ghost' is also treated as empty.")
@@ -236,6 +236,13 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	fmt.Printf("Pull request created successfully: %s\n", pr.GetHTMLURL())
 
 	if err := githubutil.Retry(func() error {
+		labels := []string{"Automatic PR"}
+		if baseBranch == "refs/heads/3.0-dev" {
+			labels = append(labels, "3.0-dev")
+		}
+		if baseBranch == "refs/heads/fasttrack/3.0" {
+			labels = append(labels, "fasttrack/3.0")
+		}
 		// This function utilizes the Issues API because in GitHub's API model, pull requests are treated as a special type of issue.
 		// While GitHub provides a dedicated PullRequests API, it doesn't currently offer a method for adding labels directly to pull requests.
 		//
@@ -243,7 +250,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		// to apply the labels.
 		//
 		// This approach is a workaround until GitHub potentially adds direct label management for pull requests in their API.
-		_, _, err := client.Issues.AddLabelsToIssue(ctx, upstream, repo, pr.GetNumber(), []string{"3.0-dev", "Automatic PR"})
+		_, _, err := client.Issues.AddLabelsToIssue(ctx, upstream, repo, pr.GetNumber(), labels)
 		return err
 	}); err != nil {
 		// Labeling may require giving an unjustified amount of permission to the bot.
