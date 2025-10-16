@@ -1,0 +1,6 @@
+github.com/microsoft/go-infra v0.0.6 h1:RB/Jx3bMC8I+16Ra9iy+HcrHe3Ss1iM46OZ0LzNUZ0Y=
+github.com/microsoft/go-infra v0.0.6/go.mod h1:L+TMMmm7bkfgUfx1FZmReNHXL9m4oqvc+bVXCuaKD30=
+golang.org/x/text v0.21.0 h1:zyQAAkrwaneQ066sspRyJaG9VNi/YJ1NfzcGB3hZ/qo=
+golang.org/x/text v0.21.0/go.mod h1:4IBbMaMmOPCJ8SecivzSH54+73PCFmPWxNTLm+vZkEQ=
+golang.org/x/tools v0.28.0 h1:WuB6qZ4RPCQo5aP3WdKZS7i595EdWqWR8vqJTlwTVK8=
+golang.org/x/tools v0.28.0/go.mod h1:dcIOrVd3mfQKTgrDVQHqCPMWy6lnhfhtX3hLXYVLfRw=
