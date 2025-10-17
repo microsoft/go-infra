@@ -1,0 +1,17 @@
+// nomod: Creating a go.mod in a subdir and and using "go install" it while it
+// exists on a branch doesn't work! Go always tries to fetch the module @latest
+// to check for deprecations, and that doesn't work.
+//
+// Another alternative is to disable the proxy before running go install, but
+// that's not as friendly.
+//
+// When reinstating this go.mod file, make sure to tidy the root go.mod file.
+
+module github.com/microsoft/go-infra/dl
+
+// Intentionally low Go version to support installing new versions of Go in old environments.
+go 1.22.0
+
+require github.com/microsoft/go-infra v0.0.6
+
+require golang.org/x/text v0.21.0 // indirect
