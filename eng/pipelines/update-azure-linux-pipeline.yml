@@ -39,7 +39,7 @@ parameters:
   - name: baseBranch
     displayName: 'Base branch to update (include "refs/heads/" prefix)'
     type: string
-    default: 'refs/heads/fasttrack/3.0'
+    default: 'refs/heads/3.0-dev'
 
   - name: updateBranch
     displayName: 'Branch to update (include "refs/heads/" prefix) or nil to automatically choose a name'
