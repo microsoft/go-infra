@@ -36,8 +36,13 @@ parameters:
     type: string
     default: 'azurelinux'
 
+  - name: baseBranch
+    displayName: 'Base branch to update (include "refs/heads/" prefix)'
+    type: string
+    default: 'refs/heads/3.0-dev'
+
   - name: updateBranch
-    displayName: 'Branch to update (include "refs/heads/" prefix if specified) or nil to automatically choose a name'
+    displayName: 'Branch to update (include "refs/heads/" prefix) or nil to automatically choose a name'
     type: string
     default: nil
 
@@ -128,6 +133,7 @@ extends:
                         -upstream ${{ parameters.upstream }} \
                         -owner ${{ parameters.owner }} \
                         -repo ${{ parameters.repo }} \
+                        -base-branch ${{ parameters.baseBranch }} \
                         -update-branch ${{ parameters.updateBranch }} \
                         -latest-major=${{ parameters.latestMajor }} \
                         -notify ${{ parameters.notify }} \
