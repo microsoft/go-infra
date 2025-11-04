@@ -1,0 +1,4 @@
+# Check what happens if after evaluating, nothing is left.
+# An empty mapping seems reasonable.
+${ inlineif false }:
+  failure

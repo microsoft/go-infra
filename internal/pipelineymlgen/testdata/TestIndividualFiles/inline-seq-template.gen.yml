@@ -1,0 +1,18 @@
+- 1
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x: 2
+- 3
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x:
+      - 4
+- 5
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x:
+      -
+        - deeper 6
+        - deeper 7
+- 8
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x:
+      - 9
+      - 10

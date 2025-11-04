@@ -1,0 +1,2 @@
+- ${ inlineif true }: success
+- ${ inlineelse }: fail

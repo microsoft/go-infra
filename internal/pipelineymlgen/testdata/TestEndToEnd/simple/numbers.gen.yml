@@ -1,0 +1,22 @@
+# Multi-output test with different data for each output
+pipelineymlgen:
+  output:
+    - file: number.1.yml
+      data:
+        number: 1
+    - file: number.2.yml
+      data:
+        number: 2
+    - file: number.3.yml
+      data:
+        number: 3
+---
+# Test simple eval and if/elseif/else logic.
+strNum: ${ .number } # A string 1, 2, or 3 depending on which output file this is.
+num: ${ yml .number } # The same number, but as a YAML number.
+${ inlineif (eq .number 2) }:
+  this is two: yep
+${ inlineelseif (eq .number 3) }:
+  this is three: indeed
+${ inlineelse }:
+  what is the number: not two or three

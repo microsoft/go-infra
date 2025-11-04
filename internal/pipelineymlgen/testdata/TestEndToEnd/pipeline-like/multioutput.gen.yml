@@ -1,0 +1,39 @@
+# Multi-output test with different data for each output
+pipelineymlgen:
+  data:
+    appName: "MyApp"
+    baseSteps:
+      - script: echo "Common step"
+        displayName: Common
+  output:
+    - file: official-pipeline.yml
+      data:
+        official: true
+        environment: "production"
+    - file: unofficial-pipeline.yml  
+      data:
+        official: false
+        environment: "development"
+---
+
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  appName: ${ .appName }
+  environment: ${ .environment }
+  isOfficial: ${ .official }
+
+stages:
+  - stage: Deploy
+    displayName: "${ .appName } - ${ .environment }"
+    jobs:
+      - job: Deploy
+        displayName: "Deploy to ${ .environment }"
+        steps:
+          - script: echo "Common step"
+            displayName: Common
+          - script: echo "Deploying ${ .appName } to ${ .environment }"
+            displayName: "Deploy ${ .appName }"
