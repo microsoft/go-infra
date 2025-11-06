@@ -8,7 +8,7 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.5.0
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-test/deep v1.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.0
