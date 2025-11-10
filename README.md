@@ -1,5 +1,7 @@
 # Microsoft build of Go Infrastructure
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/microsoft/go-infra.svg)](https://pkg.go.dev/github.com/microsoft/go-infra)
+
 This repository contains libraries and utilities that Microsoft uses to:
 
 * Build Go inside Microsoft infrastructure using up-to-date source code.
