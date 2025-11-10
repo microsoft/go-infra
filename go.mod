@@ -14,7 +14,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/go-github/v65 v65.0.0
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
-	go.yaml.in/yaml/v4 v4.0.0-rc.2
+	go.yaml.in/yaml/v4 v4.0.0-rc.3
 	golang.org/x/crypto v0.43.0
 	golang.org/x/mod v0.29.0
 	golang.org/x/oauth2 v0.32.0
