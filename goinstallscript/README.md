@@ -51,6 +51,8 @@ Pass `-h` to show help.
 
 # github.com/microsoft/go-infra/goinstallscript
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/microsoft/go-infra/goinstallscript.svg)](https://pkg.go.dev/github.com/microsoft/go-infra/goinstallscript)
+
 The `goinstallscript` command helps install `go-install.ps1` and keep it up to date.
 
 ## Set up `goinstallscript` in your repository
