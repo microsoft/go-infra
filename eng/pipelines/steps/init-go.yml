@@ -4,6 +4,8 @@
 # Set up Go tool in the build machine. This is in a template to make version updates easy.
 
 steps:
-  - task: GoTool@0
+  - task: GoTool@0.265.0
+    displayName: 'Install Go'
     inputs:
-      version: 1.24.1
+      version: '1.25'
+      goDownloadUrl: 'https://aka.ms/golang/release/latest'
