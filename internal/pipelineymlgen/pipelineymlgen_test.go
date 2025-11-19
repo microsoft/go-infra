@@ -80,10 +80,9 @@ func TestCheckEOLHandling(t *testing.T) {
 				}
 
 				destFilePath := strings.ReplaceAll(genFilePath, ".gen.yml", ".yml")
-				expectedDestContent :=
-					strings.ReplaceAll(codeGenHeader("test.gen.yml"), "\n", destLE) +
-						destLE +
-						strings.Join(contentLines, destLE)
+				expectedDestContent := strings.ReplaceAll(codeGenHeader("test.gen.yml"), "\n", destLE) +
+					destLE +
+					strings.Join(contentLines, destLE)
 				if err := os.WriteFile(destFilePath, []byte(expectedDestContent), 0o644); err != nil {
 					t.Fatalf("Failed to write destination file: %v", err)
 				}
