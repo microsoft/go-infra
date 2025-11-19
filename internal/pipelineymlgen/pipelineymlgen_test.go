@@ -57,8 +57,8 @@ func TestCheckEOLHandling(t *testing.T) {
 				contentLines := []string{
 					"first: 1",
 					// Comment handling may be fragile in the YML parser itself.
-					// If a CRLF makes it in, it may be treated as LFLF, which
-					// breaks reproducibility.
+					// If a CRLF makes it through our code into the parser, the
+					// tree is different, which can break reproducibility.
 					"# This is number two.",
 					"second: 2",
 					"",
