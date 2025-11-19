@@ -87,3 +87,59 @@ func WriteJSONFile(path string, i any) (err error) {
 	}
 	return nil
 }
+
+// CRLFToLF is a [transform.Transformer] that converts all occurrences
+// of "\r\n" to "\n", leaving lone '\r' (not followed by '\n') untouched.
+type CRLFToLF struct{}
+
+// Reset implements [transform.Transformer]. No state to clear.
+func (CRLFToLF) Reset() {}
+
+// Transform converts CRLF to LF.
+// Implements [transform.Transformer].
+// It's careful about chunk boundaries and dst capacity.
+func (CRLFToLF) Transform(dst, src []byte, atEOF bool) (nDst, nSrc int, err error) {
+	for nSrc < len(src) {
+		// Need at least one byte of dst space.
+		if nDst == len(dst) {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+
+		b := src[nSrc]
+
+		if b == '\r' {
+			// If '\r' is the last byte in src chunk and we are not at EOF,
+			// request more source to decide if it's CRLF.
+			if nSrc+1 == len(src) {
+				if !atEOF {
+					return nDst, nSrc, transform.ErrShortSrc
+				}
+				// We're already at EOF: leave lone '\r' alone.
+				dst[nDst] = '\r'
+				nDst++
+				nSrc++
+				continue
+			}
+			// We have at least one more byte, so check if we have a full \r\n.
+			if src[nSrc+1] == '\n' {
+				// Convert CRLF -> LF
+				dst[nDst] = '\n'
+				nDst++
+				nSrc += 2
+				continue
+			}
+			// Lone '\r' not followed by '\n': leave it alone.
+			dst[nDst] = '\r'
+			nDst++
+			nSrc++
+			continue
+		}
+
+		// Normal byte: copy.
+		dst[nDst] = b
+		nDst++
+		nSrc++
+	}
+
+	return nDst, nSrc, nil
+}

@@ -10,7 +10,9 @@ import (
 	"os"
 	"slices"
 
+	"github.com/microsoft/go-infra/stringutil"
 	"go.yaml.in/yaml/v4"
+	"golang.org/x/text/transform"
 )
 
 // cloneNode makes a copy of a YAML node as deep as we need it: a shallow copy
@@ -35,7 +37,9 @@ func readYAMLFileDocs(path string) ([]*yaml.Node, error) {
 }
 
 func readYAMLFileDocsFromReader(r io.Reader) ([]*yaml.Node, error) {
-	dec := yaml.NewDecoder(r)
+	// YAML parser is fragile with CRLF vs. LF. Normalize to LF before parsing.
+	content := transform.NewReader(r, stringutil.CRLFToLF{})
+	dec := yaml.NewDecoder(content)
 
 	var nodes []*yaml.Node
 	for {

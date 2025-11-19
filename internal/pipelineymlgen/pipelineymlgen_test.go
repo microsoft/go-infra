@@ -5,6 +5,7 @@ package pipelineymlgen
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,77 @@ hello: world
 		t.Errorf("Expected content, got nil")
 	} else {
 		t.Logf("Content: %+v", content)
+	}
+}
+
+func TestCheckEOLHandling(t *testing.T) {
+	// Test combinations of \n and \r\n line endings.
+	for _, sourceLE := range []string{"\n", "\r\n"} {
+		for _, destLE := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("from_%q_to_%q", sourceLE, destLE), func(t *testing.T) {
+				// Set up a test dir with a trivial .gen.yml file that exercises
+				// code paths that are sensitive to EOL:
+				testDir := t.TempDir()
+				minimalGitRootInit(t, testDir)
+
+				contentLines := []string{
+					"first: 1",
+					// Comment handling may be fragile in the YML parser itself.
+					// If a CRLF makes it through our code into the parser, the
+					// tree is different, which can break reproducibility.
+					"# This is number two.",
+					"second: 2",
+					"",
+				}
+
+				genFilePath := filepath.Join(testDir, "test.gen.yml")
+				genFileContent := strings.Join(
+					append(
+						[]string{
+							"pipelineymlgen:",
+							"  output: self",
+							"---",
+						},
+						contentLines...),
+					sourceLE,
+				)
+				if err := os.WriteFile(genFilePath, []byte(genFileContent), 0o644); err != nil {
+					t.Fatalf("Failed to write gen file: %v", err)
+				}
+
+				destFilePath := strings.ReplaceAll(genFilePath, ".gen.yml", ".yml")
+				expectedDestContent := strings.ReplaceAll(codeGenHeader("test.gen.yml"), "\n", destLE) +
+					destLE +
+					strings.Join(contentLines, destLE)
+				if err := os.WriteFile(destFilePath, []byte(expectedDestContent), 0o644); err != nil {
+					t.Fatalf("Failed to write destination file: %v", err)
+				}
+
+				if err := Run(
+					&CmdFlags{
+						Verbose: true,
+						Check:   true,
+					},
+					genFilePath,
+				); err != nil {
+					t.Errorf("Run failed: %v", err)
+					// If we failed, run again without Check to see what it would write.
+					if err := Run(
+						&CmdFlags{
+							Verbose: true,
+						},
+						genFilePath,
+					); err != nil {
+						t.Errorf("Run without Check also failed: %v", err)
+					}
+					c, err := os.ReadFile(destFilePath)
+					if err != nil {
+						t.Fatalf("Failed to read dest file after failure: %v", err)
+					}
+					t.Logf("Dest file content after failure:\n%q", string(c))
+				}
+			})
+		}
 	}
 }
 
