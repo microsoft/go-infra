@@ -2,7 +2,7 @@
 
 Our pipeline implementation is shaped by a few AzDO pipeline and YAML quirks. This doc contains notes on these quirks and how they influence how we've written the pipeline YAML.
 
-These notes also apply to the [microsoft/go](https://github.com/microsoft/go) pipelines.
+These notes apply to this repository, microsoft/go-infra, and also the [microsoft/go](https://github.com/microsoft/go), [microsoft/go-images](https://github.com/microsoft/go-images), and [microsoft/go-infra-images](https://github.com/microsoft/go-infra-images) pipelines.
 
 Useful AzDO Pipeline YAML docs:
 * [YAML schema reference for Azure Pipelines](https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema)
@@ -60,9 +60,17 @@ parameters:
     default: true
 ```
 
-In this mode, any additional parameters passed by a `- template: ...` statement are rejected as a template evaluation error. If we need some arbitrary parameters, we use an extra `object` param.
-
 Because `orange` is passed as a `boolean`, `${{ if parameters.orange }}` evaluates as expected.
+This is more predictable and easier to understand.
+
+In typed parameter mode, any parameters passed by a `- template: ...` statement that aren't specified in the template's `parameters` block are rejected as a template evaluation error.
+If we need to pass a template some arbitrary set of parameters without a fixed schema, we use an extra `object` param, such as:
+
+```yml
+parameters:
+  - name: ctx
+    type: object
+```
 
 ## Runtime parameters
 
@@ -88,10 +96,30 @@ parameters:
 
 ## Templates for data reuse
 
-AzDO supports [variable templates](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops#variable-templates-with-parameter), but it's hard to determine where variables defined this way are usable. For example, a macro expansion `$(example)` will evaluate to define a job's pool name, but not the demands on that pool. A runtime expression `$[example]` will not evaluate in either case. A template expression `${{ example }}` will always work.
+AzDO supports [variable templates](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops#variable-templates-with-parameter), but it's hard to determine where variables defined this way are usable.
 
-For universal applicability, we prefer templates and `parameters` (rather than `matrix` and `variables`) to share logic and values between stages.
-Another benefit of templates is early evaluation: we can sometimes catch errors in the queue dialog (rather than at build-time), saving dev iteration time.
+For example, when defining a job's pool name:
+
+* A macro expansion `$(example)` will evaluate to define a job's pool name, but won't evaluate to define the demands on that pool.
+* A runtime expression `$[example]` will not evaluate in either case.
+* A template expression `${{ example }}` will always work.
+
+As well as only being evaluted in certain contexts, each of these types of expression strings also each have their own rules on what expressions they can evaluate and what data they have access to.
+
+Template expressions have the broadest applicability, so we prefer templates and `parameters` (rather than `matrix` and `variables`) to share logic and values between stages.
+
+Another major benefit of templates and template expressions is early evaluation: sometimes AzDO can catch errors when we hit the "Run" button in the "queue build" dialog (rather than at build execution time), saving significantly on dev iteration time.
+
+We also use the [`pipelineymlgen`](/cmd/pipelineymlgen/README.md) tool, which adds another layer of templating evaluated at dev-time:
+
+* A `pipelineymlgen` expression `${ example }` will always work. It has access to even less data than a template expression, but executes locally, reducing iteration time even further and improving observability and debuggability.
+
+Despite the benefits, we don't always use `pipelineymlgen` for templating:
+
+* It's a custom tool that new contributors won't be familiar with.
+* It may make it more confusing to compare our yml against 1ES PT documentation.
+  * Mitigation: the evaluated files are checked into the repo, and these can be compared against 1ES PT docs.
+* When possible, we strongly prefer to move complex logic from AzDO yml into Go code rather than improve the way the templates work.
 
 ### Compile-time variable usage
 
@@ -109,6 +137,8 @@ We can still use `variables` to perform chained reuse, but values that come from
 
 Templates are (generally) evaluated in text order.
 This determines whether `variables` is available as `${{ variables[...] }}` or not.
+
+The [`pipelineymlgen`](/cmd/pipelineymlgen/README.md) tool has more traditional capabilities for variable reuse and might be a good alternative when it seems that these details about `variables` matter.
 
 ## Pipeline templates to reduce duplication with official/unofficial split
 
@@ -133,28 +163,54 @@ extends:
 (With [`pipeline.yml`](https://github.com/microsoft/go/blob/9ab06144d6e90e1686f7916bb6acc46134f0bd72/eng/pipeline/variables/pipeline.yml) variables template.)
 
 However, in other cases, we need to make separate pipeline entrypoint files.
-This happens when the build trigger can't be overridden by the Azure Pipelines UI.
+For example, the CI trigger can disabled in the AzDO UI, but a scheduled trigger can't be disabled.
+A scheduled trigger can only be overridden to a different schedule, and that schedule must have some triggers in it, not zero.
 
-For example, the CI trigger can be disabled in the AzDO UI.
-A scheduled trigger can't be disabled: it can only be overridden to a different schedule, and the schedule must have some triggers in it.
-
-We can use `extends:` to share some logic, but not all.
-
-* A pipeline template can't define `variables`, so they must be duplicated in each entrypoint yml.
-  * Mitigation: we can use templates to define variables. But this is harder for devs: more files to keep in mind, and a decision to be made of whether making a template file is actually worthwhile.
-* The template can't define runtime `parameters`, so these must also be duplicated.
-  * Mitigation: pipelines with scheduled triggers typically don't have runtime `parameters`, because a human won't be running it manually.
-* The template can define `resources`.
+> [!NOTE]
+> To mitigate the maintenance impact of having multiple pipeline files, we considered using the AzDO `extends:` feature to share some logic.
+> However, it doesn't share enough:
+>
+> * ✅ The template can define `resources`.
+> * ❌ The template can't define `variables`, so they must be duplicated in each entrypoint yml.
+>   * Mitigation: we can use templates to define variables. But this is harder for devs: more files to keep in mind, and a decision to be made of whether making a template file is actually worthwhile.
+>   * ❌ The variables defined in the entrypoint yml can't be used at compile-time in the template yml. This is a major limitation, because types of reuse that need to be done with template expressions won't work.
+> * ❌ The template can't define runtime `parameters`, so these must also be duplicated.
+>
+> We moved on to developing and using `pipelineymlgen`.
 
 For consistency and a reasonable migration path for existing pipelines, we use this set of files when necessary:
 
-* `foo-pipeline.yml` - The original file for the `foo` pipeline. This is changed to use `extends: foo.yml`.
+* `foo.gen.yml` - The [`pipelineymlgen`](/cmd/pipelineymlgen/README.md) template file. This isn't a pipeline entrypoint on its own, but it generates both of the following files.
+* `foo-pipeline.yml` - The original file for the `foo` pipeline.
 * `foo-pipeline-unofficial.yml` - A new file for the unofficial `foo` pipeline to point to, with modified triggers.
-* `foo.yml` - The shared template file. Not intended to be usable as a pipeline entrypoint on its own.
+
+The `*.gen.yml` file generates both files and differentiates the content using expressions like `${ inlineif .official }`, for example [rolling-internal-validation.gen.yml](/eng/pipelines/rolling-internal-validation.gen.yml):
+
+```yml
+pipelineymlgen:
+  output:
+    - file: rolling-internal-validation-pipeline-unofficial.yml
+      data:
+        official: false
+    - file: rolling-internal-validation-pipeline.yml
+      data:
+        official: true
+---
+# ...
+schedules:
+  - ${ inlineif .official }:
+    - cron: '45 11 * * 2'
+      displayName: Periodic Validation
+      branches:
+        include:
+          - main
+# ...
+```
 
 ## Editing tools
 
-The [Azure Pipelines extension for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-azure-devops.azure-pipelines) fails to parse our templates properly. It doesn't generally understand template expressions, doesn't understand dynamic template parameters, and the language server crashes when it sees `insert` as the first element in a list, like this:
+The last time we checked, the [Azure Pipelines extension for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-azure-devops.azure-pipelines) fails to parse our templates properly.
+It didn't generally understand template expressions, doesn't understand dynamic template parameters, and the language server crashes when it sees `insert` as the first element in a list, like this:
 
 ```yml
 - ${{ each value in parameters.thing }}:
@@ -162,7 +218,9 @@ The [Azure Pipelines extension for VS Code](https://marketplace.visualstudio.com
     answer: 42
 ```
 
-We edit the YAML files with generic YAML tools.
+We haven't tested its behavior with `pipelineymlgen` templates.
+
+We expect to edit the YAML files with generic YAML tools.
 
 ## Indentation style
 
