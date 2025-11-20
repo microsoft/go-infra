@@ -47,7 +47,9 @@ func processFile(f *CmdFlags, file string) error {
 
 	rootState := &EvalState{
 		File: file,
-		Data: map[string]any{},
+		Data: map[string]any{
+			"filename": filepath.Base(file),
+		},
 	}
 	// Only evaluate the config so far. We can't actually evaluate the content:
 	// it might strongly depend on data that is only passed into the template by

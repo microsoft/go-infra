@@ -1,0 +1,6 @@
+pipelineymlgen:
+  data:
+    title: ${ title .filename }
+  output: self
+---
+example from "${ .filename }", ${ .title }

@@ -1,0 +1,10 @@
+pipelineymlgen:
+  output:
+    - file: ${ trimSuffix ".gen.yml" .filename }-pipeline-unofficial.yml
+      data:
+        official: false
+    - file: ${ trimSuffix ".gen.yml" .filename }-pipeline.yml
+      data:
+        official: true
+---
+This is an ${ .official | ternary "official" "unofficial" } pipeline.
