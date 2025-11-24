@@ -186,6 +186,16 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 				})
 			// If the key is an evalTemplate, treat the value as the data map.
 			case *evalTemplate:
+				// Evaluate the value node first to resolve any expressions in the data.
+				evalValue, err := e.eval(valueNode)
+				if err != nil {
+					return fail(fmt.Errorf("evaluating template data value: %w", err))
+				}
+				valueNode, err := e.resultToYAML(evalValue)
+				if err != nil {
+					return fail(fmt.Errorf("converting template data value to YAML: %w", err))
+				}
+
 				if err := valueNode.Decode(&evalKey.data); err != nil {
 					return fail(fmt.Errorf("decoding template data for mapping key: %w", err))
 				}
@@ -197,63 +207,20 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 		return &m, nil
 
 	case yaml.SequenceNode:
-		// Unlike a mapping, a sequence can be evaluated completely. Create a
-		// copy to build up as we determine items to keep, insert, or exclude.
-		n := cloneNode(orig)
-		n.Content = n.Content[:0]
-
-		var condState conditionalStateMachine
-
+		// In theory, a sequence can be evaluated completely, right here.
+		// However, for consistency, build up a structure to eval later.
+		s := evalSequence{
+			orig:    orig,
+			content: make([]any, 0, len(orig.Content)),
+		}
 		for _, contentNode := range orig.Content {
 			evalItem, err := e.eval(contentNode)
 			if err != nil {
 				return fail(fmt.Errorf("evaluating sequence item: %w", err))
 			}
-
-			toInsert := evalItem
-			var isCondition bool
-
-			// First, check for conditions to deal with. This way we can reuse
-			// the rest of the logic once we've figured out what value (if any)
-			// we need to insert from this branch.
-			if item, ok := evalItem.(*evalMapping); ok {
-				if c, fv := item.singleCond(); c != nil {
-					satisfied, err := condState.shouldTake(c)
-					if err != nil {
-						return fail(fmt.Errorf("evaluating condition: %w", err))
-					}
-					if satisfied {
-						v, err := fv()
-						if err != nil {
-							return fail(fmt.Errorf("evaluating condition result value: %w", err))
-						}
-						toInsert = v
-					} else {
-						continue
-					}
-					isCondition = true
-				}
-			}
-			if !isCondition {
-				condState.reset()
-			}
-
-			r, err := e.resultToYAML(toInsert)
-			if err != nil {
-				return fail(fmt.Errorf("converting sequence item result to YAML node:\n\t\t%w", err))
-			}
-			// Put the template result into the sequence depending on the
-			// result type.
-			switch r.Kind {
-			case yaml.ScalarNode, yaml.MappingNode:
-				n.Content = append(n.Content, r)
-			case yaml.SequenceNode:
-				n.Content = append(n.Content, r.Content...)
-			default:
-				return fail(fmt.Errorf("inlinetemplate result into sequence evaluated to unexpected type %v", kindStr(r)))
-			}
+			s.content = append(s.content, evalItem)
 		}
-		return n, nil
+		return &s, nil
 
 	case yaml.ScalarNode:
 		// We've reached a string leaf. This might need contextual evaluation,
@@ -378,6 +345,9 @@ func (e *EvalState) resultToYAML(r any) (*yaml.Node, error) {
 	case *evalMapping:
 		return e.mappingToYAML(r)
 
+	case *evalSequence:
+		return e.sequenceToYAML(r)
+
 	case *evalTemplate:
 		return e.evalTemplateResult(r)
 
@@ -492,6 +462,72 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 	return n, nil
 }
 
+func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
+	fail := func(err error) (*yaml.Node, error) {
+		return nil, fmt.Errorf("during final conversion of sequence to YAML node(s): %w", err)
+	}
+	n := cloneNode(s.orig)
+	n.Content = n.Content[:0]
+
+	var condState conditionalStateMachine
+
+	for _, evalItem := range s.content {
+		toInsert := evalItem
+		var isCondition bool
+
+		// First, check for conditions to deal with. This way we can reuse
+		// the rest of the logic once we've figured out what value (if any)
+		// we need to insert from this branch.
+		if item, ok := evalItem.(*evalMapping); ok {
+			if c, fv := item.singleCond(); c != nil {
+				satisfied, err := condState.shouldTake(c)
+				if err != nil {
+					return fail(fmt.Errorf("evaluating condition: %w", err))
+				}
+				if satisfied {
+					v, err := fv()
+					if err != nil {
+						return fail(fmt.Errorf("evaluating condition result value: %w", err))
+					}
+					toInsert = v
+				} else {
+					continue
+				}
+				isCondition = true
+			}
+		}
+		if !isCondition {
+			condState.reset()
+		}
+
+		r, err := e.resultToYAML(toInsert)
+		if err != nil {
+			return fail(fmt.Errorf("converting sequence item result to YAML node:\n\t\t%w", err))
+		}
+		// Put the template result into the sequence depending on the
+		// result type.
+		switch r.Kind {
+		case yaml.ScalarNode, yaml.MappingNode:
+			n.Content = append(n.Content, r)
+		case yaml.SequenceNode:
+			// Flatten the sequence unless it was a literal nested sequence in the source.
+			shouldFlatten := true
+			if _, ok := evalItem.(*evalSequence); ok {
+				shouldFlatten = false
+			}
+
+			if shouldFlatten {
+				n.Content = append(n.Content, r.Content...)
+			} else {
+				n.Content = append(n.Content, r)
+			}
+		default:
+			return fail(fmt.Errorf("inlinetemplate result into sequence evaluated to unexpected type %v", kindStr(r)))
+		}
+	}
+	return n, nil
+}
+
 func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 	ee := *e
 	ee.File = filepath.Join(filepath.Dir(e.File), t.path)
@@ -540,6 +576,11 @@ func (e *evalMapping) singleCond() (evalConditional, func() (any, error)) {
 		return nil, nil
 	}
 	return ec, c0.value
+}
+
+type evalSequence struct {
+	orig    *yaml.Node
+	content []any
 }
 
 // evalPair is a single mapping pair inside a mapping, with deferred eval.

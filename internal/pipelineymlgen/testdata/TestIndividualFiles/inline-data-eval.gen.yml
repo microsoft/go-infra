@@ -1,0 +1,3 @@
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x:
+      - ${ "evaluated" }
