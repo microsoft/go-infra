@@ -20,7 +20,13 @@ import (
 func ProgramInfo(info *debug.BuildInfo) (goVers, progPath string) {
 	goVers = info.GoVersion
 	if strings.Contains(goVers, "devel") || strings.Contains(goVers, "-") || !version.IsValid(goVers) {
-		goVers = "devel"
+		if v, _, ok := strings.Cut(goVers, "_microsoft"); ok && version.IsValid(v) {
+			// Formats like "go1.21.1-0_microsoft ABC".
+			// Trim the "_microsoft" suffix to get a clean Go version.
+			goVers = v
+		} else {
+			goVers = "devel"
+		}
 	}
 
 	progPath = info.Path
