@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -57,18 +58,13 @@ func run() error {
 		}
 	}
 
-	f, err := os.CreateTemp("", "go-install-*.ps1")
+	scriptPath, err := createScriptTemp()
 	if err != nil {
 		return fmt.Errorf("failed to create temporary file to store go-install.ps1: %w", err)
 	}
-	defer os.Remove(f.Name())
+	defer os.Remove(scriptPath)
 
-	_, err = f.WriteString(powershell.Content)
-	if err != nil {
-		return fmt.Errorf("failed to write go-install.ps1 content to temporary file: %w", err)
-	}
-
-	cmd := exec.Command(*pwshPath, "-NoProfile", "-File", f.Name())
+	cmd := exec.Command(*pwshPath, "-NoProfile", "-File", scriptPath)
 	cmd.Args = append(cmd.Args, flag.Args()...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -83,4 +79,18 @@ func run() error {
 	}
 
 	return nil
+}
+
+func createScriptTemp() (string, error) {
+	f, err := os.CreateTemp("", "go-install-*.ps1")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temporary file to store go-install.ps1: %w", err)
+	}
+	_, err = f.WriteString(powershell.Content)
+	closeErr := f.Close()
+	if err := cmp.Or(err, closeErr); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
