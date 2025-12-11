@@ -4,7 +4,14 @@
 The script works with Windows PowerShell and PowerShell (`pwsh`) and can install all [supported prebuilt Microsoft build of Go toolset platforms](https://github.com/microsoft/go?tab=readme-ov-file#download-and-install).
 It installs the Microsoft build of Go toolset into a directory of your choice, or defaults to a directory in the user-specific data directory.
 
-Run `go-install.ps1 -h` to see more information about its parameters and defaults.
+> [!TIP]
+> Run `Get-Help -Detailed go-install.ps1` in a PowerShell terminal to see more information about the script's parameters and defaults.
+>
+> Alternatively, if you're using [`github.com/microsoft/go-infra/goinstallscript/cmd/goinstall`](README.md), run:
+>
+> ```
+> go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -help-script
+> ```
 
 The script is intended for use in CI/CD pipelines or to reproduce the results of those CI/CD pipelines locally.
 

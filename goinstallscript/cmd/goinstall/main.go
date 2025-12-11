@@ -37,6 +37,7 @@ func main() {
 func run() error {
 	pwshPath := flag.String("pwsh", "", "Path to PowerShell executable to use to run the script rather than 'pwsh' or 'powershell' from PATH")
 	dryRun := flag.Bool("n", false, "Dry run mode: print the command that would be run and exit")
+	scriptHelp := flag.Bool("help-script", false, "Show help header of the underlying go-install.ps1 script and exit")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", "goinstall")
@@ -44,6 +45,15 @@ func run() error {
 		fmt.Fprintf(flag.CommandLine.Output(), "%s\n", strings.TrimSpace(description))
 	}
 	flag.Parse()
+
+	if *scriptHelp {
+		_, comment, _, ok := cutTwice(powershell.Content, "<#", "#>")
+		if !ok {
+			return errors.New("failed to extract help comment from go-install.ps1")
+		}
+		fmt.Printf("%s\n", comment)
+		return nil
+	}
 
 	if *pwshPath == "" {
 		var err error
@@ -93,4 +103,15 @@ func createScriptTemp() (string, error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// cutTwice calls strings.Cut twice to split s into three strings. If either separator isn't found
+// in s, returns s, "", "", false.
+func cutTwice(s, sep1, sep2 string) (before, between, after string, found bool) {
+	if before1, after1, found := strings.Cut(s, sep1); found {
+		if between, after2, found := strings.Cut(after1, sep2); found {
+			return before1, between, after2, true
+		}
+	}
+	return s, "", "", false
 }

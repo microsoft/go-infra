@@ -61,6 +61,12 @@ To view the help text for the `goinstall` command, run:
 go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -h
 ```
 
+To view help for the `go-install.ps1` script, run:
+
+```
+go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -help-script
+```
+
 ### Usage in Azure Pipelines
 
 This YAML snippet installs the Microsoft build of Go and prepends it to PATH using an Azure Pipelines Logging Command for use in subsequent steps.
