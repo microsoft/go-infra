@@ -1,133 +1,91 @@
-# go-install.ps1
-
-[`go-install.ps1`](powershell/go-install.ps1) is a PowerShell script that installs the [Microsoft build of Go](https://github.com/microsoft/go) toolset.
-The script works with Windows PowerShell and PowerShell (`pwsh`) and can install all [supported prebuilt Microsoft build of Go toolset platforms](https://github.com/microsoft/go?tab=readme-ov-file#download-and-install).
-It installs the Microsoft build of Go toolset into a directory of your choice, or defaults to a directory in the user-specific data directory.
-
-Run `go-install.ps1 -h` to see more information about its parameters and defaults.
-
-The script is intended for use in CI/CD pipelines or to reproduce the results of those CI/CD pipelines locally.
-
-Use [`github.com/microsoft/go-infra/goinstallscript`](#githubcommicrosoftgo-infragoinstallscript) to ensure `go-install.ps1` is up to date.
-
-## Prerequisites
-
-On non-Windows platforms, install [PowerShell (`pwsh`)](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
-
-On Windows, either Windows PowerShell or PowerShell can be used.
-
-> [!NOTE]
-> PowerShell was formerly known as PowerShell Core.
-> Now [Windows PowerShell and PowerShell](https://learn.microsoft.com/en-us/powershell/scripting/what-is-windows-powershell) are the names used by Microsoft for these products.
-
-## Installing the script
-
-We recommend following the instructions for [`github.com/microsoft/go-infra/goinstallscript`](#githubcommicrosoftgo-infragoinstallscript) to set up the script in your repository.
-If you have specific requirements for the location or name of the script, it can be renamed or placed anywhere without affecting its functionality.
-
-## Usage
-
-For any platform: run the script using the `pwsh` command:
-
-```bash
-pwsh ./go-install.ps1
-```
-
-If you're using Azure Pipelines, pass `-AzurePipelinePath` to make `go` commands work in future steps.
-
-Pass `-h` to show help.
-
-> [!NOTE]
-> If you use a PowerShell terminal, you can choose to run the script directly:
->
-> ```
-> .\go-install.ps1
-> ```
->
-> Running the script directly has a benefit: it allows the script to change the terminal's `PATH` so the installed Go binary is then available in the current PowerShell session as `go`.
->
-> Note that in typical CI/CD pipelines, each step is run in a fresh process and the `PATH` change will not be preserved in future steps.
-> For that, use `-AzurePipelinePath` or preserve the `PATH` change in another way.
-
 # github.com/microsoft/go-infra/goinstallscript
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/microsoft/go-infra/goinstallscript.svg)](https://pkg.go.dev/github.com/microsoft/go-infra/goinstallscript)
 
-The `goinstallscript` command helps install `go-install.ps1` and keep it up to date.
+The `goinstallscript` module helps acquire and run the `go-install.ps1` script in a way that keeps it up to date.
 
-## Set up `goinstallscript` in your repository
+For more information about using the `go-install.ps1` script itself, see [the install script README](README-InstallScript.md).
 
-Open a terminal in the directory inside your Go module where you want to store the `go-install.ps1` script.
-Then, run these commands to get the latest version of the module and run `goinstallscript`:
+## Bootstrapping
 
-```
-go get -tool github.com/microsoft/go-infra/goinstallscript@latest
-go run github.com/microsoft/go-infra/goinstallscript
-```
+In some cases, it's acceptable to use some arbitrary copy of Go (a "bootstrap" copy) to install another copy of Go, then only use the second copy to build your application.
+We recommend this approach when possible, because it works better with Dependabot and requires minimal maintenance effort.
 
-This creates `go-install.ps1` in the current directory.
-
-Run `go run github.com/microsoft/go-infra/goinstallscript -h` for more information about the parameters and defaults.
-
-> [!NOTE]
-> We recommend against using `go install` to install the `goinstallscript` command.
-> The PowerShell script's content is embedded in the binary, so running an old build of `goinstallscript` may create a file with an unexpected version of the script.
+> [!IMPORTANT]
+> It's common that a bootstrap approach is not feasible.
+> For example, it may be forbidden because it's too risky to involve multiple copies of Go in a build pipeline.
+> It might also be forbidden for supply chain reasons.
 >
-> By using `go run`, you ensure the script matches the expected version specified by your `go.mod` file.
+> We've included features in the `goinstallscript` command that help with this case.
+> See [Maintaining a checked-in `go-install.ps1` script](CheckedInScript.md) for more information.
 
-## Updating the script using `goinstallscript`
+The rest of this document describes how to use a bootstrap copy of Go with the `goinstall` command to install the Microsoft build of Go.
 
-To update the script, run the two `go` commands again in the directory where the script is stored:
+The bootstrap copy of Go should be a supported, secure version of the official Go distribution or the Microsoft build of Go.
+You might have a copy of `go` included in your build VM or build image: this is typically sufficient.
+If not, the [Microsoft build of Go migration guide](https://github.com/microsoft/go/blob/microsoft/main/eng/doc/MigrationGuide.md) lists a variety of ways to install Go.
+
+## Setup
+
+On your machine, run this command inside your Go module:
 
 ```
-go get -tool github.com/microsoft/go-infra/goinstallscript@latest
-go run github.com/microsoft/go-infra/goinstallscript
+go get -tool github.com/microsoft/go-infra/goinstallscript/cmd/goinstall@latest
+```
+
+This sets up a [tool dependency](https://go.dev/doc/modules/managing-dependencies#tools) on the `goinstall` command from this module.
+Check in the changes `go` makes to your `go.mod` and `go.sum` files.
+
+> [!TIP]
+> If you want to isolate the tool's dependencies from the rest of your Go module dependencies, consider creating a separate Go module that is just for this tool.
+
+To keep the tool up to date, make sure [dependabot](https://github.com/dependabot) or a similar Go module update tool is working.
+
+## Usage
+
+In your pipeline or build script, use this Go command to run the `go-install.ps1` script and install the latest version of the Microsoft build of Go:
+
+```
+go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -- -Version Latest
 ```
 
 > [!NOTE]
-> There is no need to run the update command every time you want a new version of the Microsoft build of Go toolset.
-> Updates to the script are rare, and only occur when the lookup or download processes themselves change or a bug is found in the script's logic.
+> You must run these commands in a directory that belongs to the Go module with the tool dependency.
 
-## Set up a CI step that checks for updates
+See [go-install.ps1](powershell/go-install.ps1) for more information about the options available to the `go-install.ps1` script.
+Pass any of those options to the `goinstall` command after the `--` argument.
 
-First, make sure [dependabot](https://github.com/dependabot) or a similar Go module update tool is working.
-It will submit PRs that update the `github.com/microsoft/go-infra/goinstallscript` dependency when a new version is released.
-
-Unfortunately, the `go-install.ps1` script isn't integrated directly with dependabot, so it's necessary to add a CI test case that alerts a developer when an update to the script itself is necessary.
-
-Two ways to add the test case are [adding a CI step](#adding-a-ci-step-to-check-for-updates) or [adding a Go test](#adding-a-go-test-to-check-for-updates).
-
-> [!NOTE]
-> We maintain `github.com/microsoft/go-infra/goinstallscript` as an independent module from the rest of `github.com/microsoft/go-infra` to minimize the number of updates and keep your maintenance burden low.
-
-### Adding a CI step to check for updates
-
-Add a CI step that runs the following command in the directory where the script is stored:
+To view the help text for the `goinstall` command, run:
 
 ```
-go run github.com/microsoft/go-infra/goinstallscript -check
+go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -h
 ```
 
-`goinstallscript -check` exits with code 0 (success) if the script is up to date, and code 2 (failure) if the script is out of date.
-CI reads the exit code, so this step is all that's necessary to perform the check.
-
-The error message includes instructions for updating the script, which a developer needs to follow when an error occurs.
-
-### Adding a Go test to check for updates
-
-In the directory where your `go-install.ps1` script is stored, run this command to generate a Go test file `goinstallscript/goinstallscript_test.go` that checks whether the script is up to date:
+To view help for the `go-install.ps1` script, run:
 
 ```
-go run github.com/microsoft/go-infra/goinstallscript/cmd/creategotest
+go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -help-script
 ```
 
-The generated test then runs during `go test ./...`.
-If your CI already runs tests, this approach means no adjustment to your CI steps is necessary to run this check.
+### Usage in Azure Pipelines
 
-The test failure message includes instructions for updating the script, which a developer needs to follow when an error occurs.
+This YAML snippet installs the Microsoft build of Go and prepends it to PATH using an Azure Pipelines Logging Command for use in subsequent steps.
 
-> [!NOTE]
-> If you want to create the file yourself or integrate it into an existing test file instead, you can use the generated file's template as a reference: [`goinstallscript_test.go`](./cmd/creategotest/_template/goinstallscript_test.go).
+```yaml
+- script: |
+    go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -- -Version Latest -AzurePipelinePath
+  displayName: 'Install Microsoft build of Go'
+```
+
+### Usage in GitHub Actions
+
+This YAML snippet installs the Microsoft build of Go and prepends it to PATH using the GITHUB_PATH file for use in subsequent steps.
+
+```yaml
+- name: 'Install Microsoft build of Go'
+  run: |
+    go run github.com/microsoft/go-infra/goinstallscript/cmd/goinstall -- -Version Latest -GitHubActionsPath
+```
 
 # Support
 
