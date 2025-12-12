@@ -46,12 +46,12 @@ jobs:
           publishRunAttachments: true
 
       # If the failure was a mismatch with golden files, show the difference for easier diagnosis.
-      - script: go test ./... -update
-        displayName: Update golden test results
+      - script: go test ./... -args update || true
+        displayName: (Failure diag) Update golden test results
         condition: failed()
 
       - script: git diff
-        displayName: 🔍 Show golden file difference
+        displayName: (Failure diag) 🔍 Show golden file difference
         condition: failed()
 
   - template: jobs/fuzz.yml
