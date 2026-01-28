@@ -20,11 +20,16 @@ import (
 func ProgramInfo(info *debug.BuildInfo) (goVers, progPath string) {
 	goVers = info.GoVersion
 	if strings.Contains(goVers, "devel") || strings.Contains(goVers, "-") || !version.IsValid(goVers) {
-		if v, _, ok := strings.Cut(goVers, "_microsoft"); ok && version.IsValid(v) {
-			// Schema like "go1.21.1-0_microsoft ABC".
-			// Remove everything after the revision number.
+		if v, rest, ok := strings.Cut(goVers, "-microsoft"); ok &&
+			version.IsValid(v) &&
+			!strings.Contains(rest, "devel") {
+
+			// For schemas like "go1.21.1-0-microsoft", "go1.21-microsoft", and
+			// "go1.21rc1-microsoft", keep the revision number (if any is
+			// present) and remove everything after.
 			goVers = v
 		} else {
+			// This may be a schema like "go1.21-microsoft-devel_abc123 ..."
 			goVers = "devel"
 		}
 	}

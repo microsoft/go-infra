@@ -25,15 +25,15 @@ func TestProgramInfoVersion(t *testing.T) {
 			want:    "devel",
 		},
 		{
-			version: "go1.21.0_microsoft",
+			version: "go1.21.0-microsoft",
 			want:    "go1.21.0",
 		},
 		{
-			version: "go1.21.1-0_microsoft",
+			version: "go1.21.1-0-microsoft",
 			want:    "go1.21.1-0",
 		},
 		{
-			version: "go1.21.1-0_microsoft ABC",
+			version: "go1.21.1-0-microsoft ABC",
 			want:    "go1.21.1-0",
 		},
 		{
@@ -42,6 +42,32 @@ func TestProgramInfoVersion(t *testing.T) {
 		},
 		{
 			version: "invalid-version",
+			want:    "devel",
+		},
+
+		// Main branch devel version.
+		{
+			version: "go1.21-devel_123abcdef timestamp",
+			want:    "devel",
+		},
+		{
+			version: "go1.21-microsoft-devel_123abcdef timestamp",
+			want:    "devel",
+		},
+
+		// RC version.
+		{
+			version: "go1.21rc1",
+			want:    "go1.21rc1",
+		},
+		{
+			version: "go1.21rc1-microsoft",
+			want:    "go1.21rc1",
+		},
+
+		// Other vendor.
+		{
+			version: "go1.21.0-somevendor",
 			want:    "devel",
 		},
 	}
