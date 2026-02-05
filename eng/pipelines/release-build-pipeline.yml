@@ -14,26 +14,35 @@ parameters:
     type: string
     default: 'nil'
 
-  # Allow retrying a build starting at any of these points.
+  # Allow retrying a build starting at any of these "pollX" points.
   - name: poll1MicrosoftGoPRNumber
     displayName: '1: microsoft/go PR number to poll for merge.'
     type: string
     default: nil
+
   - name: poll2MicrosoftGoCommitHash
     displayName: '2: microsoft/go commit hash to poll for build.'
     type: string
     default: nil
+
   - name: poll3MicrosoftGoBuildID
     displayName: '3: internal build ID to poll for completion.'
     type: string
     default: nil
-  - name: poll4MicrosoftGoImagesPRNumber
-    displayName: '4: microsoft/go-images PR number to poll for merge.'
-    type: string
-    default: nil
-
-  # Allow disabling specific parts of the internal build release. These can be used to re-run
-  # specific parts of a release if necessary, e.g. if a step silently failed.
+  # These checkboxes allow disabling specific parts of the release of the
+  # internal build. They can be used to re-run specific parts of a release if
+  # necessary, e.g. if a step silently failed.
+  #
+  # They are conspicuously located between poll3 and poll4. The promise to the
+  # release runner is that these checkboxes only have an effect if the build
+  # started earlier than "poll4". The list order of the parameters list is
+  # what's shown in the AzDO UI, which helps make this intuitive.
+  #
+  # Ideally, these checkboxes would actually be additional "pollX" parameters,
+  # but as of writing, the work to implement this many "pollX"s outweighs the
+  # manual effort it could save, and it's not clear if the experience of the
+  # release runner would actually improve. These checkbox steps fail orders of
+  # magnitude less often than the polling steps do.
   - name: runInnerloop
     displayName: Trigger innerloop test pipeline
     type: boolean
@@ -58,6 +67,11 @@ parameters:
     displayName: Update the microsoft/go-images main branch and wait for PR completion.
     type: boolean
     default: true
+
+  - name: poll4MicrosoftGoImagesPRNumber
+    displayName: '4: microsoft/go-images PR number to poll for merge.'
+    type: string
+    default: nil
 
   # This parameter intentionally has no default: see release-go-pipeline.yml
   - name: goReleaseConfigVariableGroup
