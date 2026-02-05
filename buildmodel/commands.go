@@ -394,13 +394,20 @@ func SubmitUpdatePR(f *PRFlags) error {
 			Number: p.Number,
 		}
 		fmt.Printf("---- Submitted brand new PR: %v\n", p.HTMLURL)
-
-		fmt.Printf("---- Approving with reviewer account...\n")
-		if err = gitpr.ApprovePR(existingPR.ID, reviewAuther); err != nil {
-			return err
-		}
 	}
 
+	// Always re-approve: this covers the case where the repo policy requires an
+	// up-to-date approval after every new push. Otherwise, submitting two
+	// commits to the same PR would hang the release process, and this happens
+	// often due to slow PR validation CI.
+	fmt.Printf("---- Approving with reviewer account...\n")
+	if err = gitpr.ApprovePR(existingPR.ID, reviewAuther); err != nil {
+		return err
+	}
+
+	// Always re-enable auto-merge: this covers the case where auto-merge was
+	// disabled due to a previous failed merge attempt (e.g. due to some sort of
+	// flakiness).
 	fmt.Printf("---- Enabling auto-merge with reviewer account...\n")
 	if err = gitpr.EnablePRAutoMerge(existingPR.ID, reviewAuther); err != nil {
 		return err
