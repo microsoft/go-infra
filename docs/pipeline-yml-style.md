@@ -94,6 +94,43 @@ parameters:
     default: nil
 ```
 
+### Ensuring attentive booleans
+
+AzDO runtime boolean parameters are easy to use and work well for many scenarios.
+However, there's a risk that a user might not pay close attention to it and accept the default value either by mistake in a rush or not even realizing that it requires attention in the first place.
+
+Ideally, we would add a boolean parameter that accepts `true` or `false` as a radio selection and indicate to AzDO that it shouldn't select a default.
+However, it doesn't appear that this is possible as of writing.
+If we use `values:`, for example, AzDO always picks a default even if we don't specify one with the `default:` field.
+
+So, when this risk is a concern, we use a string parameter with three values:
+
+```yml
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
+```
+
+To help a user that left it at `Cancel` realize their mistake as soon as possible, we add a condition to the template that introduces a template error:
+
+```yml
+    stages:
+      - stage: Release
+        jobs:
+          # Validation for complex inputs.
+          - ${{ if not(in(parameters.isSecurityRelease, 'True', 'False')) }}:
+            - 'Cancelled run. Please pick an option to indicate whether or not this is a security release.': error
+```
+
+This way, the user can fix the issue quickly without even waiting for the pipeline to start.
+The error message that is shown to the user is not ideal, but it includes the message and is clear enough for us.
+
 ## Templates for data reuse
 
 AzDO supports [variable templates](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops#variable-templates-with-parameter), but it's hard to determine where variables defined this way are usable.
