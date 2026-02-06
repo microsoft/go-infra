@@ -5,20 +5,39 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
-  # Allow disabling specific parts of the internal build release. These can be used to re-run
-  # specific parts of a release if necessary, e.g. if a step silently failed.
-  - name: runCreatePullRequest
-    displayName: Create Pull Request on Azure Linux repo
-    type: boolean
-    default: true
+  - name: pipelineBuildID
+    displayName: 'The microsoft-go pipeline run ID that built the artifacts to submit to Azure Linux.'
+    type: string
+
+  - name: isLatestMajor
+    displayName: 'This is the latest major version, so update "golang.spec" instead of "golang-1.<N>.spec"'
+    type: string
+    default: Cancel
+    values:
+      - "True"
+      - "False"
+      - "Cancel"
+
+  - name: isSecurityRelease
+    displayName: >
+      This release includes security fixes:
+    type: string
+    default: Cancel
+    values:
+      - True
+      - False
+      - Cancel
+
+  - name: notify
+    displayName: >
+      A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
+      include '@' below. 'ghost' notifies nobody.
+    type: string
+    default: ghost
 
   # This parameter intentionally has no default: see release-go-pipeline.yml
   - name: goReleaseConfigVariableGroup
     displayName: '[Use "go-release-config" for a real release] Variable group that specifies release target locations and auth.'
-    type: string
-
-  - name: pipelineBuildID
-    displayName: 'The ID of the microsoft-go build pipeline that triggered this pipeline.'
     type: string
 
   - name: upstream
@@ -46,27 +65,12 @@ parameters:
     type: string
     default: nil
 
-  - name: latestMajor
-    displayName: 'This is the latest major version, so update "golang.spec" instead of "golang-1.<N>.spec"'
+  # Allow disabling specific parts of the internal build release. These can be used to re-run
+  # specific parts of a release if necessary, e.g. if a step silently failed.
+  - name: runCreatePullRequest
+    displayName: Create Pull Request on Azure Linux repo
     type: boolean
     default: true
-
-  - name: notify
-    displayName: >
-      A GitHub username to @mention in the tracking issue to subscribe them to updates. Do not
-      include '@' below. 'ghost' notifies nobody.
-    type: string
-    default: ghost
-
-  - name: isSecurityRelease
-    displayName: >
-      This release includes security fixes:
-    type: string
-    default: Cancel
-    values:
-      - True
-      - False
-      - Cancel
 
 trigger: none
 pr: none
@@ -105,6 +109,8 @@ extends:
       - stage: Release
         jobs:
           # Validation for complex inputs.
+          - ${{ if not(in(parameters.isLatestMajor, 'True', 'False')) }}:
+            - 'Cancelled run. Please pick an option to indicate whether or not this is the latest major version.': error
           - ${{ if not(in(parameters.isSecurityRelease, 'True', 'False')) }}:
             - 'Cancelled run. Please pick an option to indicate whether or not this is a security release.': error
 
@@ -135,7 +141,7 @@ extends:
                         -repo ${{ parameters.repo }} \
                         -base-branch ${{ parameters.baseBranch }} \
                         -update-branch ${{ parameters.updateBranch }} \
-                        -latest-major=${{ parameters.latestMajor }} \
+                        -latest-major=${{ parameters.isLatestMajor }} \
                         -notify ${{ parameters.notify }} \
                         -security=${{ parameters.isSecurityRelease }}
                     displayName: Create Pull Request to Update Azure Linux Specfiles
