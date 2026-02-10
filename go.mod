@@ -15,11 +15,11 @@ require (
 	github.com/google/go-github/v65 v65.0.0
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.48.0
 	golang.org/x/mod v0.32.0
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sync v0.19.0
-	golang.org/x/text v0.33.0
+	golang.org/x/text v0.34.0
 	golang.org/x/tools v0.41.0
 )
 
