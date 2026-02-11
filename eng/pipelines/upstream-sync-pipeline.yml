@@ -46,7 +46,7 @@ extends:
           - job: Sync
             pool:
               name: NetCore1ESPool-Internal
-              image: 1es-ubuntu-2004
+              image: 1es-ubuntu-2204
               os: linux
             workspace:
               clean: all

@@ -32,7 +32,7 @@ jobs:
     pool:
       # This is a utility job: use generic recent LTS.
       name: NetCore1ESPool-Svc-Internal
-      image: 1es-ubuntu-2004
+      image: 1es-ubuntu-2204
       os: linux
     variables:
       # Release steps may need to download build asset JSONs. Set up variables.
