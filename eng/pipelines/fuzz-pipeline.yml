@@ -50,7 +50,7 @@ extends:
               platform: linux-amd64
               pool:
                 name: NetCore1ESPool-Internal
-                image: 1es-ubuntu-2004
+                image: 1es-ubuntu-2204
                 os: linux
 
           - template: /eng/pipelines/jobs/fuzz.yml@self
@@ -60,7 +60,7 @@ extends:
               goExperiment: opensslcrypto
               pool:
                 name: NetCore1ESPool-Internal
-                image: 1es-ubuntu-2004
+                image: 1es-ubuntu-2204
                 os: linux
 
           - template: /eng/pipelines/jobs/fuzz.yml@self
