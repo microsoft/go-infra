@@ -296,6 +296,11 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		if arch.Env == nil {
 			continue
 		}
+		// Skip all Windows artifacts other than amd64. We don't have Docker image builders for
+		// other Windows architectures images of this type.
+		if arch.Env.GOOS == "windows" && arch.Env.GOARCH != "amd64" {
+			continue
+		}
 		// Special case for arm artifacts: change it to arm32v7. We produce arm32v6 builds of Go
 		// but package them in arm/v7 (armhf) Docker images. The upstream Go official image repo
 		// does this in their versions.json file: there are v6 and v7 Dockerfile arches that
