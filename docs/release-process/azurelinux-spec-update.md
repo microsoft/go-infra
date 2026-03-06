@@ -28,26 +28,24 @@ For each version released:
 
 ## Semi-automated workflow
 
-This workflow uses tools to avoid time consuming copy paste and manual CI retry after tarball mirroring.
+This workflow uses tools to avoid some time consuming and some error prone steps.
 
-1. Use https://github.com/microsoft/go-lab/tree/main/goaztool to mirror the source tarballs to Azure Linux storage.
-    * For example, `go run github.com/microsoft/go-lab/goaztool/cmd/azlmirror -versions 1.24.5-1,1.25.3-1`
-    * Make sure to do this first, so you don't have to manually re-run the GitHub CI pipelines later.
-
-Follow manual workflow to create PRs:
-
-1. Find and open each microsoft-go build...
-1. ... See above manual workflow ...
-1. Wait for each microsoft-go-infra-update-azure-linux pipeline to complete.
+1. Open latest https://github.com/microsoft/go-lab/tree/main/goaztool in a shell.
+1. `go run ./cmd/azlmirror -versions <comma-separated-versions>`
+    1. E.g. `1.24.5-1,1.25.3-1`
+    1. This runs the Azure Linux tarball mirroring pipeline for each new version.
+1. `go run ./cmd/azlprcreator -latest <x> -prev <y> [-security] -user <github-username>`
+    1. E.g. `-latest 1.25.3-1 -prev 1.24.5-1`
+    1. This runs the Azure Linux PR creation pipeline for each new version, pinging the provided GitHub username using the GitHub app/bot in each of the created PRs.
+    1. If there is a release with only one version, pass only one of `-latest` or `-prev`, depending on which one it's correlated with.
+    1. If multiple `-prev` versions update at once (not expected!), you must run the command multiple times, once for each version.
+1. Wait for the PRs to be generated.
+    1. You will get a notification for each PR when it's created if you filled out your username properly, otherwise check [this search query](https://github.com/microsoft/azurelinux/pulls/bot-for-go%5Bbot%5D).
     1. **If** this is a new major release, follow instructions in [Adding a new major version](#adding-a-new-major-version) before proceeding.
-
-Ignore instructions in each PR, and instead:
-
-1. Use https://github.com/microsoft/go-lab/tree/main/goaztool to create a buddy build for each PR:
-    1. For example, `go run github.com/microsoft/go-lab/goaztool/cmd/azlbuddy -prs 1234`
-        * Replace `1234` with the PR URL or number.
-    1. Paste a link to the buddy build from the command output into the PR conversation.
-    1. Mark the PR ready to review.
+1. Ignore instructions in each PR. They describe the manual workflow.
+1. `go run github.com/microsoft/go-lab/goaztool/cmd/azlbuddy -prs <comma-separated-PR-URLs-or-numbers>`
+    1. E.g. `-prs 'https://github.com/microsoft/azurelinux/pull/16137,https://github.com/microsoft/azurelinux/pull/16136'`
+1. Mark each PR ready to review.
 1. Done!
 
 ## Automated workflow
