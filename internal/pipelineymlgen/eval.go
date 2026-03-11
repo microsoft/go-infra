@@ -200,6 +200,10 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 					return fail(fmt.Errorf("decoding template data for mapping key: %w", err))
 				}
 				m.content = append(m.content, evalKey)
+			// If the key is an evalRange, keep the value as the unevaluated body.
+			case *evalRange:
+				evalKey.body = valueNode
+				m.content = append(m.content, evalKey)
 			default:
 				return fail(fmt.Errorf("mapping key evaluated to unexpected type %#v", evalKey))
 			}
@@ -307,6 +311,13 @@ func (e *EvalState) evalExpressionScalar(node *yaml.Node) (any, error) {
 			case *exprTemplateResult:
 				r = &evalTemplate{path: result.path}
 
+			case *exprRangeResult:
+				r = &evalRange{
+					keyName:    result.keyName,
+					valueName:  result.valueName,
+					collection: result.collection,
+				}
+
 			// We don't expect exprIfResult, exprElseIfResult, exprElseResult.
 			// Those will only be returned when r.execute is called.
 			default:
@@ -350,6 +361,9 @@ func (e *EvalState) resultToYAML(r any) (*yaml.Node, error) {
 
 	case *evalTemplate:
 		return e.evalTemplateResult(r)
+
+	case *evalRange:
+		return e.evalRangeResult(r)
 
 	case *evalPair:
 		n := cloneNode(r.orig)
@@ -543,6 +557,85 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 	return v, nil
 }
 
+func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
+	seq := &yaml.Node{Kind: yaml.SequenceNode}
+
+	switch c := r.collection.(type) {
+	case []any:
+		for i, elem := range c {
+			iterData := e.iterationData(r, i, elem)
+			node, err := e.evalRangeBody(r.body, iterData)
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
+			}
+			if node != nil {
+				seq.Content = append(seq.Content, node.Content...)
+			}
+		}
+	case map[string]any:
+		for key, val := range c {
+			iterData := e.iterationData(r, key, val)
+			node, err := e.evalRangeBody(r.body, iterData)
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+			}
+			if node != nil {
+				seq.Content = append(seq.Content, node.Content...)
+			}
+		}
+	default:
+		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
+	}
+
+	return seq, nil
+}
+
+func (e *EvalState) iterationData(r *evalRange, key, value any) map[string]any {
+	if r.valueName == "" {
+		// Replace data entirely with the element.
+		switch v := value.(type) {
+		case map[string]any:
+			return v
+		default:
+			return map[string]any{"": value}
+		}
+	}
+	data := maps.Clone(e.Data)
+	if data == nil {
+		data = make(map[string]any)
+	}
+	data[r.valueName] = value
+	if r.keyName != "" {
+		data[r.keyName] = key
+	}
+	return data
+}
+
+func (e *EvalState) evalRangeBody(body *yaml.Node, data map[string]any) (*yaml.Node, error) {
+	ee := *e
+	ee.Data = data
+	result, err := ee.eval(body)
+	if err != nil {
+		return nil, err
+	}
+	node, err := ee.resultToYAML(result)
+	if err != nil {
+		return nil, err
+	}
+	// An empty mapping means all conditions dissolved. Return nil to skip.
+	if node.Kind == yaml.MappingNode && len(node.Content) == 0 {
+		return nil, nil
+	}
+	// Wrap in a sequence if it isn't one, so callers can uniformly flatten.
+	if node.Kind != yaml.SequenceNode {
+		node = &yaml.Node{
+			Kind:    yaml.SequenceNode,
+			Content: []*yaml.Node{node},
+		}
+	}
+	return node, nil
+}
+
 // MergeData merges the given data map into the EvalState's Data map,
 // overwriting any existing keys. The Data map is cloned to avoid mutating
 // shared maps.
@@ -637,4 +730,11 @@ func (e *evalElse) satisfied() (bool, error) {
 type evalTemplate struct {
 	path string
 	data map[string]any
+}
+
+type evalRange struct {
+	keyName    string
+	valueName  string
+	collection any
+	body       *yaml.Node
 }

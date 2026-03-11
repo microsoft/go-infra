@@ -13,6 +13,12 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+type exprRangeResult struct {
+	keyName    string
+	valueName  string
+	collection any
+}
+
 type exprIfResult struct {
 	// satisfied indicates the condition was true.
 	satisfied bool
@@ -38,6 +44,7 @@ type exprTemplateResult struct {
 //   - *exprElseIfResult
 //   - *exprElseResult
 //   - *exprTemplateResult
+//   - *exprRangeResult
 //   - nil, and an error
 func executeExpression(e *EvalState, expr string) (any, error) {
 	fail := func(err error) (any, error) {
@@ -91,6 +98,36 @@ func executeExpression(e *EvalState, expr string) (any, error) {
 			// We can't evaluate the template right here: we don't have access
 			// to data that might be in a child node. The caller has to do it.
 			result = &exprTemplateResult{path: templatePath}
+			return "", nil
+		},
+		"inlinerange": func(args ...any) (string, error) {
+			r := &exprRangeResult{}
+			switch len(args) {
+			case 1:
+				r.collection = args[0]
+			case 2:
+				name, ok := args[0].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[0])
+				}
+				r.valueName = name
+				r.collection = args[1]
+			case 3:
+				kn, ok := args[0].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for key name, got %T", args[0])
+				}
+				vn, ok := args[1].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[1])
+				}
+				r.keyName = kn
+				r.valueName = vn
+				r.collection = args[2]
+			default:
+				return "", fmt.Errorf("inlinerange: expected 1-3 args, got %d", len(args))
+			}
+			result = r
 			return "", nil
 		},
 	})

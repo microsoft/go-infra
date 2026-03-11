@@ -1,0 +1,6 @@
+# Range body that produces multiple sequence items per iteration.
+- static
+- ${ inlinerange "v" (list "a" "b") }:
+    - first: ${ .v }
+    - second: ${ .v }
+- end

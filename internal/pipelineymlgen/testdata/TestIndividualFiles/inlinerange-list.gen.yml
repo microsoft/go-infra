@@ -1,0 +1,3 @@
+# Range over a list with a value name.
+- ${ inlinerange "v" (list "a" "b" "c") }:
+    ${ .v }

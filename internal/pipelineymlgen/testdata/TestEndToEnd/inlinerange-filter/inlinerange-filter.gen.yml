@@ -1,0 +1,24 @@
+pipelineymlgen:
+  data:
+    source:
+      variables:
+        - name: windowsServer2025PublicPoolImage
+          value: Server2025-NESDockerBuilds
+        - name: windowsServer2025InternalPoolImage
+          value: Server2025-NESDockerBuilds-1ESPT
+        - name: windowsServer2025PoolName
+          value: Docker-2025-${{ variables['System.TeamProject'] }}
+        - group: DotNet-Docker-Common-2
+  output: self
+---
+variables:
+
+- name: publicProjectName
+  value: public
+- name: internalProjectName
+  value: internal
+
+# Test inlinerange from data. Filter out variables with "group" key.
+- ${ inlinerange "v" .source.variables }:
+    ${ inlineif (not (hasKey .v "group")) }:
+      ${ yml .v }

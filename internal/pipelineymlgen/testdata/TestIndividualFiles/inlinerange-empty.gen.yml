@@ -1,0 +1,5 @@
+# An empty list produces no output items.
+- before
+- ${ inlinerange "v" (list) }:
+    ${ .v }
+- after

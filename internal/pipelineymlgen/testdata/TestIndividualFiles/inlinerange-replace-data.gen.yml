@@ -1,0 +1,3 @@
+# Form 1: data is replaced entirely with each element.
+- ${ inlinerange (list (dict "name" "alice") (dict "name" "bob")) }:
+    person: ${ .name }

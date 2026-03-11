@@ -1,0 +1,3 @@
+# Range over a dict with key and value names.
+- ${ inlinerange "k" "v" (dict "x" 1 "y" 2) }:
+    ${ .k }: ${ yml .v }
