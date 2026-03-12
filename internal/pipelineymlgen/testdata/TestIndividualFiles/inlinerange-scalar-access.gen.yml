@@ -1,0 +1,4 @@
+# Range over a list of scalars without a value name.
+# Non-map elements are wrapped as {"": value}, accessible via index . "".
+- ${ inlinerange (list 1 2 3) }:
+    num: ${ index . "" }
