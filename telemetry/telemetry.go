@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights"
@@ -51,6 +52,7 @@ type Config struct {
 }
 
 var countersToUpload map[string]struct{}
+var wildcardPrefixes []string
 
 // Start initializes telemetry using the specified configuration.
 func Start(cfg Config) {
@@ -87,12 +89,19 @@ func Start(cfg Config) {
 		return // Program not configured for telemetry
 	}
 	countersToUpload = make(map[string]struct{})
+	wildcardPrefixes = nil
 	for _, c := range uploadConfig.Programs[progIdx].Counters {
 		if c.Name == "" {
 			continue // Skip empty counter names
 		}
 		for _, e := range config.Expand(c.Name) {
-			countersToUpload[e] = struct{}{}
+			if config.IsWildcard(e) {
+				if prefix := config.WildcardPrefix(e); prefix != "" {
+					wildcardPrefixes = append(wildcardPrefixes, prefix)
+				}
+			} else {
+				countersToUpload[e] = struct{}{}
+			}
 		}
 	}
 
@@ -120,6 +129,13 @@ func Close(ctx context.Context) {
 }
 
 func uploadFilter(name string) bool {
-	_, ok := countersToUpload[name]
-	return ok
+	if _, ok := countersToUpload[name]; ok {
+		return true
+	}
+	for _, prefix := range wildcardPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
