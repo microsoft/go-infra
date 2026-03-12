@@ -40,8 +40,8 @@ func TestTelemetryWildcard(t *testing.T) {
 	counter.Inc("go:4")          // skipped: not in {1,2,3}
 	counter.Inc("wild:anything") // matches wildcard "wild:*"
 	counter.Inc("wild:")         // matches wildcard "wild:*" (empty suffix)
-	counter.Inc("wild:a/b/c")   // matches wildcard "wild:*"
-	counter.Inc("other:nope")   // skipped: not configured
+	counter.Inc("wild:a/b/c")    // matches wildcard "wild:*"
+	counter.Inc("other:nope")    // skipped: not configured
 
 	telemetry.Close(t.Context())
 }
@@ -52,6 +52,7 @@ func TestUploadFilter(t *testing.T) {
 	uploadConfig.Programs[0].Counters = append(uploadConfig.Programs[0].Counters,
 		config.CounterConfig{Name: "prefix:*"},
 		config.CounterConfig{Name: "another/deep:*"},
+		config.CounterConfig{Name: "*"}, // bare wildcard — should be ignored, not match everything
 	)
 	// Start telemetry to populate countersToUpload and wildcardPrefixes,
 	// but we won't send any real counters — we just test the filter.
@@ -90,7 +91,7 @@ func TestUploadFilter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := itelemetry.UploadFilter(tt.name)
+			got := telemetry.UploadFilterForTest(tt.name)
 			if got != tt.want {
 				t.Errorf("UploadFilter(%q) = %v, want %v", tt.name, got, tt.want)
 			}

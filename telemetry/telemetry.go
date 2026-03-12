@@ -96,7 +96,9 @@ func Start(cfg Config) {
 		}
 		for _, e := range config.Expand(c.Name) {
 			if config.IsWildcard(e) {
-				wildcardPrefixes = append(wildcardPrefixes, config.WildcardPrefix(e))
+				if prefix := config.WildcardPrefix(e); prefix != "" {
+					wildcardPrefixes = append(wildcardPrefixes, prefix)
+				}
 			} else {
 				countersToUpload[e] = struct{}{}
 			}
