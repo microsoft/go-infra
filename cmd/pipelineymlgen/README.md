@@ -120,8 +120,11 @@ Possible args are:
 
 * `inlinerange <pipeline>`
 
-    `data` is set to each element of the list in turn and the child element value is evaluated.
-    Note that this means there is no way to access the outer value of `data` while evaluating child elements.
+    For each element of the list, `data` is set to that element and the child element value is evaluated.
+    When the element is a map, `data` is that map. When the element is not a map, it is wrapped as
+    `map[string]any{"": <value>}`, and you can access the value using `index . ""` in the template.
+    Note that this form is primarily intended for lists of maps, and there is no way to access the
+    outer value of `data` while evaluating child elements.
 
 * `inlinerange "<valuename>" <pipeline>`
 

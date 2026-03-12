@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -560,9 +562,18 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	seq := &yaml.Node{Kind: yaml.SequenceNode}
 
-	switch c := r.collection.(type) {
-	case []any:
-		for i, elem := range c {
+	rv := reflect.ValueOf(r.collection)
+	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return seq, nil
+		}
+		rv = rv.Elem()
+	}
+
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := range rv.Len() {
+			elem := rv.Index(i).Interface()
 			iterData := e.iterationData(r, i, elem)
 			node, err := e.evalRangeBody(r.body, iterData)
 			if err != nil {
@@ -572,8 +583,30 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 				seq.Content = append(seq.Content, node.Content...)
 			}
 		}
-	case map[string]any:
-		for key, val := range c {
+	case reflect.Map:
+		// Collect and sort keys for deterministic output. String keys are
+		// sorted as strings; all other key types use fmt.Sprintf for
+		// comparison, which is consistent if not numerically ordered.
+		type mapEntry struct {
+			sortKey string
+			key     reflect.Value
+		}
+		entries := make([]mapEntry, 0, rv.Len())
+		for _, k := range rv.MapKeys() {
+			var sortKey string
+			if k.Kind() == reflect.String {
+				sortKey = k.String()
+			} else {
+				sortKey = fmt.Sprintf("%v", k.Interface())
+			}
+			entries = append(entries, mapEntry{sortKey, k})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].sortKey < entries[j].sortKey
+		})
+		for _, entry := range entries {
+			key := entry.key.Interface()
+			val := rv.MapIndex(entry.key).Interface()
 			iterData := e.iterationData(r, key, val)
 			node, err := e.evalRangeBody(r.body, iterData)
 			if err != nil {
