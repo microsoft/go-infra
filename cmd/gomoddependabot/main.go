@@ -83,7 +83,10 @@ func run() error {
 			PackageEcosystem: "gomod",
 			Directory:        m,
 			Groups: map[string]any{
-				"all": map[string]any{},
+				"all": map[string]any{
+					"dependency-type": "production",
+					"patterns":        []string{"*"},
+				},
 			},
 		}
 		entry.Schedule.Interval = "daily"
