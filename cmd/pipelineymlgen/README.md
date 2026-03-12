@@ -121,8 +121,8 @@ Possible args are:
 * `inlinerange <pipeline>`
 
     For each element of the list, `data` is set to that element and the child element value is evaluated.
-    When the element is a map, `data` is that map. When the element is not a map, it is wrapped as
-    `map[string]any{"": <value>}`, and you can access the value using `index . ""` in the template.
+    The element must be a map with string keys (e.g. `dict "key" "value"` or a YAML mapping from the
+    `data:` section). Non-map elements require a variable name; use `inlinerange "v" <pipeline>` instead.
     Note that this form is primarily intended for lists of maps, and there is no way to access the
     outer value of `data` while evaluating child elements.
 
@@ -134,9 +134,13 @@ Possible args are:
 
     Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
 
+When iterating over a map, the key iteration order is the YAML document order when the map comes from
+the `data:` section of the configuration document. Maps created at runtime (e.g., via the Sprig `dict`
+function) do not have a document order, so their keys are iterated in sorted order for reproducibility.
+
 ### Sprig functions
 
-Most Sprig functions functions are included.
+Most Sprig functions are included.
 Specifically, `HermeticTxtFuncMap`, the reproducible functions.
 
 See [Sprig documentation](https://masterminds.github.io/sprig/) for more details.

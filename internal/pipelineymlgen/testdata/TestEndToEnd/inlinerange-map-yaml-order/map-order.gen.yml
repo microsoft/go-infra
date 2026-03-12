@@ -1,0 +1,14 @@
+pipelineymlgen:
+  data:
+    # Keys in non-alphabetical order: c, a, b.
+    # inlinerange should iterate in this YAML document order.
+    os:
+      windows: win
+      linux: lin
+      darwin: mac
+  output: self
+---
+# Iterate over a YAML-sourced map; original key order should be preserved.
+- ${ inlinerange "name" "short" .os }:
+    os: ${ .name }
+    short: ${ .short }

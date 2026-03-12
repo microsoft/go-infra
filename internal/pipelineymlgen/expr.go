@@ -10,7 +10,6 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
-	"go.yaml.in/yaml/v4"
 )
 
 type exprRangeResult struct {
@@ -74,24 +73,13 @@ func executeExpression(e *EvalState, expr string) (any, error) {
 			return "", nil
 		},
 		"yml": func(v any) (string, error) {
-			// We can't go directly from "any" to a yaml.Node, so use a []byte.
-			out, err := yaml.Marshal(v)
+			// Convert to a yaml.Node, preserving YAML map key order and
+			// stripping the internal yamlMapOrderKey sentinel.
+			n, err := anyToYAMLNode(v)
 			if err != nil {
-				return "", fmt.Errorf("failed to marshal inline value: %w", err)
+				return "", fmt.Errorf("failed to convert inline value: %w", err)
 			}
-			var n yaml.Node
-			if err := yaml.Unmarshal(out, &n); err != nil {
-				return "", fmt.Errorf("failed to unmarshal inline value: %w", err)
-			}
-			// The result is wrapped in a Document node. Pull it out.
-			if n.Kind != yaml.DocumentNode {
-				return "", fmt.Errorf("inlined expression resulted in non-document node of kind %v", n.Kind)
-			}
-			if len(n.Content) != 1 {
-				return "", fmt.Errorf("inlined expression resulted in document node with %d content nodes (expected 1)", len(n.Content))
-			}
-			n = *n.Content[0]
-			result = &n
+			result = n
 			return "", nil
 		},
 		"inlinetemplate": func(templatePath string) (string, error) {
