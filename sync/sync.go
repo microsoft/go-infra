@@ -654,7 +654,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 					return nil, err
 				}
 				if lineNumber == maxDiffLinesToDisplay {
-					diffLines.WriteString(fmt.Sprintf("Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay))
+					fmt.Fprintf(&diffLines, "Diff truncated: contains more than %v lines.\n", maxDiffLinesToDisplay)
 					break
 				}
 				diffLines.WriteString(diffLineScanner.Text())
