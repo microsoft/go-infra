@@ -24,6 +24,82 @@ func TestTelemetry(t *testing.T) {
 	testTelemetry(t, uploadConfig, 4)
 }
 
+func TestTelemetryWildcard(t *testing.T) {
+	uploadConfig := baseUploadConfig(t)
+	// Add a wildcard counter to the upload config.
+	uploadConfig.Programs[0].Counters = append(uploadConfig.Programs[0].Counters,
+		config.CounterConfig{Name: "wild:*"},
+	)
+	startTelemetry(t, uploadConfig, 7)
+
+	counter.Inc("test_counter")
+	counter.Inc("go:0") // skipped: not in {1,2,3}
+	counter.Inc("go:1")
+	counter.Inc("go:2")
+	counter.Inc("go:3")
+	counter.Inc("go:4")          // skipped: not in {1,2,3}
+	counter.Inc("wild:anything") // matches wildcard "wild:*"
+	counter.Inc("wild:")         // matches wildcard "wild:*" (empty suffix)
+	counter.Inc("wild:a/b/c")   // matches wildcard "wild:*"
+	counter.Inc("other:nope")   // skipped: not configured
+
+	telemetry.Close(t.Context())
+}
+
+func TestUploadFilter(t *testing.T) {
+	uploadConfig := baseUploadConfig(t)
+	// Add wildcard counters.
+	uploadConfig.Programs[0].Counters = append(uploadConfig.Programs[0].Counters,
+		config.CounterConfig{Name: "prefix:*"},
+		config.CounterConfig{Name: "another/deep:*"},
+	)
+	// Start telemetry to populate countersToUpload and wildcardPrefixes,
+	// but we won't send any real counters — we just test the filter.
+	startTelemetry(t, uploadConfig, 0)
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		// Exact matches from baseUploadConfig.
+		{"test_counter", true},
+		{"go:1", true},
+		{"go:2", true},
+		{"go:3", true},
+
+		// Not in config.
+		{"go:0", false},
+		{"go:4", false},
+		{"unknown", false},
+		{"", false},
+
+		// Wildcard prefix matches.
+		{"prefix:", true},
+		{"prefix:foo", true},
+		{"prefix:foo/bar", true},
+		{"prefix:foo:bar", true},
+
+		{"another/deep:", true},
+		{"another/deep:x", true},
+
+		// Partial prefix — should NOT match.
+		{"prefi", false},
+		{"prefix", false},
+		{"another/deep", false},
+		{"another/", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := itelemetry.UploadFilter(tt.name)
+			if got != tt.want {
+				t.Errorf("UploadFilter(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+
+	telemetry.Close(t.Context())
+}
+
 func TestTelemetryWrongGOOS(t *testing.T) {
 	uploadConfig := baseUploadConfig(t)
 	uploadConfig.GOOS = []string{"not-a-real-os"} // intentionally wrong

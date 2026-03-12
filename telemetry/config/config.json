@@ -66,6 +66,9 @@
 				},
 				{
 					"Name": "go/cgo:{enabled,disabled}"
+				},
+				{
+					"Name": "msgo/modulehash:*"
 				}
 			]
 		}

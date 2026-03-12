@@ -30,3 +30,12 @@ func Init(client *appinsights.Client) {
 
 	Client = client
 }
+
+// UploadFilter calls the upload filter on the global client.
+// It is exposed for testing purposes only.
+func UploadFilter(name string) bool {
+	if Client == nil || Client.UploadFilter == nil {
+		return false
+	}
+	return Client.UploadFilter(name)
+}

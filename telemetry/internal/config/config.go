@@ -47,8 +47,12 @@ func UnmarshalConfig(data []byte) (*UploadConfig, error) {
 }
 
 // Expand takes a counter defined with buckets and expands it into distinct
-// strings for each bucket.
+// strings for each bucket. If the counter ends with "*" (e.g. "go/package:*"),
+// it is returned as-is to indicate a wildcard prefix match.
 func Expand(counter string) []string {
+	if strings.HasSuffix(counter, "*") {
+		return []string{counter}
+	}
 	prefix, rest, hasBuckets := strings.Cut(counter, "{")
 	var counters []string
 	if hasBuckets {
@@ -60,4 +64,15 @@ func Expand(counter string) []string {
 		counters = append(counters, prefix)
 	}
 	return counters
+}
+
+// IsWildcard reports whether the counter name is a wildcard pattern.
+func IsWildcard(name string) bool {
+	return strings.HasSuffix(name, "*")
+}
+
+// WildcardPrefix returns the prefix of a wildcard counter name,
+// stripping the trailing "*".
+func WildcardPrefix(name string) string {
+	return strings.TrimSuffix(name, "*")
 }
