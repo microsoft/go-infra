@@ -1,3 +1,3 @@
 failed to evaluate `testdata/TestIndividualFileErrors/inlinerange-scalar-no-varname.gen.yml` content (with config): 
 	eval "Document" at testdata/TestIndividualFileErrors/inlinerange-scalar-no-varname.gen.yml:3:1 failed: converting doc content result to YAML node: during final conversion of sequence to YAML node(s): converting sequence item result to YAML node:
-		during final conversion of mapping to YAML node(s): converting mapping item result to YAML node: inlinerange iteration 0: inlinerange: element of type int is not a string-keyed map; use a variable name
+		during final conversion of mapping to YAML node(s): converting mapping item result to YAML node: inlinerange iteration 0: inlinerange: element of type int is not a map; use a variable name

@@ -240,16 +240,13 @@ type configData map[string]any
 // UnmarshalYAML decodes the YAML node into a configData map, preserving the
 // original YAML key order in yamlMapOrderKey for ordered inlinerange iteration.
 func (d *configData) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("expected YAML mapping for config data, got node kind %v", node.Kind)
-	}
 	val, err := yamlNodeToData(node)
 	if err != nil {
 		return err
 	}
 	m, ok := val.(map[string]any)
 	if !ok {
-		return fmt.Errorf("expected map from YAML decode, got %T", val)
+		return fmt.Errorf("expected YAML mapping for data, got %T", val)
 	}
 	*d = configData(m)
 	return nil

@@ -9,7 +9,6 @@ import (
 	"maps"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -562,6 +561,25 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	seq := &yaml.Node{Kind: yaml.SequenceNode}
 
+	// Handle map[string]any directly, preserving YAML key order when available.
+	if m, ok := r.collection.(map[string]any); ok {
+		for _, key := range getOrderedMapKeys(m) {
+			iterData, err := e.iterationData(r, key, m[key])
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+			}
+			node, err := e.evalRangeBody(r.body, iterData)
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+			}
+			if node != nil {
+				seq.Content = append(seq.Content, node.Content...)
+			}
+		}
+		return seq, nil
+	}
+
+	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
@@ -586,36 +604,6 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 				seq.Content = append(seq.Content, node.Content...)
 			}
 		}
-	case reflect.Map:
-		if rv.Type().Key().Kind() != reflect.String {
-			return nil, fmt.Errorf("inlinerange: cannot range over map with non-string keys (%T)", r.collection)
-		}
-		// Use YAML document order when available; otherwise sort for determinism.
-		var keys []string
-		if m, ok := r.collection.(map[string]any); ok {
-			keys = getOrderedMapKeys(m)
-		} else {
-			rkeys := rv.MapKeys()
-			keys = make([]string, 0, len(rkeys))
-			for _, k := range rkeys {
-				keys = append(keys, k.String())
-			}
-			sort.Strings(keys)
-		}
-		for _, key := range keys {
-			val := rv.MapIndex(reflect.ValueOf(key)).Interface()
-			iterData, err := e.iterationData(r, key, val)
-			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
-			}
-			node, err := e.evalRangeBody(r.body, iterData)
-			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
-			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
-			}
-		}
 	default:
 		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
 	}
@@ -627,23 +615,15 @@ func (e *EvalState) iterationData(r *evalRange, key, value any) (map[string]any,
 	if r.valueName == "" {
 		// Replace data entirely with the map element. Non-map elements require
 		// a variable name: use inlinerange "v" .myList instead.
-		rv := reflect.ValueOf(value)
-		if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
-			if rv.IsNil() {
-				return nil, fmt.Errorf("inlinerange: element is nil; use a variable name to iterate over nil-able elements")
-			}
-			rv = rv.Elem()
+		m, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("inlinerange: element of type %T is not a map; use a variable name", value)
 		}
-		if rv.Kind() != reflect.Map || rv.Type().Key().Kind() != reflect.String {
-			return nil, fmt.Errorf("inlinerange: element of type %T is not a string-keyed map; use a variable name", value)
-		}
-		result := make(map[string]any, rv.Len())
-		for _, k := range rv.MapKeys() {
-			kstr := k.String()
-			if kstr == yamlMapOrderKey {
-				continue // strip internal ordering sentinel
+		result := make(map[string]any, len(m))
+		for k, v := range m {
+			if k != yamlMapOrderKey {
+				result[k] = v
 			}
-			result[kstr] = rv.MapIndex(k).Interface()
 		}
 		return result, nil
 	}

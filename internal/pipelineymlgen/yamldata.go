@@ -5,7 +5,6 @@ package pipelineymlgen
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 
 	"go.yaml.in/yaml/v4"
@@ -84,83 +83,26 @@ func getOrderedMapKeys(m map[string]any) []string {
 	return keys
 }
 
-// anyToYAMLNode converts a Go value to a *yaml.Node.
-// For map[string]any values it preserves YAML key order (using the
-// yamlMapOrderKey sentinel) and strips the sentinel from the output.
-// For other map types with string keys it sorts the keys.
-func anyToYAMLNode(v any) (*yaml.Node, error) {
-	if v == nil {
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: ""}, nil
-	}
-
-	// Use reflect so we can handle any map/slice type, not just map[string]any.
-	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
-		if rv.IsNil() {
-			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: ""}, nil
-		}
-		rv = rv.Elem()
-	}
-
-	switch rv.Kind() {
-	case reflect.Map:
-		if rv.Type().Key().Kind() != reflect.String {
-			return marshalToNode(v)
-		}
-		n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-		// Use ordered keys if available.
-		var keys []string
-		if m, ok := v.(map[string]any); ok {
-			keys = getOrderedMapKeys(m)
-		} else {
-			// For other map[string]V types: sort for determinism.
-			rkeys := rv.MapKeys()
-			keys = make([]string, 0, len(rkeys))
-			for _, k := range rkeys {
-				keys = append(keys, k.String())
+// stripSentinel removes the yamlMapOrderKey from all map[string]any values in
+// v recursively. Used before marshaling to prevent the internal ordering key
+// from appearing in YAML output.
+func stripSentinel(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		result := make(map[string]any, len(v))
+		for k, val := range v {
+			if k != yamlMapOrderKey {
+				result[k] = stripSentinel(val)
 			}
-			sort.Strings(keys)
 		}
-		for _, k := range keys {
-			valNode, err := anyToYAMLNode(rv.MapIndex(reflect.ValueOf(k)).Interface())
-			if err != nil {
-				return nil, fmt.Errorf("converting map key %q: %w", k, err)
-			}
-			n.Content = append(n.Content,
-				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k},
-				valNode,
-			)
+		return result
+	case []any:
+		result := make([]any, len(v))
+		for i, elem := range v {
+			result[i] = stripSentinel(elem)
 		}
-		return n, nil
-
-	case reflect.Slice, reflect.Array:
-		n := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-		for i := range rv.Len() {
-			elemNode, err := anyToYAMLNode(rv.Index(i).Interface())
-			if err != nil {
-				return nil, fmt.Errorf("converting slice index %d: %w", i, err)
-			}
-			n.Content = append(n.Content, elemNode)
-		}
-		return n, nil
-
+		return result
 	default:
-		return marshalToNode(v)
+		return v
 	}
-}
-
-// marshalToNode marshals v to YAML bytes and returns the resulting scalar node.
-func marshalToNode(v any) (*yaml.Node, error) {
-	out, err := yaml.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal value: %w", err)
-	}
-	var n yaml.Node
-	if err := yaml.Unmarshal(out, &n); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal marshaled value: %w", err)
-	}
-	if n.Kind == yaml.DocumentNode && len(n.Content) == 1 {
-		return n.Content[0], nil
-	}
-	return &n, nil
 }
