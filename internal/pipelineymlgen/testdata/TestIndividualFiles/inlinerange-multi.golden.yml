@@ -1,0 +1,7 @@
+# Range body that produces multiple sequence items per iteration.
+- static
+- first: a
+- second: a
+- first: b
+- second: b
+- end

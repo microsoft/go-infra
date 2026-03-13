@@ -1,0 +1,4 @@
+# Range over a map; keys are output in deterministic sorted order
+# regardless of the nondeterministic order of Go map iteration.
+- ${ inlinerange "k" "v" (dict "c" 3 "a" 1 "b" 2) }:
+    ${ .k }: ${ yml .v }

@@ -10,8 +10,13 @@ import (
 	"text/template"
 
 	"github.com/Masterminds/sprig/v3"
-	"go.yaml.in/yaml/v4"
 )
+
+type exprRangeResult struct {
+	keyName    string
+	valueName  string
+	collection any
+}
 
 type exprIfResult struct {
 	// satisfied indicates the condition was true.
@@ -38,6 +43,7 @@ type exprTemplateResult struct {
 //   - *exprElseIfResult
 //   - *exprElseResult
 //   - *exprTemplateResult
+//   - *exprRangeResult
 //   - nil, and an error
 func executeExpression(e *EvalState, expr string) (any, error) {
 	fail := func(err error) (any, error) {
@@ -67,30 +73,47 @@ func executeExpression(e *EvalState, expr string) (any, error) {
 			return "", nil
 		},
 		"yml": func(v any) (string, error) {
-			// We can't go directly from "any" to a yaml.Node, so use a []byte.
-			out, err := yaml.Marshal(v)
+			n, err := marshalToNode(v)
 			if err != nil {
-				return "", fmt.Errorf("failed to marshal inline value: %w", err)
+				return "", fmt.Errorf("failed to convert inline value: %w", err)
 			}
-			var n yaml.Node
-			if err := yaml.Unmarshal(out, &n); err != nil {
-				return "", fmt.Errorf("failed to unmarshal inline value: %w", err)
-			}
-			// The result is wrapped in a Document node. Pull it out.
-			if n.Kind != yaml.DocumentNode {
-				return "", fmt.Errorf("inlined expression resulted in non-document node of kind %v", n.Kind)
-			}
-			if len(n.Content) != 1 {
-				return "", fmt.Errorf("inlined expression resulted in document node with %d content nodes (expected 1)", len(n.Content))
-			}
-			n = *n.Content[0]
-			result = &n
+			result = n
 			return "", nil
 		},
 		"inlinetemplate": func(templatePath string) (string, error) {
 			// We can't evaluate the template right here: we don't have access
 			// to data that might be in a child node. The caller has to do it.
 			result = &exprTemplateResult{path: templatePath}
+			return "", nil
+		},
+		"inlinerange": func(args ...any) (string, error) {
+			r := &exprRangeResult{}
+			switch len(args) {
+			case 1:
+				r.collection = args[0]
+			case 2:
+				name, ok := args[0].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[0])
+				}
+				r.valueName = name
+				r.collection = args[1]
+			case 3:
+				kn, ok := args[0].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for key name, got %T", args[0])
+				}
+				vn, ok := args[1].(string)
+				if !ok {
+					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[1])
+				}
+				r.keyName = kn
+				r.valueName = vn
+				r.collection = args[2]
+			default:
+				return "", fmt.Errorf("inlinerange: expected 1-3 args, got %d", len(args))
+			}
+			result = r
 			return "", nil
 		},
 	})

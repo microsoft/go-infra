@@ -110,9 +110,34 @@ If this node has an object child, it is merged into `data` before evaluating the
 
 More technically: if the node is a key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
 
+### `inlinerange <args...>`
+
+A YAML-inlining version of `range`.
+Iterates over a collection (array/slice or map), evaluating the child element for each item.
+If the collection is empty, nothing is output.
+
+Possible args are:
+
+* `inlinerange <pipeline>`
+
+    For each element of the list, `data` is set to that element and the child element value is evaluated.
+    If the element is a map, its keys are available as `.key`. If the element is a scalar, `${ . }` gives
+    the value. Note that there is no way to access the outer value of `data` while evaluating child
+    elements; use `inlinerange "v" <pipeline>` when you need access to outer data.
+
+* `inlinerange "<valuename>" <pipeline>`
+
+    Merges `data` with `map[string]any{valuename: <value>}` for each iteration.
+
+* `inlinerange "<keyname>" "<valuename>" <pipeline>`
+
+    Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
+
+When iterating over a map, the keys are visited in sorted order for reproducibility.
+
 ### Sprig functions
 
-Most Sprig functions functions are included.
+Most Sprig functions are included.
 Specifically, `HermeticTxtFuncMap`, the reproducible functions.
 
 See [Sprig documentation](https://masterminds.github.io/sprig/) for more details.
