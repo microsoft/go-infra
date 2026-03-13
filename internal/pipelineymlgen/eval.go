@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -19,8 +20,10 @@ type EvalState struct {
 	// File path being evaluated.
 	File string
 
-	// Data map for template evaluation.
-	Data map[string]any
+	// Data is the template's dot value. Usually a map[string]any, but when
+	// inlinerange iterates without variable names, it may be any value
+	// (e.g. a scalar), allowing ${ . } to give the element directly.
+	Data any
 }
 
 // EvalFile is a helper to run EvalFileConfig and evalFileWithConfig in one.
@@ -560,24 +563,44 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	seq := &yaml.Node{Kind: yaml.SequenceNode}
 
-	switch c := r.collection.(type) {
-	case []any:
-		for i, elem := range c {
-			iterData := e.iterationData(r, i, elem)
+	// Handle map[string]any directly with sorted keys for determinism.
+	if m, ok := r.collection.(map[string]any); ok {
+		for _, key := range sortedMapKeys(m) {
+			iterData, err := e.iterationData(r, key, m[key])
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+			}
 			node, err := e.evalRangeBody(r.body, iterData)
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
+				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
 			}
 			if node != nil {
 				seq.Content = append(seq.Content, node.Content...)
 			}
 		}
-	case map[string]any:
-		for key, val := range c {
-			iterData := e.iterationData(r, key, val)
+		return seq, nil
+	}
+
+	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
+	rv := reflect.ValueOf(r.collection)
+	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return seq, nil
+		}
+		rv = rv.Elem()
+	}
+
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		for i := range rv.Len() {
+			elem := rv.Index(i).Interface()
+			iterData, err := e.iterationData(r, i, elem)
+			if err != nil {
+				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
+			}
 			node, err := e.evalRangeBody(r.body, iterData)
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
 			}
 			if node != nil {
 				seq.Content = append(seq.Content, node.Content...)
@@ -590,17 +613,16 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	return seq, nil
 }
 
-func (e *EvalState) iterationData(r *evalRange, key, value any) map[string]any {
+func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
 	if r.valueName == "" {
-		// Replace data entirely with the element.
-		switch v := value.(type) {
-		case map[string]any:
-			return v
-		default:
-			return map[string]any{"": value}
-		}
+		// Replace data entirely with the element. For maps, .key works.
+		// For any other type (scalars, slices, etc.), ${ . } gives the value.
+		return value, nil
 	}
-	data := maps.Clone(e.Data)
+	m, _ := e.Data.(map[string]any)
+	// If e.Data is not a map (e.g., a scalar from a no-varname inlinerange),
+	// m is nil and we start fresh so the variable names are still accessible.
+	data := maps.Clone(m)
 	if data == nil {
 		data = make(map[string]any)
 	}
@@ -608,10 +630,10 @@ func (e *EvalState) iterationData(r *evalRange, key, value any) map[string]any {
 	if r.keyName != "" {
 		data[r.keyName] = key
 	}
-	return data
+	return data, nil
 }
 
-func (e *EvalState) evalRangeBody(body *yaml.Node, data map[string]any) (*yaml.Node, error) {
+func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error) {
 	ee := *e
 	ee.Data = data
 	result, err := ee.eval(body)
@@ -640,12 +662,14 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data map[string]any) (*yaml.N
 // overwriting any existing keys. The Data map is cloned to avoid mutating
 // shared maps.
 func (e *EvalState) MergeData(data map[string]any) {
-	// Start with a shallow copy of the data to avoid mutation of shared maps.
-	e.Data = maps.Clone(e.Data)
-	if e.Data == nil {
-		e.Data = make(map[string]any)
+	// Start with the existing map if Data holds one; ignore any scalar value.
+	m, _ := e.Data.(map[string]any)
+	cloned := maps.Clone(m)
+	if cloned == nil {
+		cloned = make(map[string]any)
 	}
-	maps.Copy(e.Data, data)
+	maps.Copy(cloned, data)
+	e.Data = cloned
 }
 
 type evalMapping struct {

@@ -1,0 +1,4 @@
+# Form 1: no variable name, scalar elements.
+# ${ . } gives the scalar value for each iteration.
+- ${ inlinerange (list 1 2) }:
+    value: ${ . }

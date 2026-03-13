@@ -120,8 +120,10 @@ Possible args are:
 
 * `inlinerange <pipeline>`
 
-    `data` is set to each element of the list in turn and the child element value is evaluated.
-    Note that this means there is no way to access the outer value of `data` while evaluating child elements.
+    For each element of the list, `data` is set to that element and the child element value is evaluated.
+    If the element is a map, its keys are available as `.key`. If the element is a scalar, `${ . }` gives
+    the value. Note that there is no way to access the outer value of `data` while evaluating child
+    elements; use `inlinerange "v" <pipeline>` when you need access to outer data.
 
 * `inlinerange "<valuename>" <pipeline>`
 
@@ -131,9 +133,11 @@ Possible args are:
 
     Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
 
+When iterating over a map, the keys are visited in sorted order for reproducibility.
+
 ### Sprig functions
 
-Most Sprig functions functions are included.
+Most Sprig functions are included.
 Specifically, `HermeticTxtFuncMap`, the reproducible functions.
 
 See [Sprig documentation](https://masterminds.github.io/sprig/) for more details.

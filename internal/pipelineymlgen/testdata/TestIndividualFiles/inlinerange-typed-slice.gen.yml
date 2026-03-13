@@ -1,0 +1,4 @@
+# Range over a typed []string slice produced by sortAlpha+keys.
+# This exercises the reflection-based path for non-[]any slices.
+- ${ inlinerange "v" (sortAlpha (keys (dict "b" "two" "a" "one"))) }:
+    item: ${ .v }
