@@ -1,4 +1,0 @@
-# Ranging without a variable name requires map elements.
-# Scalar elements (like these ints) produce an error.
-- ${ inlinerange (list 1 2) }:
-    something: here

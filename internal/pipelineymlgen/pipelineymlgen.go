@@ -186,7 +186,7 @@ type ConfigurationDoc struct {
 }
 
 type Configuration struct {
-	Data   configData       `yaml:"data"`
+	Data   map[string]any   `yaml:"data"`
 	Output *OutputDirective `yaml:"output"`
 }
 
@@ -229,25 +229,6 @@ func (o *OutputDirective) UnmarshalYAML(value *yaml.Node) error {
 
 // OutputConfig represents a single output configuration.
 type OutputConfig struct {
-	File string     `yaml:"file"`
-	Data configData `yaml:"data"`
-}
-
-// configData is a map[string]any that decodes YAML mappings with key order
-// preserved via yamlMapOrderKey for use in inlinerange iteration.
-type configData map[string]any
-
-// UnmarshalYAML decodes the YAML node into a configData map, preserving the
-// original YAML key order in yamlMapOrderKey for ordered inlinerange iteration.
-func (d *configData) UnmarshalYAML(node *yaml.Node) error {
-	val, err := yamlNodeToData(node)
-	if err != nil {
-		return err
-	}
-	m, ok := val.(map[string]any)
-	if !ok {
-		return fmt.Errorf("expected YAML mapping for data, got %T", val)
-	}
-	*d = configData(m)
-	return nil
+	File string         `yaml:"file"`
+	Data map[string]any `yaml:"data"`
 }

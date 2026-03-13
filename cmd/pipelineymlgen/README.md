@@ -121,10 +121,9 @@ Possible args are:
 * `inlinerange <pipeline>`
 
     For each element of the list, `data` is set to that element and the child element value is evaluated.
-    The element must be a map with string keys (e.g. `dict "key" "value"` or a YAML mapping from the
-    `data:` section). Non-map elements require a variable name; use `inlinerange "v" <pipeline>` instead.
-    Note that this form is primarily intended for lists of maps, and there is no way to access the
-    outer value of `data` while evaluating child elements.
+    If the element is a map, its keys are available as `.key`. If the element is a scalar, `${ . }` gives
+    the value. Note that there is no way to access the outer value of `data` while evaluating child
+    elements; use `inlinerange "v" <pipeline>` when you need access to outer data.
 
 * `inlinerange "<valuename>" <pipeline>`
 
@@ -134,9 +133,7 @@ Possible args are:
 
     Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
 
-When iterating over a map, the key iteration order is the YAML document order when the map comes from
-the `data:` section of the configuration document. Maps created at runtime (e.g., via the Sprig `dict`
-function) do not have a document order, so their keys are iterated in sorted order for reproducibility.
+When iterating over a map, the keys are visited in sorted order for reproducibility.
 
 ### Sprig functions
 
