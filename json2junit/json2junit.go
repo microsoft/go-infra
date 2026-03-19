@@ -196,7 +196,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		}
 		suite.Tests++
 		suite.testCases[entry.Test] = &junitTestCase{
-			Name:      entry.Test,
+			Name:      entry.Package + "." + entry.Test,
 			Classname: entry.Package,
 		}
 	case "output":
