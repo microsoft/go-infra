@@ -26,12 +26,12 @@ type Options struct {
 
 // Convert reads Go test JSON and writes converted JUnit XML.
 func Convert(w io.Writer, r io.Reader) error {
-	return ConvertOptions(w, r, nil)
+	return ConvertWithOptions(w, r, nil)
 }
 
-// ConvertOptions reads Go test JSON and writes converted JUnit XML using the given options.
-func ConvertOptions(w io.Writer, r io.Reader, opts *Options) error {
-	c := NewConverterOptions(w, opts)
+// ConvertWithOptions reads Go test JSON and writes converted JUnit XML using the given options.
+func ConvertWithOptions(w io.Writer, r io.Reader, opts *Options) error {
+	c := NewConverterWithOptions(w, opts)
 	if _, err := io.Copy(c, r); err != nil {
 		return err
 	}
@@ -41,13 +41,13 @@ func ConvertOptions(w io.Writer, r io.Reader, opts *Options) error {
 // ConvertFile reads a Go test JSON file and creates a JUnit XML file with converted content.
 // Creates the directory containing the target file if necessary.
 func ConvertFile(out, in string) error {
-	return ConvertFileOptions(out, in, nil)
+	return ConvertFileWithOptions(out, in, nil)
 }
 
-// ConvertFileOptions reads a Go test JSON file and creates a JUnit XML file with converted content.
+// ConvertFileWithOptions reads a Go test JSON file and creates a JUnit XML file with converted content.
 // Creates the directory containing the target file if necessary.
 // If opts is nil, default options are used.
-func ConvertFileOptions(out, in string, opts *Options) error {
+func ConvertFileWithOptions(out, in string, opts *Options) error {
 	r, err := os.Open(in)
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func ConvertFileOptions(out, in string, opts *Options) error {
 		return err
 	}
 
-	if err := ConvertOptions(w, r, opts); err != nil {
+	if err := ConvertWithOptions(w, r, opts); err != nil {
 		w.Close()
 		return err
 	}
@@ -91,12 +91,12 @@ type Converter struct {
 // Writes on the returned writer are written as JUnit to w,
 // with minimal delay.
 func NewConverter(w io.Writer) *Converter {
-	return NewConverterOptions(w, nil)
+	return NewConverterWithOptions(w, nil)
 }
 
-// NewConverterOptions returns a "JSON to JUnit" converter with the given options.
+// NewConverterWithOptions returns a "JSON to JUnit" converter with the given options.
 // If opts is nil, default options are used.
-func NewConverterOptions(w io.Writer, opts *Options) *Converter {
+func NewConverterWithOptions(w io.Writer, opts *Options) *Converter {
 	c := &Converter{
 		w:      w,
 		suites: make(map[string]*junitTestSuite),
