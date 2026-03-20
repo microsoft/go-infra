@@ -17,9 +17,21 @@ import (
 	"time"
 )
 
+// Options configures the conversion behavior.
+type Options struct {
+	// IncludePackageInTestName prefixes each test case name with its package path,
+	// e.g. "crypto/sha256.TestGolden" instead of "TestGolden".
+	IncludePackageInTestName bool
+}
+
 // Convert reads Go test JSON and writes converted JUnit XML.
 func Convert(w io.Writer, r io.Reader) error {
-	c := NewConverter(w)
+	return ConvertOptions(w, r, nil)
+}
+
+// ConvertOptions reads Go test JSON and writes converted JUnit XML using the given options.
+func ConvertOptions(w io.Writer, r io.Reader, opts *Options) error {
+	c := NewConverterOptions(w, opts)
 	if _, err := io.Copy(c, r); err != nil {
 		return err
 	}
@@ -29,6 +41,13 @@ func Convert(w io.Writer, r io.Reader) error {
 // ConvertFile reads a Go test JSON file and creates a JUnit XML file with converted content.
 // Creates the directory containing the target file if necessary.
 func ConvertFile(out, in string) error {
+	return ConvertFileOptions(out, in, nil)
+}
+
+// ConvertFileOptions reads a Go test JSON file and creates a JUnit XML file with converted content.
+// Creates the directory containing the target file if necessary.
+// If opts is nil, default options are used.
+func ConvertFileOptions(out, in string, opts *Options) error {
 	r, err := os.Open(in)
 	if err != nil {
 		return err
@@ -44,7 +63,7 @@ func ConvertFile(out, in string) error {
 		return err
 	}
 
-	if err := Convert(w, r); err != nil {
+	if err := ConvertOptions(w, r, opts); err != nil {
 		w.Close()
 		return err
 	}
@@ -65,16 +84,27 @@ type Converter struct {
 	suites map[string]*junitTestSuite
 	w      io.Writer
 	xmlEnc *xml.Encoder
+	opts   Options
 }
 
 // NewConverter returns a "JSON to JUnit" converter.
 // Writes on the returned writer are written as JUnit to w,
 // with minimal delay.
 func NewConverter(w io.Writer) *Converter {
-	return &Converter{
+	return NewConverterOptions(w, nil)
+}
+
+// NewConverterOptions returns a "JSON to JUnit" converter with the given options.
+// If opts is nil, default options are used.
+func NewConverterOptions(w io.Writer, opts *Options) *Converter {
+	c := &Converter{
 		w:      w,
 		suites: make(map[string]*junitTestSuite),
 	}
+	if opts != nil {
+		c.opts = *opts
+	}
+	return c
 }
 
 // Write writes a JSON test entry to the writer.
@@ -195,8 +225,12 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			return fmt.Errorf("duplicate run entry for package %v test %v", entry.Package, entry.Test)
 		}
 		suite.Tests++
+		name := entry.Test
+		if c.opts.IncludePackageInTestName {
+			name = entry.Package + "." + entry.Test
+		}
 		suite.testCases[entry.Test] = &junitTestCase{
-			Name:      entry.Package + "." + entry.Test,
+			Name:      name,
 			Classname: entry.Package,
 		}
 	case "output":
