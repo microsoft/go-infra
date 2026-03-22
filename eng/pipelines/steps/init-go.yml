@@ -6,4 +6,5 @@
 steps:
   - task: GoTool@0
     inputs:
-      version: 1.24.1
+      version: '1.25'
+      goDownloadUrl: 'https://aka.ms/golang/release/latest'
