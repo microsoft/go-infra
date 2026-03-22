@@ -36,6 +36,21 @@ func TestConverter(t *testing.T) {
 	}
 }
 
+func TestConverterIncludePackage(t *testing.T) {
+	in := filepath.Join("testdata", "inputs", "good", "pass.jsonl")
+	tmpOut := filepath.Join(t.TempDir(), "output.xml")
+	if err := ConvertFileWithOptions(tmpOut, in, &Options{
+		IncludePackageInTestName: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(tmpOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goldentest.Check(t, "pass.xml", string(data))
+}
+
 func TestConverterErrors(t *testing.T) {
 	dir := filepath.Join("testdata", "inputs", "bad")
 	files, err := os.ReadDir(dir)
