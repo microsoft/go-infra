@@ -4,6 +4,7 @@
 package buildassets
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -47,6 +48,11 @@ func TestBuildResultsDirectoryInfo_GoldenCreateSummary(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
+				// Ensure the manifest test data keeps its real-world format: UTF-16 LE with CRLF.
+				// This matters because the code parses this encoding in production, so it's
+				// important that tests exercise it. If this check fails, restore the file from
+				// source control rather than changing this check.
+				checkManifestIsUTF16LECRLF(t, destManifestPath)
 				b.DestinationManifest = destManifestPath
 			}
 
@@ -114,4 +120,23 @@ func tempExtractTxtar(t *testing.T, path string) (outDir string, ok bool) {
 		}
 	}
 	return td, true
+}
+
+// checkManifestIsUTF16LECRLF checks that path is a UTF-16 LE file (starts with BOM) that contains
+// at least one CRLF sequence in UTF-16 LE encoding. These manifest files are real-world test data
+// produced by pipeline tooling, and the code must handle this encoding in production.
+func checkManifestIsUTF16LECRLF(t *testing.T, path string) {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("unable to read manifest file %q: %v", path, err)
+	}
+	utf16LEBOM := []byte{0xFF, 0xFE}
+	if !bytes.HasPrefix(content, utf16LEBOM) {
+		t.Errorf("manifest test data %q must start with UTF-16 LE BOM (FF FE); restore the file from source control", path)
+	}
+	utf16LECRLF := []byte{0x0D, 0x00, 0x0A, 0x00}
+	if !bytes.Contains(content, utf16LECRLF) {
+		t.Errorf("manifest test data %q must contain UTF-16 LE CRLF sequences (0D 00 0A 00); restore the file from source control", path)
+	}
 }

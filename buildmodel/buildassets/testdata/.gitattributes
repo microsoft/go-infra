@@ -1,0 +1,4 @@
+# These manifest JSON files are real-world test data that the program parses in production.
+# They use UTF-16 LE encoding with CRLF line endings as produced by the pipeline tooling.
+# Keep them in their original format to ensure the parser handles this encoding correctly.
+*/msGo.output.manifest.json -text
