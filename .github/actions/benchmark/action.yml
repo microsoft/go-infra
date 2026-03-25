@@ -1,0 +1,95 @@
+name: 'Benchmark Compare'
+description: 'Run Go benchmarks on head vs base and fail on significant regressions (>= 5%, statistically significant via benchstat with count=7).'
+
+inputs:
+  base-ref:
+    description: 'Base ref to compare against (branch, tag, or SHA)'
+    required: true
+  go-version:
+    description: 'Go version to use'
+    required: true
+  env-vars:
+    description: 'Newline-separated KEY=VALUE environment variables for go test (e.g. GO_OPENSSL_VERSION_OVERRIDE=3.3.1)'
+    required: false
+    default: ''
+  go-mod-path:
+    description: 'Relative path to go.mod inside the repo (for cache)'
+    required: false
+    default: 'go.mod'
+  threshold:
+    description: 'Minimum regression percentage to flag (default: 5)'
+    required: false
+    default: '5'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout HEAD (your branch)
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        path: head
+
+    - name: Checkout BASE (target branch)
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        ref: ${{ inputs.base-ref }}
+        path: base
+
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache-dependency-path: head/${{ inputs.go-mod-path }}
+
+    - name: Install benchstat
+      shell: bash
+      run: go install golang.org/x/perf/cmd/benchstat@latest
+
+    - name: Run benchmarks (base)
+      shell: bash
+      working-directory: base
+      run: |
+        # Export user-provided env vars
+        if [ -n "$ENV_VARS" ]; then
+          while IFS= read -r line; do
+            [ -n "$line" ] && export "$line"
+          done <<< "$ENV_VARS"
+        fi
+        go test -run='^$' -bench=. -count=7 -benchmem -timeout 30m ./... 2>/dev/null | tee ../base.txt || true
+      env:
+        ENV_VARS: ${{ inputs.env-vars }}
+
+    - name: Run benchmarks (head)
+      shell: bash
+      working-directory: head
+      run: |
+        # Export user-provided env vars
+        if [ -n "$ENV_VARS" ]; then
+          while IFS= read -r line; do
+            [ -n "$line" ] && export "$line"
+          done <<< "$ENV_VARS"
+        fi
+        go test -run='^$' -bench=. -count=7 -benchmem -timeout 30m ./... 2>/dev/null | tee ../head.txt || true
+      env:
+        ENV_VARS: ${{ inputs.env-vars }}
+
+    - name: Compare benchmarks
+      shell: bash
+      run: |
+        benchstat base.txt head.txt | tee benchstat.txt
+        # For sec/op, B/op, allocs/op: a "+" means regression (slower / more allocs).
+        # For B/s: a "+" means improvement (more throughput), so we exclude it.
+        # Only flag regressions >= threshold to ignore CI noise on shared runners.
+        THRESHOLD="${{ inputs.threshold }}"
+        if awk -v threshold="$THRESHOLD" '
+          /^[[:space:]]*│.*(sec\/op|B\/op|allocs\/op)/ { header=1; next }
+          /^$/ { header=0 }
+          header && match($0, /\+([0-9]+\.[0-9]+)% \(p=/, m) { if (m[1]+0 >= threshold) found=1 }
+          END { exit !found }
+        ' benchstat.txt; then
+          echo ""
+          echo "Statistically significant benchmark regression(s) >= ${THRESHOLD}% detected."
+          echo "See the benchstat output above for details."
+          exit 1
+        fi
+        echo ""
+        echo "No significant benchmark regressions detected."
