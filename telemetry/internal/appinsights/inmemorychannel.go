@@ -44,6 +44,7 @@ type inMemoryChannel struct {
 
 	throttled   atomic.Bool
 	closed      atomic.Bool
+	closeOnce   sync.Once
 	sendQueue   []*[]batchItem
 	sendQueueMu sync.Mutex
 	sendMu      sync.Mutex
@@ -104,17 +105,21 @@ func (channel *inMemoryChannel) error(msg string, args ...any) {
 
 // Queues a single telemetry item
 func (channel *inMemoryChannel) send(item *contracts.Envelope) {
-	if item != nil && !channel.closed.Load() {
-		channel.collectChan <- item
+	if item == nil {
+		return
+	}
+	select {
+	case channel.collectChan <- item:
+	case <-channel.cancelCtx.Done():
 	}
 }
 
 // Forces the current queue to be sent
 func (channel *inMemoryChannel) flush() {
-	if channel.closed.Load() {
-		return
+	select {
+	case channel.flushChan <- struct{}{}:
+	case <-channel.cancelCtx.Done():
 	}
-	channel.flushChan <- struct{}{}
 }
 
 func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []batchItem) {
@@ -127,13 +132,11 @@ var errStopped = errors.New("client stopped")
 var errClosed = errors.New("client closed")
 
 func (channel *inMemoryChannel) stop() {
-	if channel.closed.Load() {
-		return
-	}
-
-	channel.closed.Store(true)
-	channel.cancelCauseFunc(errStopped)
-	channel.checkInflight()
+	channel.closeOnce.Do(func() {
+		channel.closed.Store(true)
+		channel.cancelCauseFunc(errStopped)
+		channel.checkInflight()
+	})
 }
 
 // close flushes and tears down the submission goroutine and closes internal
@@ -141,19 +144,21 @@ func (channel *inMemoryChannel) stop() {
 // (it is then safe to shut down without losing telemetry) or when
 // the context is canceled.
 func (channel *inMemoryChannel) close(ctx context.Context) {
-	if channel.closed.Load() {
-		return
-	}
-
-	channel.closed.Store(true)
-	channel.flushChan <- struct{}{}
-	select {
-	case <-ctx.Done():
-		channel.cancelCauseFunc(context.Cause(ctx))
-	case <-channel.cancelCtx.Done():
-		// Successfully flushed
-	}
-	channel.checkInflight()
+	channel.closeOnce.Do(func() {
+		channel.closed.Store(true)
+		select {
+		case channel.flushChan <- struct{}{}:
+		case <-channel.cancelCtx.Done():
+			// acceptLoop already exited.
+		}
+		select {
+		case <-ctx.Done():
+			channel.cancelCauseFunc(context.Cause(ctx))
+		case <-channel.cancelCtx.Done():
+			// Successfully flushed
+		}
+		channel.checkInflight()
+	})
 }
 
 func (channel *inMemoryChannel) checkInflight() {

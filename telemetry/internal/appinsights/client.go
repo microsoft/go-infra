@@ -126,6 +126,9 @@ func (c *Client) Close(ctx context.Context) {
 // Any telemetry waiting to be sent is discarded.
 // This is a more abrupt version of [Client.Close].
 func (c *Client) Stop() {
+	if !c.initialized.Load() {
+		return
+	}
 	c.channel.stop()
 }
 
