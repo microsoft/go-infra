@@ -116,6 +116,9 @@ func (c *Client) Flush() {
 // Close flushes and tears down the submission goroutine and closes internal channels.
 // Waits until all pending telemetry items have been submitted.
 func (c *Client) Close(ctx context.Context) {
+	// Synchronize with any in-progress init so we don't miss
+	// a channel that is about to be created.
+	c.initOnce.Do(func() {})
 	if !c.initialized.Load() {
 		return
 	}
@@ -126,6 +129,9 @@ func (c *Client) Close(ctx context.Context) {
 // Any telemetry waiting to be sent is discarded.
 // This is a more abrupt version of [Client.Close].
 func (c *Client) Stop() {
+	// Synchronize with any in-progress init so we don't miss
+	// a channel that is about to be created.
+	c.initOnce.Do(func() {})
 	if !c.initialized.Load() {
 		return
 	}
@@ -138,6 +144,10 @@ func (c *Client) track(data contracts.EventData, n int64) {
 		return
 	}
 	c.init()
+	if !c.initialized.Load() {
+		// Stop or Close consumed initOnce before init could run.
+		return
+	}
 	ev := c.context.envelop(data)
 	if err := ev.Sanitize(); err != nil {
 		c.channel.warn("tags were not sanitary and have been sanitized", "error", err)

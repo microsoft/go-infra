@@ -105,7 +105,7 @@ func (channel *inMemoryChannel) error(msg string, args ...any) {
 
 // Queues a single telemetry item
 func (channel *inMemoryChannel) send(item *contracts.Envelope) {
-	if item == nil {
+	if item == nil || channel.closed.Load() {
 		return
 	}
 	select {
@@ -116,6 +116,9 @@ func (channel *inMemoryChannel) send(item *contracts.Envelope) {
 
 // Forces the current queue to be sent
 func (channel *inMemoryChannel) flush() {
+	if channel.closed.Load() {
+		return
+	}
 	select {
 	case channel.flushChan <- struct{}{}:
 	case <-channel.cancelCtx.Done():
