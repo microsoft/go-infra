@@ -25,7 +25,7 @@ jobs:
     steps:
       # Intentionally get upstream Go. This allows us to run install script
       # tests and see results even if the Microsoft build of Go install process breaks.
-      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: stable
 
