@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-//go:build (go1.24 && goexperiment.synctest) || go1.25
-
 package appinsights_test
 
 import (
@@ -35,7 +33,7 @@ type testPlan struct {
 }
 
 func (plan testPlan) run(t *testing.T) {
-	syncRun(t, func(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
 		client := appinsightstest.New(t, plan.actions, plan.responses...)
 		client.SetMaxBatchSize(plan.maxBatchSize)
 		client.SetMaxBatchInterval(plan.maxBatchInterval)
@@ -119,7 +117,6 @@ func TestClientBatchMultiple(t *testing.T) {
 }
 
 func TestClientInterval(t *testing.T) {
-	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchInterval: 1 * time.Second,
 		actions: []appinsightstest.Action{
@@ -137,7 +134,6 @@ func TestClientInterval(t *testing.T) {
 }
 
 func TestClientIntervalMultiple(t *testing.T) {
-	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchInterval: 1 * time.Second,
 		actions: []appinsightstest.Action{
@@ -441,4 +437,116 @@ func BenchmarkClientBurstPerformance(b *testing.B) {
 	}
 
 	client.Close(b.Context())
+}
+
+func TestClientConcurrentClose(t *testing.T) {
+	// Two concurrent Close calls must not leak a goroutine.
+	synctest.Test(t, func(t *testing.T) {
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			HTTPClient: &http.Client{
+				Transport: fakeTransport{
+					code: http.StatusOK,
+					body: []byte(`{"itemsReceived":1, "itemsAccepted":1, "errors":[]}`),
+				},
+			},
+		}
+		client.TrackEvent("init", nil)
+		synctest.Wait()
+
+		done := make(chan struct{}, 2)
+		go func() {
+			client.Close(t.Context())
+			done <- struct{}{}
+		}()
+		go func() {
+			client.Close(t.Context())
+			done <- struct{}{}
+		}()
+		synctest.Wait()
+		<-done
+		<-done
+	})
+}
+
+func TestClientCloseAndStop(t *testing.T) {
+	// Concurrent Close and Stop must not leak a goroutine.
+	synctest.Test(t, func(t *testing.T) {
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			HTTPClient: &http.Client{
+				Transport: fakeTransport{
+					code: http.StatusOK,
+					body: []byte(`{"itemsReceived":1, "itemsAccepted":1, "errors":[]}`),
+				},
+			},
+		}
+		client.TrackEvent("init", nil)
+		synctest.Wait()
+
+		done := make(chan struct{}, 2)
+		go func() {
+			client.Close(t.Context())
+			done <- struct{}{}
+		}()
+		go func() {
+			client.Stop()
+			done <- struct{}{}
+		}()
+		synctest.Wait()
+		<-done
+		<-done
+	})
+}
+
+func TestClientSendAfterClose(t *testing.T) {
+	// Sending after Close must not block.
+	synctest.Test(t, func(t *testing.T) {
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			HTTPClient: &http.Client{
+				Transport: fakeTransport{
+					code: http.StatusOK,
+					body: []byte(`{"itemsReceived":1, "itemsAccepted":1, "errors":[]}`),
+				},
+			},
+		}
+		client.TrackEvent("init", nil)
+		synctest.Wait()
+		client.Close(t.Context())
+		synctest.Wait()
+		// Must not block.
+		client.TrackEvent("after_close", nil)
+		synctest.Wait()
+	})
+}
+
+func TestClientFlushAfterClose(t *testing.T) {
+	// Flushing after Close must not block.
+	synctest.Test(t, func(t *testing.T) {
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			HTTPClient: &http.Client{
+				Transport: fakeTransport{
+					code: http.StatusOK,
+					body: []byte(`{"itemsReceived":1, "itemsAccepted":1, "errors":[]}`),
+				},
+			},
+		}
+		client.TrackEvent("init", nil)
+		synctest.Wait()
+		client.Close(t.Context())
+		synctest.Wait()
+		// Must not block.
+		client.Flush()
+		synctest.Wait()
+	})
+}
+
+func TestClientStopBeforeInit(t *testing.T) {
+	// Stop on an uninitialized client must not panic.
+	client := &appinsights.Client{
+		InstrumentationKey: test_ikey,
+	}
+	client.Stop()
 }
