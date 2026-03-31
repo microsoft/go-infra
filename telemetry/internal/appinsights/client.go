@@ -62,7 +62,9 @@ type Client struct {
 
 // init initializes the client.
 // It is safe to call this method multiple times concurrently.
-func (c *Client) init() {
+// Returns true if the client is initialized after the call, false if init
+// is called after the client has been stopped or closed.
+func (c *Client) init() bool {
 	c.initOnce.Do(func() {
 		if c.InstrumentationKey == "" {
 			panic("instrumentation key is required")
@@ -80,6 +82,17 @@ func (c *Client) init() {
 		go c.channel.acceptLoop()
 		c.initialized.Store(true)
 	})
+	return c.initialized.Load()
+
+}
+
+// cancel tries to prevent the client from being initialized.
+// It is safe to call this method multiple times concurrently.
+// Returns true if the client is not initialized after the call, false if cancel
+// is called after the client has been initialized.
+func (c *Client) cancel() bool {
+	c.initOnce.Do(func() {})
+	return !c.initialized.Load()
 }
 
 func setupContext(instrumentationKey string, tags map[string]string) *telemetryContext {
@@ -118,8 +131,7 @@ func (c *Client) Flush() {
 func (c *Client) Close(ctx context.Context) {
 	// Synchronize with any in-progress init so we don't miss
 	// a channel that is about to be created.
-	c.initOnce.Do(func() {})
-	if !c.initialized.Load() {
+	if c.cancel() {
 		return
 	}
 	c.channel.close(ctx)
@@ -131,8 +143,7 @@ func (c *Client) Close(ctx context.Context) {
 func (c *Client) Stop() {
 	// Synchronize with any in-progress init so we don't miss
 	// a channel that is about to be created.
-	c.initOnce.Do(func() {})
-	if !c.initialized.Load() {
+	if c.cancel() {
 		return
 	}
 	c.channel.stop()
@@ -143,8 +154,7 @@ func (c *Client) track(data contracts.EventData, n int64) {
 	if n == 0 || (c.UploadFilter != nil && !c.UploadFilter(data.Name)) {
 		return
 	}
-	c.init()
-	if !c.initialized.Load() {
+	if !c.init() {
 		// Stop or Close consumed initOnce before init could run.
 		return
 	}
