@@ -52,7 +52,7 @@ func TestConverterIncludePackage(t *testing.T) {
 	goldentest.Check(t, "pass.xml", string(data))
 }
 
-func TestConverterAttempt(t *testing.T) {
+func TestConverterJobAttempt(t *testing.T) {
 	in := filepath.Join("testdata", "inputs", "good", "pass.jsonl")
 
 	tests := []struct {
@@ -60,8 +60,8 @@ func TestConverterAttempt(t *testing.T) {
 		opts          Options
 		wantSuiteName string
 	}{
-		{"with_attempt", Options{JobAttempt: "3"}, "cmd/go [attempt 3]"},
-		{"no_attempt", Options{}, "cmd/go"},
+		{"with_job_attempt", Options{JobAttempt: "3"}, "cmd/go [attempt 3]"},
+		{"no_job_attempt", Options{}, "cmd/go"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
