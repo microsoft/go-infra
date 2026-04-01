@@ -14,8 +14,8 @@ jobs:
     workspace:
       clean: all
     pool:
-      # Use generic recent LTS.
-      vmImage: ubuntu-22.04
+      name: NetCore-Public
+      demands: ImageOverride -equals build.ubuntu.2204.amd64.open
     steps:
       - template: steps/checkout-unix-task.yml
       - template: steps/init-go.yml
@@ -58,7 +58,8 @@ jobs:
     parameters:
       name: TestFuzz1x
       pool:
-        vmImage: ubuntu-22.04
+        name: NetCore-Public
+        demands: ImageOverride -equals build.ubuntu.2204.amd64.open
       platform: linux-amd64
       useMicrosoftGo: false
       # 1x runs the tests only once. It uses the first entry in the corpus so won't generate any
