@@ -29,7 +29,6 @@ schedules:
 
 variables:
   - group: Microsoft-GoLang-bot
-  - group: DotNet-VSTS-Infra-Access
   - template: variables/pipeline.yml
 
 resources:

@@ -19,6 +19,17 @@ steps:
       # job preemptively. But at some point, a dev needs to check that the tool is working
       # properly and the upstream release is progressing as expected.
       timeoutInMinutes: 360
+    # Mint an AzDO token via WIF for pushing to the internal mirror repo.
+    # https://learn.microsoft.com/en-us/azure/devops/cli/entra-tokens
+    - task: AzureCLI@2
+      displayName: Mint AzDO token via WIF
+      inputs:
+        azureSubscription: 'dnceng-build-rw-code-rw-wif'
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          $token = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
+          Write-Host "##vso[task.setvariable variable=WifAzdoToken;issecret=true]$token"
     # Either make sure the microsoft/go branch has the correct commit as its submodule, or
     # submit a PR that sets the submodule commit.
     - script: |
@@ -34,7 +45,7 @@ steps:
           -github-reviewer-app-client-id '$(BotAccount-review-bot-for-go-client-id)' \
           -github-reviewer-app-installation '$(BotAccount-review-bot-for-go-installation)' \
           -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)' \
-          -azdo-dnceng-pat '$(AzDODncengPAT)' \
+          -azdo-dnceng-pat '$(WifAzdoToken)' \
           -create-branches \
           -set-azdo-variable-pr-number poll1MicrosoftGoPRNumber \
           -set-azdo-variable-up-to-date-commit poll2MicrosoftGoCommitHash

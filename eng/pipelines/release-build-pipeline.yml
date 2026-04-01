@@ -86,7 +86,6 @@ variables:
   - group: go-akams-config
   - group: go-akams-auth
   - group: Microsoft-GoLang-bot
-  - group: DotNet-VSTS-Infra-Access
   # Import config group. This may direct the build to use secrets from the other groups.
   - group: ${{ parameters.goReleaseConfigVariableGroup }}
   - template: variables/release-pipelines.yml
