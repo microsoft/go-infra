@@ -13,7 +13,6 @@ pr: none
 schedules: []
 variables:
   - group: Microsoft-GoLang-bot
-  - group: DotNet-VSTS-Infra-Access
   - template: variables/pipeline.yml
 resources:
   repositories:
@@ -48,6 +47,16 @@ extends:
               - template: /eng/pipelines/steps/checkout-unix-task.yml@self
               - template: /eng/pipelines/steps/init-go.yml@self
               - template: /eng/pipelines/steps/set-bot-git-author.yml@self
+              - task: AzureCLI@2
+                displayName: Mint AzDO token via WIF
+                inputs:
+                  azureSubscription: 'dnceng-build-rw-code-rw-wif'
+                  scriptType: 'pscore'
+                  scriptLocation: 'inlineScript'
+                  inlineScript: |
+                    # Get access token: https://learn.microsoft.com/en-us/azure/devops/cli/entra-tokens
+                    $token = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
+                    Write-Host "##vso[task.setvariable variable=WifAzdoToken;issecret=true]$token"
               - pwsh: |
                   go run ./cmd/sync `
                     -git-auth api `
@@ -58,5 +67,5 @@ extends:
                     -github-reviewer-app-client-id $(BotAccount-review-bot-for-go-client-id) `
                     -github-reviewer-app-installation $(BotAccount-review-bot-for-go-installation) `
                     -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)' `
-                    -azdo-dnceng-pat $(dn-bot-dnceng-build-rw-code-rw)
+                    -azdo-dnceng-pat $(WifAzdoToken)
                 displayName: Sync
