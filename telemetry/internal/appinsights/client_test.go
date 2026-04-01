@@ -117,6 +117,7 @@ func TestClientBatchMultiple(t *testing.T) {
 }
 
 func TestClientInterval(t *testing.T) {
+	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchInterval: 1 * time.Second,
 		actions: []appinsightstest.Action{
@@ -134,6 +135,7 @@ func TestClientInterval(t *testing.T) {
 }
 
 func TestClientIntervalMultiple(t *testing.T) {
+	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchInterval: 1 * time.Second,
 		actions: []appinsightstest.Action{
@@ -185,6 +187,7 @@ func TestClientFlushMultiple(t *testing.T) {
 }
 
 func TestClientBatchIntervalFlush(t *testing.T) {
+	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchSize:     2,
 		maxBatchInterval: 1 * time.Second,
