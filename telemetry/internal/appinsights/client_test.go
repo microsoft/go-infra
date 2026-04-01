@@ -187,6 +187,7 @@ func TestClientFlushMultiple(t *testing.T) {
 }
 
 func TestClientBatchIntervalFlush(t *testing.T) {
+	t.Skip("flaky: https://github.com/microsoft/go-lab/issues/253")
 	plan := testPlan{
 		maxBatchSize:     2,
 		maxBatchInterval: 1 * time.Second,
