@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/go-infra/goldentest"
@@ -49,6 +50,36 @@ func TestConverterIncludePackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	goldentest.Check(t, "pass.xml", string(data))
+}
+
+func TestConverterJobAttempt(t *testing.T) {
+	in := filepath.Join("testdata", "inputs", "good", "pass.jsonl")
+
+	tests := []struct {
+		name          string
+		opts          Options
+		wantSuiteName string
+	}{
+		{"with_job_attempt", Options{JobAttempt: "3"}, "cmd/go [attempt 3]"},
+		{"no_job_attempt", Options{}, "cmd/go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpOut := filepath.Join(t.TempDir(), "output.xml")
+			if err := ConvertFileWithOptions(tmpOut, in, &tt.opts); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(tmpOut)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The suite name appears in the XML as: <testsuite name="...">
+			want := `name="` + tt.wantSuiteName + `"`
+			if !strings.Contains(string(data), want) {
+				t.Errorf("expected suite name %q in output, got:\n%s", tt.wantSuiteName, data)
+			}
+		})
+	}
 }
 
 func TestConverterErrors(t *testing.T) {

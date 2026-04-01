@@ -22,6 +22,9 @@ type Options struct {
 	// IncludePackageInTestName prefixes each test case name with its package path,
 	// e.g. "crypto/sha256.TestGolden" instead of "TestGolden".
 	IncludePackageInTestName bool
+	// JobAttempt is a label for the CI job-level rerun attempt (e.g. System.StageAttempt
+	// in Azure DevOps), included in JUnit test suite names. If empty, no label is added.
+	JobAttempt string
 }
 
 // Convert reads Go test JSON and writes converted JUnit XML.
@@ -210,8 +213,12 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		if _, ok := c.suites[entry.Package]; ok {
 			return fmt.Errorf("duplicate start entry for %v", entry.Package)
 		}
+		suiteName := entry.Package
+		if c.opts.JobAttempt != "" {
+			suiteName += " [attempt " + c.opts.JobAttempt + "]"
+		}
 		c.suites[entry.Package] = &junitTestSuite{
-			Name:      entry.Package,
+			Name:      suiteName,
 			Timestamp: entry.Time.Format(time.RFC3339),
 			testCases: make(map[string]*junitTestCase),
 		}
