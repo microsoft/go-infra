@@ -55,6 +55,7 @@ extends:
                   scriptType: 'pscore'
                   scriptLocation: 'inlineScript'
                   inlineScript: |
+                    # Get access token: https://learn.microsoft.com/en-us/azure/devops/cli/entra-tokens
                     $token = az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv
                     Write-Host "##vso[task.setvariable variable=WifAzdoToken;issecret=true]$token"
               - pwsh: |
