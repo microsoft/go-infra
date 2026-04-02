@@ -800,8 +800,9 @@ type evalRange struct {
 	collection any
 	body       *yaml.Node
 	// inSequence is true when this range is inside a mapping that is a
-	// sequence item. In that case each iteration produces a separate sequence
-	// element. When false (mapping value context), iterations that produce
-	// MappingNodes are flattened into a single combined MappingNode.
+	// sequence item. When true, the range always produces a SequenceNode
+	// (preserving list item structure). When false (mapping value context),
+	// iterations that produce MappingNodes are flattened into a single
+	// combined MappingNode.
 	inSequence bool
 }
