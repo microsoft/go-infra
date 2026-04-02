@@ -1,0 +1,5 @@
+# Range over a list of maps, producing map entries (not sequence items).
+containers:
+  ${ inlinerange "c" (list (dict "container" "ubuntu2204" "image" "mcr.microsoft.com/ubuntu-22.04") (dict "container" "ubuntu2404" "image" "mcr.microsoft.com/ubuntu-24.04")) }:
+    ${ .c.container }:
+      image: ${ .c.image }

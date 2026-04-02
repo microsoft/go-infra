@@ -225,6 +225,15 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 			if err != nil {
 				return fail(fmt.Errorf("evaluating sequence item: %w", err))
 			}
+			// Mark any evalRanges inside mapping sequence items so they know
+			// to produce sequence output rather than mapping output.
+			if m, ok := evalItem.(*evalMapping); ok {
+				for _, c := range m.content {
+					if r, ok := c.(*evalRange); ok {
+						r.inSequence = true
+					}
+				}
+			}
 			s.content = append(s.content, evalItem)
 		}
 		return &s, nil
@@ -561,7 +570,7 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 }
 
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
-	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	result := &yaml.Node{Kind: yaml.SequenceNode}
 
 	// Handle map[string]any directly with sorted keys for determinism.
 	if m, ok := r.collection.(map[string]any); ok {
@@ -575,17 +584,17 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
 			}
 			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
+				result.Content = append(result.Content, node.Content...)
 			}
 		}
-		return seq, nil
+		return e.evalRangeFlatten(r, result)
 	}
 
 	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return seq, nil
+			return result, nil
 		}
 		rv = rv.Elem()
 	}
@@ -603,14 +612,43 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
 			}
 			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
+				result.Content = append(result.Content, node.Content...)
 			}
 		}
 	default:
 		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
 	}
 
-	return seq, nil
+	return e.evalRangeFlatten(r, result)
+}
+
+// evalRangeFlatten converts the collected range results into the appropriate
+// YAML node type. When the range is NOT in a sequence context and all body
+// results are MappingNodes, it flattens them into a single MappingNode so the
+// output contains map entries rather than sequence items.
+func (e *EvalState) evalRangeFlatten(r *evalRange, seq *yaml.Node) (*yaml.Node, error) {
+	if r.inSequence {
+		return seq, nil
+	}
+
+	// Check if all items in the sequence are MappingNodes. If so, flatten
+	// their key-value pairs into a single MappingNode.
+	allMappings := len(seq.Content) > 0
+	for _, item := range seq.Content {
+		if item.Kind != yaml.MappingNode {
+			allMappings = false
+			break
+		}
+	}
+	if !allMappings {
+		return seq, nil
+	}
+
+	m := &yaml.Node{Kind: yaml.MappingNode}
+	for _, item := range seq.Content {
+		m.Content = append(m.Content, item.Content...)
+	}
+	return m, nil
 }
 
 func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
@@ -761,4 +799,9 @@ type evalRange struct {
 	valueName  string
 	collection any
 	body       *yaml.Node
+	// inSequence is true when this range is inside a mapping that is a
+	// sequence item. In that case each iteration produces a separate sequence
+	// element. When false (mapping value context), iterations that produce
+	// MappingNodes are flattened into a single combined MappingNode.
+	inSequence bool
 }

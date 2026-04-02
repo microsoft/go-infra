@@ -1,0 +1,6 @@
+# Range over a list of maps, producing map entries (not sequence items).
+containers:
+  ubuntu2204:
+    image: mcr.microsoft.com/ubuntu-22.04
+  ubuntu2404:
+    image: mcr.microsoft.com/ubuntu-24.04
