@@ -24,18 +24,18 @@ A mixture of `pipelineymlgen` and built-in template logic is expected be the bes
 > If you use VS Code, consider changing the icon for `*.gen.yml` files to make navigation easier.
 > For example, if you use [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), you can use [these settings](https://github.com/material-extensions/vscode-material-icon-theme?tab=readme-ov-file#custom-file-icon-clones):
 >
-> ```json
-  "material-icon-theme.files.customClones": [
-    {
-      "name": "yaml-gen",
-      "base": "yaml",
-      "color": "amber-300",
-    },
-  ],
-  "material-icon-theme.files.associations": {
-    "*.gen.yml": "yaml-gen"
-  }
-  ```
+> ```jsonl
+> "material-icon-theme.files.customClones": [
+>   {
+>     "name": "yaml-gen",
+>     "base": "yaml",
+>     "color": "amber-300",
+>   },
+> ],
+> "material-icon-theme.files.associations": {
+>   "*.gen.yml": "yaml-gen"
+> }
+> ```
 
 ## Set up `pipelineymlgen`
 
