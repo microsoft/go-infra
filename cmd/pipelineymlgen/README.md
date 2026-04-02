@@ -20,6 +20,23 @@ However, `pipelineymlgen` isn't a replacement for Azure Pipelines templates.
 Executing conditional logic based on these is still something only Azure Pipelines template expressions can do.
 A mixture of `pipelineymlgen` and built-in template logic is expected be the best solution.
 
+> [!TIP]
+> If you use VS Code, consider changing the icon for `*.gen.yml` files to make navigation easier.
+> For example, if you use [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme), you can use [these settings](https://github.com/material-extensions/vscode-material-icon-theme?tab=readme-ov-file#custom-file-icon-clones):
+>
+> ```json
+  "material-icon-theme.files.customClones": [
+    {
+      "name": "yaml-gen",
+      "base": "yaml",
+      "color": "amber-300",
+    },
+  ],
+  "material-icon-theme.files.associations": {
+    "*.gen.yml": "yaml-gen"
+  }
+  ```
+
 ## Set up `pipelineymlgen`
 
 1. `go get -tool github.com/microsoft/go-infra/cmd/pipelineymlgen@latest`
