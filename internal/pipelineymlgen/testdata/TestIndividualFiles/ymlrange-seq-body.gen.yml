@@ -1,0 +1,3 @@
+# ymlrange with a sequence body keeps each iteration as a sub-sequence.
+- ${ ymlrange (list "a" "b") }:
+    - ${ yml . }: ex

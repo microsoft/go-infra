@@ -1,0 +1,4 @@
+# ymlrange with a mapping body in mapping context merges into one mapping.
+outer:
+  ${ ymlrange "k" "v" (dict "a" 1 "b" 2) }:
+    ${ .k }: ${ yml .v }

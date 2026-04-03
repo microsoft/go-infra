@@ -16,6 +16,7 @@ type exprRangeResult struct {
 	keyName    string
 	valueName  string
 	collection any
+	inline     bool
 }
 
 type exprIfResult struct {
@@ -87,31 +88,18 @@ func executeExpression(e *EvalState, expr string) (any, error) {
 			return "", nil
 		},
 		"inlinerange": func(args ...any) (string, error) {
-			r := &exprRangeResult{}
-			switch len(args) {
-			case 1:
-				r.collection = args[0]
-			case 2:
-				name, ok := args[0].(string)
-				if !ok {
-					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[0])
-				}
-				r.valueName = name
-				r.collection = args[1]
-			case 3:
-				kn, ok := args[0].(string)
-				if !ok {
-					return "", fmt.Errorf("inlinerange: expected string for key name, got %T", args[0])
-				}
-				vn, ok := args[1].(string)
-				if !ok {
-					return "", fmt.Errorf("inlinerange: expected string for value name, got %T", args[1])
-				}
-				r.keyName = kn
-				r.valueName = vn
-				r.collection = args[2]
-			default:
-				return "", fmt.Errorf("inlinerange: expected 1-3 args, got %d", len(args))
+			r, err := parseRangeArgs("inlinerange", args)
+			if err != nil {
+				return "", err
+			}
+			r.inline = true
+			result = r
+			return "", nil
+		},
+		"ymlrange": func(args ...any) (string, error) {
+			r, err := parseRangeArgs("ymlrange", args)
+			if err != nil {
+				return "", err
 			}
 			result = r
 			return "", nil
@@ -147,4 +135,36 @@ func cutExpr(s string) (string, bool) {
 		return "", false
 	}
 	return s, true
+}
+
+// parseRangeArgs parses the arguments to inlinerange or ymlrange. The name
+// parameter is used for error messages.
+func parseRangeArgs(name string, args []any) (*exprRangeResult, error) {
+	r := &exprRangeResult{}
+	switch len(args) {
+	case 1:
+		r.collection = args[0]
+	case 2:
+		n, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected string for value name, got %T", name, args[0])
+		}
+		r.valueName = n
+		r.collection = args[1]
+	case 3:
+		kn, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected string for key name, got %T", name, args[0])
+		}
+		vn, ok := args[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected string for value name, got %T", name, args[1])
+		}
+		r.keyName = kn
+		r.valueName = vn
+		r.collection = args[2]
+	default:
+		return nil, fmt.Errorf("%s: expected 1-3 args, got %d", name, len(args))
+	}
+	return r, nil
 }

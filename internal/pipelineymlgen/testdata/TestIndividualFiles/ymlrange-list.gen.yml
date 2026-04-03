@@ -1,0 +1,3 @@
+# ymlrange keeps each iteration grouped.
+- ${ ymlrange "v" (list "a" "b" "c") }:
+    ${ .v }

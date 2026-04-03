@@ -1,0 +1,7 @@
+# ymlrange with multiple items per iteration merges all into one sub-sequence.
+- static
+- - first: a
+  - second: a
+  - first: b
+  - second: b
+- end

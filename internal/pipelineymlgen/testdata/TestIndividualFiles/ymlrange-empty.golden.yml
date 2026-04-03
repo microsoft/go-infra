@@ -1,0 +1,3 @@
+# ymlrange with empty collection produces no output.
+- before
+- after

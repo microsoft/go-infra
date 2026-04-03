@@ -1,0 +1,5 @@
+# ymlrange with empty collection produces no output.
+- before
+- ${ ymlrange "v" (list) }:
+    ${ .v }
+- after

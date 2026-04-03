@@ -319,6 +319,7 @@ func (e *EvalState) evalExpressionScalar(node *yaml.Node) (any, error) {
 					keyName:    result.keyName,
 					valueName:  result.valueName,
 					collection: result.collection,
+					inline:     result.inline,
 				}
 
 			// We don't expect exprIfResult, exprElseIfResult, exprElseResult.
@@ -449,6 +450,16 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 				return fail(fmt.Errorf("converting mapping item result to YAML node: %w", err))
 			}
 
+			// ymlrange produces a single merged node that should not
+			// be flattened into the surrounding mapping. Return it
+			// directly so the parent can treat it as one element.
+			if er, ok := a.(*evalRange); ok && !er.inline {
+				if n.Kind != 0 {
+					return fail(fmt.Errorf("ymlrange cannot be combined with other mapping content"))
+				}
+				return node, nil
+			}
+
 			switch node.Kind {
 			case yaml.ScalarNode:
 				switch n.Kind {
@@ -527,9 +538,14 @@ func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
 		case yaml.ScalarNode, yaml.MappingNode:
 			n.Content = append(n.Content, r)
 		case yaml.SequenceNode:
-			// Flatten the sequence unless it was a literal nested sequence in the source.
+			// Flatten the sequence unless it was a literal nested sequence
+			// in the source, or a non-empty ymlrange result (which should
+			// stay grouped). Empty ymlrange results flatten to nothing.
 			shouldFlatten := true
 			if _, ok := evalItem.(*evalSequence); ok {
+				shouldFlatten = false
+			}
+			if m, ok := evalItem.(*evalMapping); ok && m.isYMLRange() && len(r.Content) > 0 {
 				shouldFlatten = false
 			}
 
@@ -561,31 +577,87 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 }
 
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
-	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	cmdName := "ymlrange"
+	if r.inline {
+		cmdName = "inlinerange"
+	}
+
+	// inlinerange always builds a flat sequence of all iterations' items.
+	// ymlrange merges all iterations into a single container node.
+	var result *yaml.Node
+	if r.inline {
+		result = &yaml.Node{Kind: yaml.SequenceNode}
+	}
+
+	appendIteration := func(node *yaml.Node) error {
+		if node == nil {
+			return nil
+		}
+		if r.inline {
+			// inlinerange: flatten each iteration's items into one
+			// sequence. The caller (sequenceToYAML or mappingToYAML)
+			// will in turn inline these into the parent.
+			result.Content = append(result.Content, node.Content...)
+		} else {
+			// ymlrange: merge all iterations into one container node.
+			// Sequence bodies → one merged sequence.
+			// Mapping bodies → one merged mapping.
+			// Scalar bodies → collected into a sequence.
+			switch node.Kind {
+			case yaml.SequenceNode, yaml.MappingNode:
+				if result == nil {
+					result = &yaml.Node{Kind: node.Kind}
+				} else if result.Kind != node.Kind {
+					return fmt.Errorf(
+						"%s: body produced mixed node kinds: had %s, got %s",
+						cmdName, kindStr(result), kindStr(node))
+				}
+				result.Content = append(result.Content, node.Content...)
+			case yaml.ScalarNode:
+				if result == nil {
+					result = &yaml.Node{Kind: yaml.SequenceNode}
+				} else if result.Kind != yaml.SequenceNode {
+					return fmt.Errorf(
+						"%s: body produced mixed node kinds: had %s, got scalar",
+						cmdName, kindStr(result))
+				}
+				result.Content = append(result.Content, node)
+			default:
+				return fmt.Errorf("%s: unexpected body node kind %s", cmdName, kindStr(node))
+			}
+		}
+		return nil
+	}
 
 	// Handle map[string]any directly with sorted keys for determinism.
 	if m, ok := r.collection.(map[string]any); ok {
 		for _, key := range sortedMapKeys(m) {
 			iterData, err := e.iterationData(r, key, m[key])
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+				return nil, fmt.Errorf("%s iteration key %v: %w", cmdName, key, err)
 			}
-			node, err := e.evalRangeBody(r.body, iterData)
+			node, err := e.evalRangeBody(r, iterData)
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
+				return nil, fmt.Errorf("%s iteration key %v: %w", cmdName, key, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
+			if err := appendIteration(node); err != nil {
+				return nil, fmt.Errorf("%s iteration key %v: %w", cmdName, key, err)
 			}
 		}
-		return seq, nil
+		if result == nil {
+			return &yaml.Node{Kind: yaml.SequenceNode}, nil
+		}
+		return result, nil
 	}
 
 	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return seq, nil
+			if result == nil {
+				return &yaml.Node{Kind: yaml.SequenceNode}, nil
+			}
+			return result, nil
 		}
 		rv = rv.Elem()
 	}
@@ -596,21 +668,24 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 			elem := rv.Index(i).Interface()
 			iterData, err := e.iterationData(r, i, elem)
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
+				return nil, fmt.Errorf("%s iteration %d: %w", cmdName, i, err)
 			}
-			node, err := e.evalRangeBody(r.body, iterData)
+			node, err := e.evalRangeBody(r, iterData)
 			if err != nil {
-				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
+				return nil, fmt.Errorf("%s iteration %d: %w", cmdName, i, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
+			if err := appendIteration(node); err != nil {
+				return nil, fmt.Errorf("%s iteration %d: %w", cmdName, i, err)
 			}
 		}
 	default:
-		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
+		return nil, fmt.Errorf("%s: cannot range over %T", cmdName, r.collection)
 	}
 
-	return seq, nil
+	if result == nil {
+		return &yaml.Node{Kind: yaml.SequenceNode}, nil
+	}
+	return result, nil
 }
 
 func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
@@ -633,10 +708,10 @@ func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
 	return data, nil
 }
 
-func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error) {
+func (e *EvalState) evalRangeBody(r *evalRange, data any) (*yaml.Node, error) {
 	ee := *e
 	ee.Data = data
-	result, err := ee.eval(body)
+	result, err := ee.eval(r.body)
 	if err != nil {
 		return nil, err
 	}
@@ -648,13 +723,17 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error)
 	if node.Kind == yaml.MappingNode && len(node.Content) == 0 {
 		return nil, nil
 	}
-	// Wrap in a sequence if it isn't one, so callers can uniformly flatten.
-	if node.Kind != yaml.SequenceNode {
-		node = &yaml.Node{
-			Kind:    yaml.SequenceNode,
-			Content: []*yaml.Node{node},
+	if r.inline {
+		// inlinerange: wrap in a sequence if it isn't one, so callers
+		// can uniformly flatten.
+		if node.Kind != yaml.SequenceNode {
+			node = &yaml.Node{
+				Kind:    yaml.SequenceNode,
+				Content: []*yaml.Node{node},
+			}
 		}
 	}
+	// ymlrange: return the node as-is; the caller keeps it grouped.
 	return node, nil
 }
 
@@ -693,6 +772,16 @@ func (e *evalMapping) singleCond() (evalConditional, func() (any, error)) {
 		return nil, nil
 	}
 	return ec, c0.value
+}
+
+// isYMLRange reports whether this mapping wraps a single ymlrange (non-inline
+// range). This is used by sequenceToYAML to avoid flattening the result.
+func (e *evalMapping) isYMLRange() bool {
+	if len(e.content) != 1 {
+		return false
+	}
+	er, ok := e.content[0].(*evalRange)
+	return ok && !er.inline
 }
 
 type evalSequence struct {
@@ -761,4 +850,5 @@ type evalRange struct {
 	valueName  string
 	collection any
 	body       *yaml.Node
+	inline     bool
 }

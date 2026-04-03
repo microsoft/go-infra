@@ -1,0 +1,6 @@
+# Multiple keys in one body end up in the same merged mapping.
+outer:
+  a: 1
+  a-suffix: 1
+  b: 2
+  b-suffix: 2

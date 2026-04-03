@@ -1,0 +1,6 @@
+# ymlrange with multiple items per iteration merges all into one sub-sequence.
+- static
+- ${ ymlrange "v" (list "a" "b") }:
+    - first: ${ .v }
+    - second: ${ .v }
+- end

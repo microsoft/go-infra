@@ -110,30 +110,37 @@ If this node has an object child, it is merged into `data` before evaluating the
 
 More technically: if the node is a key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
 
-### `inlinerange <args...>`
+### `inlinerange <args...>` / `ymlrange <args...>`
 
-A YAML-inlining version of `range`.
-Iterates over a collection (array/slice or map), evaluating the child element for each item.
+Both commands iterate over a collection (array/slice or map), evaluating the child element for each item.
 If the collection is empty, nothing is output.
+When iterating over a map, the keys are visited in sorted order for reproducibility.
+
+They differ only in how the results are inserted into the parent:
+
+* `inlinerange` flattens each iteration's output items directly into the parent as siblings. The `inlinerange` node is replaced by all items produced across all iterations.
+* `ymlrange` merges all iterations' outputs into a single container node that replaces the `ymlrange` node. The merged node type depends on each iteration's output body:
+  * Sequence bodies are merged into one combined sequence.
+  * Mapping bodies are merged into one combined mapping.
+    When the `ymlrange` expression is a key in a mapping, the merged pairs are inlined directly into the surrounding mapping.
+  * Scalar bodies are collected into a sequence.
 
 Possible args are:
 
-* `inlinerange <pipeline>`
+* `inlinerange <pipeline>` / `ymlrange <pipeline>`
 
     For each element of the list, `data` is set to that element and the child element value is evaluated.
     If the element is a map, its keys are available as `.key`. If the element is a scalar, `${ . }` gives
     the value. Note that there is no way to access the outer value of `data` while evaluating child
-    elements; use `inlinerange "v" <pipeline>` when you need access to outer data.
+    elements; use a `"<valuename>"` form when you need access to outer data.
 
-* `inlinerange "<valuename>" <pipeline>`
+* `inlinerange "<valuename>" <pipeline>` / `ymlrange "<valuename>" <pipeline>`
 
     Merges `data` with `map[string]any{valuename: <value>}` for each iteration.
 
-* `inlinerange "<keyname>" "<valuename>" <pipeline>`
+* `inlinerange "<keyname>" "<valuename>" <pipeline>` / `ymlrange "<keyname>" "<valuename>" <pipeline>`
 
     Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
-
-When iterating over a map, the keys are visited in sorted order for reproducibility.
 
 ### Sprig functions
 
