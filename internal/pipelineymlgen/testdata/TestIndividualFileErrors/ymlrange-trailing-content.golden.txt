@@ -1,0 +1,2 @@
+failed to evaluate `testdata/TestIndividualFileErrors/ymlrange-trailing-content.gen.yml` content (with config): 
+	eval "Document" at testdata/TestIndividualFileErrors/ymlrange-trailing-content.gen.yml:2:1 failed: converting doc content result to YAML node: during final conversion of mapping to YAML node(s): converting mapping item result to YAML node: during final conversion of result to YAML node(s): failed to convert value: during final conversion of mapping to YAML node(s): ymlrange cannot be combined with other mapping content

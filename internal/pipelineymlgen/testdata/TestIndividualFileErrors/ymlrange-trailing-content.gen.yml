@@ -1,0 +1,5 @@
+# ymlrange cannot be combined with other content in the same mapping.
+outer:
+  ${ ymlrange "k" "v" (dict "a" 1) }:
+    ${ .k }: ${ yml .v }
+  after-ymlrange: should-error

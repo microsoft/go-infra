@@ -409,6 +409,9 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 	n.Tag = ""
 
 	var condState conditionalStateMachine
+	// ymlrangeNode tracks the result of a ymlrange entry, if one was found.
+	// ymlrange must be the sole entry in the mapping.
+	var ymlrangeNode *yaml.Node
 
 	for _, mapElem := range m.content {
 		// Might contain one *yaml.Node, or some mappingPairs.
@@ -450,14 +453,20 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 				return fail(fmt.Errorf("converting mapping item result to YAML node: %w", err))
 			}
 
-			// ymlrange produces a single merged node that should not
-			// be flattened into the surrounding mapping. Return it
-			// directly so the parent can treat it as one element.
+			// ymlrange produces a single merged node that should not be
+			// flattened into the surrounding mapping. Track the result and
+			// continue iterating so we can detect any invalid surrounding
+			// content and report an error.
 			if er, ok := a.(*evalRange); ok && !er.inline {
-				if n.Kind != 0 {
+				if n.Kind != 0 || ymlrangeNode != nil {
 					return fail(fmt.Errorf("ymlrange cannot be combined with other mapping content"))
 				}
-				return node, nil
+				ymlrangeNode = node
+				continue
+			}
+
+			if ymlrangeNode != nil {
+				return fail(fmt.Errorf("ymlrange cannot be combined with other mapping content"))
 			}
 
 			switch node.Kind {
@@ -482,6 +491,9 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 				return fail(fmt.Errorf("unexpected node kind to flatten into mapping: %v", kindStr(node)))
 			}
 		}
+	}
+	if ymlrangeNode != nil {
+		return ymlrangeNode, nil
 	}
 	if n.Kind == 0 {
 		// If we never found anything to insert, this is still a mapping.
