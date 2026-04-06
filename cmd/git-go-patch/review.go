@@ -268,14 +268,14 @@ func resetSubmoduleTo(rootDir, goDir, commit string, force bool) error {
 }
 
 func applyPatchCommits(goDir, patchDir string) error {
-	args := []string{"am", "--whitespace=nowarn"}
+	var args []string
 	if err := patch.WalkPatches(patchDir, func(file string) error {
 		args = append(args, file)
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to walk patches: %v", err)
 	}
-	return gitcmd.Run(goDir, args...)
+	return gitcmd.Am(goDir, args...)
 }
 
 func parsePRURL(urlStr string) (owner, repo string, prNum int, err error) {
