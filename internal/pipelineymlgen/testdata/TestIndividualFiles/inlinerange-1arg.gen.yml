@@ -1,0 +1,2 @@
+- ${ inlinerange (list 1 2) }:
+  - value: ${ . }

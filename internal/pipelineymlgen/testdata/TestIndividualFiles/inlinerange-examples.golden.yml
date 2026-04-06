@@ -1,0 +1,55 @@
+# Test and demonstration of how inlinerange can be used to generate any seq/map
+# structure despite always attempting to inline the result.
+
+# Baseline: inlinerange inserts key value pairs into a map.
+insertMap:
+  name: Geomys bursarius
+  family: Geomyidae
+  status: least concern
+  # inlinerange also inserts items into an otherwise-empty map.
+  properties:
+    diet: herbivore
+    tunnel: 2059cm/wk
+# inlinerange can insert items into a sequence.
+insertSeq:
+  - 1
+  - 2
+  - 3
+  - 4
+# More than one element per iteration can be inserted.
+insertSeqGaps:
+  - 1
+  - gap
+  - 2
+  - gap
+  - 3
+  - gap
+  - 4
+# It can produce a sequence of sequences by explicitly including an extra dash.
+# The dash forms an otherwise-empty sequence for inlinerange to insert into.
+insertSeqOfSeq:
+  - initialize
+  - - parallel-calculate
+    - parallel-telemetry
+# If the child element is a map and the target is a sequence, the map as a whole
+# is inserted as a single element in the sequence.
+insertMapElementIntoSeq:
+  - 1
+  - 2: present
+    3: present
+    4: present
+# If the child element is a sequence and the target is a map, this is an error:
+#
+#   insertSeqElementIntoMap:
+#     begin: 1
+#     next:
+#       ${ inlinerange (list 2 3 4) }:
+#         - ${ yml . }
+#
+# The intent was probably to include a "-" to insert elements into a sequence:
+insertSeqElementIntoMap:
+  begin: 1
+  next:
+    - 2
+    - 3
+    - 4

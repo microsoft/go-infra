@@ -1,0 +1,3 @@
+title: example
+${ inlinerange (list 1) }:
+  ${ . }

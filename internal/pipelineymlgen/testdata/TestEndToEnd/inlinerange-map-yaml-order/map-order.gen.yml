@@ -10,5 +10,5 @@ pipelineymlgen:
 ---
 # Iterate over a YAML-sourced map; keys are visited in sorted order.
 - ${ inlinerange "name" "short" .os }:
-    os: ${ .name }
+  - os: ${ .name }
     short: ${ .short }

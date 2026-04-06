@@ -460,9 +460,16 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
 				}
 				n.Value = node.Value
-			case yaml.SequenceNode, yaml.MappingNode:
-				if n.Kind == 0 || n.Kind == node.Kind {
-					n.Kind = node.Kind
+			case yaml.MappingNode:
+				if n.Kind == 0 || n.Kind == yaml.MappingNode {
+					n.Kind = yaml.MappingNode
+				} else {
+					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
+				}
+				n.Content = append(n.Content, node.Content...)
+			case yaml.SequenceNode:
+				if n.Kind == 0 || n.Kind == yaml.SequenceNode {
+					n.Kind = yaml.SequenceNode
 				} else {
 					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
 				}
@@ -524,8 +531,13 @@ func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
 		// Put the template result into the sequence depending on the
 		// result type.
 		switch r.Kind {
-		case yaml.ScalarNode, yaml.MappingNode:
+		case yaml.ScalarNode:
 			n.Content = append(n.Content, r)
+		case yaml.MappingNode:
+			// Skip empty mappings from dissolved content (e.g. empty inlinerange).
+			if len(r.Content) > 0 {
+				n.Content = append(n.Content, r)
+			}
 		case yaml.SequenceNode:
 			// Flatten the sequence unless it was a literal nested sequence in the source.
 			shouldFlatten := true
@@ -561,7 +573,13 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 }
 
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
-	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	var items []*yaml.Node
+
+	collectItem := func(node *yaml.Node) {
+		if node != nil {
+			items = append(items, node)
+		}
+	}
 
 	// Handle map[string]any directly with sorted keys for determinism.
 	if m, ok := r.collection.(map[string]any); ok {
@@ -574,18 +592,16 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 			if err != nil {
 				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
-			}
+			collectItem(node)
 		}
-		return seq, nil
+		return e.mergeRangeItems(items)
 	}
 
 	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return seq, nil
+			return &yaml.Node{Kind: yaml.MappingNode}, nil
 		}
 		rv = rv.Elem()
 	}
@@ -602,15 +618,29 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 			if err != nil {
 				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
-			}
+			collectItem(node)
 		}
 	default:
 		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
 	}
 
-	return seq, nil
+	return e.mergeRangeItems(items)
+}
+
+// mergeRangeItems combines per-iteration body results into a single node.
+// If every body produced a mapping, entries are merged into one MappingNode.
+// If every body produced a sequence, items are flattened into one SequenceNode.
+func (e *EvalState) mergeRangeItems(items []*yaml.Node) (*yaml.Node, error) {
+	if len(items) == 0 {
+		return &yaml.Node{Kind: yaml.MappingNode}, nil
+	}
+
+	kind := items[0].Kind
+	n := &yaml.Node{Kind: kind}
+	for _, item := range items {
+		n.Content = append(n.Content, item.Content...)
+	}
+	return n, nil
 }
 
 func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
@@ -644,16 +674,14 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error)
 	if err != nil {
 		return nil, err
 	}
+	// A scalar body is ambiguous: use "- value" to produce sequence items
+	// or "key: value" for mapping entries.
+	if node.Kind == yaml.ScalarNode {
+		return nil, fmt.Errorf("inlinerange body evaluated to scalar %q; use \"- value\" for sequence items or \"key: value\" for mapping entries", node.Value)
+	}
 	// An empty mapping means all conditions dissolved. Return nil to skip.
 	if node.Kind == yaml.MappingNode && len(node.Content) == 0 {
 		return nil, nil
-	}
-	// Wrap in a sequence if it isn't one, so callers can uniformly flatten.
-	if node.Kind != yaml.SequenceNode {
-		node = &yaml.Node{
-			Kind:    yaml.SequenceNode,
-			Content: []*yaml.Node{node},
-		}
 	}
 	return node, nil
 }
