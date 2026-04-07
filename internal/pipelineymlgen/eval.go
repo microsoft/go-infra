@@ -136,6 +136,11 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting doc content result to YAML node: %w", err))
 		}
+		if resultNode == nil {
+			// All content dissolved (e.g. all conditions false).
+			// Produce an empty mapping as the document content.
+			resultNode = &yaml.Node{Kind: yaml.MappingNode}
+		}
 		n.Content[0] = resultNode
 
 		return n, nil
@@ -448,6 +453,10 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 			if err != nil {
 				return fail(fmt.Errorf("converting mapping item result to YAML node: %w", err))
 			}
+			// nil means dissolved content (e.g. empty inlinerange). Skip it.
+			if node == nil {
+				continue
+			}
 
 			switch node.Kind {
 			case yaml.ScalarNode:
@@ -480,7 +489,14 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 		}
 	}
 	if n.Kind == 0 {
-		// If we never found anything to insert, this is still a mapping.
+		if len(m.content) > 0 {
+			// The mapping had content entries but they all dissolved
+			// (e.g. false conditions, empty ranges). Return nil to signal
+			// "nothing to insert" so callers can distinguish this from a
+			// genuine empty mapping like {}.
+			return nil, nil
+		}
+		// Genuine empty mapping (no content entries at all).
 		n.Kind = yaml.MappingNode
 	}
 	return n, nil
@@ -528,16 +544,18 @@ func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting sequence item result to YAML node:\n\t\t%w", err))
 		}
+		// nil means dissolved content (e.g. empty inlinerange, all-false
+		// conditions). Skip it without dropping legitimate empty mappings.
+		if r == nil {
+			continue
+		}
 		// Put the template result into the sequence depending on the
 		// result type.
 		switch r.Kind {
 		case yaml.ScalarNode:
 			n.Content = append(n.Content, r)
 		case yaml.MappingNode:
-			// Skip empty mappings from dissolved content (e.g. empty inlinerange).
-			if len(r.Content) > 0 {
-				n.Content = append(n.Content, r)
-			}
+			n.Content = append(n.Content, r)
 		case yaml.SequenceNode:
 			// Flatten the sequence unless it was a literal nested sequence in the source.
 			shouldFlatten := true
@@ -630,12 +648,18 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 // mergeRangeItems combines per-iteration body results into a single node.
 // If every body produced a mapping, entries are merged into one MappingNode.
 // If every body produced a sequence, items are flattened into one SequenceNode.
+// Returns nil when there are no items (all iterations dissolved).
 func (e *EvalState) mergeRangeItems(items []*yaml.Node) (*yaml.Node, error) {
 	if len(items) == 0 {
-		return &yaml.Node{Kind: yaml.MappingNode}, nil
+		return nil, nil
 	}
 
 	kind := items[0].Kind
+	for _, item := range items[1:] {
+		if item.Kind != kind {
+			return nil, fmt.Errorf("inlinerange: body produced inconsistent YAML node kinds across iterations: first was %v, got %v", kindStr(items[0]), kindStr(item))
+		}
+	}
 	n := &yaml.Node{Kind: kind}
 	for _, item := range items {
 		n.Content = append(n.Content, item.Content...)
@@ -674,14 +698,14 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error)
 	if err != nil {
 		return nil, err
 	}
+	// nil means all content dissolved (e.g. false conditions, empty ranges).
+	if node == nil {
+		return nil, nil
+	}
 	// A scalar body is ambiguous: use "- value" to produce sequence items
 	// or "key: value" for mapping entries.
 	if node.Kind == yaml.ScalarNode {
 		return nil, fmt.Errorf("inlinerange body evaluated to scalar %q; use \"- value\" for sequence items or \"key: value\" for mapping entries", node.Value)
-	}
-	// An empty mapping means all conditions dissolved. Return nil to skip.
-	if node.Kind == yaml.MappingNode && len(node.Content) == 0 {
-		return nil, nil
 	}
 	return node, nil
 }

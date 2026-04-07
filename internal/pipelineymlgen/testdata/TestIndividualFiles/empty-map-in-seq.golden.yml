@@ -1,0 +1,6 @@
+# Verify that legitimate empty mappings in sequences are preserved,
+# not dropped by the dissolved-content logic.
+items:
+  - name: first
+  - {}
+  - name: third
