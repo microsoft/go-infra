@@ -141,7 +141,7 @@ func baseUploadConfig(t *testing.T) config.UploadConfig {
 	if !ok {
 		t.Fatal("failed to read build info")
 	}
-	_, prog := itelemetry.ProgramInfo(bi)
+	_, prog := itelemetry.ProgramInfo(bi, false)
 	return config.UploadConfig{
 		GOOS:   []string{runtime.GOOS},
 		GOARCH: []string{runtime.GOARCH},

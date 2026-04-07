@@ -46,6 +46,9 @@ type Config struct {
 	// upload configuration does not explicitly include them.
 	AllowGoDevel bool
 
+	// If true, remove ".test" suffix from program name when running tests.
+	TrimTestSuffix bool
+
 	// Logger specifies a structured logger.
 	// If nil nothing is logged.
 	Logger *slog.Logger
@@ -73,7 +76,7 @@ func Start(cfg Config) {
 	if !ok {
 		panic("failed to read build info for telemetry")
 	}
-	ver, prog := telemetry.ProgramInfo(bi)
+	ver, prog := telemetry.ProgramInfo(bi, cfg.TrimTestSuffix)
 	if ver == "devel" {
 		if !cfg.AllowGoDevel {
 			// If the Go version is a development version and we are not allowing
