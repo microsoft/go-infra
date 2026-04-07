@@ -79,7 +79,7 @@ func (m *MatchCheckRepo) CheckedApply(path string, p *Patch) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := gitcmd.Run(m.gitDir, "am", "-q", "--whitespace=nowarn", oldPatchPath); err != nil {
+		if err := gitcmd.Am(m.gitDir, "-q", oldPatchPath); err != nil {
 			// If the old patch no longer works at all, it definitely doesn't match the new patch!
 			// Cancel the attempt.
 			log.Printf("Old patch doesn't apply: %v. Disregarding this patch as a match candidate for %q and continuing...\n", err, filepath.Base(absPath))
@@ -99,7 +99,7 @@ func (m *MatchCheckRepo) CheckedApply(path string, p *Patch) (string, error) {
 	}
 
 	// Apply the given "new" patch. Don't undo this: we want future calls of Apply to build on this.
-	if err := gitcmd.Run(m.gitDir, "am", "-q", "--whitespace=nowarn", absPath); err != nil {
+	if err := gitcmd.Am(m.gitDir, "-q", absPath); err != nil {
 		return "", err
 	}
 

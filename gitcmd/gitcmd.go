@@ -160,6 +160,22 @@ func Run(dir string, args ...string) error {
 	return executil.Run(executil.Dir(dir, "git", args...))
 }
 
+// Am runs "git -c am.threeWay=false am --whitespace=nowarn <args>" in the given directory.
+//
+// It explicitly disables am.threeWay to ensure the result doesn't depend on the user's Git
+// configuration. This is important for internal processes like "git go-patch extract" that use "am"
+// to compare patches: if the user has am.threeWay=true, three-way merge may silently resolve
+// conflicts that would fail in CI (where am.threeWay is not set), causing a mismatch between local
+// and CI behavior. See https://github.com/microsoft/go/issues/1233.
+//
+// It passes --whitespace=nowarn because trailing whitespace may be present in patch files. These
+// warnings should be avoided when authoring each patch file, and emitting warnings at apply time
+// would only be noisy.
+func Am(dir string, args ...string) error {
+	a := append([]string{"-c", "am.threeWay=false", "am", "--whitespace=nowarn"}, args...)
+	return Run(dir, a...)
+}
+
 // NewTempGitRepo creates a gitRepo in temp storage. If desired, clean it up with AttemptDelete.
 func NewTempGitRepo() (string, error) {
 	gitDir, err := os.MkdirTemp("", "releasego-temp-git-*")
