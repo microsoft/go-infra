@@ -76,7 +76,7 @@ func TestProgramInfoVersion(t *testing.T) {
 		t.Run(tt.version, func(t *testing.T) {
 			gotGoVers, _ := telemetry.ProgramInfo(&debug.BuildInfo{
 				GoVersion: tt.version,
-			})
+			}, false)
 
 			if gotGoVers != tt.want {
 				t.Errorf("ProgramInfo() goVers = %v, want %v", gotGoVers, tt.want)
@@ -118,7 +118,39 @@ func TestProgramInfoPath(t *testing.T) {
 			_, gotProgPath := telemetry.ProgramInfo(&debug.BuildInfo{
 				GoVersion: "go1.21.0",
 				Path:      "",
-			})
+			}, false)
+
+			if gotProgPath != tt.wantProgPath {
+				t.Errorf("ProgramInfo() progPath = %v, want %v", gotProgPath, tt.wantProgPath)
+			}
+		})
+	}
+}
+
+func TestProgramInfoTrimTestSuffix(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildPath    string
+		wantProgPath string
+	}{
+		{
+			name:         "trim suffix",
+			buildPath:    "example.com/mod/cmd.test",
+			wantProgPath: "example.com/mod/cmd",
+		},
+		{
+			name:         "ignore non-suffix match",
+			buildPath:    "example.com/mod/cmd.test.binary",
+			wantProgPath: "example.com/mod/cmd.test.binary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, gotProgPath := telemetry.ProgramInfo(&debug.BuildInfo{
+				GoVersion: "go1.21.0",
+				Path:      tt.buildPath,
+			}, true)
 
 			if gotProgPath != tt.wantProgPath {
 				t.Errorf("ProgramInfo() progPath = %v, want %v", gotProgPath, tt.wantProgPath)

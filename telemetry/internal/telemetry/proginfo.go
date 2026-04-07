@@ -17,7 +17,7 @@ import (
 // the Go version, and will typically be of the form "go1.2.3", not a semantic
 // version of the form "v1.2.3". Go versions may also include spaces and
 // special characters.
-func ProgramInfo(info *debug.BuildInfo) (goVers, progPath string) {
+func ProgramInfo(info *debug.BuildInfo, trimTestuffix bool) (goVers, progPath string) {
 	goVers = info.GoVersion
 	if strings.Contains(goVers, "devel") || strings.Contains(goVers, "-") || !version.IsValid(goVers) {
 		if v, rest, ok := strings.Cut(goVers, "-microsoft"); ok &&
@@ -37,6 +37,9 @@ func ProgramInfo(info *debug.BuildInfo) (goVers, progPath string) {
 	progPath = info.Path
 	if progPath == "" {
 		progPath = strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe")
+	}
+	if trimTestuffix {
+		progPath, _ = strings.CutSuffix(progPath, ".test") // Remove ".test" suffix added by "go test"
 	}
 
 	return goVers, progPath
