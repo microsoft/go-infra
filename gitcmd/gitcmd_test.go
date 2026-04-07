@@ -149,6 +149,9 @@ func TestAmAppliesCleanPatchWithThreeWayEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 patch file in %q, got %d", patchDir, len(entries))
+	}
 	patchFile, err := filepath.Abs(filepath.Join(patchDir, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
