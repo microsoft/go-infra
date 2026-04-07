@@ -139,7 +139,7 @@ Possible args are:
 
 * `inlinerange <pipeline>`
 
-    For each element of the list, `data` is set to that element and the loop body is evaluated.
+    For each element of the collection, `data` is set to that element and the loop body is evaluated.
     This means `${ . }` in the body accesses the value.
 
     Note that in this form, there is no way to access the outer value of `data` while evaluating the loop body.
