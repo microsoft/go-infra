@@ -619,7 +619,7 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return &yaml.Node{Kind: yaml.MappingNode}, nil
+			return nil, nil
 		}
 		rv = rv.Elem()
 	}
