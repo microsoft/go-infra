@@ -108,6 +108,9 @@ func TestAmAppliesCleanPatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(entries) == 0 {
+		t.Fatal("git format-patch produced no patch files")
+	}
 	patchFile, err := filepath.Abs(filepath.Join(patchDir, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
