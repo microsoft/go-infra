@@ -1,0 +1,7 @@
+# Two entries in the same mapping each produce a SequenceNode.
+# Exercises accumulation (append) in the yaml.SequenceNode case of mappingToYAML:
+# both entries must contribute items to n.Content, not just the last one.
+- ${ inlinerange (list "a") }:
+  - ${ . }
+  ${ inlinerange (list "b") }:
+  - ${ . }
