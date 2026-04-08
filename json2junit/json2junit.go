@@ -292,14 +292,14 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			testCase.Result = &junitResult{
 				XMLName: xml.Name{Space: "", Local: "skipped"},
 				Message: "skipped",
-				Content: testCase.systemOut,
+				Content: truncateForAzDO(testCase.systemOut),
 			}
 		case "fail":
 			suite.Failures++
 			testCase.Result = &junitResult{
 				XMLName: xml.Name{Space: "", Local: "failure"},
 				Message: "failed",
-				Content: testCase.systemOut,
+				Content: truncateForAzDO(testCase.systemOut),
 			}
 		}
 		// Clear systemOut, it's already in the event.

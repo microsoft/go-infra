@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="cmd/go" tests="2" failures="2" skipped="0" time="0.011" timestamp="2025-02-07T14:43:16+01:00">
+	<system-out><![CDATA[FAIL]]></system-out>
+	<testcase classname="cmd/go" name="TestLongLine" time="1.23">
+		<failure message="failed"><![CDATA[short line
+PATH=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+end]]></failure>
+	</testcase>
+	<testcase classname="cmd/go" name="TestLongOutput" time="2.34">
+		<failure message="failed"><![CDATA[[json2junit: Output truncated at ~4000 characters. See raw test output for full content.]
+
+line 000: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 001: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 002: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 003: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 004: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 005: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 006: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 007: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 008: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 009: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 010: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 011: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 012: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 013: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 014: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 015: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 016: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 017: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 018: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 019: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 020: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 021: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 022: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 023: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 024: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 025: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 026: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 027: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 028: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 029: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 030: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 031: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 032: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 033: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 034: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 035: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 036: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 037: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 038: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 039: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 040: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 041: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 042: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 043: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 044: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 045: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 046: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 047: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 048: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 049: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 050: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 051: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 052: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 053: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 054: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 055: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 056: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 057: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 058: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 059: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 060: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 061: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 062: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 063: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 064: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 065: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 066: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 067: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 068: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 069: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 070: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 071: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 072: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 073: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 074: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 075: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 076: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 077: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 078: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 079: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 080: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 081: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 082: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 083: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 084: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 085: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 086: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 087: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 088: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 089: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 090: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 091: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 092: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 093: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 094: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 095: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 096: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 097: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 098: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 099: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 100: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 101: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 102: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 103: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 104: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 105: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 106: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 107: aaaaaaaaaaaaaaaaaaaaaaaaa
+line 108: aaaaaaaaaaa]]></failure>
+	</testcase>
+</testsuite>
+</testsuites>
