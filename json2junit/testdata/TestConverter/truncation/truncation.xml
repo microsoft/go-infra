@@ -118,7 +118,8 @@ line 104: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 105: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 106: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 107: aaaaaaaaaaaaaaaaaaaaaaaaa
-line 108: aaaaaaaaaaa]]></failure>
+line 108: aaaaaaaaaaa
+[json2junit: If you can see this, the AzDO character limit has increased!]]]></failure>
 	</testcase>
 </testsuite>
 </testsuites>

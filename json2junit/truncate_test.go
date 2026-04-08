@@ -44,11 +44,15 @@ func TestTruncateForAzDO_OneBeyondLimit(t *testing.T) {
 	}
 
 	got := truncateForAzDO(input)
-	if len(got) > azdoMaxChars {
-		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
+	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
+	if len(got) > maxExpected {
+		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")
+	}
+	if !strings.HasSuffix(string(got), string(beyondLimitSentinel)) {
+		t.Error("expected beyond-limit sentinel at end")
 	}
 }
 
@@ -61,8 +65,9 @@ func TestTruncateForAzDO_LongLinesShortened(t *testing.T) {
 	input := []byte(strings.Join(lines, "\n"))
 
 	got := truncateForAzDO(input)
-	if len(got) > azdoMaxChars {
-		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
+	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
+	if len(got) > maxExpected {
+		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")
@@ -91,8 +96,9 @@ func TestTruncateForAzDO_ShortLinesOverLimit(t *testing.T) {
 	}
 
 	got := truncateForAzDO(input)
-	if len(got) > azdoMaxChars {
-		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
+	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
+	if len(got) > maxExpected {
+		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")
