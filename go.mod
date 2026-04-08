@@ -6,7 +6,7 @@ module github.com/microsoft/go-infra
 go 1.25.0
 
 require (
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.0
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.1
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-test/deep v1.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
