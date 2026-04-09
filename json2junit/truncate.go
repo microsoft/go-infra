@@ -8,7 +8,7 @@ import "bytes"
 const (
 	// azdoMaxChars is the approximate maximum number of characters the AzDO
 	// test viewer displays before silently truncating test failure content.
-	azdoMaxChars = 4000
+	azdoMaxChars = 16000
 	// maxLineLen is the maximum number of characters kept per output line
 	// when truncation is applied. Truncating long lines (e.g. PATH dumps)
 	// increases the chance that meaningful test output fits within the AzDO
@@ -16,9 +16,9 @@ const (
 	maxLineLen = 200
 )
 
-var truncationNotice = []byte("[json2junit: Output truncated at ~4000 characters. See raw test output for full content.]\n\n")
+var truncationNotice = []byte("[json2junit: Output truncated at ~16000 characters. See raw test output for full content.]\n\n")
 
-// beyondLimitSentinel is appended after the 4000-char mark. It is invisible
+// beyondLimitSentinel is appended after the 16000-char mark. It is invisible
 // unless AzDO increases its character limit, serving as a canary to detect
 // when the limit changes.
 var beyondLimitSentinel = []byte("\n[json2junit: If you can see this, the AzDO character limit has increased!]")

@@ -57,9 +57,9 @@ func TestTruncateForAzDO_OneBeyondLimit(t *testing.T) {
 }
 
 func TestTruncateForAzDO_LongLinesShortened(t *testing.T) {
-	// A few very long lines that push total over 4000.
+	// Long lines that push total over the limit.
 	var lines []string
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 80; i++ {
 		lines = append(lines, strings.Repeat("x", 500))
 	}
 	input := []byte(strings.Join(lines, "\n"))
@@ -84,10 +84,10 @@ func TestTruncateForAzDO_LongLinesShortened(t *testing.T) {
 }
 
 func TestTruncateForAzDO_ShortLinesOverLimit(t *testing.T) {
-	// Many short lines that exceed 4000 total. Lines should NOT be truncated
+	// Many short lines that exceed the limit. Lines should NOT be truncated
 	// individually, but total output should be cut down.
 	var lines []string
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 800; i++ {
 		lines = append(lines, strings.Repeat("a", 30))
 	}
 	input := []byte(strings.Join(lines, "\n"))
@@ -114,7 +114,7 @@ func TestTruncateForAzDO_ShortLineNotTruncated(t *testing.T) {
 	// A line under the limit within a long output should not get "[...]".
 	shortLine := strings.Repeat("s", maxLineLen)
 	longLine := strings.Repeat("L", 500)
-	input := []byte(strings.Join([]string{shortLine, longLine, strings.Repeat("pad\n", 1500)}, "\n"))
+	input := []byte(strings.Join([]string{shortLine, longLine, strings.Repeat("pad\n", 6000)}, "\n"))
 
 	got := truncateForAzDO(input)
 	// The short line should appear intact (no "[...]").
@@ -133,7 +133,7 @@ func TestTruncateForAzDO_EnvLinesShortened(t *testing.T) {
 	gopathLine := "GOPATH=/home/user/go"
 	importantLine := "--- FAIL: TestImportant (0.00s)"
 	// Pad to exceed the limit.
-	padding := strings.Repeat("output line\n", 350)
+	padding := strings.Repeat("output line\n", 1500)
 	input := []byte(strings.Join([]string{importantLine, pathLine, gopathLine, padding}, "\n"))
 	if len(input) <= azdoMaxChars {
 		t.Fatalf("test setup: expected >%d bytes, got %d", azdoMaxChars, len(input))
@@ -170,7 +170,7 @@ func TestTruncateForAzDO_EnvLinesKeptUnderLimit(t *testing.T) {
 func TestTruncateForAzDO_EnvLineIndented(t *testing.T) {
 	// Env var lines with leading whitespace should preserve the indent.
 	indentedPath := "    PATH=/usr/bin:/opt/tools/bin"
-	padding := strings.Repeat("x\n", 2500)
+	padding := strings.Repeat("x\n", 10000)
 	input := []byte(indentedPath + "\n" + padding)
 	if len(input) <= azdoMaxChars {
 		t.Fatalf("test setup: expected >%d bytes", azdoMaxChars)
