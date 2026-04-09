@@ -83,11 +83,22 @@ func updateDL(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	// Parse and sort versions in descending order.
-	versionsList := strings.Split(releaseVersions, ",")
-	goVersions := make(infrasort.GoVersions, 0, len(versionsList))
-	for _, v := range versionsList {
-		goVersions = append(goVersions, goversion.New(v))
+	// Parse, validate, and sort versions in descending order.
+	rawVersions := strings.Split(releaseVersions, ",")
+	goVersions := make(infrasort.GoVersions, 0, len(rawVersions))
+	for _, v := range rawVersions {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		gv := goversion.New(v)
+		if gv.Major == "" || gv.Minor == "" {
+			return fmt.Errorf("invalid version string: %q", v)
+		}
+		goVersions = append(goVersions, gv)
+	}
+	if len(goVersions) == 0 {
+		return fmt.Errorf("no valid versions found in -versions flag")
 	}
 	sort.Sort(goVersions)
 
@@ -115,6 +126,7 @@ func updateDL(p subcmd.ParseFunc) error {
 
 	type fileEntry struct {
 		path    string
+		version string
 		content []byte
 	}
 	files := make([]fileEntry, 0, len(dlVersions))
@@ -125,7 +137,7 @@ func updateDL(p subcmd.ParseFunc) error {
 			return fmt.Errorf("error executing dl template for version %s: %w", dv.Version, err)
 		}
 		filePath := dlFilePath(dv.Version)
-		files = append(files, fileEntry{path: filePath, content: buf.Bytes()})
+		files = append(files, fileEntry{path: filePath, version: dv.Version, content: buf.Bytes()})
 	}
 
 	if dryRun {
@@ -188,7 +200,7 @@ func updateDL(p subcmd.ParseFunc) error {
 			repo,
 			branchName,
 			f.path,
-			fmt.Sprintf("Add dl package: msgo%s", f.path),
+			fmt.Sprintf("Add dl package: msgo%s", f.version),
 			f.content,
 		); err != nil {
 			return fmt.Errorf("error uploading file %s to branch %s: %w", f.path, branchName, err)
@@ -241,10 +253,11 @@ func fetchGoSrcSHA256(ctx context.Context, client *github.Client, owner, repo, t
 	}
 
 	// Download the assets.json file.
+	downloadClient := &http.Client{Timeout: 30 * time.Second}
 	var rc io.ReadCloser
 	if err := githubutil.Retry(func() error {
 		var err error
-		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), http.DefaultClient)
+		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), downloadClient)
 		return err
 	}); err != nil {
 		return "", fmt.Errorf("error downloading assets.json from release %s: %w", tag, err)

@@ -8,7 +8,7 @@
 //	$ go install github.com/microsoft/go-lab/dl/msgo1.25.8-1@latest
 //	$ msgo1.25.8-1 download
 //
-// And then use the go1.25.8-1 command as if it were your normal go
+// And then use the msgo1.25.8-1 command as if it were your normal go
 // command.
 //
 // See the release notes at https://github.com/microsoft/go/releases/tag/v1.25.8-1.
