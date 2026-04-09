@@ -37,22 +37,18 @@ func TestTruncateForAzDO_ExactlyAtLimit(t *testing.T) {
 }
 
 func TestTruncateForAzDO_OneBeyondLimit(t *testing.T) {
-	// Content one byte over 4000 triggers truncation with notice at front.
+	// Content one byte over the limit triggers truncation with notice at front.
 	input := []byte(strings.Repeat("c\n", (azdoMaxChars+2)/2))
 	if len(input) <= azdoMaxChars {
 		t.Fatalf("test setup: expected >%d bytes, got %d", azdoMaxChars, len(input))
 	}
 
 	got := truncateForAzDO(input)
-	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
-	if len(got) > maxExpected {
-		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
+	if len(got) > azdoMaxChars {
+		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")
-	}
-	if !strings.HasSuffix(string(got), string(beyondLimitSentinel)) {
-		t.Error("expected beyond-limit sentinel at end")
 	}
 }
 
@@ -65,9 +61,8 @@ func TestTruncateForAzDO_LongLinesShortened(t *testing.T) {
 	input := []byte(strings.Join(lines, "\n"))
 
 	got := truncateForAzDO(input)
-	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
-	if len(got) > maxExpected {
-		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
+	if len(got) > azdoMaxChars {
+		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")
@@ -96,9 +91,8 @@ func TestTruncateForAzDO_ShortLinesOverLimit(t *testing.T) {
 	}
 
 	got := truncateForAzDO(input)
-	maxExpected := azdoMaxChars + len(beyondLimitSentinel)
-	if len(got) > maxExpected {
-		t.Errorf("output %d chars exceeds limit+sentinel %d", len(got), maxExpected)
+	if len(got) > azdoMaxChars {
+		t.Errorf("output %d chars exceeds limit %d", len(got), azdoMaxChars)
 	}
 	if !strings.HasPrefix(string(got), string(truncationNotice)) {
 		t.Error("expected truncation notice at beginning")

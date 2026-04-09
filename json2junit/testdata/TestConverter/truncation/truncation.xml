@@ -451,8 +451,7 @@ line 437: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 438: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 439: aaaaaaaaaaaaaaaaaaaaaaaaa
 line 440: aaaaaaaaaaaaaaaaaaaaaaaaa
-line 441: aaaaaaaaaaaaaaaaaaaaaa
-[json2junit: If you can see this, the AzDO character limit has increased!]]]></failure>
+line 441: aaaaaaaaaaaaaaaaaaaaaa]]></failure>
 	</testcase>
 </testsuite>
 </testsuites>

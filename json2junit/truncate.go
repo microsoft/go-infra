@@ -18,11 +18,6 @@ const (
 
 var truncationNotice = []byte("[json2junit: Output truncated at ~16000 characters. See raw test output for full content.]\n\n")
 
-// beyondLimitSentinel is appended after the 16000-char mark. It is invisible
-// unless AzDO increases its character limit, serving as a canary to detect
-// when the limit changes.
-var beyondLimitSentinel = []byte("\n[json2junit: If you can see this, the AzDO character limit has increased!]")
-
 // envVarPrefixes lists environment variable prefixes whose values tend to be
 // very long and not useful in a test failure context. When truncation is needed,
 // these are shortened to just the variable name and the last path segment of the
@@ -123,9 +118,8 @@ func truncateForAzDO(content []byte) []byte {
 		content = content[:contentLimit]
 	}
 
-	result := make([]byte, 0, len(truncationNotice)+len(content)+len(beyondLimitSentinel))
+	result := make([]byte, 0, len(truncationNotice)+len(content))
 	result = append(result, truncationNotice...)
 	result = append(result, content...)
-	result = append(result, beyondLimitSentinel...)
 	return result
 }
