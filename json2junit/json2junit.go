@@ -17,6 +17,26 @@ import (
 	"time"
 )
 
+const (
+	// azdoMaxChars is the approximate maximum number of characters the AzDO
+	// test viewer displays before silently truncating test failure content.
+	azdoMaxChars = 32000
+)
+
+var azdoWarning = []byte("[json2junit: Output is ~32000+ characters and may be truncated by AzDO. See raw test output for full content.]\n\n")
+
+// warnLongContent prepends a warning to test output that exceeds AzDO's display
+// limit. The content itself is not modified or truncated.
+func warnLongContent(content []byte) []byte {
+	if len(content) <= azdoMaxChars {
+		return content
+	}
+	result := make([]byte, 0, len(azdoWarning)+len(content))
+	result = append(result, azdoWarning...)
+	result = append(result, content...)
+	return result
+}
+
 // Options configures the conversion behavior.
 type Options struct {
 	// IncludePackageInTestName prefixes each test case name with its package path,
@@ -270,7 +290,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 				// In case of success, we don't care about the output.
 				suite.SystemOut = nil
 			} else if suite.SystemOut != nil {
-				suite.SystemOut.Content = bytes.TrimSuffix(suite.SystemOut.Content, []byte{'\n'})
+				suite.SystemOut.Content = warnLongContent(bytes.TrimSuffix(suite.SystemOut.Content, []byte{'\n'}))
 			}
 			err := c.writeXMLTestSuite(suite)
 			if err != nil {
@@ -292,14 +312,14 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			testCase.Result = &junitResult{
 				XMLName: xml.Name{Space: "", Local: "skipped"},
 				Message: "skipped",
-				Content: testCase.systemOut,
+				Content: warnLongContent(testCase.systemOut),
 			}
 		case "fail":
 			suite.Failures++
 			testCase.Result = &junitResult{
 				XMLName: xml.Name{Space: "", Local: "failure"},
 				Message: "failed",
-				Content: testCase.systemOut,
+				Content: warnLongContent(testCase.systemOut),
 			}
 		}
 		// Clear systemOut, it's already in the event.
