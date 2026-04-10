@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -23,12 +24,12 @@ const (
 	azdoMaxChars = 32000
 )
 
-var azdoWarning = []byte("[json2junit: Output is ~32000+ characters and may be truncated by AzDO. See raw test output for full content.]\n\n")
+var azdoWarning = []byte(fmt.Sprintf("[json2junit: Output is ~%d+ characters and may be truncated by AzDO. See raw test output for full content.]\n\n", azdoMaxChars))
 
 // warnLongContent prepends a warning to test output that exceeds AzDO's display
 // limit. The content itself is not modified or truncated.
 func warnLongContent(content []byte) []byte {
-	if len(content) <= azdoMaxChars {
+	if utf8.RuneCount(content) <= azdoMaxChars {
 		return content
 	}
 	result := make([]byte, 0, len(azdoWarning)+len(content))
