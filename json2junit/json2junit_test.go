@@ -103,3 +103,66 @@ func TestConverterErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestWarnLongContent_NoWarning(t *testing.T) {
+	input := []byte("short output\nline two\n")
+	got := warnLongContent(input)
+	if string(got) != string(input) {
+		t.Errorf("expected no change, got %q", got)
+	}
+}
+
+func TestWarnLongContent_Empty(t *testing.T) {
+	got := warnLongContent(nil)
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %q", got)
+	}
+	got = warnLongContent([]byte{})
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestWarnLongContent_ExactlyAtLimit(t *testing.T) {
+	input := []byte(strings.Repeat("b\n", azdoMaxChars/2))[:azdoMaxChars]
+	got := warnLongContent(input)
+	if string(got) != string(input) {
+		t.Errorf("expected no change for content at exact limit, got len %d", len(got))
+	}
+}
+
+func TestWarnLongContent_OneBeyondLimit(t *testing.T) {
+	input := []byte(strings.Repeat("c\n", (azdoMaxChars+2)/2))
+	if len(input) <= azdoMaxChars {
+		t.Fatalf("test setup: expected >%d bytes, got %d", azdoMaxChars, len(input))
+	}
+
+	got := warnLongContent(input)
+	if !strings.HasPrefix(string(got), string(azdoWarning)) {
+		t.Error("expected warning at beginning")
+	}
+	afterWarning := string(got)[len(azdoWarning):]
+	if afterWarning != string(input) {
+		t.Errorf("expected original content after warning, got len %d vs %d", len(afterWarning), len(input))
+	}
+}
+
+func TestWarnLongContent_PreservesAllContent(t *testing.T) {
+	var lines []string
+	for i := 0; i < 1500; i++ {
+		lines = append(lines, strings.Repeat("a", 30))
+	}
+	input := []byte(strings.Join(lines, "\n"))
+	if len(input) <= azdoMaxChars {
+		t.Fatalf("test input too short: %d", len(input))
+	}
+
+	got := warnLongContent(input)
+	if !strings.HasPrefix(string(got), string(azdoWarning)) {
+		t.Error("expected warning at beginning")
+	}
+	afterWarning := string(got)[len(azdoWarning):]
+	if afterWarning != string(input) {
+		t.Error("expected all content preserved without any truncation")
+	}
+}
