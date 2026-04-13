@@ -46,10 +46,10 @@ func TestGenerateDLPRTitle(t *testing.T) {
 		versions []string
 		expected string
 	}{
-		{nil, ""},
-		{[]string{"1.25.8-1"}, "Add dl package for Go 1.25.8-1"},
-		{[]string{"1.25.8-1", "1.26.1-1"}, "Add dl packages for Go 1.25.8-1 and 1.26.1-1"},
-		{[]string{"1.25.8-1", "1.26.1-1", "1.24.3-1"}, "Add dl packages for Go 1.25.8-1, 1.26.1-1, and 1.24.3-1"},
+		{nil, "Update dl for Go "},
+		{[]string{"1.25.8-1"}, "Update dl for Go 1.25.8-1"},
+		{[]string{"1.25.8-1", "1.26.1-1"}, "Update dl for Go 1.25.8-1, 1.26.1-1"},
+		{[]string{"1.25.8-1", "1.26.1-1", "1.24.3-1"}, "Update dl for Go 1.25.8-1, 1.26.1-1, 1.24.3-1"},
 	}
 
 	for _, tt := range tests {

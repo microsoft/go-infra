@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// The msgo1.25.8-1 command runs the go command from Microsoft Go 1.25.8-1.
+// The msgo1.25.8-1 command runs the go command from Microsoft build of Go 1.25.8-1.
 //
 // To install, run:
 //

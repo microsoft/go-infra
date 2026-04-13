@@ -52,19 +52,12 @@ type dlVersionData struct {
 var dlTemplate string
 
 func updateDL(p subcmd.ParseFunc) error {
-	var releaseVersions string
-	var dryRun bool
-	var org string
-	var repo string
-	var goOrg string
-	var goRepo string
-
-	flag.StringVar(&releaseVersions, "versions", "", "Comma-separated list of version numbers for the Go release (e.g. 1.25.8-1,1.26.1-1).")
-	flag.BoolVar(&dryRun, "n", false, "Enable dry run: do not push changes to GitHub.")
-	flag.StringVar(&org, "org", "microsoft", "The GitHub organization for the go-lab repository.")
-	flag.StringVar(&repo, "repo", "go-lab", "The GitHub repository name for the dl packages.")
-	flag.StringVar(&goOrg, "go-org", "microsoft", "The GitHub organization for the Go releases repository.")
-	flag.StringVar(&goRepo, "go-repo", "go", "The GitHub repository name for Go releases.")
+	releaseVersions := flag.String("versions", "", "Comma-separated list of version numbers for the Go release (e.g. 1.25.8-1,1.26.1-1).")
+	dryRun := flag.Bool("n", false, "Enable dry run: do not push changes to GitHub.")
+	org := flag.String("org", "microsoft", "The GitHub organization for the go-lab repository.")
+	repo := flag.String("repo", "go-lab", "The GitHub repository name for the dl packages.")
+	goOrg := flag.String("go-org", "microsoft", "The GitHub organization for the Go releases repository.")
+	goRepo := flag.String("go-repo", "go", "The GitHub repository name for Go releases.")
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
 
@@ -72,7 +65,7 @@ func updateDL(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if releaseVersions == "" {
+	if *releaseVersions == "" {
 		return fmt.Errorf("no versions specified; use -versions flag")
 	}
 
@@ -83,9 +76,9 @@ func updateDL(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	// Parse, validate, and sort versions in descending order.
-	rawVersions := strings.Split(releaseVersions, ",")
-	goVersions := make(infrasort.GoVersions, 0, len(rawVersions))
+	// Parse and validate versions, fetching the SHA256 for each from the release's assets.json.
+	rawVersions := strings.Split(*releaseVersions, ",")
+	dlVersions := make([]dlVersionData, 0, len(rawVersions))
 	for _, v := range rawVersions {
 		v = strings.TrimSpace(v)
 		if v == "" {
@@ -95,19 +88,10 @@ func updateDL(p subcmd.ParseFunc) error {
 		if gv.Major == "" || gv.Minor == "" {
 			return fmt.Errorf("invalid version string: %q", v)
 		}
-		goVersions = append(goVersions, gv)
-	}
-	if len(goVersions) == 0 {
-		return fmt.Errorf("no valid versions found in -versions flag")
-	}
-	sort.Sort(goVersions)
 
-	// For each version, fetch the SHA256 from the release's assets.json.
-	dlVersions := make([]dlVersionData, 0, len(goVersions))
-	for _, gv := range goVersions {
 		version := gv.Full()
 		log.Printf("Fetching SHA256 for version %s...\n", version)
-		sha256, err := fetchGoSrcSHA256(ctx, client, goOrg, goRepo, "v"+version)
+		sha256, err := fetchGoSrcSHA256(ctx, client, *goOrg, *goRepo, "v"+version)
 		if err != nil {
 			return fmt.Errorf("error fetching SHA256 for version %s: %w", version, err)
 		}
@@ -117,6 +101,13 @@ func updateDL(p subcmd.ParseFunc) error {
 			SHA256:  sha256,
 		})
 	}
+	if len(dlVersions) == 0 {
+		return fmt.Errorf("no valid versions found in -versions flag")
+	}
+	// Sort descending so PR title lists versions in a consistent order.
+	sort.Slice(dlVersions, func(i, j int) bool {
+		return infrasort.GoVersionDesc(goversion.New(dlVersions[i].Version), goversion.New(dlVersions[j].Version))
+	})
 
 	// Generate file contents from the template.
 	tmpl, err := template.New("dl").Parse(dlTemplate)
@@ -140,7 +131,7 @@ func updateDL(p subcmd.ParseFunc) error {
 		files = append(files, fileEntry{path: filePath, version: dv.Version, content: buf.Bytes()})
 	}
 
-	if dryRun {
+	if *dryRun {
 		for _, f := range files {
 			fmt.Printf("Would create %s\n", f.path)
 			fmt.Println("=====")
@@ -163,16 +154,13 @@ func updateDL(p subcmd.ParseFunc) error {
 	}
 
 	// Check that none of the files already exist.
-	for _, f := range files {
-		if _, err := githubutil.DownloadFile(ctx, client, org, repo, "main", f.path); err != nil {
-			if errors.Is(err, githubutil.ErrFileNotExists) {
-				// Good.
-			} else {
-				return fmt.Errorf("error checking if file %s exists: %w", f.path, err)
-			}
-		} else {
-			return fmt.Errorf("file %s already exists in %s/%s", f.path, org, repo)
-		}
+	refFS := githubutil.NewRefFS(ctx, client, *org, *repo, "main")
+	filePaths := make([]string, len(files))
+	for i, f := range files {
+		filePaths[i] = f.path
+	}
+	if err := checkDLFilesNotExist(refFS, filePaths); err != nil {
+		return err
 	}
 
 	// Generate the PR title.
@@ -187,7 +175,7 @@ func updateDL(p subcmd.ParseFunc) error {
 	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("dl/%s/%d", slug, time.Now().Unix())}
 	branchName := prSet.PRBranch()
 
-	if err := githubutil.CreateBranch(ctx, client, org, repo, branchName, "main"); err != nil {
+	if err := githubutil.CreateBranch(ctx, client, *org, *repo, branchName, "main"); err != nil {
 		return fmt.Errorf("error creating branch %s: %w", branchName, err)
 	}
 
@@ -196,8 +184,8 @@ func updateDL(p subcmd.ParseFunc) error {
 		if err := githubutil.UploadFile(
 			ctx,
 			client,
-			org,
-			repo,
+			*org,
+			*repo,
 			branchName,
 			f.path,
 			fmt.Sprintf("Add dl package: msgo%s", f.version),
@@ -207,11 +195,11 @@ func updateDL(p subcmd.ParseFunc) error {
 		}
 	}
 
-	ownerRepo := fmt.Sprintf("%s/%s", org, repo)
+	ownerRepo := fmt.Sprintf("%s/%s", *org, *repo)
 	prReq := prSet.CreateGitHubPR(
-		org,
+		*org,
 		title,
-		"**Automated Pull Request:** Adds dl packages for new Microsoft Go releases.\n"+
+		"**Automated Pull Request:** Adds dl packages for new Microsoft build of Go releases.\n"+
 			"This PR was generated automatically using the [`update-dl.go`](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/update-dl.go) script.")
 	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
 	if err != nil {
@@ -286,18 +274,22 @@ func dlFilePath(version string) string {
 	return fmt.Sprintf("dl/msgo%s/main.go", version)
 }
 
+// checkDLFilesNotExist checks that none of the given file paths already exist in the filesystem.
+// fsys can be a githubutil.NewRefFS (remote GitHub) or os.DirFS (local).
+func checkDLFilesNotExist(fsys githubutil.SimplifiedFS, paths []string) error {
+	for _, path := range paths {
+		_, err := fsys.ReadFile(path)
+		if err == nil {
+			return fmt.Errorf("file %s already exists", path)
+		}
+		if !errors.Is(err, githubutil.ErrFileNotExists) && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("error checking if file %s exists: %w", path, err)
+		}
+	}
+	return nil
+}
+
 // generateDLPRTitle generates a human-readable PR title for the dl update.
 func generateDLPRTitle(versions []string) string {
-	count := len(versions)
-	switch count {
-	case 0:
-		return ""
-	case 1:
-		return fmt.Sprintf("Add dl package for Go %s", versions[0])
-	case 2:
-		return fmt.Sprintf("Add dl packages for Go %s and %s", versions[0], versions[1])
-	default:
-		allExceptLast := strings.Join(versions[:count-1], ", ")
-		return fmt.Sprintf("Add dl packages for Go %s, and %s", allExceptLast, versions[count-1])
-	}
+	return "Update dl for Go " + strings.Join(versions, ", ")
 }
