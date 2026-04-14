@@ -6,8 +6,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/google/go-github/v65/github"
-	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -90,15 +89,15 @@ func updateDL(p subcmd.ParseFunc) error {
 		}
 
 		version := gv.Full()
-		log.Printf("Fetching SHA256 for version %s...\n", version)
-		sha256, err := fetchGoSrcSHA256(ctx, client, *goOrg, *goRepo, "v"+version)
+		log.Printf("Fetching assets.json SHA256 for version %s...\n", version)
+		assetsJSONSHA256, err := fetchAssetsJSONSHA256(ctx, client, *goOrg, *goRepo, "v"+version)
 		if err != nil {
-			return fmt.Errorf("error fetching SHA256 for version %s: %w", version, err)
+			return fmt.Errorf("error fetching assets.json SHA256 for version %s: %w", version, err)
 		}
-		log.Printf("SHA256 for %s: %s\n", version, sha256)
+		log.Printf("assets.json SHA256 for %s: %s\n", version, assetsJSONSHA256)
 		dlVersions = append(dlVersions, dlVersionData{
 			Version: version,
-			SHA256:  sha256,
+			SHA256:  assetsJSONSHA256,
 		})
 	}
 	if len(dlVersions) == 0 {
@@ -217,8 +216,10 @@ func updateDL(p subcmd.ParseFunc) error {
 	return nil
 }
 
-// fetchGoSrcSHA256 downloads the assets.json from a GitHub release and returns the GoSrcSHA256.
-func fetchGoSrcSHA256(ctx context.Context, client *github.Client, owner, repo, tag string) (string, error) {
+// fetchAssetsJSONSHA256 downloads the assets.json from a GitHub release and returns its content SHA256.
+// The dl tool in go-lab uses this hash to verify the integrity of assets.json before extracting
+// platform-specific download URLs and hashes from it.
+func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, repo, tag string) (string, error) {
 	var release *github.RepositoryRelease
 	if err := githubutil.Retry(func() error {
 		var err error
@@ -257,16 +258,8 @@ func fetchGoSrcSHA256(ctx context.Context, client *github.Client, owner, repo, t
 		return "", fmt.Errorf("error reading assets.json: %w", err)
 	}
 
-	var assets buildassets.BuildAssets
-	if err := json.Unmarshal(data, &assets); err != nil {
-		return "", fmt.Errorf("error parsing assets.json: %w", err)
-	}
-
-	if assets.GoSrcSHA256 == "" {
-		return "", fmt.Errorf("GoSrcSHA256 is empty in assets.json for release %s", tag)
-	}
-
-	return assets.GoSrcSHA256, nil
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash[:]), nil
 }
 
 // dlFilePath returns the path for a dl package's main.go file within the go-lab repo.
