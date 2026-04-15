@@ -14,6 +14,15 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+// dissolvedByRange is a sentinel yaml.Node returned when an inlinerange
+// produces no output because the collection was empty.
+var dissolvedByRange yaml.Node
+
+// dissolvedByConditions is a sentinel yaml.Node returned when a conditional
+// chain (inlineif/inlineelseif) evaluates with no branch taken and no else.
+// It lets callers distinguish this from dissolvedByRange.
+var dissolvedByConditions yaml.Node
+
 // EvalState holds the generator's template evaluation state. It's copied and
 // extended when evaluating a new doc or when Data changes.
 type EvalState struct {
@@ -136,12 +145,17 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting doc content result to YAML node: %w", err))
 		}
-		if resultNode == nil {
-			// All content dissolved (e.g. all conditions false).
-			// Produce an empty mapping as the document content.
-			resultNode = &yaml.Node{Kind: yaml.MappingNode}
+		switch resultNode {
+		case &dissolvedByRange:
+			// Empty inlinerange collection: produce an empty mapping.
+			// e.g. { ${ inlinerange "v" (list) }: { ${ .v }: true } } -> {}
+			n.Content[0] = &yaml.Node{Kind: yaml.MappingNode}
+		case nil, &dissolvedByConditions:
+			// All conditions evaluated to false with no else branch.
+			return fail(fmt.Errorf("all conditions evaluated to false and no else branch was reached; add ${ inlineelse } to provide a fallback"))
+		default:
+			n.Content[0] = resultNode
 		}
-		n.Content[0] = resultNode
 
 		return n, nil
 
@@ -387,6 +401,12 @@ func (e *EvalState) resultToYAML(r any) (*yaml.Node, error) {
 		if err != nil {
 			return fail(fmt.Errorf("failed to convert value: %w", err))
 		}
+		if v == &dissolvedByConditions {
+			return fail(fmt.Errorf("inlineif without inlineelse cannot appear as a mapping value; the condition was false with no else branch to provide a value"))
+		}
+		if v == &dissolvedByRange {
+			return fail(fmt.Errorf("inlinerange with an empty collection cannot appear as a mapping value"))
+		}
 		n.Kind = yaml.MappingNode
 		n.Content = []*yaml.Node{k, v}
 		return n, nil
@@ -413,6 +433,7 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 	n.Tag = ""
 
 	var condState conditionalStateMachine
+	var hadRangeDissolution bool
 
 	for _, mapElem := range m.content {
 		// Might contain one *yaml.Node, or some mappingPairs.
@@ -453,8 +474,13 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 			if err != nil {
 				return fail(fmt.Errorf("converting mapping item result to YAML node: %w", err))
 			}
-			// nil means dissolved content (e.g. empty inlinerange). Skip it.
-			if node == nil {
+			// dissolvedByRange means an empty inlinerange. Track and skip.
+			// dissolvedByConditions means all-false conditions. Skip.
+			if node == &dissolvedByRange {
+				hadRangeDissolution = true
+				continue
+			}
+			if node == nil || node == &dissolvedByConditions {
 				continue
 			}
 
@@ -490,11 +516,12 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 	}
 	if n.Kind == 0 {
 		if len(m.content) > 0 {
-			// The mapping had content entries but they all dissolved
-			// (e.g. false conditions, empty ranges). Return nil to signal
-			// "nothing to insert" so callers can distinguish this from a
-			// genuine empty mapping like {}.
-			return nil, nil
+			// The mapping had content entries but they all dissolved.
+			// Propagate dissolvedByRange if any entry came from an empty range.
+			if hadRangeDissolution {
+				return &dissolvedByRange, nil
+			}
+			return &dissolvedByConditions, nil
 		}
 		// Genuine empty mapping (no content entries at all).
 		n.Kind = yaml.MappingNode
@@ -544,9 +571,9 @@ func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting sequence item result to YAML node:\n\t\t%w", err))
 		}
-		// nil means dissolved content (e.g. empty inlinerange, all-false
-		// conditions). Skip it without dropping legitimate empty mappings.
-		if r == nil {
+		// nil, dissolvedByRange, or dissolvedByConditions means dissolved content.
+		// Skip it without dropping legitimate empty mappings.
+		if r == nil || r == &dissolvedByRange || r == &dissolvedByConditions {
 			continue
 		}
 		// Put the template result into the sequence depending on the
@@ -619,7 +646,7 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return nil, nil
+			return &dissolvedByRange, nil
 		}
 		rv = rv.Elem()
 	}
@@ -648,10 +675,10 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 // mergeRangeItems combines per-iteration body results into a single node.
 // If every body produced a mapping, entries are merged into one MappingNode.
 // If every body produced a sequence, items are flattened into one SequenceNode.
-// Returns nil when there are no items (all iterations dissolved).
+// Returns dissolvedByRange when there are no items (empty collection).
 func (e *EvalState) mergeRangeItems(items []*yaml.Node) (*yaml.Node, error) {
 	if len(items) == 0 {
-		return nil, nil
+		return &dissolvedByRange, nil
 	}
 
 	kind := items[0].Kind
@@ -698,8 +725,8 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error)
 	if err != nil {
 		return nil, err
 	}
-	// nil means all content dissolved (e.g. false conditions, empty ranges).
-	if node == nil {
+	// dissolved sentinels mean all content dissolved (e.g. false conditions, empty ranges).
+	if node == nil || node == &dissolvedByConditions || node == &dissolvedByRange {
 		return nil, nil
 	}
 	// A scalar body is ambiguous: use "- value" to produce sequence items
