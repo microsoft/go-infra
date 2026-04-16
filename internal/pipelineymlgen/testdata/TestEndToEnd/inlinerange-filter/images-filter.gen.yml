@@ -6,5 +6,5 @@ pipelineymlgen:
 ---
 # Include every variables entry that uses "name" and "value" keys.
 - ${ inlinerange "v" .source.variables }:
-    ${ inlineif (and (hasKey .v "name") (hasKey .v "value")) }:
+  - ${ inlineif (and (hasKey .v "name") (hasKey .v "value")) }:
       ${ yml .v }

@@ -20,5 +20,5 @@ variables:
 
 # Test inlinerange from data. Filter out variables with "group" key.
 - ${ inlinerange "v" .source.variables }:
-    ${ inlineif (not (hasKey .v "group")) }:
+  - ${ inlineif (not (hasKey .v "group")) }:
       ${ yml .v }

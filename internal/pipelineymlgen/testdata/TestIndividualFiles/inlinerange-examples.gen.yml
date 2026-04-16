@@ -1,0 +1,54 @@
+# Test and demonstration of how inlinerange can be used to generate any seq/map
+# structure despite always attempting to inline the result.
+
+# Baseline: inlinerange inserts key value pairs into a map.
+insertMap:
+  name: Geomys bursarius
+  ${ inlinerange "k" "v" (dict "family" "Geomyidae" "status" "least concern") }:
+    ${ .k }: ${ .v }
+  # inlinerange also inserts items into an otherwise-empty map.
+  properties:
+    ${ inlinerange "k" "v" (dict "diet" "herbivore" "tunnel" "2059cm/wk") }:
+      ${ .k }: ${ .v }
+
+# inlinerange can insert items into a sequence.
+insertSeq:
+  - 1
+  - ${ inlinerange (list 2 3 4) }:
+    - ${ yml . }
+
+# More than one element per iteration can be inserted.
+insertSeqGaps:
+  - 1
+  - ${ inlinerange (list 2 3 4) }:
+    - gap
+    - ${ yml . }
+
+# It can produce a sequence of sequences by explicitly including an extra dash.
+# The dash forms an otherwise-empty sequence for inlinerange to insert into.
+insertSeqOfSeq:
+  - initialize
+  - - ${ inlinerange (list "parallel-calculate" "parallel-telemetry") }:
+      - ${ yml . }
+
+# If the child element is a map and the target is a sequence, the map as a whole
+# is inserted as a single element in the sequence.
+insertMapElementIntoSeq:
+  - 1
+  - ${ inlinerange (list 2 3 4) }:
+      ${ yml . }: present
+
+# If the child element is a sequence and the target is a map, this is an error:
+#
+#   insertSeqElementIntoMap:
+#     begin: 1
+#     next:
+#       ${ inlinerange (list 2 3 4) }:
+#         - ${ yml . }
+#
+# The intent was probably to include a "-" to insert elements into a sequence:
+insertSeqElementIntoMap:
+  begin: 1
+  next:
+    - ${ inlinerange (list 2 3 4) }:
+      - ${ yml . }

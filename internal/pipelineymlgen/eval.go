@@ -14,6 +14,15 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+// dissolvedByRange is a sentinel yaml.Node returned when an inlinerange
+// produces no output because the collection was empty.
+var dissolvedByRange yaml.Node
+
+// dissolvedByConditions is a sentinel yaml.Node returned when a conditional
+// chain (inlineif/inlineelseif) evaluates with no branch taken and no else.
+// It lets callers distinguish this from dissolvedByRange.
+var dissolvedByConditions yaml.Node
+
 // EvalState holds the generator's template evaluation state. It's copied and
 // extended when evaluating a new doc or when Data changes.
 type EvalState struct {
@@ -136,7 +145,17 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting doc content result to YAML node: %w", err))
 		}
-		n.Content[0] = resultNode
+		switch resultNode {
+		case &dissolvedByRange:
+			// Empty inlinerange collection: produce an empty mapping.
+			// e.g. { ${ inlinerange "v" (list) }: { ${ .v }: true } } -> {}
+			n.Content[0] = &yaml.Node{Kind: yaml.MappingNode}
+		case nil, &dissolvedByConditions:
+			// All conditions evaluated to false with no else branch.
+			return fail(fmt.Errorf("all conditions evaluated to false and no else branch was reached; add ${ inlineelse } to provide a fallback"))
+		default:
+			n.Content[0] = resultNode
+		}
 
 		return n, nil
 
@@ -382,6 +401,12 @@ func (e *EvalState) resultToYAML(r any) (*yaml.Node, error) {
 		if err != nil {
 			return fail(fmt.Errorf("failed to convert value: %w", err))
 		}
+		if v == &dissolvedByConditions {
+			return fail(fmt.Errorf("inlineif without inlineelse cannot appear as a mapping value; the condition was false with no else branch to provide a value"))
+		}
+		if v == &dissolvedByRange {
+			return fail(fmt.Errorf("inlinerange with an empty collection cannot appear as a mapping value"))
+		}
 		n.Kind = yaml.MappingNode
 		n.Content = []*yaml.Node{k, v}
 		return n, nil
@@ -408,6 +433,7 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 	n.Tag = ""
 
 	var condState conditionalStateMachine
+	var hadRangeDissolution bool
 
 	for _, mapElem := range m.content {
 		// Might contain one *yaml.Node, or some mappingPairs.
@@ -448,6 +474,15 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 			if err != nil {
 				return fail(fmt.Errorf("converting mapping item result to YAML node: %w", err))
 			}
+			// dissolvedByRange means an empty inlinerange. Track and skip.
+			// dissolvedByConditions means all-false conditions. Skip.
+			if node == &dissolvedByRange {
+				hadRangeDissolution = true
+				continue
+			}
+			if node == nil || node == &dissolvedByConditions {
+				continue
+			}
 
 			switch node.Kind {
 			case yaml.ScalarNode:
@@ -460,9 +495,16 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
 				}
 				n.Value = node.Value
-			case yaml.SequenceNode, yaml.MappingNode:
-				if n.Kind == 0 || n.Kind == node.Kind {
-					n.Kind = node.Kind
+			case yaml.MappingNode:
+				if n.Kind == 0 || n.Kind == yaml.MappingNode {
+					n.Kind = yaml.MappingNode
+				} else {
+					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
+				}
+				n.Content = append(n.Content, node.Content...)
+			case yaml.SequenceNode:
+				if n.Kind == 0 || n.Kind == yaml.SequenceNode {
+					n.Kind = yaml.SequenceNode
 				} else {
 					return fail(fmt.Errorf("mapping contains multiple kinds: had %v, now also %v", kindStr(n), kindStr(node)))
 				}
@@ -473,7 +515,15 @@ func (e *EvalState) mappingToYAML(m *evalMapping) (*yaml.Node, error) {
 		}
 	}
 	if n.Kind == 0 {
-		// If we never found anything to insert, this is still a mapping.
+		if len(m.content) > 0 {
+			// The mapping had content entries but they all dissolved.
+			// Propagate dissolvedByRange if any entry came from an empty range.
+			if hadRangeDissolution {
+				return &dissolvedByRange, nil
+			}
+			return &dissolvedByConditions, nil
+		}
+		// Genuine empty mapping (no content entries at all).
 		n.Kind = yaml.MappingNode
 	}
 	return n, nil
@@ -521,10 +571,17 @@ func (e *EvalState) sequenceToYAML(s *evalSequence) (*yaml.Node, error) {
 		if err != nil {
 			return fail(fmt.Errorf("converting sequence item result to YAML node:\n\t\t%w", err))
 		}
+		// nil, dissolvedByRange, or dissolvedByConditions means dissolved content.
+		// Skip it without dropping legitimate empty mappings.
+		if r == nil || r == &dissolvedByRange || r == &dissolvedByConditions {
+			continue
+		}
 		// Put the template result into the sequence depending on the
 		// result type.
 		switch r.Kind {
-		case yaml.ScalarNode, yaml.MappingNode:
+		case yaml.ScalarNode:
+			n.Content = append(n.Content, r)
+		case yaml.MappingNode:
 			n.Content = append(n.Content, r)
 		case yaml.SequenceNode:
 			// Flatten the sequence unless it was a literal nested sequence in the source.
@@ -561,7 +618,13 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 }
 
 func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
-	seq := &yaml.Node{Kind: yaml.SequenceNode}
+	var items []*yaml.Node
+
+	collectItem := func(node *yaml.Node) {
+		if node != nil {
+			items = append(items, node)
+		}
+	}
 
 	// Handle map[string]any directly with sorted keys for determinism.
 	if m, ok := r.collection.(map[string]any); ok {
@@ -574,18 +637,16 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 			if err != nil {
 				return nil, fmt.Errorf("inlinerange iteration key %v: %w", key, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
-			}
+			collectItem(node)
 		}
-		return seq, nil
+		return e.mergeRangeItems(items)
 	}
 
 	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
 	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
-			return seq, nil
+			return &dissolvedByRange, nil
 		}
 		rv = rv.Elem()
 	}
@@ -602,15 +663,35 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 			if err != nil {
 				return nil, fmt.Errorf("inlinerange iteration %d: %w", i, err)
 			}
-			if node != nil {
-				seq.Content = append(seq.Content, node.Content...)
-			}
+			collectItem(node)
 		}
 	default:
 		return nil, fmt.Errorf("inlinerange: cannot range over %T", r.collection)
 	}
 
-	return seq, nil
+	return e.mergeRangeItems(items)
+}
+
+// mergeRangeItems combines per-iteration body results into a single node.
+// If every body produced a mapping, entries are merged into one MappingNode.
+// If every body produced a sequence, items are flattened into one SequenceNode.
+// Returns dissolvedByRange when there are no items (empty collection).
+func (e *EvalState) mergeRangeItems(items []*yaml.Node) (*yaml.Node, error) {
+	if len(items) == 0 {
+		return &dissolvedByRange, nil
+	}
+
+	kind := items[0].Kind
+	for _, item := range items[1:] {
+		if item.Kind != kind {
+			return nil, fmt.Errorf("inlinerange: body produced inconsistent YAML node kinds across iterations: first was %v, got %v", kindStr(items[0]), kindStr(item))
+		}
+	}
+	n := &yaml.Node{Kind: kind}
+	for _, item := range items {
+		n.Content = append(n.Content, item.Content...)
+	}
+	return n, nil
 }
 
 func (e *EvalState) iterationData(r *evalRange, key, value any) (any, error) {
@@ -644,16 +725,14 @@ func (e *EvalState) evalRangeBody(body *yaml.Node, data any) (*yaml.Node, error)
 	if err != nil {
 		return nil, err
 	}
-	// An empty mapping means all conditions dissolved. Return nil to skip.
-	if node.Kind == yaml.MappingNode && len(node.Content) == 0 {
+	// dissolved sentinels mean all content dissolved (e.g. false conditions, empty ranges).
+	if node == nil || node == &dissolvedByConditions || node == &dissolvedByRange {
 		return nil, nil
 	}
-	// Wrap in a sequence if it isn't one, so callers can uniformly flatten.
-	if node.Kind != yaml.SequenceNode {
-		node = &yaml.Node{
-			Kind:    yaml.SequenceNode,
-			Content: []*yaml.Node{node},
-		}
+	// A scalar body is ambiguous: use "- value" to produce sequence items
+	// or "key: value" for mapping entries.
+	if node.Kind == yaml.ScalarNode {
+		return nil, fmt.Errorf("inlinerange body evaluated to scalar %q; use \"- value\" for sequence items or \"key: value\" for mapping entries", node.Value)
 	}
 	return node, nil
 }

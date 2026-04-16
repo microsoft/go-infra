@@ -1,0 +1,5 @@
+- ${ inlinerange (list "a" "b") }:
+    ${ inlineif (eq . "a") }:
+      key: value
+    ${ inlineelse }:
+      - item
