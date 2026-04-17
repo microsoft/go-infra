@@ -117,7 +117,6 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 	}
 
 	switch orig.Kind {
-
 	case yaml.DocumentNode:
 		if len(orig.Content) > 1 {
 			return fail(fmt.Errorf("document node contains multiple content nodes"))
@@ -288,7 +287,6 @@ func (e *EvalState) evalExpressionScalar(node *yaml.Node) (any, error) {
 			}
 
 			switch result := result.(type) {
-
 			// Something like "hello ${ .name }!".
 			case string:
 				return []byte(result)
@@ -352,7 +350,6 @@ func (e *EvalState) resultToYAML(r any) (*yaml.Node, error) {
 	}
 
 	switch r := r.(type) {
-
 	case *yaml.Node:
 		return r, nil
 
