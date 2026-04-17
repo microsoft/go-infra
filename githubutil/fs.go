@@ -5,6 +5,7 @@ package githubutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"time"
@@ -55,6 +56,9 @@ var _ SimplifiedFS = (*FS)(nil)
 func (r *FS) ReadFile(name string) ([]byte, error) {
 	fileContent, err := DownloadFile(r.ctx, r.client, r.owner, r.repo, r.ref, name)
 	if err != nil {
+		if errors.Is(err, ErrFileNotExists) {
+			return nil, fmt.Errorf("failed to download file %q: %w", name, fs.ErrNotExist)
+		}
 		return nil, fmt.Errorf("failed to download file %q: %w", name, err)
 	}
 	return fileContent, nil

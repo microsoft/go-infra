@@ -14,6 +14,11 @@ type GoVersions []*goversion.GoVersion
 func (versions GoVersions) Len() int      { return len(versions) }
 func (versions GoVersions) Swap(i, j int) { versions[i], versions[j] = versions[j], versions[i] }
 func (versions GoVersions) Less(i, j int) bool {
+	return GoVersionLess(versions[i], versions[j])
+}
+
+// GoVersionLess reports whether a should sort before b in descending version order.
+func GoVersionLess(a, b *goversion.GoVersion) bool {
 	less := func(a, b string) bool {
 		intA, err := strconv.Atoi(a)
 		if err != nil {
@@ -27,7 +32,7 @@ func (versions GoVersions) Less(i, j int) bool {
 		return intA > intB
 	}
 
-	current, next := versions[i], versions[j]
+	current, next := a, b
 
 	if current.Major != next.Major {
 		return less(current.Major, next.Major)
