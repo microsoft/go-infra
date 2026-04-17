@@ -6,6 +6,11 @@ linters:
     - nakedret
     - predeclared
     - unconvert
+    - whitespace
+  settings:
+    whitespace:
+      # Enforce a newline (or comment) after every multi-line if statement.
+      multi-if: true
   exclusions:
     generated: lax
     presets:

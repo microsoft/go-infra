@@ -733,7 +733,6 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 					"). Skipping PR submission."
 			}
 		}
-
 	}
 
 	if len(changedBranches) == 0 {
