@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -28,6 +29,8 @@ import (
 	"github.com/microsoft/go-infra/subcmd"
 )
 
+var downloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "update-dl",
@@ -35,7 +38,7 @@ func init() {
 		Description: `
 The update-dl command generates dl/msgo<version>/main.go files for each specified
 Go release version and creates a pull request on the go-lab repository. It fetches
-the source archive SHA256 hash from the GitHub release's assets.json file.
+the assets.json SHA256 hash from the GitHub release.
 `,
 		Handle: updateDL,
 	})
@@ -53,10 +56,8 @@ var dlTemplate string
 func updateDL(p subcmd.ParseFunc) error {
 	releaseVersions := flag.String("versions", "", "Comma-separated list of version numbers for the Go release (e.g. 1.25.8-1,1.26.1-1).")
 	dryRun := flag.Bool("n", false, "Enable dry run: do not push changes to GitHub.")
-	org := flag.String("org", "microsoft", "The GitHub organization for the go-lab repository.")
-	repo := flag.String("repo", "go-lab", "The GitHub repository name for the dl packages.")
-	goOrg := flag.String("go-org", "microsoft", "The GitHub organization for the Go releases repository.")
-	goRepo := flag.String("go-repo", "go", "The GitHub repository name for Go releases.")
+	dlRepo := flag.String("repo", "microsoft/go-lab", "The GitHub repository for the dl packages, in '{owner}/{repo}' form.")
+	goRepo := flag.String("go-repo", "microsoft/go", "The GitHub repository for Go releases, in '{owner}/{repo}' form.")
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
 
@@ -66,6 +67,15 @@ func updateDL(p subcmd.ParseFunc) error {
 
 	if *releaseVersions == "" {
 		return fmt.Errorf("no versions specified; use -versions flag")
+	}
+
+	labOwner, labName, err := githubutil.ParseRepoFlag(dlRepo)
+	if err != nil {
+		return fmt.Errorf("invalid -repo: %w", err)
+	}
+	goOwner, goName, err := githubutil.ParseRepoFlag(goRepo)
+	if err != nil {
+		return fmt.Errorf("invalid -go-repo: %w", err)
 	}
 
 	ctx := context.Background()
@@ -90,7 +100,7 @@ func updateDL(p subcmd.ParseFunc) error {
 
 		version := gv.Full()
 		log.Printf("Fetching assets.json SHA256 for version %s...\n", version)
-		assetsJSONSHA256, err := fetchAssetsJSONSHA256(ctx, client, *goOrg, *goRepo, "v"+version)
+		assetsJSONSHA256, err := fetchAssetsJSONSHA256(ctx, client, goOwner, goName, "v"+version)
 		if err != nil {
 			return fmt.Errorf("error fetching assets.json SHA256 for version %s: %w", version, err)
 		}
@@ -105,7 +115,7 @@ func updateDL(p subcmd.ParseFunc) error {
 	}
 	// Sort descending so PR title lists versions in a consistent order.
 	sort.Slice(dlVersions, func(i, j int) bool {
-		return infrasort.GoVersionDesc(goversion.New(dlVersions[i].Version), goversion.New(dlVersions[j].Version))
+		return infrasort.GoVersionLess(goversion.New(dlVersions[i].Version), goversion.New(dlVersions[j].Version))
 	})
 
 	// Generate file contents from the template.
@@ -142,18 +152,8 @@ func updateDL(p subcmd.ParseFunc) error {
 		return nil
 	}
 
-	auther, err := gitHubAuthFlags.NewAuther()
-	if err != nil {
-		return fmt.Errorf("failed to get GitHub auther: %w", err)
-	}
-
-	reviewAuther, err := gitHubReviewerAuthFlags.NewAuther()
-	if err != nil {
-		return fmt.Errorf("failed to get GitHub review auther: %w", err)
-	}
-
 	// Check that none of the files already exist.
-	refFS := githubutil.NewRefFS(ctx, client, *org, *repo, "main")
+	refFS := githubutil.NewRefFS(ctx, client, labOwner, labName, "main")
 	filePaths := make([]string, len(files))
 	for i, f := range files {
 		filePaths[i] = f.path
@@ -169,47 +169,96 @@ func updateDL(p subcmd.ParseFunc) error {
 	}
 	title := generateDLPRTitle(versionStrings)
 
-	// Create a feature branch and upload all files.
+	prBody := "**Automated Pull Request:** Adds dl packages for new Microsoft build of Go releases.\n" +
+		"This PR was generated automatically using the [`update-dl.go`](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/update-dl.go) script."
+
+	// Use the tree API to create a single commit with all files, avoiding noisy history
+	// and simplifying retries. If anything fails, retry from the beginning with a fresh base.
 	slug := "msgo-" + strings.Join(versionStrings, "-")
-	prSet := gitpr.PRRefSet{Name: "main", Purpose: fmt.Sprintf("dl/%s/%d", slug, time.Now().Unix())}
-	branchName := prSet.PRBranch()
+	branchName := "dev/dl/" + slug + "/" + fmt.Sprintf("%d", time.Now().Unix())
 
-	if err := githubutil.CreateBranch(ctx, client, *org, *repo, branchName, "main"); err != nil {
-		return fmt.Errorf("error creating branch %s: %w", branchName, err)
-	}
-
-	for _, f := range files {
-		log.Printf("Uploading %s...\n", f.path)
-		if err := githubutil.UploadFile(
-			ctx,
-			client,
-			*org,
-			*repo,
-			branchName,
-			f.path,
-			fmt.Sprintf("Add dl package: msgo%s", f.version),
-			f.content,
-		); err != nil {
-			return fmt.Errorf("error uploading file %s to branch %s: %w", f.path, branchName, err)
+	var pr *github.PullRequest
+	if err := githubutil.Retry(func() error {
+		// Get the base branch ref and commit to pin the tree base.
+		baseRef, _, err := client.Git.GetRef(ctx, labOwner, labName, "heads/main")
+		if err != nil {
+			return fmt.Errorf("error getting main ref: %w", err)
 		}
-	}
+		baseCommitSHA := baseRef.Object.GetSHA()
+		baseCommit, _, err := client.Git.GetCommit(ctx, labOwner, labName, baseCommitSHA)
+		if err != nil {
+			return fmt.Errorf("error getting commit %s: %w", baseCommitSHA, err)
+		}
 
-	ownerRepo := fmt.Sprintf("%s/%s", *org, *repo)
-	prReq := prSet.CreateGitHubPR(
-		*org,
-		title,
-		"**Automated Pull Request:** Adds dl packages for new Microsoft build of Go releases.\n"+
-			"This PR was generated automatically using the [`update-dl.go`](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/update-dl.go) script.")
-	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
-	if err != nil {
-		return fmt.Errorf("error creating pull request with gitpr: %w", err)
-	}
+		// Build tree entries for all files.
+		treeEntries := make([]*github.TreeEntry, 0, len(files))
+		for _, f := range files {
+			treeEntries = append(treeEntries, &github.TreeEntry{
+				Path:    github.String(f.path),
+				Content: github.String(string(f.content)),
+				Mode:    github.String(githubutil.TreeModeFile),
+			})
+		}
 
-	if err = gitpr.EnablePRAutoMerge(createdPR.NodeID, reviewAuther); err != nil {
+		createTree, _, err := client.Git.CreateTree(ctx, labOwner, labName, baseCommit.Tree.GetSHA(), treeEntries)
+		if err != nil {
+			return fmt.Errorf("error creating tree: %w", err)
+		}
+
+		createCommit, _, err := client.Git.CreateCommit(ctx, labOwner, labName, &github.Commit{
+			Message: github.String(title),
+			Parents: []*github.Commit{baseCommit},
+			Tree:    createTree,
+		}, &github.CreateCommitOptions{})
+		if err != nil {
+			return fmt.Errorf("error creating commit: %w", err)
+		}
+
+		newRef := &github.Reference{
+			Ref:    github.String("refs/heads/" + branchName),
+			Object: &github.GitObject{SHA: createCommit.SHA},
+		}
+		if _, _, err = client.Git.CreateRef(ctx, labOwner, labName, newRef); err != nil {
+			return fmt.Errorf("error creating ref %s: %w", branchName, err)
+		}
+		// Ref is created; can't retry from here (name is taken).
+		return nil
+	}); err != nil {
 		return err
 	}
 
-	if err = gitpr.ApprovePR(createdPR.NodeID, reviewAuther); err != nil {
+	// Create the pull request.
+	if err := githubutil.Retry(func() error {
+		pr, _, err = client.PullRequests.Create(ctx, labOwner, labName, &github.NewPullRequest{
+			Title: github.String(title),
+			Head:  github.String(branchName),
+			Base:  github.String("main"),
+			Body:  github.String(prBody),
+		})
+		if err != nil {
+			return fmt.Errorf("error creating pull request: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	log.Printf("Pull request created: %s\n", pr.GetHTMLURL())
+
+	reviewAuther, err := gitHubReviewerAuthFlags.NewAuther()
+	if err != nil {
+		return fmt.Errorf("failed to get GitHub review auther: %w", err)
+	}
+
+	if err := githubutil.Retry(func() error {
+		return gitpr.EnablePRAutoMerge(pr.GetNodeID(), reviewAuther)
+	}); err != nil {
+		return err
+	}
+
+	if err := githubutil.Retry(func() error {
+		return gitpr.ApprovePR(pr.GetNodeID(), reviewAuther)
+	}); err != nil {
 		return err
 	}
 
@@ -242,11 +291,10 @@ func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, re
 	}
 
 	// Download the assets.json file.
-	downloadClient := &http.Client{Timeout: 30 * time.Second}
 	var rc io.ReadCloser
 	if err := githubutil.Retry(func() error {
 		var err error
-		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), downloadClient)
+		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), downloadHTTPClient)
 		return err
 	}); err != nil {
 		return "", fmt.Errorf("error downloading assets.json from release %s: %w", tag, err)
@@ -275,7 +323,7 @@ func checkDLFilesNotExist(fsys githubutil.SimplifiedFS, paths []string) error {
 		if err == nil {
 			return fmt.Errorf("file %s already exists", path)
 		}
-		if !errors.Is(err, githubutil.ErrFileNotExists) && !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("error checking if file %s exists: %w", path, err)
 		}
 	}
