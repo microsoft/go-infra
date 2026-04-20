@@ -1,0 +1,23 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+// The msgo{{.Version}} command runs the go command from Microsoft build of Go {{.Version}}.
+//
+// To install, run:
+//
+//	$ go install github.com/microsoft/go-lab/dl/msgo{{.Version}}@latest
+//	$ msgo{{.Version}} download
+//
+// And then use the msgo{{.Version}} command as if it were your normal go
+// command.
+//
+// See the release notes at https://github.com/microsoft/go/releases/tag/v{{.Version}}.
+//
+// File bugs at https://github.com/microsoft/go/issues/new.
+package main
+
+import "github.com/microsoft/go-lab/dl/internal/version"
+
+func main() {
+	version.Run("msgo{{.Version}}", "{{.SHA256}}")
+}
