@@ -1,14 +1,8 @@
 name: Check Line Endings
 
-# Reusable workflow that verifies the calling repository has no files checked
-# in with mixed or CRLF line endings, per the repo's .gitattributes rules.
+# Reusable workflow that verifies a repo's files match its .gitattributes
+# line-ending rules. Call from another repo with:
 #
-# Usage from another repo:
-#
-#   name: Check Line Endings
-#   on:
-#     push:
-#     pull_request:
 #   jobs:
 #     check-line-endings:
 #       uses: microsoft/go-infra/.github/workflows/check-line-endings.yml@main
@@ -30,14 +24,26 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Check for CRLF or mixed line endings
+      - name: Check .gitattributes has a default text rule
         shell: bash
         run: |
           set -euo pipefail
-          BAD=$(git ls-files --eol | awk '$1 ~ /(mixed|crlf)/ || $2 ~ /(mixed|crlf)/ {print $1, $2, $NF}')
-          if [ -n "$BAD" ]; then
-            echo "::error::Files with CRLF or mixed line endings detected:"
-            echo "$BAD"
+          # Probe a nonexistent file to see what attributes apply by default.
+          # Without a default (e.g. `* text=auto`), the renormalize step would
+          # silently pass for files lacking an explicit attribute.
+          probe=$(git check-attr text eol -- probe-file-intentionally-does-not-exist.xyz)
+          echo "$probe"
+          if ! echo "$probe" | grep -qE '^[^:]+: text: (auto|set|lf|crlf)$'; then
+            echo "::error::.gitattributes is missing a default text rule (e.g. '* text=auto')."
             exit 1
           fi
-          echo "No CRLF or mixed line endings found."
+
+      - name: Check line endings match .gitattributes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add --renormalize .
+          if ! git diff --cached --stat --exit-code; then
+            echo "::error::Line endings don't match .gitattributes. Run 'git add --renormalize .' locally and commit."
+            exit 1
+          fi
