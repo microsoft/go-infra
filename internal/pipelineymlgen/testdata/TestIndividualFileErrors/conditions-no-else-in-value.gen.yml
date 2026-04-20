@@ -1,0 +1,3 @@
+example:
+  title:
+    ${ inlineif false }: Never

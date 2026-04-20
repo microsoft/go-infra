@@ -1,0 +1,2 @@
+- ${ inlinerange "v" (list) }:
+    - ${ .v }

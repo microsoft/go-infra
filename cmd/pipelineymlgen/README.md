@@ -130,17 +130,21 @@ More technically: if the node is a key node of a mapping pair, the value node is
 ### `inlinerange <args...>`
 
 A YAML-inlining version of `range`.
-Iterates over a collection (array/slice or map), evaluating the child element for each item.
-If the collection is empty, nothing is output.
+Iterates over a collection (array/slice or map), evaluating the loop body (child element or elements) for each collection item.
+
+Arrays and slices are iterated in order.
+Maps are iterated in sorted key order for reproducibility.
 
 Possible args are:
 
 * `inlinerange <pipeline>`
 
-    For each element of the list, `data` is set to that element and the child element value is evaluated.
-    If the element is a map, its keys are available as `.key`. If the element is a scalar, `${ . }` gives
-    the value. Note that there is no way to access the outer value of `data` while evaluating child
-    elements; use `inlinerange "v" <pipeline>` when you need access to outer data.
+    For each element of the collection, `data` is set to that element and the loop body is evaluated.
+    This means `${ . }` in the body accesses the value.
+
+    Note that in this form, there is no way to access the outer value of `data` while evaluating the loop body.
+    If the pipeline is a map, there is also no way to access the keys.
+    Use the `valuename` and `keyname`+`valuename` forms when you need more functionality.
 
 * `inlinerange "<valuename>" <pipeline>`
 
@@ -150,7 +154,27 @@ Possible args are:
 
     Merges `data` with `map[string]any{keyname: <key>, valuename: <value>}` for each iteration.
 
-When iterating over a map, the keys are visited in sorted order for reproducibility.
+The loop body output type determines how results are inserted:
+
+* A mapping body inserts key-value pairs into the parent mapping:
+
+    ```yml
+    ${ inlinerange "k" "v" (dict "a" 1 "b" 2) }:
+      ${ .k }: ${ yml .v }
+    otherKey: value
+    ```
+
+* A sequence body inserts items into the parent sequence:
+
+    ```yml
+    - ${ inlinerange (list 1 2 3) }:
+      - ${ yml . }
+    - other item
+    ```
+
+* A bare scalar body is an error.
+
+See [inlinerange-examples.gen.yml](/internal/pipelineymlgen/testdata/TestIndividualFiles/inlinerange-examples.gen.yml) -> [inlinerange-examples.golden.yml](/internal/pipelineymlgen/testdata/TestIndividualFiles/inlinerange-examples.golden.yml) for more examples with output.
 
 ### Sprig functions
 

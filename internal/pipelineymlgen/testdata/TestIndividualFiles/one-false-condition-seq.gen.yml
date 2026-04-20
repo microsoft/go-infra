@@ -1,0 +1,3 @@
+# Check what happens if after evaluating, nothing is left, but it's a sequence.
+- ${ inlineif false }:
+  - failure

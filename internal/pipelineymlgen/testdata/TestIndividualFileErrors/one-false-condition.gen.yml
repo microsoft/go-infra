@@ -1,0 +1,3 @@
+# All conditions evaluate to false with no else branch. Should produce an error.
+${ inlineif false }:
+  failure
