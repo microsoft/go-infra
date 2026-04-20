@@ -29,7 +29,7 @@ import (
 	"github.com/microsoft/go-infra/subcmd"
 )
 
-var downloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var downloadHTTPClient = http.Client{Timeout: 30 * time.Second}
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
@@ -294,7 +294,7 @@ func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, re
 	var rc io.ReadCloser
 	if err := githubutil.Retry(func() error {
 		var err error
-		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), downloadHTTPClient)
+		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), &downloadHTTPClient)
 		return err
 	}); err != nil {
 		return "", fmt.Errorf("error downloading assets.json from release %s: %w", tag, err)
