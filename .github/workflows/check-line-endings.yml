@@ -29,12 +29,16 @@ jobs:
         run: |
           set -euo pipefail
           # Probe a nonexistent file to see what attributes apply by default.
-          # Without a default (e.g. `* text=auto`), the renormalize step would
-          # silently pass for files lacking an explicit attribute.
+          # Without a default (e.g. `* text=auto eol=lf`), the renormalize step
+          # would silently pass for files lacking an explicit attribute.
           probe=$(git check-attr text eol -- probe-file-intentionally-does-not-exist.xyz)
           echo "$probe"
           if ! echo "$probe" | grep -qE '^[^:]+: text: (auto|set|lf|crlf)$'; then
-            echo "::error::.gitattributes is missing a default text rule (e.g. '* text=auto')."
+            echo "::error::.gitattributes is missing a default text rule (e.g. '* text=auto eol=lf')."
+            exit 1
+          fi
+          if ! echo "$probe" | grep -qE '^[^:]+: eol: lf$'; then
+            echo "::error::.gitattributes is missing a default 'eol=lf' rule (e.g. '* text=auto eol=lf'). This ensures Go tests and tools behave consistently across platforms."
             exit 1
           fi
 
