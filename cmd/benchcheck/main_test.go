@@ -266,9 +266,9 @@ func TestIsCrashLine(t *testing.T) {
 		{"SIGSEGV: segmentation violation", true},
 		{"SIGABRT: abort", true},
 		{"panic: runtime error", true},
-		{"SIGTERM", false},           // no colon
-		{"SIG: bad", false},          // no uppercase letters between SIG and :
-		{"SIGNATURE: foo", true},     // SIG + uppercase + colon
+		{"SIGTERM", false},       // no colon
+		{"SIG: bad", false},      // no uppercase letters between SIG and :
+		{"SIGNATURE: foo", true}, // SIG + uppercase + colon
 		{"something else", false},
 		{"", false},
 	}

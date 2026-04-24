@@ -63,7 +63,9 @@ Flags:
 `)
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	if fs.NArg() != 2 {
 		fs.Usage()

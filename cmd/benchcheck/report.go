@@ -24,7 +24,9 @@ func cmdReport(args []string) {
 		fmt.Fprintf(os.Stderr, "usage: benchcheck report [flags] results-dir\n\nFlags:\n")
 		fs.PrintDefaults()
 	}
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	if fs.NArg() != 1 {
 		fs.Usage()
