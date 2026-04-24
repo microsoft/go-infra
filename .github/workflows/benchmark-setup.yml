@@ -23,9 +23,8 @@ on:
         default: 'main'
       dispatch-base-ref:
         description: |
-          Override base ref supplied by workflow_dispatch input. Pass
-          ${{ inputs.base-ref }} from the calling workflow when wiring up
-          a workflow_dispatch input.
+          Override base ref. Caller should pass its workflow_dispatch
+          base-ref input here so manual runs can override the default.
         required: false
         type: string
         default: ''
