@@ -29,11 +29,26 @@ inputs:
 runs:
   using: composite
   steps:
+    # Capture this composite action's own ref. Doing it in a `run:` step is
+    # important: `${{ github.action_ref }}` evaluated inside a `with:` block of
+    # a `uses:` step refers to the inner action's ref (e.g., actions/checkout),
+    # not to this composite action.
+    - name: Resolve composite action ref
+      id: ref
+      shell: bash
+      run: |
+        ref="${GITHUB_ACTION_REF:-}"
+        if [ -z "$ref" ]; then
+          echo "::error::GITHUB_ACTION_REF is empty; cannot determine which microsoft/go-infra ref to check out."
+          exit 1
+        fi
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
     - name: Checkout go-infra (for benchcheck)
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: microsoft/go-infra
-        ref: ${{ github.action_ref }}
+        ref: ${{ steps.ref.outputs.ref }}
         path: _go-infra-benchcheck
 
     - name: Build benchcheck
