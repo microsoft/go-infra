@@ -65,9 +65,10 @@ func cmdReport(args []string) {
 		status := readJobStatus(filepath.Join(dir, "status.json"))
 		failures := readFileContent(filepath.Join(dir, "failures.txt"))
 		regressions := readFileContent(filepath.Join(dir, "regressions.txt"))
+		benchstat := readFileContent(filepath.Join(dir, "benchstat.txt"))
 
 		if status.Failed() {
-			buf.WriteString("<details>\n")
+			buf.WriteString("<details open>\n")
 			fmt.Fprintf(&buf, "<summary>:x: <code>%s</code></summary>\n\n", label)
 			if status.BenchmarkError {
 				fmt.Fprintf(&buf, ":boom: **Benchmark run failed** — see [workflow logs](%s) for details.\n\n", jobURL)
@@ -84,10 +85,24 @@ func cmdReport(args []string) {
 			} else if !status.BenchmarkError {
 				buf.WriteString("No benchmark regressions detected.\n\n")
 			}
+			if benchstat != "" {
+				buf.WriteString("<details><summary><b>benchstat</b></summary>\n\n```\n")
+				buf.WriteString(benchstat)
+				buf.WriteString("\n```\n</details>\n\n")
+			}
 			fmt.Fprintf(&buf, ":file_folder: [Full results](%s)\n\n", jobURL)
 			buf.WriteString("</details>\n\n")
 		} else {
-			fmt.Fprintf(&buf, ":white_check_mark: `%s` · [results](%s)\n", label, jobURL)
+			buf.WriteString("<details>\n")
+			fmt.Fprintf(&buf, "<summary>:white_check_mark: <code>%s</code> · <a href=\"%s\">job</a></summary>\n\n", label, jobURL)
+			if benchstat != "" {
+				buf.WriteString("```\n")
+				buf.WriteString(benchstat)
+				buf.WriteString("\n```\n\n")
+			} else {
+				buf.WriteString("_no benchstat output_\n\n")
+			}
+			buf.WriteString("</details>\n\n")
 		}
 	}
 
