@@ -51,9 +51,10 @@ runs:
     - name: Run benchstat
       shell: bash
       run: |
-        go -C _go-infra-benchcheck tool benchstat \
-          "${{ inputs.base-file }}" "${{ inputs.head-file }}" \
-          | tee benchstat.txt || true
+        base=$(cd "$(dirname "${{ inputs.base-file }}")" && pwd)/$(basename "${{ inputs.base-file }}")
+        head=$(cd "$(dirname "${{ inputs.head-file }}")" && pwd)/$(basename "${{ inputs.head-file }}")
+        go -C _go-infra-benchcheck tool benchstat "$base" "$head" \
+          | tee "$GITHUB_WORKSPACE/benchstat.txt" || true
 
     - name: Run benchcheck check
       shell: bash
