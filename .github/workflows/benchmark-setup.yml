@@ -1,0 +1,69 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Benchmark setup (reusable)
+
+# Resolves head-ref, base-ref, and pr-number for downstream bench jobs.
+#
+# Caller usage:
+#
+#   jobs:
+#     setup:
+#       uses: microsoft/go-infra/.github/workflows/benchmark-setup.yml@<sha>
+#       with:
+#         default-base-ref: v2
+
+on:
+  workflow_call:
+    inputs:
+      default-base-ref:
+        description: 'Default base ref for workflow_dispatch runs.'
+        required: false
+        type: string
+        default: 'main'
+      dispatch-base-ref:
+        description: |
+          Override base ref. Caller should pass its workflow_dispatch
+          base-ref input here so manual runs can override the default.
+        required: false
+        type: string
+        default: ''
+    outputs:
+      head-ref:
+        description: 'SHA (pull_request) or ref (workflow_dispatch) to benchmark as HEAD.'
+        value: ${{ jobs.resolve.outputs.head-ref }}
+      base-ref:
+        description: 'Branch, tag, or SHA to benchmark as BASE.'
+        value: ${{ jobs.resolve.outputs.base-ref }}
+      pr-number:
+        description: 'PR number, or empty for workflow_dispatch runs.'
+        value: ${{ jobs.resolve.outputs.pr-number }}
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      head-ref: ${{ steps.resolve.outputs.head-ref }}
+      base-ref: ${{ steps.resolve.outputs.base-ref }}
+      pr-number: ${{ steps.resolve.outputs.pr-number }}
+    steps:
+      - name: Resolve refs
+        id: resolve
+        uses: actions/github-script@v9
+        env:
+          DEFAULT_BASE_REF: ${{ inputs.default-base-ref }}
+          DISPATCH_BASE_REF: ${{ inputs.dispatch-base-ref }}
+        with:
+          script: |
+            if (context.eventName === 'pull_request') {
+              core.setOutput('head-ref', context.payload.pull_request.head.sha);
+              core.setOutput('base-ref', context.payload.pull_request.base.ref);
+              core.setOutput('pr-number', String(context.payload.pull_request.number));
+            } else {
+              core.setOutput('head-ref', context.sha);
+              core.setOutput('base-ref', process.env.DISPATCH_BASE_REF || process.env.DEFAULT_BASE_REF);
+              core.setOutput('pr-number', '');
+            }

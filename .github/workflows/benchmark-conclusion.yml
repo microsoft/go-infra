@@ -1,0 +1,145 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Benchmark conclusion (reusable)
+
+# Aggregates per-cell benchmark artifacts (uploaded as benchstat-*) into a
+# single PR comment, then fails the job if any matrix cell reported a
+# regression or test failure.
+#
+# Caller usage:
+#
+#   jobs:
+#     conclusion:
+#       needs: [setup, bench]
+#       if: always() && needs.setup.result == 'success'
+#       uses: microsoft/go-infra/.github/workflows/benchmark-conclusion.yml@<sha>
+#       with:
+#         head-ref: ${{ needs.setup.outputs.head-ref }}
+#         pr-number: ${{ needs.setup.outputs.pr-number }}
+#         bench-result: ${{ needs.bench.result }}
+#         infra-ref: <sha>  # same SHA as the @ pin above
+
+on:
+  workflow_call:
+    inputs:
+      head-ref:
+        description: 'HEAD ref/SHA, used to pin go-infra checkout for benchcheck build.'
+        required: true
+        type: string
+      pr-number:
+        description: 'PR number to comment on. Empty disables commenting.'
+        required: false
+        type: string
+        default: ''
+      bench-result:
+        description: 'needs.bench.result from the calling workflow.'
+        required: true
+        type: string
+      infra-ref:
+        description: |
+          Ref of microsoft/go-infra to check out for building benchcheck.
+          Should match the @ref the caller used on this workflow.
+        required: true
+        type: string
+      go-version:
+        description: 'Go toolchain version used to build benchcheck.'
+        required: false
+        type: string
+        default: '1.25.x'
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  conclude:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all benchstat artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: results
+          pattern: benchstat-*
+
+      - name: Checkout go-infra (for benchcheck)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: microsoft/go-infra
+          ref: ${{ inputs.infra-ref }}
+          path: _go-infra
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache-dependency-path: _go-infra/go.sum
+
+      - name: Fetch job URLs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Fetch job URLs and find the step number for the Compare step to deep-link.
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            --paginate --jq '
+              .jobs[] | select(.name | startswith("bench (")) |
+              (.name | ltrimstr("bench (") | rtrimstr(")") | split(", ")) as $p |
+              # Find the Compare step that actually ran (not skipped).
+              (first(.steps[] | select((.name | test("[Cc]ompare")) and .conclusion != "skipped") | .number) // null) as $step |
+              "\($p | join("-"))\t\(.html_url)\(if $step then "#step:\($step):1" else "" end)"' \
+            > job_urls.tsv || true
+          cat job_urls.tsv
+
+      - name: Build report
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          go build -C _go-infra/cmd/benchcheck -o "$RUNNER_TEMP/benchcheck" .
+          "$RUNNER_TEMP/benchcheck" report \
+            -run-url="$RUN_URL" \
+            -job-urls=job_urls.tsv \
+            -overall-result="${{ inputs.bench-result }}" \
+            results/ > report.md
+
+      - name: Post PR comment
+        if: inputs.pr-number != ''
+        uses: actions/github-script@v9
+        env:
+          PR_NUMBER: ${{ inputs.pr-number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('report.md', 'utf8');
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const marker = '<!-- benchmark-results -->';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+      - name: Check result
+        run: |
+          if [[ "${{ inputs.bench-result }}" == "failure" || "${{ inputs.bench-result }}" == "cancelled" ]]; then
+            echo "One or more benchmark jobs detected regressions or were cancelled."
+            exit 1
+          fi
+          echo "All benchmark jobs passed."
