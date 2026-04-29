@@ -80,10 +80,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Fetch job URLs and find the step number for the Compare step to deep-link.
+          # Reusable-workflow jobs are named "<caller-job-name> / <inner-job-name>",
+          # so strip the trailing " / <inner>" before parsing the matrix portion.
           gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
             --paginate --jq '
               .jobs[] | select(.name | startswith("bench (")) |
-              (.name | ltrimstr("bench (") | rtrimstr(")") | split(", ")) as $p |
+              (.name | sub(" / [^/]+$"; "") | ltrimstr("bench (") | rtrimstr(")") | split(", ")) as $p |
               # Find the Compare step that actually ran (not skipped).
               (first(.steps[] | select((.name | test("[Cc]ompare")) and .conclusion != "skipped") | .number) // null) as $step |
               "\($p | join("-"))\t\(.html_url)\(if $step then "#step:\($step):1" else "" end)"' \
