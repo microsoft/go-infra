@@ -1,0 +1,249 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Reusable end-to-end benchmark workflow. See benchmark.md for caller usage
+# and the matrix cell field reference.
+
+name: Benchmark
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        description: |
+          JSON object with an "include" array of bench-cell descriptors. See
+          the file header for the supported per-cell fields.
+        required: true
+        type: string
+      infra-ref:
+        description: |
+          Ref of microsoft/go-infra to check out for benchcheck source. Should
+          match the @ref the caller used on this reusable workflow.
+        required: true
+        type: string
+      default-base-ref:
+        description: 'Default base ref for workflow_dispatch runs.'
+        required: false
+        type: string
+        default: 'main'
+      dispatch-base-ref:
+        description: |
+          Override base ref. Caller should pass its workflow_dispatch
+          base-ref input here so manual runs can override the default.
+        required: false
+        type: string
+        default: ''
+      go-version:
+        description: 'Go toolchain version used to build benchcheck in the conclude job.'
+        required: false
+        type: string
+        default: '1.25.x'
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      head-ref: ${{ steps.resolve.outputs.head-ref }}
+      base-ref: ${{ steps.resolve.outputs.base-ref }}
+      pr-number: ${{ steps.resolve.outputs.pr-number }}
+    steps:
+      - name: Resolve refs
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEFAULT_BASE_REF: ${{ inputs.default-base-ref }}
+          DISPATCH_BASE_REF: ${{ inputs.dispatch-base-ref }}
+        with:
+          script: |
+            if (context.eventName === 'pull_request') {
+              core.setOutput('head-ref', context.payload.pull_request.head.sha);
+              core.setOutput('base-ref', context.payload.pull_request.base.ref);
+              core.setOutput('pr-number', String(context.payload.pull_request.number));
+            } else {
+              core.setOutput('head-ref', context.sha);
+              core.setOutput('base-ref', process.env.DISPATCH_BASE_REF || process.env.DEFAULT_BASE_REF);
+              core.setOutput('pr-number', '');
+            }
+
+  bench:
+    needs: setup
+    name: bench (${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    env:
+      MS_GO_NOSYSTEMCRYPTO: "1"
+      GO_TEST_FIPS: ${{ matrix.fips-mode }}
+      CGO_ENABLED: ${{ matrix.cgo-enabled }}
+    steps:
+      - name: Initialize status
+        shell: bash
+        run: echo '{"regression":false,"test_failures":false,"benchmark_error":true}' > status.json
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-download-base-url: ${{ matrix.go-download-base-url || 'https://aka.ms/golang/release/latest' }}
+
+      - name: Checkout HEAD
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.setup.outputs.head-ref }}
+          path: head
+
+      - name: Checkout BASE
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.setup.outputs.base-ref }}
+          path: base
+
+      - name: Checkout go-infra (for benchcheck)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: microsoft/go-infra
+          ref: ${{ inputs.infra-ref }}
+          path: _go-infra
+
+      - name: Set FIPS mode (Windows)
+        if: matrix.fips-mode != '' && runner.os == 'Windows'
+        shell: cmd
+        run: REG ADD HKLM\SYSTEM\CurrentControlSet\Control\Lsa\FipsAlgorithmPolicy /v Enabled /t REG_DWORD /f /d ${{ matrix.fips-mode }}
+
+      - name: Select Xcode
+        if: matrix.xcode-version != ''
+        shell: bash
+        run: sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode-version }}.app"
+
+      - name: Run benchmarks (base)
+        shell: bash
+        working-directory: base
+        run: |
+          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m ./... 2>&1 | tee ../base.txt || true
+
+      - name: Run benchmarks (head)
+        shell: bash
+        working-directory: head
+        run: |
+          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m ./... 2>&1 | tee ../head.txt || true
+
+      - name: "📊 Compare and check"
+        shell: bash
+        run: |
+          go -C _go-infra tool benchstat "$GITHUB_WORKSPACE/base.txt" "$GITHUB_WORKSPACE/head.txt" | tee benchstat.txt || true
+          go build -C _go-infra/cmd/benchcheck -o "$PWD/benchcheck" .
+          ./benchcheck check \
+            -o-regressions=regressions.txt \
+            -o-failures=failures.txt \
+            -o-status=status.json \
+            base.txt head.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: benchstat-${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}
+          path: |
+            benchstat.txt
+            regressions.txt
+            failures.txt
+            status.json
+
+  conclude:
+    needs: [setup, bench]
+    if: always() && needs.setup.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all benchstat artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: results
+          pattern: benchstat-*
+
+      - name: Checkout go-infra (for benchcheck)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: microsoft/go-infra
+          ref: ${{ inputs.infra-ref }}
+          path: _go-infra
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache-dependency-path: _go-infra/go.sum
+
+      - name: Fetch job URLs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Reusable-workflow matrix jobs are named "<caller-job-name> / bench (<label>)";
+          # strip the "<caller-job-name> / " prefix and "bench (...)" wrapper to get the
+          # label, which matches the artifact-name suffix used by the report.
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
+            --paginate --jq '
+              .jobs[] | select(.name | test(" / bench \\(")) |
+              (.name | sub("^.* / bench \\("; "") | sub("\\)$"; "")) as $label |
+              # Find the Compare step that actually ran (not skipped).
+              (first(.steps[] | select((.name | test("[Cc]ompare")) and .conclusion != "skipped") | .number) // null) as $step |
+              "\($label)\t\(.html_url)\(if $step then "#step:\($step):1" else "" end)"' \
+            > job_urls.tsv || true
+          cat job_urls.tsv
+
+      - name: Build report
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          go build -C _go-infra/cmd/benchcheck -o "$RUNNER_TEMP/benchcheck" .
+          "$RUNNER_TEMP/benchcheck" report \
+            -run-url="$RUN_URL" \
+            -job-urls=job_urls.tsv \
+            -overall-result="${{ needs.bench.result }}" \
+            results/ > report.md
+
+      - name: Post PR comment
+        if: needs.setup.outputs.pr-number != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ needs.setup.outputs.pr-number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('report.md', 'utf8');
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const marker = '<!-- benchmark-results -->';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+      - name: Check result
+        run: |
+          if [[ "${{ needs.bench.result }}" == "failure" || "${{ needs.bench.result }}" == "cancelled" ]]; then
+            echo "One or more benchmark jobs detected regressions or were cancelled."
+            exit 1
+          fi
+          echo "All benchmark jobs passed."

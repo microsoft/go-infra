@@ -176,6 +176,10 @@ func appendFailuresFromFile(lines []string, path, prefix string) ([]string, erro
 func extractFailures(r io.Reader, prefix string) ([]string, error) {
 	var lines []string
 	scanner := bufio.NewScanner(r)
+	// go test output can contain very long lines (long panic frames, generated
+	// file paths, JSON-formatted log lines). Bump the limit well above the
+	// 64KiB default so Scan does not bail out partway through with ErrTooLong.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	inCrash := false
 	for scanner.Scan() {
 		line := scanner.Text()

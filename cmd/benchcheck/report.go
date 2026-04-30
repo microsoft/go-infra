@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,14 +44,28 @@ func cmdReport(args []string) {
 
 	// Header.
 	buf.WriteString("## Benchmark Results\n\n")
-	if *overallResult == "failure" {
+	if *overallResult != "success" {
 		buf.WriteString(":warning: **Issues detected** — expand failed jobs below for details\n\n")
 	} else {
 		buf.WriteString(":white_check_mark: **No significant regressions detected**\n\n")
 	}
 
 	// Process each artifact directory.
-	entries, _ := filepath.Glob(filepath.Join(resultsDir, "benchstat-*"))
+	pattern := filepath.Join(resultsDir, "benchstat-*")
+	entries, err := filepath.Glob(pattern)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "benchcheck report: discovering benchmark results with %q: %v\n", pattern, err)
+		buf.WriteString("<details open>\n")
+		buf.WriteString("<summary>:boom: <code>artifact-discovery</code></summary>\n\n")
+		buf.WriteString("**Benchmark result discovery failed:**\n```\n")
+		buf.WriteString(err.Error())
+		buf.WriteString("\n```\n\n")
+		if *runURL != "" {
+			fmt.Fprintf(&buf, ":file_folder: [Workflow logs](%s)\n\n", *runURL)
+		}
+		buf.WriteString("</details>\n\n")
+		entries = nil
+	}
 	sort.Strings(entries)
 	for _, dir := range entries {
 		info, err := os.Stat(dir)
@@ -58,6 +73,10 @@ func cmdReport(args []string) {
 			continue
 		}
 		label := strings.TrimPrefix(info.Name(), "benchstat-")
+		// label comes from artifact directory names supplied by the caller and
+		// is interpolated into HTML below; escape to keep the comment valid even
+		// if a future caller uses unusual characters.
+		safeLabel := html.EscapeString(label)
 		jobURL := jobURLs[label]
 		if jobURL == "" {
 			jobURL = *runURL
@@ -68,7 +87,7 @@ func cmdReport(args []string) {
 
 		if status.Failed() {
 			buf.WriteString("<details>\n")
-			fmt.Fprintf(&buf, "<summary>:x: <code>%s</code></summary>\n\n", label)
+			fmt.Fprintf(&buf, "<summary>:x: <code>%s</code></summary>\n\n", safeLabel)
 			if status.BenchmarkError {
 				fmt.Fprintf(&buf, ":boom: **Benchmark run failed** — see [workflow logs](%s) for details.\n\n", jobURL)
 			}
@@ -87,7 +106,7 @@ func cmdReport(args []string) {
 			fmt.Fprintf(&buf, ":file_folder: [Full results](%s)\n\n", jobURL)
 			buf.WriteString("</details>\n\n")
 		} else {
-			fmt.Fprintf(&buf, ":white_check_mark: `%s` · [results](%s)\n", label, jobURL)
+			fmt.Fprintf(&buf, ":white_check_mark: `%s` · [results](%s)\n", safeLabel, jobURL)
 		}
 	}
 
