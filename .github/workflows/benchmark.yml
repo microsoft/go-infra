@@ -72,6 +72,11 @@ jobs:
 
   bench:
     needs: setup
+    # The cell label below is interpolated into both the job display name and
+    # the uploaded artifact name; the conclude job parses the job name to find
+    # the matching artifact. The two expressions MUST stay identical. Actions
+    # has no way to factor this out (job `name:` is evaluated before any step
+    # runs and does not see job-level `env`).
     name: bench (${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }})
     runs-on: ${{ matrix.runs-on }}
     strategy:
@@ -147,6 +152,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
+          # MUST match the label inside the job's `name:` above.
           name: benchstat-${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}
           path: |
             benchstat.txt

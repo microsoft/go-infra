@@ -1,11 +1,7 @@
 # Benchmark workflow
 
-[`benchmark.yml`](../.github/workflows/benchmark.yml) is a reusable workflow
-that runs Go benchmarks on a PR (or `workflow_dispatch` run), compares them to
-a base ref using [`benchstat`][benchstat], and posts a single aggregated
-report back to the PR as a comment. It is consumed by per-backend
-`benchmark.yml` files in `microsoft/go-crypto-winnative` and
-`microsoft/go-crypto-darwin`.
+[`benchmark.yml`](../.github/workflows/benchmark.yml) is a reusable workflow that runs Go benchmarks on a PR (or `workflow_dispatch` run), compares them to a base ref using [`benchstat`][benchstat], and posts a single aggregated report back to the PR as a comment.
+It is consumed by per-backend `benchmark.yml` files in `microsoft/go-crypto-winnative` and `microsoft/go-crypto-darwin`.
 
 [benchstat]: https://pkg.go.dev/golang.org/x/perf/cmd/benchstat
 
@@ -13,22 +9,10 @@ report back to the PR as a comment. It is consumed by per-backend
 
 Three jobs run in sequence:
 
-1. **`setup`** — resolves `head-ref`, `base-ref`, and `pr-number` from the
-   triggering event (`pull_request` payload, or `dispatch-base-ref` /
-   `default-base-ref` for `workflow_dispatch`).
-2. **`bench`** — one matrix cell per entry in `inputs.matrix`. For each cell:
-   checks out HEAD and BASE, runs `go test -bench=. -count=10 -benchmem`
-   against each, and uploads the per-cell results as a `benchstat-<label>`
-   artifact.
-3. **`conclude`** — downloads all per-cell artifacts, builds a single
-   markdown report with [`cmd/benchcheck`](../cmd/benchcheck), posts (or
-   updates) the PR comment, and fails the job if any cell reported a
-   regression or test failure.
-
-The workflow self-resolves `microsoft/go-infra` at `${{ github.workflow_sha }}`
-when building `benchcheck`, so the binary always matches the workflow YAML
-the caller pinned to. Bumping the caller's `@<sha>` is sufficient — there is
-no separate `infra-ref` to keep in sync.
+1. **`setup`** — resolves `head-ref`, `base-ref`, and `pr-number` from the triggering event (`pull_request` payload, or `dispatch-base-ref` / `default-base-ref` for `workflow_dispatch`).
+2. **`bench`** — one matrix cell per entry in `inputs.matrix`.
+   For each cell: checks out HEAD and BASE, runs `go test -bench=. -count=10 -benchmem` against each, and uploads the per-cell results as a `benchstat-<label>` artifact.
+3. **`conclude`** — downloads all per-cell artifacts, builds a single markdown report with [`cmd/benchcheck`](../cmd/benchcheck), posts (or updates) the PR comment, and fails the job if any cell reported a regression or test failure.
 
 ## Caller skeleton
 
@@ -74,20 +58,15 @@ jobs:
         }
 ```
 
-Pin the workflow to a SHA, and pass the same SHA as `infra-ref:` so the
-workflow can check out the matching `microsoft/go-infra` source for the
-`benchcheck` binary. (`${{ github.workflow_sha }}` resolves to the caller's
-event SHA inside a reusable workflow, so it can't be used here.)
+Pin the workflow to a SHA, and pass the same SHA as `infra-ref:` so the workflow can check out the matching `microsoft/go-infra` source for the `benchcheck` binary.
+(`${{ github.workflow_sha }}` resolves to the caller's event SHA inside a reusable workflow, so it can't be used here.)
 
-If `microsoft/go-infra` ships release tags, add a `# vX.Y.Z` comment after
-each SHA so Dependabot can keep both pins up to date.
+If `microsoft/go-infra` ships release tags, add a `# vX.Y.Z` comment after each SHA so Dependabot can keep both pins up to date.
 
 ## `matrix` cell fields
 
-`inputs.matrix` is parsed with `fromJSON` and used directly as the bench
-job's `strategy.matrix`, so any standard matrix shape works — top-level
-arrays for cross-product, plus optional `include` / `exclude` to add or
-trim cells. Each cell entry supports:
+`inputs.matrix` is parsed with `fromJSON` and used directly as the bench job's `strategy.matrix`, so any [standard matrix shape](https://docs.github.com/actions/how-tos/write-workflows/choose-what-workflows-do/run-job-variations) works — top-level arrays for cross-product, plus optional `include` / `exclude` to add or trim cells.
+Each cell entry supports:
 
 | field | required | meaning |
 |---|---|---|
@@ -98,9 +77,8 @@ trim cells. Each cell entry supports:
 | `cgo-enabled` | no | Exported as `CGO_ENABLED` to the bench steps. |
 | `xcode-version` | no | macOS only; runs `sudo xcode-select -s /Applications/Xcode_<v>.app` before benchmarking. |
 
-Each cell's display name and uploaded artifact name are derived as
-`<runs-on>-go<go-version>[-fips<n>][-cgo<n>][-xcode<v>]`. The combination
-must be unique across the matrix.
+Each cell's display name and uploaded artifact name are derived as `<runs-on>-go<go-version>[-fips<n>][-cgo<n>][-xcode<v>]`.
+The combination must be unique across the matrix.
 
 ## Other inputs
 
