@@ -15,12 +15,6 @@ on:
           the file header for the supported per-cell fields.
         required: true
         type: string
-      infra-ref:
-        description: |
-          Ref of microsoft/go-infra to check out for benchcheck source. Should
-          match the @ref the caller used on this reusable workflow.
-        required: true
-        type: string
       default-base-ref:
         description: 'Default base ref for workflow_dispatch runs.'
         required: false
@@ -51,6 +45,7 @@ jobs:
       head-ref: ${{ steps.resolve.outputs.head-ref }}
       base-ref: ${{ steps.resolve.outputs.base-ref }}
       pr-number: ${{ steps.resolve.outputs.pr-number }}
+      infra-ref: ${{ steps.resolve.outputs.infra-ref }}
     steps:
       - name: Resolve refs
         id: resolve
@@ -58,6 +53,10 @@ jobs:
         env:
           DEFAULT_BASE_REF: ${{ inputs.default-base-ref }}
           DISPATCH_BASE_REF: ${{ inputs.dispatch-base-ref }}
+          # github.workflow_ref is `<owner>/<repo>/<path>@<ref>` for a called
+          # reusable workflow; the trailing ref is what microsoft/go-infra was
+          # pinned to by the caller, which is what benchcheck must be built from.
+          WORKFLOW_REF: ${{ github.workflow_ref }}
         with:
           script: |
             if (context.eventName === 'pull_request') {
@@ -69,6 +68,7 @@ jobs:
               core.setOutput('base-ref', process.env.DISPATCH_BASE_REF || process.env.DEFAULT_BASE_REF);
               core.setOutput('pr-number', '');
             }
+            core.setOutput('infra-ref', process.env.WORKFLOW_REF.split('@').pop());
 
   bench:
     needs: setup
@@ -112,7 +112,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: microsoft/go-infra
-          ref: ${{ inputs.infra-ref }}
+          ref: ${{ needs.setup.outputs.infra-ref }}
           path: _go-infra
 
       - name: Set FIPS mode (Windows)
@@ -175,7 +175,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: microsoft/go-infra
-          ref: ${{ inputs.infra-ref }}
+          ref: ${{ needs.setup.outputs.infra-ref }}
           path: _go-infra
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0

@@ -45,7 +45,6 @@ jobs:
       contents: read
       pull-requests: write
     with:
-      infra-ref: <sha>   # same SHA as the @ pin above
       default-base-ref: main
       dispatch-base-ref: ${{ inputs.base-ref }}
       matrix: |
@@ -58,10 +57,10 @@ jobs:
         }
 ```
 
-Pin the workflow to a SHA, and pass the same SHA as `infra-ref:` so the workflow can check out the matching `microsoft/go-infra` source for the `benchcheck` binary.
-(`${{ github.workflow_sha }}` resolves to the caller's event SHA inside a reusable workflow, so it can't be used here.)
+Pin the workflow to a SHA.
+The `benchcheck` binary is built from `microsoft/go-infra` at that same SHA (derived from `github.workflow_ref`), so there is no second ref to keep in sync.
 
-If `microsoft/go-infra` ships release tags, add a `# vX.Y.Z` comment after each SHA so Dependabot can keep both pins up to date.
+If `microsoft/go-infra` ships release tags, add a `# vX.Y.Z` comment after the SHA so Dependabot can keep the pin up to date.
 
 ## `matrix` cell fields
 
@@ -84,7 +83,6 @@ The combination must be unique across the matrix.
 
 | input | default | meaning |
 |---|---|---|
-| `infra-ref` | required | SHA of `microsoft/go-infra` to check out for the `benchcheck` source. Must match the `@<sha>` used on the `uses:` line. |
 | `default-base-ref` | `main` | Base ref used for `workflow_dispatch` runs when `dispatch-base-ref` is empty. |
 | `dispatch-base-ref` | `''` | Caller should pass its `workflow_dispatch` `base-ref` input here. Ignored on `pull_request`. |
 | `go-version` | `1.25.x` | Go toolchain used to build `benchcheck` in the `conclude` job. |
