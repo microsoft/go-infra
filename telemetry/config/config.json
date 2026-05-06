@@ -68,7 +68,7 @@
 					"Name": "go/cgo:{enabled,disabled}"
 				},
 				{
-					"Name": "msgo/modulehash:*"
+					"Name": "msgo/systemcrypto:{enabled,disabled}"
 				}
 			]
 		}
