@@ -58,7 +58,7 @@ jobs:
 ```
 
 Pin the workflow to a SHA.
-The `benchcheck` binary is built from `microsoft/go-infra` at that same SHA (derived from `github.workflow_ref`), so there is no second ref to keep in sync.
+The `benchcheck` binary is built from `microsoft/go-infra` at that same SHA (read from `job.workflow_sha`), so there is no second ref to keep in sync.
 
 If `microsoft/go-infra` ships release tags, add a `# vX.Y.Z` comment after the SHA so Dependabot can keep the pin up to date.
 
