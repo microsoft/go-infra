@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 # Reusable end-to-end benchmark workflow. See benchmark.md for caller usage
-# and the matrix cell field reference.
+# and the matrix entry field reference.
 
 name: Benchmark
 
@@ -11,8 +11,8 @@ on:
     inputs:
       matrix:
         description: |
-          JSON object with an "include" array of bench-cell descriptors. See
-          the file header for the supported per-cell fields.
+          JSON object with an "include" array of bench-entry descriptors. See
+          the file header for the supported per-entry fields.
         required: true
         type: string
       default-base-ref:
@@ -28,7 +28,7 @@ on:
         type: string
         default: ''
       go-version:
-        description: 'Go toolchain version used to build benchcheck in the conclude job.'
+        description: 'Go toolchain version used to build benchcheck in the conclude job and to run the benchmarks.'
         required: false
         type: string
         default: '1.25.x'
@@ -66,7 +66,7 @@ jobs:
 
   bench:
     needs: setup
-    # The cell label below is interpolated into both the job display name and
+    # The entry label below is interpolated into both the job display name and
     # the uploaded artifact name; the conclude job parses the job name to find
     # the matching artifact. The two expressions MUST stay identical. Actions
     # has no way to factor this out (job `name:` is evaluated before any step
