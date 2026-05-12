@@ -237,7 +237,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	prReq := prSet.CreateGitHubPR(
 		org,
 		releaseInfo.Title,
-		"**Automated Pull Request:** Adds the Microsoft Go release announcement.\n"+
+		"**Automated Pull Request:** Adds the Microsoft build of Go release announcement.\n"+
 			"This PR was generated automatically using the [\"`publish-announcement.go`\"](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/publish-announcement.go) script.")
 	createdPR, err := gitpr.PostGitHub(ownerRepo, prReq, auther)
 	if err != nil {
