@@ -6,20 +6,20 @@ module github.com/microsoft/go-infra
 go 1.25.0
 
 require (
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.1
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-test/deep v1.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v65 v65.0.0
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
-	golang.org/x/crypto v0.50.0
-	golang.org/x/mod v0.35.0
+	golang.org/x/crypto v0.51.0
+	golang.org/x/mod v0.36.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/perf v0.0.0-20260409210113-8e83ce0f7b1c
 	golang.org/x/sync v0.20.0
-	golang.org/x/text v0.36.0
-	golang.org/x/tools v0.44.0
+	golang.org/x/text v0.37.0
+	golang.org/x/tools v0.45.0
 )
 
 require (
