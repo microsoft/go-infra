@@ -97,6 +97,19 @@ steps:
           -set-azdo-variable poll3MicrosoftGoBuildID
       displayName: ⌚ Find microsoft/go internal CI build
 
+    # Pin the discovered microsoft/go build forever. The microsoft-go pipeline
+    # itself can't tell whether a CI-triggered run is "for a release" because it
+    # has no parameters from the release flow, so retention is decided here in
+    # the release pipeline that does know.
+    # https://github.com/microsoft/go-lab/issues/59
+    - script: |
+        releasego retain-build \
+          -id '$(poll3MicrosoftGoBuildID)' \
+          -org 'https://dev.azure.com/dnceng/' \
+          -proj 'internal' \
+          -azdopat '$(System.AccessToken)'
+      displayName: Enable permanent retention on microsoft/go build
+
     - template: ../steps/report.yml
       parameters:
         releaseIssue: ${{ parameters.releaseIssue }}
