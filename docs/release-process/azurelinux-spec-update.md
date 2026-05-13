@@ -30,11 +30,11 @@ For each version released:
 
 This workflow uses tools to avoid some time consuming and some error prone steps.
 
-1. Open latest https://github.com/microsoft/go-lab/tree/main/goaztool in a shell.
+1. Open latest https://github.com/microsoft/go-lab/tree/main/devtool in a shell.
 1. `go run ./cmd/azlmirror -versions <comma-separated-versions>`
     1. E.g. `1.24.5-1,1.25.3-1`
     1. This runs the Azure Linux tarball mirroring pipeline for each new version.
-1. `go run ./cmd/azlprcreator -latest <x> -prev <y> [-security] -user <github-username>`
+1. `go run ./cmd/azlbotpr -latest <x> -prev <y> [-security] -user <github-username>`
     1. E.g. `-latest 1.25.3-1 -prev 1.24.5-1`
     1. This runs the Azure Linux PR creation pipeline for each new version, pinging the provided GitHub username using the GitHub app/bot in each of the created PRs.
     1. If there is a release with only one version, pass only one of `-latest` or `-prev`, depending on which one it's correlated with.
@@ -43,7 +43,7 @@ This workflow uses tools to avoid some time consuming and some error prone steps
     1. You will get a notification for each PR when it's created if you filled out your username properly, otherwise check [this search query](https://github.com/microsoft/azurelinux/pulls/bot-for-go%5Bbot%5D).
     1. **If** this is a new major release, follow instructions in [Adding a new major version](#adding-a-new-major-version) before proceeding.
 1. Ignore instructions in each PR. They describe the manual workflow.
-1. `go run github.com/microsoft/go-lab/goaztool/cmd/azlbuddy -prs <comma-separated-PR-URLs-or-numbers>`
+1. `go run ./cmd/azlbuddy -prs <comma-separated-PR-URLs-or-numbers>`
     1. E.g. `-prs 'https://github.com/microsoft/azurelinux/pull/16137,https://github.com/microsoft/azurelinux/pull/16136'`
 1. Mark each PR ready to review.
 1. Done!
