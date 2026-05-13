@@ -99,9 +99,7 @@ steps:
 
     # Pin the discovered microsoft/go build forever. The microsoft-go pipeline
     # itself can't tell whether a CI-triggered run is "for a release" because it
-    # has no parameters from the release flow, so retention is decided here in
-    # the release pipeline that does know.
-    # https://github.com/microsoft/go-lab/issues/59
+    # has no parameters from the release flow, so retention is decided here.
     - script: |
         releasego retain-build \
           -id '$(poll3MicrosoftGoBuildID)' \
@@ -183,6 +181,16 @@ steps:
             p version '${{ parameters.releaseVersion }}' \
             p upstreamRunID '$(poll3MicrosoftGoBuildID)'
         displayName: 🚀 Start microsoft-go-canary
+
+      # Pin the canary build forever. Canary doesn't know it's being run "for a
+      # release", so retention is decided here in the release pipeline that does.
+      - script: |
+          releasego retain-build \
+            -id '$(MicrosoftGoCanaryBuildID)' \
+            -org 'https://dev.azure.com/dnceng/' \
+            -proj 'internal' \
+            -azdopat '$(System.AccessToken)'
+        displayName: Enable permanent retention on microsoft-go-canary build
 
       - template: ../steps/report.yml
         parameters:
