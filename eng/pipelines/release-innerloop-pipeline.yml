@@ -104,16 +104,6 @@ extends:
                         -azdopat '$(System.AccessToken)' \
                         -set-azdo-variable poll1MicrosoftGoInnerloopBuildID
                     displayName: 🚀 Run microsoft/go internal innerloop build
-                  # Pin the innerloop build forever. The innerloop pipeline doesn't
-                  # know it's being run "for a release", so retention is decided
-                  # here in the release pipeline that does.
-                  - script: |
-                      releasego retain-build \
-                        -id '$(poll1MicrosoftGoInnerloopBuildID)' \
-                        -org 'https://dev.azure.com/dnceng/' \
-                        -proj 'internal' \
-                        -azdopat '$(System.AccessToken)'
-                    displayName: Enable permanent retention on microsoft-go-innerloop build
                   # Report that the job started to provide the release runner with a direct link.
                   - template: ../steps/report.yml
                     parameters:
@@ -125,6 +115,21 @@ extends:
                       buildStatus: '?'
                       start: true
                       reason: queued build
+
+                # Pin the innerloop build forever. The innerloop pipeline doesn't
+                # know it's being run "for a release", so retention is decided
+                # here in the release pipeline that does. Placed outside the
+                # "queue a fresh build" block so it also runs when the pipeline
+                # is resumed with poll1MicrosoftGoInnerloopBuildID already set,
+                # and re-runs on retry after a transient failure of this step.
+                # retain-build is idempotent (PATCH keepForever=true).
+                - script: |
+                    releasego retain-build \
+                      -id '$(poll1MicrosoftGoInnerloopBuildID)' \
+                      -org 'https://dev.azure.com/dnceng/' \
+                      -proj 'internal' \
+                      -azdopat '$(System.AccessToken)'
+                  displayName: Enable permanent retention on microsoft-go-innerloop build
 
                 # Now we have poll1MicrosoftGoInnerloopBuildID
                 - script: |

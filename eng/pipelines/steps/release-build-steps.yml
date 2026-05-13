@@ -97,17 +97,6 @@ steps:
           -set-azdo-variable poll3MicrosoftGoBuildID
       displayName: ⌚ Find microsoft/go internal CI build
 
-    # Pin the discovered microsoft/go build forever. The microsoft-go pipeline
-    # itself can't tell whether a CI-triggered run is "for a release" because it
-    # has no parameters from the release flow, so retention is decided here.
-    - script: |
-        releasego retain-build \
-          -id '$(poll3MicrosoftGoBuildID)' \
-          -org 'https://dev.azure.com/dnceng/' \
-          -proj 'internal' \
-          -azdopat '$(System.AccessToken)'
-      displayName: Enable permanent retention on microsoft/go build
-
     - template: ../steps/report.yml
       parameters:
         releaseIssue: ${{ parameters.releaseIssue }}
@@ -149,6 +138,21 @@ steps:
           reason: queued build
 
   - ${{ elseif eq(parameters.emptyPollNumber, 4) }}:
+
+    # Pin the discovered microsoft/go build forever. The microsoft-go pipeline
+    # itself can't tell whether a CI-triggered run is "for a release" because
+    # it has no parameters from the release flow, so retention is decided here.
+    # Done at the start of the wait-on-build poll (rather than next to the
+    # discovery step) so it runs on every resume path: fresh discovery,
+    # operator-supplied poll3MicrosoftGoBuildID, and retries after a transient
+    # failure of this step. retain-build is idempotent (PATCH keepForever=true).
+    - script: |
+        releasego retain-build \
+          -id '$(poll3MicrosoftGoBuildID)' \
+          -org 'https://dev.azure.com/dnceng/' \
+          -proj 'internal' \
+          -azdopat '$(System.AccessToken)'
+      displayName: Enable permanent retention on microsoft/go build
 
     # Now we have poll3MicrosoftGoBuildID
     - script: |

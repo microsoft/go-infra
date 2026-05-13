@@ -31,6 +31,16 @@ Pass -id, -org, or -proj to override.
 func handleRetainBuild(p subcmd.ParseFunc) error {
 	id := flag.Int("id", 0, "The AzDO build ID to retain. Defaults to the current build (env BUILD_BUILDID).")
 	azdoFlags := azdo.BindClientFlags()
+	// Override the default "[Required]" usage strings: for retain-build, -org and
+	// -proj are env-defaulted (SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT) so that
+	// the typical in-pipeline call site only needs -azdopat. Without this, -h
+	// would mislead users about which flags must be passed explicitly.
+	if f := flag.CommandLine.Lookup("org"); f != nil {
+		f.Usage = "The AzDO organization URL. Defaults to env SYSTEM_COLLECTIONURI."
+	}
+	if f := flag.CommandLine.Lookup("proj"); f != nil {
+		f.Usage = "The AzDO project. Defaults to env SYSTEM_TEAMPROJECT."
+	}
 
 	if err := p(); err != nil {
 		return err
