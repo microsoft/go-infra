@@ -18,8 +18,6 @@ parameters:
   releaseIssue: nil
   # A string of flags to pass "add-retry-instructions" for this job, or empty string to skip.
   retryInstructionsFlags: ''
-  # When true, mark this orchestration build to be retained forever for the release audit trail.
-  retainBuild: false
 
   # Additional variables to include.
   variables: {}
@@ -65,10 +63,12 @@ jobs:
           echo "##vso[task.prependpath]$(go env GOPATH)/bin"
         displayName: Install releasego
 
-      - ${{ if eq(parameters.retainBuild, true) }}:
-        - script: |
-            releasego retain-build -azdopat '$(System.AccessToken)'
-          displayName: Enable permanent build retention
+      # Retain every releasego orchestration build forever for the release audit
+      # trail. All current callers of this template are low-frequency release
+      # pipelines where permanent retention is always desired.
+      - script: |
+          releasego retain-build -azdopat '$(System.AccessToken)'
+        displayName: Enable permanent build retention
 
       - template: ../steps/report.yml
         parameters:

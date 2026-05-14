@@ -33,6 +33,19 @@ func BindClientFlags() *ClientFlags {
 	}
 }
 
+// BindClientFlagsWithEnvDefaults is like BindClientFlags but defaults -org and
+// -proj to the SYSTEM_COLLECTIONURI and SYSTEM_TEAMPROJECT environment variables
+// (set by AzDO during a pipeline run), so the typical in-pipeline call site
+// only needs to pass -azdopat. -azdopat is left required because AzDO does not
+// expose the PAT as an environment variable by default.
+func BindClientFlagsWithEnvDefaults() *ClientFlags {
+	return &ClientFlags{
+		Org:  flag.String("org", GetEnvCollectionURI(), "The AzDO organization URL. Defaults to env SYSTEM_COLLECTIONURI."),
+		Proj: flag.String("proj", GetEnvProject(), "The AzDO project. Defaults to env SYSTEM_TEAMPROJECT."),
+		PAT:  flag.String("azdopat", "", "[Required] The Azure DevOps PAT to use."),
+	}
+}
+
 // EnsureAssigned can be called after "flag.Parse()" to ensure all required flags were specified.
 func (c *ClientFlags) EnsureAssigned() error {
 	if *c.Org == "" {

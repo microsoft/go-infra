@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"log"
-	"os"
 	"strconv"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
@@ -29,38 +28,11 @@ Pass -id, -org, or -proj to override.
 }
 
 func handleRetainBuild(p subcmd.ParseFunc) error {
-	id := flag.Int("id", 0, "The AzDO build ID to retain. Defaults to the current build (env BUILD_BUILDID).")
-	azdoFlags := azdo.BindClientFlags()
-	// Override the default "[Required]" usage strings: for retain-build, -org and
-	// -proj are env-defaulted (SYSTEM_COLLECTIONURI, SYSTEM_TEAMPROJECT) so that
-	// the typical in-pipeline call site only needs -azdopat. Without this, -h
-	// would mislead users about which flags must be passed explicitly.
-	if f := flag.CommandLine.Lookup("org"); f != nil {
-		f.Usage = "The AzDO organization URL. Defaults to env SYSTEM_COLLECTIONURI."
-	}
-	if f := flag.CommandLine.Lookup("proj"); f != nil {
-		f.Usage = "The AzDO project. Defaults to env SYSTEM_TEAMPROJECT."
-	}
+	id := flag.Int("id", envBuildID(), "The AzDO build ID to retain. Defaults to the current build (env BUILD_BUILDID).")
+	azdoFlags := azdo.BindClientFlagsWithEnvDefaults()
 
 	if err := p(); err != nil {
 		return err
-	}
-
-	// Apply env-var defaults so the typical in-pipeline call site only needs to pass -azdopat.
-	if *id == 0 {
-		if v := os.Getenv("BUILD_BUILDID"); v != "" {
-			parsed, err := strconv.Atoi(v)
-			if err != nil {
-				return err
-			}
-			*id = parsed
-		}
-	}
-	if *azdoFlags.Org == "" {
-		*azdoFlags.Org = azdo.GetEnvCollectionURI()
-	}
-	if *azdoFlags.Proj == "" {
-		*azdoFlags.Proj = azdo.GetEnvProject()
 	}
 
 	if *id == 0 {
@@ -92,4 +64,19 @@ func handleRetainBuild(p subcmd.ParseFunc) error {
 	url, _ := azdo.GetBuildWebURL(updated)
 	log.Printf("Enabled permanent retention for build %v %v", *id, url)
 	return nil
+}
+
+// envBuildID returns the AzDO BUILD_BUILDID env var as an int, or 0 if it is
+// unset or unparseable. Used as the default for the -id flag so that -h shows
+// the resolved value when running inside a pipeline.
+func envBuildID() int {
+	v := azdo.GetEnvBuildID()
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
 }

@@ -122,7 +122,6 @@ extends:
               releaseVersion: ${{ parameters.releaseVersion }}
               releaseIssue: ${{ parameters.releaseIssue }}
               retryInstructionsFlags: '-checkboxes'
-              retainBuild: true
               variables:
                 # Set a variable for each polling parameter. If a variable starts off with 'nil', it
                 # will be overridden with a logging command as the pipeline moves on. Variables are
