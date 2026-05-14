@@ -34,23 +34,28 @@ type pkgCheck struct {
 	allowed map[string]bool
 }
 
+// defaultAllowed is the allowlist used when -allow is not specified for a -pkg.
+// These correspond to the imports permitted by deps_test.go in the Go
+// standard library for the crypto backends.
+var defaultAllowed = []string{"crypto", "crypto/cipher", "crypto/subtle", "errors", "hash", "io", "math/bits", "runtime", "slices", "strconv", "sync", "unsafe"}
+
 func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: check-imports [flags]
 
 Flags:
   -pkg <import-path>       Go package to check (may be repeated)
-  -allow <pkg1,pkg2,...>   Comma-separated allowlist for the preceding -pkg
+  -allow <pkg1,pkg2,...>   Comma-separated allowlist for the preceding -pkg (optional: overrides default)
   -module <module-path>    Module path prefix to treat as internal (auto-detected if omitted)
 
-Each -pkg must be followed by an -allow. Imports of "C" and packages under
-the module path are always permitted.
+If -allow is omitted after a -pkg, the built-in default allowlist is used:
+  crypto,crypto/cipher,crypto/subtle,errors,hash,io,math/bits,runtime,slices,strconv,sync,unsafe
+
+Imports of "C" and packages under the module path are always permitted.
 
 Example:
-  check-imports \
-    -pkg ./internal/ossl -allow errors,unsafe \
-    -pkg ./osslsetup     -allow errors,strconv,strings,sync,syscall,unsafe \
-    -pkg .               -allow crypto,crypto/cipher,crypto/subtle,errors,hash,io,math/bits,runtime,slices,strconv,sync,unsafe
+  check-imports -pkg ./internal/ossl -pkg ./osslsetup -pkg .
+  check-imports -pkg ./internal/ossl -allow errors,unsafe -pkg . -allow crypto,errors
 `)
 	}
 
@@ -77,21 +82,25 @@ Example:
 				os.Exit(2)
 			}
 			pkg := args[i]
-			// Next must be -allow
-			i++
-			if i >= len(args) || args[i] != "-allow" {
-				fmt.Fprintf(os.Stderr, "error: -pkg %s must be followed by -allow\n", pkg)
-				os.Exit(2)
-			}
-			i++
-			if i >= len(args) {
-				fmt.Fprintf(os.Stderr, "error: -allow requires a value after -pkg %s\n", pkg)
-				os.Exit(2)
-			}
-			allowed := make(map[string]bool)
-			for _, a := range strings.Split(args[i], ",") {
-				a = strings.TrimSpace(a)
-				if a != "" {
+			// Check if next arg is -allow (optional).
+			var allowed map[string]bool
+			if i+1 < len(args) && args[i+1] == "-allow" {
+				i++ // consume -allow
+				i++
+				if i >= len(args) {
+					fmt.Fprintf(os.Stderr, "error: -allow requires a value after -pkg %s\n", pkg)
+					os.Exit(2)
+				}
+				allowed = make(map[string]bool)
+				for _, a := range strings.Split(args[i], ",") {
+					a = strings.TrimSpace(a)
+					if a != "" {
+						allowed[a] = true
+					}
+				}
+			} else {
+				allowed = make(map[string]bool, len(defaultAllowed))
+				for _, a := range defaultAllowed {
 					allowed[a] = true
 				}
 			}
