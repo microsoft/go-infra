@@ -63,6 +63,13 @@ jobs:
           echo "##vso[task.prependpath]$(go env GOPATH)/bin"
         displayName: Install releasego
 
+      # Retain every releasego orchestration build forever for the release audit
+      # trail. All current callers of this template are low-frequency release
+      # pipelines where permanent retention is always desired.
+      - script: |
+          releasego retain-build -azdopat '$(System.AccessToken)'
+        displayName: Enable permanent build retention
+
       - template: ../steps/report.yml
         parameters:
           version: ${{ parameters.releaseVersion }}
