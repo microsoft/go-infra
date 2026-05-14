@@ -37,7 +37,7 @@ type pkgCheck struct {
 // defaultAllowed is the allowlist used when -allow is not specified for a -pkg.
 // These correspond to the imports permitted by deps_test.go in the Go
 // standard library for the crypto backends.
-var defaultAllowed = []string{"crypto", "crypto/cipher", "crypto/subtle", "errors", "hash", "io", "math", "math/bits", "runtime", "slices", "strconv", "sync", "unsafe"}
+var defaultAllowed = []string{"bytes", "crypto", "crypto/cipher", "crypto/subtle", "errors", "hash", "io", "math", "math/bits", "runtime", "slices", "strconv", "sync", "unsafe"}
 
 func main() {
 	flag.Usage = func() {
@@ -49,7 +49,7 @@ Flags:
   -module <module-path>    Module path prefix to treat as internal (auto-detected if omitted)
 
 If -allow is omitted after a -pkg, the built-in default allowlist is used:
-  crypto,crypto/cipher,crypto/subtle,errors,hash,io,math,math/bits,runtime,slices,strconv,sync,unsafe
+  bytes,crypto,crypto/cipher,crypto/subtle,errors,hash,io,math,math/bits,runtime,slices,strconv,sync,unsafe
 
 Imports of "C" and packages under the module path are always permitted.
 
