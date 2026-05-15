@@ -176,15 +176,15 @@ extends:
                         buildStatus: '?'
                         start: true
                         reason: queued build
-                    # Now we have poll2MicrosoftGoImagesBuildID
-                    - script: |
-                        releasego wait-build \
-                          -id '$(poll2MicrosoftGoImagesBuildID)' \
-                          -org 'https://dev.azure.com/dnceng/' \
-                          -proj 'internal' \
-                          -azdopat '$(System.AccessToken)'
-                      displayName: ⌚ Wait for go-images build
-                      timeoutInMinutes: 180
+                  # Now we have poll2MicrosoftGoImagesBuildID
+                  - script: |
+                      releasego wait-build \
+                        -id '$(poll2MicrosoftGoImagesBuildID)' \
+                        -org 'https://dev.azure.com/dnceng/' \
+                        -proj 'internal' \
+                        -azdopat '$(System.AccessToken)'
+                    displayName: ⌚ Wait for go-images build
+                    timeoutInMinutes: 180
 
                 - ${{ if eq(parameters.runPublishAnnouncement, true) }}:
                   - script: |
