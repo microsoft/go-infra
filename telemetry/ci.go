@@ -6,74 +6,81 @@ package telemetry
 import "strings"
 
 // DetectCI inspects the given environment variables to determine which CI
-// system is in use. The env parameter should be in the same format as
-// os.Environ() (i.e. each entry is "KEY=VALUE"). It returns a short
-// identifier matching the go/ci counter values, or "" if no CI system is
+// systems are in use. The env parameter should be in the same format as
+// os.Environ() (i.e. each entry is "KEY=VALUE"). It returns "ci" plus short
+// identifiers matching the go/ci counter values, or nil if no CI system is
 // detected.
-func DetectCI(env []string) string {
+func DetectCI(env []string) []string {
 	m := envMap(env)
+	var detected []string
+	addDetected := func(ci string) {
+		if len(detected) == 0 {
+			detected = append(detected, "ci")
+		}
+		detected = append(detected, ci)
+	}
 
 	// Azure Pipelines
 	// https://docs.microsoft.com/en-us/azure/devops/pipelines/build/variables#system-variables-devops-services
 	if isTrue(m["TF_BUILD"]) {
-		return "azdo"
+		addDetected("azdo")
 	}
 
 	// GitHub Actions
 	// https://docs.github.com/en/actions/learn-github-actions/environment-variables#default-environment-variables
 	if isTrue(m["GITHUB_ACTIONS"]) {
-		return "github"
+		addDetected("github")
 	}
 
 	// GitLab CI
 	// https://docs.gitlab.com/ee/ci/variables/predefined_variables.html
 	if m["GITLAB_CI"] != "" {
-		return "gitlab"
+		addDetected("gitlab")
 	}
 
 	// AppVeyor
 	// https://www.appveyor.com/docs/environment-variables/
 	if isTrue(m["APPVEYOR"]) {
-		return "appveyor"
+		addDetected("appveyor")
 	}
 
 	// Travis CI
 	// https://docs.travis-ci.com/user/environment-variables/#default-environment-variables
 	if isTrue(m["TRAVIS"]) {
-		return "travis"
+		addDetected("travis")
 	}
 
 	// CircleCI
 	// https://circleci.com/docs/2.0/env-vars/#built-in-environment-variables
 	if isTrue(m["CIRCLECI"]) {
-		return "circleci"
+		addDetected("circleci")
 	}
 
 	// AWS CodeBuild
 	// https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-env-vars.html
 	if m["CODEBUILD_BUILD_ID"] != "" && m["AWS_REGION"] != "" {
-		return "aws_codebuild"
+		addDetected("aws_codebuild")
 	}
 
 	// Jenkins
 	// https://github.com/jenkinsci/jenkins/blob/master/core/src/main/resources/jenkins/model/CoreEnvironmentContributor/buildEnv.groovy
 	if m["BUILD_ID"] != "" && m["BUILD_URL"] != "" {
-		return "jenkins"
+		addDetected("jenkins")
 	}
 
 	// Google Cloud Build
 	// https://cloud.google.com/build/docs/configuring-builds/substitute-variable-values#using_default_substitutions
 	if m["BUILD_ID"] != "" && m["PROJECT_ID"] != "" {
-		return "google_cloud_build"
+		addDetected("google_cloud_build")
 	}
 
 	// TeamCity
 	// https://www.jetbrains.com/help/teamcity/predefined-build-parameters.html#Predefined+Server+Build+Parameters
 	if m["TEAMCITY_VERSION"] != "" {
-		return "teamcity"
+		addDetected("teamcity")
 	}
 
-	return ""
+	return detected
 }
 
 // envMap converts an os.Environ()-style slice into a map for fast lookup.
