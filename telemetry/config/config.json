@@ -68,7 +68,13 @@
 					"Name": "go/cgo:{enabled,disabled}"
 				},
 				{
-					"Name": "msgo/systemcrypto:{enabled,disabled}"
+					"Name": "msgo/ci:{appveyor,aws_codebuild,azdo,circleci,github,gitlab,google_cloud_build,jenkins,teamcity,travis}"
+				},
+				{
+					"Name": "mssgo/systemcrypto:{enabled,disabled}"
+				},
+				{
+					"Name": "msgo/module:*"
 				}
 			]
 		}
