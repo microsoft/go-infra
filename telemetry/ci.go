@@ -88,6 +88,10 @@ func envMap(env []string) map[string]string {
 }
 
 // isTrue reports whether the value is a common boolean-true string.
+// Matches the logic in dotnet/sdk EnvironmentVariableParser.ParseBool.
 func isTrue(v string) bool {
-	return v == "true" || v == "True" || v == "TRUE" || v == "1"
+	return v == "1" ||
+		strings.EqualFold(v, "true") ||
+		strings.EqualFold(v, "yes") ||
+		strings.EqualFold(v, "on")
 }
