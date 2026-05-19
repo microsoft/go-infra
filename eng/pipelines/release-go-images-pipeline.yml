@@ -167,6 +167,18 @@ extends:
                           -azdopat '$(System.AccessToken)' \
                           -set-azdo-variable poll2MicrosoftGoImagesBuildID \
                       displayName: 🚀 Start go-images build/publish
+                    # Pin the go-images publish build forever. The go-images
+                    # pipeline also runs on a schedule and doesn't know it's
+                    # being run "for a release", so retention is decided here
+                    # in the release pipeline that does. Matches the pattern
+                    # used for microsoft-go, innerloop, and canary.
+                    - script: |
+                        releasego retain-build \
+                          -id '$(poll2MicrosoftGoImagesBuildID)' \
+                          -org 'https://dev.azure.com/dnceng/' \
+                          -proj 'internal' \
+                          -azdopat '$(System.AccessToken)'
+                      displayName: Enable permanent retention on microsoft-go-images build
                     - template: ../steps/report.yml
                       parameters:
                         releaseIssue: ${{ parameters.releaseIssue }}
