@@ -6,8 +6,8 @@ package telemetry
 import "strings"
 
 // DetectCI inspects the given environment variables to determine which CI
-// system is in use. The env parameter should be in the same format as
-// os.Environ() (i.e. each entry is "KEY=VALUE"). It returns a short
+// system is most likely in use, if any. The env parameter should be in the same
+// format as os.Environ() (i.e. each entry is "KEY=VALUE"). It returns a short
 // identifier matching the go/ci counter values, or "" if no CI system is
 // detected.
 func DetectCI(env []string) string {
@@ -55,6 +55,12 @@ func DetectCI(env []string) string {
 		return "aws_codebuild"
 	}
 
+	// TeamCity
+	// https://www.jetbrains.com/help/teamcity/predefined-build-parameters.html#Predefined+Server+Build+Parameters
+	if m["TEAMCITY_VERSION"] != "" {
+		return "teamcity"
+	}
+
 	// Jenkins
 	// https://github.com/jenkinsci/jenkins/blob/master/core/src/main/resources/jenkins/model/CoreEnvironmentContributor/buildEnv.groovy
 	if m["BUILD_ID"] != "" && m["BUILD_URL"] != "" {
@@ -65,12 +71,6 @@ func DetectCI(env []string) string {
 	// https://cloud.google.com/build/docs/configuring-builds/substitute-variable-values#using_default_substitutions
 	if m["BUILD_ID"] != "" && m["PROJECT_ID"] != "" {
 		return "google_cloud_build"
-	}
-
-	// TeamCity
-	// https://www.jetbrains.com/help/teamcity/predefined-build-parameters.html#Predefined+Server+Build+Parameters
-	if m["TEAMCITY_VERSION"] != "" {
-		return "teamcity"
 	}
 
 	return ""
