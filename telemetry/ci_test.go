@@ -27,6 +27,7 @@ func TestDetectCI(t *testing.T) {
 		{"AWS CodeBuild missing region", []string{"CODEBUILD_BUILD_ID=build:123"}, ""},
 		{"Jenkins missing BUILD_URL", []string{"BUILD_ID=42"}, ""},
 		{"azdo wins over generic CI", []string{"TF_BUILD=True", "CI=true"}, "azdo"},
+		{"TeamCity wins over generic BUILD_ID checks", []string{"TEAMCITY_VERSION=2023.05", "BUILD_ID=42", "BUILD_URL=http://jenkins/job/42", "PROJECT_ID=my-project"}, "teamcity"},
 	}
 
 	for _, tt := range tests {
