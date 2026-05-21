@@ -25,6 +25,8 @@ jobs:
   create:
     if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release-on-merge'))
     runs-on: ubuntu-latest
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -32,11 +34,17 @@ jobs:
         with:
           go-version: stable
 
-      - name: "Create next go-infra patch release (dry: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }})"
+      - name: Alert unsupported fork-triggered release
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true
+        run: |
+          echo "::error::This workflow cannot create releases when triggered by merged PRs from forks because GITHUB_TOKEN does not have write access. Re-run this workflow with workflow_dispatch from the base repository."
+          exit 1
+
+      - name: "Create next go-infra patch release (dry: ${{ env.DRY_RUN }})"
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           go run ./cmd/releasego create-go-infra-patch
           -repo="${{ github.repository }}"
           -github-pat="$GH_TOKEN"
-          -dry-run="${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}"
+          -dry-run="${{ env.DRY_RUN }}"
