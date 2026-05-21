@@ -32,11 +32,11 @@ jobs:
         with:
           go-version: stable
 
-      - name: "Create next go-infra patch release (dry: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run && 'true' || 'false' }})"
+      - name: "Create next go-infra patch release (dry: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }})"
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           go run ./cmd/releasego create-go-infra-patch
           -repo="${{ github.repository }}"
           -github-pat="$GH_TOKEN"
-          -dry-run="${{ github.event_name == 'workflow_dispatch' && inputs.dry-run && 'true' || 'false' }}"
+          -dry-run="${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}"
