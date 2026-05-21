@@ -37,7 +37,7 @@ jobs:
       - name: Alert unsupported fork-triggered release
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == true
         run: |
-          echo "::error::This workflow cannot create releases when triggered by merged PRs from forks because GITHUB_TOKEN does not have write access. Re-run this workflow with workflow_dispatch from the base repository."
+          echo "::error::This workflow cannot create releases when triggered by merged PRs from forks because GITHUB_TOKEN does not have write access. Ask a maintainer with workflow dispatch permissions to re-run this workflow with workflow_dispatch from the base repository, or create the release manually."
           exit 1
 
       - name: "Create next go-infra patch release (dry: ${{ env.DRY_RUN }})"
