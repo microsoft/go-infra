@@ -16,22 +16,22 @@ on:
         required: true
         type: string
       default-base-ref:
-        description: 'Default base ref for workflow_dispatch runs.'
+        description: "Default base ref for workflow_dispatch runs."
         required: false
         type: string
-        default: 'main'
+        default: "main"
       dispatch-base-ref:
         description: |
           Override base ref. Caller should pass its workflow_dispatch
           base-ref input here so manual runs can override the default.
         required: false
         type: string
-        default: ''
+        default: ""
       go-version:
-        description: 'Go toolchain version used to build benchcheck in the conclude job and to run the benchmarks.'
+        description: "Go toolchain version used to build benchcheck in the conclude job and to run the benchmarks."
         required: false
         type: string
-        default: '1.25.x'
+        default: "1.25.x"
 
 permissions:
   actions: read
@@ -71,8 +71,9 @@ jobs:
     # the matching artifact. The two expressions MUST stay identical. Actions
     # has no way to factor this out (job `name:` is evaluated before any step
     # runs and does not see job-level `env`).
-    name: bench (${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }})
+    name: bench (${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}${{ matrix.openssl-version && format('-ossl{0}', matrix.openssl-version) || '' }}${{ matrix.container-label && format('-{0}', matrix.container-label) || '' }})
     runs-on: ${{ matrix.runs-on }}
+    container: ${{ matrix.container && fromJSON(format('{{"image":"{0}"}}', matrix.container)) || fromJSON('null') }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.matrix) }}
@@ -80,10 +81,16 @@ jobs:
       MS_GO_NOSYSTEMCRYPTO: "1"
       GO_TEST_FIPS: ${{ matrix.fips-mode }}
       CGO_ENABLED: ${{ matrix.cgo-enabled }}
+      GO_OPENSSL_VERSION_OVERRIDE: ${{ matrix.openssl-version }}
     steps:
       - name: Initialize status
         shell: bash
         run: echo '{"regression":false,"test_failures":false,"benchmark_error":true}' > status.json
+
+      - name: Container setup
+        if: matrix.container-setup != ''
+        shell: bash
+        run: ${{ matrix.container-setup }}
 
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
@@ -121,6 +128,16 @@ jobs:
         shell: bash
         run: sudo xcode-select -s "/Applications/Xcode_${{ matrix.xcode-version }}.app"
 
+      - name: Install build tools
+        if: matrix.openssl-version != '' && runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Install OpenSSL
+        if: matrix.openssl-version != ''
+        shell: bash
+        run: sudo sh head/scripts/openssl.sh ${{ matrix.openssl-version }}
+
       - name: Run benchmarks (base)
         shell: bash
         working-directory: base
@@ -149,7 +166,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           # MUST match the label inside the job's `name:` above.
-          name: benchstat-${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}
+          name: benchstat-${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}${{ matrix.openssl-version && format('-ossl{0}', matrix.openssl-version) || '' }}${{ matrix.container-label && format('-{0}', matrix.container-label) || '' }}
           path: |
             benchstat.txt
             regressions.txt
