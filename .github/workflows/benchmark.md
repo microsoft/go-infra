@@ -75,8 +75,12 @@ Each matrix entry supports:
 | `fips-mode` | no | Non-empty enables FIPS mode for the bench steps; on Windows runners this also writes the `FipsAlgorithmPolicy` registry key to the supplied value. |
 | `cgo-enabled` | no | Exported as `CGO_ENABLED` to the bench steps. |
 | `xcode-version` | no | macOS only; runs `sudo xcode-select -s /Applications/Xcode_<v>.app` before benchmarking. |
+| `openssl-version` | no | Linux only; installs `build-essential`, builds the specified OpenSSL version from source using the repo's `scripts/openssl.sh`, and exports `GO_OPENSSL_VERSION_OVERRIDE`. |
+| `container` | no | Docker image to run the bench job in (e.g. an Azure Linux image with system OpenSSL). When empty or absent the job runs directly on the runner. |
+| `container-label` | no | Short label appended to the job/artifact name when `container` is set (e.g. `azl3`). Keeps names readable and unique. |
+| `container-setup` | no | Shell command(s) to run inside the container before any other steps (e.g. `tdnf install -y openssl-devel`). |
 
-Each entry's display name and uploaded artifact name are derived as `<runs-on>-go<go-version>[-fips<n>][-cgo<n>][-xcode<v>]`.
+Each entry's display name and uploaded artifact name are derived as `<runs-on>-go<go-version>[-fips<n>][-cgo<n>][-xcode<v>][-ossl<v>][-<container-label>]`.
 The combination must be unique across the matrix.
 
 ## Other inputs
