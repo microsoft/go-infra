@@ -18,24 +18,18 @@ type UploadConfig struct {
 
 // A ProgramConfig contains the configuration for a single program.
 type ProgramConfig struct {
-	// the counter names may have to be
-	// repeated for each program. (e.g., if the counters are in a package
-	// that is used in more than one program.)
-	Name       string
-	Counters   []CounterConfig  `json:",omitempty"`
-	Properties []PropertyConfig `json:",omitempty"`
+	// The counter and property names may have to be repeated for each
+	// program (e.g., if they are defined in a package used by more than
+	// one program).
+	Name     string
+	Counters []CounterConfig `json:",omitempty"`
 }
 
 // A CounterConfig contains the configuration for a single counter.
+// Counters may optionally declare associated property event names.
 type CounterConfig struct {
-	Name string // The "collapsed" counter: <chart>:{<bucket1>,<bucket2>,...}
-}
-
-// A PropertyConfig contains the configuration for an event that carries
-// high-cardinality data as custom dimensions (properties) rather than as
-// part of the counter name.
-type PropertyConfig struct {
-	Name string // The event name (e.g. "msgo/modulehash")
+	Name       string   // The "collapsed" counter: <chart>:{<bucket1>,<bucket2>,...}
+	Properties []string `json:",omitempty"` // Associated property event names
 }
 
 func ReadConfig(file string) (*UploadConfig, error) {

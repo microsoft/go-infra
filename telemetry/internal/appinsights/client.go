@@ -53,6 +53,11 @@ type Client struct {
 	// If nil, all telemetry items are sent.
 	UploadFilter func(name string) bool
 
+	// Function to filter property keys for a given event name.
+	// Returns a new map containing only the allowed keys.
+	// If nil, all properties are sent.
+	PropertyFilter func(name string, properties map[string]string) map[string]string
+
 	channel *inMemoryChannel
 	context *telemetryContext
 
@@ -153,6 +158,9 @@ func (c *Client) Stop() {
 func (c *Client) track(data contracts.EventData, n int64) {
 	if n == 0 || (c.UploadFilter != nil && !c.UploadFilter(data.Name)) {
 		return
+	}
+	if c.PropertyFilter != nil && data.Properties != nil {
+		data.Properties = c.PropertyFilter(data.Name, data.Properties)
 	}
 	if !c.init() {
 		// Stop or Close consumed initOnce before init could run.

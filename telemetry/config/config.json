@@ -50,7 +50,8 @@
 			"Name": "cmd/go",
 			"Counters": [
 				{
-					"Name": "go/invocations"
+					"Name": "go/invocations",
+					"Properties": ["msgo/module/hash"]
 				},
 				{
 					"Name": "go/goexperiment:{ms_tls_config_schannel,systemcrypto,nosystemcrypto,opensslcrypto,cngcrypto,darwincrypto,ms_nocgo_opensslcrypto}"
@@ -69,11 +70,6 @@
 				},
 				{
 					"Name": "msgo/systemcrypto:{enabled,disabled}"
-				}
-			],
-			"Properties": [
-				{
-					"Name": "msgo/modulehash"
 				}
 			]
 		}

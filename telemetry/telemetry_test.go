@@ -101,6 +101,107 @@ func TestUploadFilter(t *testing.T) {
 	telemetry.Close(t.Context())
 }
 
+func TestUploadFilterProperties(t *testing.T) {
+	uploadConfig := baseUploadConfig(t)
+	// Declare allowed property keys on the first counter.
+	uploadConfig.Programs[0].Counters[0].Properties = []string{
+		"msgo/module/hash",
+	}
+	startTelemetry(t, uploadConfig, 0)
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		// The counter itself should still be allowed.
+		{"test_counter", true},
+		{"go:1", true},
+
+		// Property keys don't become event names.
+		{"msgo/module/hash", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := telemetry.UploadFilterForTest(tt.name)
+			if got != tt.want {
+				t.Errorf("UploadFilter(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+
+	telemetry.Close(t.Context())
+}
+
+func TestPropertyFilter(t *testing.T) {
+	uploadConfig := baseUploadConfig(t)
+	// "test_counter" allows property key "msgo/module/hash"
+	uploadConfig.Programs[0].Counters[0].Properties = []string{
+		"msgo/module/hash",
+	}
+	startTelemetry(t, uploadConfig, 0)
+
+	tests := []struct {
+		name       string
+		eventName  string
+		properties map[string]string
+		want       map[string]string
+	}{
+		{
+			name:       "declared property key kept",
+			eventName:  "test_counter",
+			properties: map[string]string{"msgo/module/hash": "abc123"},
+			want:       map[string]string{"msgo/module/hash": "abc123"},
+		},
+		{
+			name:       "undeclared property key stripped",
+			eventName:  "test_counter",
+			properties: map[string]string{"msgo/module/hash": "abc123", "secret": "oops"},
+			want:       map[string]string{"msgo/module/hash": "abc123"},
+		},
+		{
+			name:       "all keys undeclared returns empty",
+			eventName:  "test_counter",
+			properties: map[string]string{"secret": "oops"},
+			want:       map[string]string{},
+		},
+		{
+			name:       "counter without properties returns nil",
+			eventName:  "go:1",
+			properties: map[string]string{"a": "1"},
+			want:       nil,
+		},
+		{
+			name:       "unknown event returns nil",
+			eventName:  "unknown/event",
+			properties: map[string]string{"a": "1"},
+			want:       nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := telemetry.PropertyFilterForTest(tt.eventName, tt.properties)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("PropertyFilter(%q, ...) = %v, want nil", tt.eventName, got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Errorf("PropertyFilter(%q, ...) returned %d keys, want %d\ngot:  %v\nwant: %v",
+					tt.eventName, len(got), len(tt.want), got, tt.want)
+				return
+			}
+			for k, wantV := range tt.want {
+				if gotV, ok := got[k]; !ok || gotV != wantV {
+					t.Errorf("PropertyFilter(%q, ...)[%q] = %q, want %q", tt.eventName, k, gotV, wantV)
+				}
+			}
+		})
+	}
+
+	telemetry.Close(t.Context())
+}
+
 func TestTelemetryWrongGOOS(t *testing.T) {
 	uploadConfig := baseUploadConfig(t)
 	uploadConfig.GOOS = []string{"not-a-real-os"} // intentionally wrong
