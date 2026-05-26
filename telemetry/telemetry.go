@@ -54,8 +54,9 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-var countersToUpload map[string]struct{}
+var eventsToUpload map[string]struct{}
 var wildcardPrefixes []string
+var allowedProperties map[string]map[string]struct{}
 
 // Start initializes telemetry using the specified configuration.
 func Start(cfg Config) {
@@ -91,7 +92,8 @@ func Start(cfg Config) {
 	if progIdx == -1 {
 		return // Program not configured for telemetry
 	}
-	countersToUpload = make(map[string]struct{})
+	eventsToUpload = make(map[string]struct{})
+	allowedProperties = make(map[string]map[string]struct{})
 	wildcardPrefixes = nil
 	for _, c := range uploadConfig.Programs[progIdx].Counters {
 		if c.Name == "" {
@@ -103,7 +105,14 @@ func Start(cfg Config) {
 					wildcardPrefixes = append(wildcardPrefixes, prefix)
 				}
 			} else {
-				countersToUpload[e] = struct{}{}
+				eventsToUpload[e] = struct{}{}
+				if len(c.Properties) > 0 {
+					keys := make(map[string]struct{}, len(c.Properties))
+					for _, p := range c.Properties {
+						keys[p] = struct{}{}
+					}
+					allowedProperties[e] = keys
+				}
 			}
 		}
 	}
@@ -117,8 +126,9 @@ func Start(cfg Config) {
 			"ai.application.ver": ver,
 			"ai.cloud.role":      prog,
 		},
-		UploadFilter: uploadFilter,
-		Logger:       cfg.Logger,
+		UploadFilter:   uploadFilter,
+		PropertyFilter: propertyFilter,
+		Logger:         cfg.Logger,
 	})
 }
 
@@ -132,7 +142,7 @@ func Close(ctx context.Context) {
 }
 
 func uploadFilter(name string) bool {
-	if _, ok := countersToUpload[name]; ok {
+	if _, ok := eventsToUpload[name]; ok {
 		return true
 	}
 	for _, prefix := range wildcardPrefixes {
@@ -141,4 +151,18 @@ func uploadFilter(name string) bool {
 		}
 	}
 	return false
+}
+
+func propertyFilter(name string, properties map[string]string) map[string]string {
+	keys, ok := allowedProperties[name]
+	if !ok {
+		return nil
+	}
+	filtered := make(map[string]string, len(keys))
+	for k, v := range properties {
+		if _, ok := keys[k]; ok {
+			filtered[k] = v
+		}
+	}
+	return filtered
 }

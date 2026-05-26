@@ -5,3 +5,6 @@ package telemetry
 
 // UploadFilterForTest is exported for testing only.
 var UploadFilterForTest = uploadFilter
+
+// PropertyFilterForTest is exported for testing only.
+var PropertyFilterForTest = propertyFilter
