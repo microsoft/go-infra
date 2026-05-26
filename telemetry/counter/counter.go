@@ -30,6 +30,14 @@ func New(name string) *Counter {
 	return telemetry.Client.NewEvent(name, nil)
 }
 
+// NewWithProperties returns a counter with the given name and custom properties.
+// Properties are sent as custom dimensions in Application Insights, allowing
+// high-cardinality values (such as hashes) to be sent as values rather than
+// as part of the counter name.
+func NewWithProperties(name string, properties map[string]string) *Counter {
+	return telemetry.Client.NewEvent(name, properties)
+}
+
 // CountFlags creates a counter for every flag that is set
 // and increments the counter. The name of the counter is
 // the concatenation of prefix and the flag name.

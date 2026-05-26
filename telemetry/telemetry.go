@@ -107,6 +107,11 @@ func Start(cfg Config) {
 			}
 		}
 	}
+	for _, p := range uploadConfig.Programs[progIdx].Properties {
+		if p.Name != "" {
+			countersToUpload[p.Name] = struct{}{}
+		}
+	}
 
 	telemetry.Init(&appinsights.Client{
 		InstrumentationKey: cfg.InstrumentationKey,

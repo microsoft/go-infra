@@ -69,9 +69,11 @@
 				},
 				{
 					"Name": "msgo/systemcrypto:{enabled,disabled}"
-				},
+				}
+			],
+			"Properties": [
 				{
-					"Name": "msgo/module:*"
+					"Name": "msgo/modulehash"
 				}
 			]
 		}
