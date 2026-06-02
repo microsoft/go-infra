@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/go-infra/goldentest"
 )
 
 func Test_createCommitMessageSnippet(t *testing.T) {
@@ -321,8 +323,8 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 			commitLog:      "def5678 runtime: reduce allocations\nabc1235 cmd/go: fix module loading",
 			wantContains: []string{
 				"<details><summary>Upstream commits included in this update</summary>",
-				"- [`def5678`](https://github.com/golang/go/commit/def5678) runtime: reduce allocations",
-				"- [`abc1235`](https://github.com/golang/go/commit/abc1235) cmd/go: fix module loading",
+				"- [`def5678`](https://github.com/golang/go/commit/def5678) `runtime: reduce allocations`",
+				"- [`abc1235`](https://github.com/golang/go/commit/abc1235) `cmd/go: fix module loading`",
 				"[View full diff on GitHub](https://github.com/golang/go/compare/abc1234...def5678)",
 				"</details>",
 			},
@@ -334,7 +336,7 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 			newCommit:      "bbb1111",
 			commitLog:      "bbb1111 net/http: fix redirect handling",
 			wantContains: []string{
-				"- [`bbb1111`](https://github.com/golang/go/commit/bbb1111) net/http: fix redirect handling",
+				"- [`bbb1111`](https://github.com/golang/go/commit/bbb1111) `net/http: fix redirect handling`",
 				"https://github.com/golang/go/compare/aaa0000...bbb1111",
 			},
 		},
@@ -377,8 +379,57 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 			newCommit:      "bbb1111",
 			commitLog:      "bbb1111",
 			wantContains: []string{
-				"- bbb1111",
+				"- `bbb1111`",
 			},
+		},
+		{
+			name:           "fix keyword",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "61c83b6407 sinit.c: recursion in sinit fixes #1617",
+		},
+		{
+			name:           "auto-linked issue references",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog: "4d95fe6653 test: add regress test for #53619\n" +
+				"4d95fe6653 test: add regress test for golang/go#53619\n" +
+				"4d95fe6653 test: add regress test for https://github.com/golang/go/issues/53619",
+		},
+		{
+			name:           "markdown syntax in commit message",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "4d95fe6653 doc: mention `go test` fixes #53619 and <details> for @ghost",
+		},
+		{
+			name:           "handful",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "abdc5da461185ab87c1240384e9a66339219f766",
+			newCommit:      "39b11f4b14ee3ecce33588a48f9190bc49363e75",
+			commitLog: `39b11f4b14 [dev.simd] simd: add ARM64 NEON shift intrinsics
+e4283592e5 fmt: give advice on wrapper functions
+098d688071 [dev.simd] simdgen: add argsMatchRule for broadcast-to-VMOVI folding
+1bcea1df64 cmd/{vet,fix}: use new constants from /x/tools/go/analysis/suite
+ae1c21739d [dev.simd] simd: add ARM64 NEON Broadcast and String helpers
+399bc412ae [dev.simd] simd: add ARM64 NEON support for partial slice operations
+60f0ced65b internal/testenv: make MustHaveSource detect missing source
+e0a8616941 math/rand/v2: add method Rand.N
+8621461b26 cmd: update vendored x/arch
+0db3804845 archive/zip: turn off large zip test on 32-bit archs
+abdc5da461 simd/archsimd/_gen: annotate text/template usage`,
+		},
+		{
+			name:           "backticks",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog: "e5489a34ca crypto/x509: add missing `be` to comment about serial number positivity\n" +
+				"73652af80d cmd/compile: use `else if` for mutually exclusive `if` statements\n" +
+				"54af9a3ba5 runtime: reintroduce ``dead'' space during GC scan",
 		},
 	}
 	for _, tt := range tests {
@@ -394,6 +445,11 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 					t.Errorf("formatUpstreamCommitDetails() contains unexpected content %q\ngot:\n%s", notWant, got)
 				}
 			}
+			// Don't include the <details> block and repeated \n for the golden
+			// output so it's easier to preview.
+			gotSimple := strings.ReplaceAll(got, "\n\n<details><summary>Upstream commits included in this update</summary>\n\n", "")
+			gotSimple = strings.ReplaceAll(gotSimple, "\n</details>", "")
+			goldentest.Check(t, "*.PRDescription.md", gotSimple)
 		})
 	}
 }
