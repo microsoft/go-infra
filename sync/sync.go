@@ -503,6 +503,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				return nil
 			}
 
+			// Get the current submodule commit before updating, so we can build a compare link.
+			oldSubmoduleCommit, _ := getTrimmedCmdOutput("rev-parse", "HEAD:"+entry.SubmoduleTarget)
+
 			// This update uses a submodule, so find the target version of upstream and update the
 			// submodule to point at it. UpstreamLocalSyncTarget might be a commit hash, and if so,
 			// this rev-parse is simply checking that the commit actually exists.
@@ -591,6 +594,28 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 			prTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
 			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
+
+			// Add a compare link and commit list so reviewers can see what changed upstream.
+			if oldSubmoduleCommit != "" && oldSubmoduleCommit != newCommit {
+				compareRepoURL := entry.UpstreamMirror
+				if compareRepoURL == "" {
+					compareRepoURL = entry.Upstream
+				}
+				if parsed, err := gitpr.ParseRemoteURL(compareRepoURL); err == nil {
+					// Get the list of commits in the range for an inline summary.
+					commitList, logErr := getTrimmedCmdOutput(
+						"log", "--oneline", "--no-decorate",
+						oldSubmoduleCommit+".."+newCommit,
+					)
+					var commitLog string
+					if logErr == nil {
+						commitLog = commitList
+					}
+					prBody += formatUpstreamCommitDetails(
+						parsed.GetOwnerSlashRepo(), oldSubmoduleCommit, newCommit, commitLog,
+					)
+				}
+			}
 		}
 
 		// Check if there are any files in the stage. If not, we don't need to process this branch
@@ -894,4 +919,37 @@ func createCommitMessageSnippet(message string) string {
 		message = message[:maxUpstreamCommitMessageInSnippet-len(snippetCutoffIndicator)+1] + snippetCutoffIndicator
 	}
 	return message
+}
+
+// formatUpstreamCommitDetails builds a collapsible Markdown section listing the upstream commits
+// included in a submodule update, with clickable links to the GitHub commit pages and a compare
+// link showing the full diff. commitLog is the output of "git log --oneline" for the commit range;
+// it may be empty if the log could not be retrieved.
+func formatUpstreamCommitDetails(ownerSlashRepo, oldCommit, newCommit, commitLog string) string {
+	compareLink := fmt.Sprintf(
+		"https://github.com/%s/compare/%s...%s",
+		ownerSlashRepo, oldCommit, newCommit,
+	)
+
+	var b strings.Builder
+	b.WriteString("\n\n<details><summary>Upstream commits included in this update</summary>\n\n")
+
+	if commitLog != "" {
+		for _, line := range strings.Split(commitLog, "\n") {
+			if parts := strings.SplitN(line, " ", 2); len(parts) == 2 {
+				fmt.Fprintf(&b, "- [`%s`](https://github.com/%s/commit/%s) %s\n",
+					parts[0], ownerSlashRepo, parts[0], parts[1],
+				)
+			} else {
+				b.WriteString("- " + line + "\n")
+			}
+		}
+	} else {
+		b.WriteString("Could not retrieve commit list.\n")
+	}
+
+	fmt.Fprintf(&b, "\n[View full diff on GitHub](%s)", compareLink)
+	b.WriteString("\n\n</details>")
+
+	return b.String()
 }
