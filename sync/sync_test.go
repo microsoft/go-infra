@@ -429,7 +429,8 @@ abdc5da461 simd/archsimd/_gen: annotate text/template usage`,
 			newCommit:      "bbb1111",
 			commitLog: "e5489a34ca crypto/x509: add missing `be` to comment about serial number positivity\n" +
 				"73652af80d cmd/compile: use `else if` for mutually exclusive `if` statements\n" +
-				"54af9a3ba5 runtime: reintroduce ``dead'' space during GC scan",
+				"54af9a3ba5 runtime: reintroduce ``dead'' space during GC scan\n" +
+				"58a8fdb6cf cmd/go: inject State parameter into `bug.runBug`",
 		},
 	}
 	for _, tt := range tests {
