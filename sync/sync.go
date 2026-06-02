@@ -966,7 +966,7 @@ func cutLogHash(logLine string) (hash, message string) {
 		return "", logLine
 	}
 	for _, h := range hash {
-		if !(('0' <= h && h <= '9') || ('a' <= h && h <= 'f')) {
+		if (h < '0' || h > '9') && (h < 'a' || h > 'f') {
 			// If the hash doesn't look like a real commit hash,
 			// treat it as a message.
 			return "", logLine
