@@ -938,13 +938,12 @@ func formatUpstreamCommitDetails(ownerSlashRepo, oldCommit, newCommit, commitLog
 		b.WriteString("Could not retrieve commit list.\n")
 	} else if commitLog != "" {
 		for _, line := range strings.Split(commitLog, "\n") {
-			if parts := strings.SplitN(line, " ", 2); len(parts) == 2 {
-				fmt.Fprintf(&b, "- [`%s`](https://github.com/%s/commit/%s) %s\n",
-					parts[0], ownerSlashRepo, parts[0], parts[1],
-				)
-			} else {
-				b.WriteString("- " + line + "\n")
+			fmt.Fprintf(&b, "- ")
+			hash, message := cutLogHash(line)
+			if hash != "" {
+				fmt.Fprintf(&b, "[`%s`](https://github.com/%s/commit/%s) ", hash, ownerSlashRepo, hash)
 			}
+			fmt.Fprintf(&b, "%s\n", formatCommitMessageForPRDescription(message))
 		}
 	} else {
 		b.WriteString("No commits in range.\n")
@@ -954,4 +953,46 @@ func formatUpstreamCommitDetails(ownerSlashRepo, oldCommit, newCommit, commitLog
 	b.WriteString("\n\n</details>")
 
 	return b.String()
+}
+
+// cutLogHash attempts to split a "git log --oneline" line into the commit hash
+// and the commit message. If the line doesn't look like a valid "git log
+// --oneline" line, it returns an empty hash and the full line as the message.
+func cutLogHash(logLine string) (hash, message string) {
+	hash, message, ok := strings.Cut(logLine, " ")
+	if !ok {
+		// If the log line doesn't contain a space, it doesn't look like a valid
+		// "git log --oneline" line.
+		return "", logLine
+	}
+	for _, h := range hash {
+		if (h < '0' || h > '9') && (h < 'a' || h > 'f') {
+			// If the hash doesn't look like a real commit hash,
+			// treat it as a message.
+			return "", logLine
+		}
+	}
+	return hash, message
+}
+
+// formatCommitMessageForPRDescription formats a commit message for display in
+// the PR description without making the PR take any actions upon merge, without
+// linking issues, without pinging users, and others, by formatting the message
+// as an inline code span.
+func formatCommitMessageForPRDescription(message string) string {
+	codeSpanDelimiter := "`"
+	// Increase the size of the inline code span delimiter until the message
+	// doesn't contain it, so the wrapping can't be interrupted.
+	// (This is like a code fence, but inline.)
+	// It's rare to hit backticks in a message--not worth doing efficiently.
+	for strings.Contains(message, codeSpanDelimiter) {
+		codeSpanDelimiter += "`"
+	}
+	// Insert a space if the message begins or ends with backticks to avoid
+	// (according to parsers) unbalanced backticks that won't be understood
+	// correctly.
+	if strings.HasPrefix(message, "`") || strings.HasSuffix(message, "`") {
+		return codeSpanDelimiter + " " + message + " " + codeSpanDelimiter
+	}
+	return codeSpanDelimiter + message + codeSpanDelimiter
 }
