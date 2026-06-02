@@ -301,3 +301,99 @@ func runGit(dir string, args ...string) error {
 	cmd.Dir = dir
 	return run(cmd)
 }
+
+func Test_formatUpstreamCommitDetails(t *testing.T) {
+	tests := []struct {
+		name           string
+		ownerSlashRepo string
+		oldCommit      string
+		newCommit      string
+		commitLog      string
+		logFailed      bool
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name:           "multiple commits",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "abc1234",
+			newCommit:      "def5678",
+			commitLog:      "def5678 runtime: reduce allocations\nabc1235 cmd/go: fix module loading",
+			wantContains: []string{
+				"<details><summary>Upstream commits included in this update</summary>",
+				"- [`def5678`](https://github.com/golang/go/commit/def5678) runtime: reduce allocations",
+				"- [`abc1235`](https://github.com/golang/go/commit/abc1235) cmd/go: fix module loading",
+				"[View full diff on GitHub](https://github.com/golang/go/compare/abc1234...def5678)",
+				"</details>",
+			},
+		},
+		{
+			name:           "single commit",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "bbb1111 net/http: fix redirect handling",
+			wantContains: []string{
+				"- [`bbb1111`](https://github.com/golang/go/commit/bbb1111) net/http: fix redirect handling",
+				"https://github.com/golang/go/compare/aaa0000...bbb1111",
+			},
+		},
+		{
+			name:           "log failed",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "",
+			logFailed:      true,
+			wantContains: []string{
+				"Could not retrieve commit list.",
+				"https://github.com/golang/go/compare/aaa0000...bbb1111",
+			},
+			wantNotContain: []string{
+				"- [`",
+				"No commits in range.",
+			},
+		},
+		{
+			name:           "empty range",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "",
+			logFailed:      false,
+			wantContains: []string{
+				"No commits in range.",
+				"https://github.com/golang/go/compare/aaa0000...bbb1111",
+			},
+			wantNotContain: []string{
+				"- [`",
+				"Could not retrieve commit list.",
+			},
+		},
+		{
+			name:           "commit line without space",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "bbb1111",
+			wantContains: []string{
+				"- bbb1111",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatUpstreamCommitDetails(tt.ownerSlashRepo, tt.oldCommit, tt.newCommit, tt.commitLog, tt.logFailed)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("formatUpstreamCommitDetails() missing expected content %q\ngot:\n%s", want, got)
+				}
+			}
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(got, notWant) {
+					t.Errorf("formatUpstreamCommitDetails() contains unexpected content %q\ngot:\n%s", notWant, got)
+				}
+			}
+		})
+	}
+}
