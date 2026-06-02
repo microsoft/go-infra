@@ -309,6 +309,7 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 		oldCommit      string
 		newCommit      string
 		commitLog      string
+		logFailed      bool
 		wantContains   []string
 		wantNotContain []string
 	}{
@@ -338,17 +339,35 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 			},
 		},
 		{
-			name:           "empty commit log",
+			name:           "log failed",
 			ownerSlashRepo: "golang/go",
 			oldCommit:      "aaa0000",
 			newCommit:      "bbb1111",
 			commitLog:      "",
+			logFailed:      true,
 			wantContains: []string{
 				"Could not retrieve commit list.",
 				"https://github.com/golang/go/compare/aaa0000...bbb1111",
 			},
 			wantNotContain: []string{
 				"- [`",
+				"No commits in range.",
+			},
+		},
+		{
+			name:           "empty range",
+			ownerSlashRepo: "golang/go",
+			oldCommit:      "aaa0000",
+			newCommit:      "bbb1111",
+			commitLog:      "",
+			logFailed:      false,
+			wantContains: []string{
+				"No commits in range.",
+				"https://github.com/golang/go/compare/aaa0000...bbb1111",
+			},
+			wantNotContain: []string{
+				"- [`",
+				"Could not retrieve commit list.",
 			},
 		},
 		{
@@ -364,7 +383,7 @@ func Test_formatUpstreamCommitDetails(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatUpstreamCommitDetails(tt.ownerSlashRepo, tt.oldCommit, tt.newCommit, tt.commitLog)
+			got := formatUpstreamCommitDetails(tt.ownerSlashRepo, tt.oldCommit, tt.newCommit, tt.commitLog, tt.logFailed)
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("formatUpstreamCommitDetails() missing expected content %q\ngot:\n%s", want, got)
