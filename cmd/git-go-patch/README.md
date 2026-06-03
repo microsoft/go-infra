@@ -38,6 +38,33 @@ git go-patch -h
 
 Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and `apply`, `rebase`, and `extract` can help.
 
+### Streamlined workflow with `git go-patch shell`
+
+`git go-patch shell` automates the most common parts of the editing workflow. It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and it automatically runs `git go-patch extract` when you exit the shell. The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
+
+A typical session looks like this:
+
+```
+git go-patch shell -apply
+# edit commits in the submodule, e.g. with `git rebase -i` or `git go-patch rebase`
+exit
+# `git go-patch extract` runs automatically and rewrites the patch files
+```
+
+Useful flags:
+
+* `-apply`: run `git go-patch apply` before opening the shell.
+* `-rebase`: run `git go-patch rebase` (an interactive rebase) before opening the shell. Combine with `-apply` to apply and then immediately start a rebase. The rebase runs to completion first; if it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`.
+* `-no-extract`: don't run `git go-patch extract` automatically on exit (run it yourself when ready).
+
+If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state.
+
+The shell sets `GIT_GO_PATCH_INTERACTIVE=1` in its environment so scripts (and an accidental nested `git go-patch shell`) can reliably detect the mode. The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
+
+### Manual workflow
+
+You can also run each step yourself:
+
 1. Open a terminal anywhere within the repository containing the patch files or the submodule.
 1. Use `git go-patch apply` to apply patches onto the submodule as a series of commits.
 1. Navigate into the submodule.

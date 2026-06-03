@@ -1,0 +1,376 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/subcmd"
+)
+
+// promptPrefix is prepended to the interactive shell prompt so it's obvious the shell is running
+// inside the patched submodule and "extract" will run on exit.
+const promptPrefix = "(git-go-patch) "
+
+// envInteractive is set in the interactive shell's environment so that scripts (and a nested
+// invocation of this command) can reliably detect that they're running inside a git-go-patch shell,
+// independent of the prompt prefix (which some prompt frameworks may drop).
+const envInteractive = "GIT_GO_PATCH_INTERACTIVE"
+
+func init() {
+	subcommands = append(subcommands, subcmd.Option{
+		Name:    "shell",
+		Summary: "Open an interactive shell in the submodule, then run 'extract' on exit.",
+		Description: `
+
+This command streamlines the common "apply, edit, extract" workflow by starting an interactive
+shell with its working directory set to the submodule, so no manual "cd" is necessary. The shell
+prompt is prefixed with "` + strings.TrimSpace(promptPrefix) + `" to make it clear the shell is in
+this special mode. When you exit the shell (for example by running "exit"), "git go-patch extract"
+runs automatically to rewrite the patch files based on the commits in the submodule.
+
+Inside the shell you can edit commits however you like, for example with "git rebase -i", and you
+can run "code ." to open an editor scoped to the submodule's history.
+
+Use "-apply" to run "git go-patch apply" before opening the shell, and "-rebase" to start an
+interactive rebase. Both can be combined, in which case "apply" runs first. The "-rebase" rebase
+runs to completion before the shell opens; if it stops (for example on a conflict or an "edit" or
+"break" step) the shell still opens so you can resolve it and run "git rebase --continue". Use
+"-no-extract" if you want to run "extract" yourself instead of automatically on exit.
+
+If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, "extract"
+is skipped to avoid rewriting the patch files from an incomplete state.
+` + repoRootSearchDescription,
+		Handle: handleShell,
+	})
+}
+
+func handleShell(p subcmd.ParseFunc) error {
+	apply := flag.Bool("apply", false, "Run 'git go-patch apply' before opening the shell.")
+	rebase := flag.Bool("rebase", false, "Run 'git go-patch rebase' (interactive rebase) before opening the shell.")
+	noExtract := flag.Bool(
+		"no-extract", false,
+		"Don't automatically run 'git go-patch extract' when the shell exits.")
+
+	if err := p(); err != nil {
+		return err
+	}
+
+	config, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	_, goDir := config.FullProjectRoots()
+
+	if *apply {
+		if err := runSelf(goDir, "apply"); err != nil {
+			return err
+		}
+	}
+	if *rebase {
+		if !*apply {
+			// 'rebase' rebases the commits 'apply' creates and reads the HEAD it recorded. If no
+			// apply state exists yet, the raw error from 'rebase' is cryptic, so hint at the cause.
+			if _, err := os.Stat(config.FullPrePatchStatusFilePath()); errors.Is(err, os.ErrNotExist) {
+				fmt.Println("\nNote: '-rebase' rebases the commits created by 'apply', but no apply state was found.")
+				fmt.Println("Pass '-apply' as well (or run 'git go-patch apply' first) if the rebase fails to start.")
+			}
+		}
+		if err := runSelf(goDir, "rebase"); err != nil {
+			// An interactive rebase exits non-zero when it stops for conflicts or an "edit"/"break"
+			// step. That's exactly when an interactive shell is most useful, so report the problem
+			// but still open the shell instead of bailing out.
+			fmt.Printf("\nWARNING: 'git go-patch rebase' exited with an error: %v\n", err)
+			fmt.Println("If it stopped for conflicts or an 'edit'/'break' step, resolve it in the shell and run 'git rebase --continue' (or 'git rebase --abort').")
+		}
+	}
+
+	if os.Getenv(envInteractive) != "" {
+		fmt.Println("\nWARNING: it looks like you're already inside a 'git go-patch shell' (" + envInteractive + " is set).")
+		fmt.Println("Opening another one will nest shells; remember to 'exit' each one.")
+	}
+
+	fmt.Printf("\nStarting an interactive shell in %#q.\n", goDir)
+	if *noExtract {
+		fmt.Println("Run 'git go-patch extract' yourself when you're done. Type 'exit' to leave the shell.")
+	} else {
+		fmt.Println("'git go-patch extract' will run automatically when you exit. Type 'exit' to leave the shell.")
+	}
+	fmt.Println()
+
+	if err := runInteractiveShell(goDir); err != nil {
+		// An interactive shell exits with the status of its last command, so a non-zero exit is
+		// usually just a failed final command (e.g. a grep with no match) and not a problem. Only
+		// warn when the shell itself failed to launch, which is the actionable case.
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			fmt.Printf("\nWARNING: failed to run the interactive shell: %v\n", err)
+		}
+	}
+
+	if *noExtract {
+		fmt.Println("\nSkipping 'extract' because -no-extract was specified.")
+		return nil
+	}
+
+	// If the user left a rebase, merge, cherry-pick, or revert half-finished, the submodule's commit
+	// history isn't in a meaningful state, so running 'extract' would rewrite the patch files from
+	// incomplete work.
+	if inProgress, err := gitOperationInProgress(goDir); err != nil {
+		fmt.Printf("\nWARNING: unable to determine whether a Git operation is in progress: %v\n", err)
+		fmt.Println("Skipping 'extract' to be safe. Run 'git go-patch extract' yourself once the submodule is in a clean state.")
+		return nil
+	} else if inProgress {
+		fmt.Println("\nA rebase, merge, cherry-pick, or revert is still in progress in the submodule, so 'extract' was skipped.")
+		fmt.Println("Finish or abort it, then run 'git go-patch extract' to update the patch files.")
+		return nil
+	}
+
+	fmt.Println("\nShell exited. Running 'git go-patch extract'.")
+	return runSelf(goDir, "extract")
+}
+
+// gitOperationInProgress reports whether the Git repository at dir has an in-progress rebase, merge,
+// cherry-pick, or revert, which would make the commit history unsuitable for 'extract'.
+func gitOperationInProgress(dir string) (bool, error) {
+	for _, name := range []string{"rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"} {
+		cmd := exec.Command("git", "rev-parse", "--git-path", name)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return false, fmt.Errorf("unable to run 'git rev-parse --git-path %s': %w", name, err)
+		}
+		p := strings.TrimSpace(string(out))
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(dir, p)
+		}
+		switch _, err := os.Stat(p); {
+		case err == nil:
+			return true, nil
+		case !os.IsNotExist(err):
+			return false, fmt.Errorf("unable to stat %q: %w", p, err)
+		}
+	}
+	return false, nil
+}
+
+// runSelf runs this same git-go-patch executable with the given subcommand, in the given working
+// directory, inheriting the current stdio. It forwards the "-c" repo root flag if it was set, so the
+// child command targets the same repository. The working directory is set to the submodule so
+// subcommands like "rebase" don't warn that the shell is being run from outside the submodule.
+func runSelf(dir, subcommand string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("unable to locate the git-go-patch executable: %w", err)
+	}
+
+	args := []string{subcommand}
+	if *repoRootFlag != "" {
+		// Resolve the repo root to an absolute path before forwarding it. The child runs with its
+		// working directory set to the submodule (cmd.Dir below), so a relative "-c" would resolve
+		// against the wrong directory. filepath.Abs resolves against this process's working
+		// directory, which is where the user originally passed "-c".
+		root := *repoRootFlag
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		args = append(args, "-c", root)
+	}
+
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	return executil.Run(cmd)
+}
+
+// runInteractiveShell starts an interactive shell with its working directory set to dir and the
+// prompt prefixed with promptPrefix. It blocks until the shell exits.
+func runInteractiveShell(dir string) error {
+	cmd, cleanup, err := interactiveShellCmd()
+	if err != nil {
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Mark the environment so scripts and a nested 'git go-patch shell' can detect this mode. The
+	// shell builders leave cmd.Env nil when they don't need to customize it, which means "inherit
+	// this process's environment"; start from os.Environ() in that case so appending doesn't drop it.
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, envInteractive+"=1")
+
+	// Unlike the rest of this package, run the shell directly instead of through executil.Run, which
+	// would print a "Running command" banner that's noise right before an interactive prompt.
+	return cmd.Run()
+}
+
+// interactiveShellCmd builds an *exec.Cmd that launches the user's interactive shell with a prompt
+// that indicates git-go-patch mode. It returns an optional cleanup func to remove any temporary
+// files created to customize the prompt.
+func interactiveShellCmd() (cmd *exec.Cmd, cleanup func(), err error) {
+	if runtime.GOOS == "windows" {
+		return windowsShellCmd()
+	}
+	return unixShellCmd()
+}
+
+func windowsShellCmd() (*exec.Cmd, func(), error) {
+	// Prefer PowerShell, which is the common shell for Microsoft build of Go development. Fall back
+	// to cmd.exe if PowerShell isn't available.
+	if pwsh, err := exec.LookPath("pwsh"); err == nil {
+		return powerShellCmd(pwsh), nil, nil
+	}
+	if powershell, err := exec.LookPath("powershell"); err == nil {
+		return powerShellCmd(powershell), nil, nil
+	}
+
+	comspec := os.Getenv("COMSPEC")
+	if comspec == "" {
+		comspec = "cmd.exe"
+	}
+	return cmdShellCmd(comspec), nil, nil
+}
+
+func cmdShellCmd(comspec string) *exec.Cmd {
+	cmd := exec.Command(comspec)
+	// cmd.exe builds its prompt from the PROMPT environment variable. "$P$G" is the default
+	// "current-path>" prompt, so prepend the indicator to it.
+	cmd.Env = append(os.Environ(), "PROMPT="+promptPrefix+"$P$G")
+	return cmd
+}
+
+func powerShellCmd(shell string) *exec.Cmd {
+	// Wrap the existing prompt function (which loads from the user's profile) so custom prompts like
+	// oh-my-posh or posh-git are preserved, just with the indicator prepended. Capturing it after the
+	// profile loads means the indicator wins. Then drop into an interactive session with -NoExit.
+	promptCommand := fmt.Sprintf(
+		"$global:__goPatchPrompt = $function:prompt; "+
+			"function global:prompt { '%s' + (& $global:__goPatchPrompt) }",
+		promptPrefix)
+	return exec.Command(shell, "-NoLogo", "-NoExit", "-Command", promptCommand)
+}
+
+func unixShellCmd() (*exec.Cmd, func(), error) {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+
+	switch filepath.Base(shell) {
+	case "bash":
+		return bashShellCmd(shell)
+	case "zsh":
+		return zshShellCmd(shell)
+	default:
+		// For sh, dash, and other shells, the PS1 environment variable is honored by the
+		// interactive shell, so prepend the indicator to whatever PS1 is already set.
+		cmd := exec.Command(shell, "-i")
+		ps1 := os.Getenv("PS1")
+		if ps1 == "" {
+			ps1 = "$ "
+		}
+		cmd.Env = append(os.Environ(), "PS1="+promptPrefix+ps1)
+		return cmd, nil, nil
+	}
+}
+
+func bashShellCmd(shell string) (*exec.Cmd, func(), error) {
+	// bash interactive shells set PS1 from their startup files, overriding any inherited value. Use
+	// a temporary init file that sources the user's normal config first, then prepends the
+	// indicator to the resulting prompt.
+	rcContent := `[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+PS1="` + promptPrefix + `$PS1"
+`
+	rcFile, cleanup, err := writeTempRC("git-go-patch-bashrc", rcContent)
+	if err != nil {
+		return nil, nil, err
+	}
+	return exec.Command(shell, "--rcfile", rcFile, "-i"), cleanup, nil
+}
+
+func zshShellCmd(shell string) (*exec.Cmd, func(), error) {
+	// zsh reads .zshrc from ZDOTDIR. Point ZDOTDIR at a temporary directory whose .zshrc sources
+	// the user's normal config and then prepends the indicator to the prompt.
+	tmpDir, err := os.MkdirTemp("", "git-go-patch-zdotdir-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to create temp ZDOTDIR: %w", err)
+	}
+	cleanup := func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Printf("WARNING: unable to clean up temp dir %#q: %v\n", tmpDir, err)
+		}
+	}
+
+	// Because ZDOTDIR is overridden below, zsh resolves all of its startup files from the temp dir.
+	// Recreate the ones a non-login interactive shell uses so the user's environment still loads:
+	// .zshenv (always sourced, commonly sets PATH and other critical env) and .zshrc.
+	origZDotDir := os.Getenv("ZDOTDIR")
+	if origZDotDir == "" {
+		origZDotDir = os.Getenv("HOME")
+	}
+
+	files := map[string]string{
+		// Source the user's .zshenv, then re-assert ZDOTDIR in case the user's config changed it, so
+		// the temp .zshrc below is still picked up.
+		".zshenv": fmt.Sprintf(`[ -f "%s/.zshenv" ] && source "%s/.zshenv"
+export ZDOTDIR=%q
+`, origZDotDir, origZDotDir, tmpDir),
+		".zshrc": fmt.Sprintf(`[ -f "%s/.zshrc" ] && source "%s/.zshrc"
+PS1="%s$PS1"
+`, origZDotDir, origZDotDir, promptPrefix),
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o600); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("unable to write temp %s: %w", name, err)
+		}
+	}
+
+	cmd := exec.Command(shell, "-i")
+	cmd.Env = append(os.Environ(), "ZDOTDIR="+tmpDir)
+	return cmd, cleanup, nil
+}
+
+// writeTempRC writes content to a uniquely named temporary file and returns its path along with a
+// cleanup func that removes it.
+func writeTempRC(pattern, content string) (string, func(), error) {
+	f, err := os.CreateTemp("", pattern+"-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("unable to create temp shell init file: %w", err)
+	}
+	cleanup := func() {
+		if err := os.Remove(f.Name()); err != nil {
+			fmt.Printf("WARNING: unable to clean up temp file %#q: %v\n", f.Name(), err)
+		}
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("unable to write temp shell init file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("unable to close temp shell init file: %w", err)
+	}
+	return f.Name(), cleanup, nil
+}

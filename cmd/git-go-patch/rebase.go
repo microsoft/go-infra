@@ -66,18 +66,18 @@ func warnIfOutsideSubmodule(submoduleDir string) {
 
 	wd, err := os.Getwd()
 	if err != nil {
-		fmt.Printf("%vunable to get working dir: %v\n", unexpected, wd)
+		fmt.Printf("%vunable to get working dir: %v\n", unexpected, err)
 		return
 	}
 
 	rel, err := filepath.Rel(submoduleDir, wd)
 	if err != nil {
-		fmt.Printf("%vunable to calculate relative path from %#q to %#q: %v", unexpected, submoduleDir, wd, err)
+		fmt.Printf("%vunable to calculate relative path from %#q to %#q: %v\n", unexpected, submoduleDir, wd, err)
 		return
 	}
 	invRel, err := filepath.Rel(wd, submoduleDir)
 	if err != nil {
-		fmt.Printf("%vunable to calculate inverse relative path from %#q to %#q: %v", wd, unexpected, submoduleDir, err)
+		fmt.Printf("%vunable to calculate inverse relative path from %#q to %#q: %v\n", unexpected, wd, submoduleDir, err)
 		return
 	}
 
