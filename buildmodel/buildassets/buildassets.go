@@ -117,9 +117,9 @@ func (b BuildAssets) GoVersion() *goversion.GoVersion {
 // archiving infra is stored in each release branch to make it local to the code it operates on and
 // less likely to unintentionally break, so some of that information is duplicated here.
 var (
-	archiveSuffixes = []string{".tar.gz", ".zip"}
-	checksumSuffix  = ".sha256"
-	signatureSuffix = ".sig"
+	archiveSuffixes   = []string{".tar.gz", ".zip"}
+	checksumSuffix    = ".sha256"
+	signatureSuffixes = []string{".sig", ".asc"}
 )
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
@@ -246,10 +246,24 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				continue
 			}
 
-			// Is it a signature file?
-			if associatedName, ok := stringutil.CutSuffix(e.Name(), signatureSuffix); ok {
-				a := getOrCreateArch(associatedName)
+			// Is it a signature file? Check .sig and .asc.
+			// Prefer .sig when both exist (signatureSuffixes is ordered by preference).
+			var sigAssociatedName string
+			var isSig bool
+			for _, suffix := range signatureSuffixes {
+				if name, ok := stringutil.CutSuffix(e.Name(), suffix); ok {
+					sigAssociatedName = name
+					isSig = true
+					break
+				}
+			}
+			if isSig {
+				a := getOrCreateArch(sigAssociatedName)
 
+				// Skip if we already have a signature URL (e.g. .sig was already found).
+				if a.PGPSignatureURL != "" {
+					continue
+				}
 				a.PGPSignatureURL, err = getURL(e.Name())
 				if err != nil {
 					return nil, fmt.Errorf("unable to get URL for signature file %q: %w", e.Name(), err)
@@ -334,11 +348,13 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 // assets.json file should be used for the canonical version information.
 func CutToolsetFileParts(filename string) (prefix, platform, ext string, ok bool) {
 	for _, archiveExt := range archiveSuffixes {
-		for _, ext := range []string{
-			archiveExt,
-			archiveExt + checksumSuffix,
-			archiveExt + signatureSuffix,
-		} {
+		var suffixes []string
+		suffixes = append(suffixes, archiveExt)
+		suffixes = append(suffixes, archiveExt+checksumSuffix)
+		for _, sigSuffix := range signatureSuffixes {
+			suffixes = append(suffixes, archiveExt+sigSuffix)
+		}
+		for _, ext := range suffixes {
 			preExt, ok := stringutil.CutSuffix(filename, ext)
 			if !ok {
 				continue
