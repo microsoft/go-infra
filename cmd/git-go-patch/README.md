@@ -68,7 +68,7 @@ Useful flags:
 
 If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state.
 
-The shell sets `GIT_GO_PATCH_INTERACTIVE=1` in its environment so scripts (and an accidental nested `git go-patch shell`) can reliably detect the mode. The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
+The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode. The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
 
 ### Manual workflow
 

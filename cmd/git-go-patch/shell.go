@@ -21,9 +21,10 @@ import (
 // inside the patched submodule and "extract" will run on exit.
 const promptPrefix = "(git-go-patch) "
 
-// envInteractive is set in the interactive shell's environment so that scripts (and a nested
-// invocation of this command) can reliably detect that they're running inside a git-go-patch shell,
-// independent of the prompt prefix (which some prompt frameworks may drop).
+// envInteractive marks an interactive shell by holding the absolute path of the target submodule
+// (a more reliable signal than the prompt prefix, which some prompt frameworks drop). Storing the
+// path lets a nested invocation warn only on re-entry into the same submodule; since the variable is
+// inherited by every descendant, a bare flag would false-positive for a shell opened on another repo.
 const envInteractive = "GIT_GO_PATCH_INTERACTIVE"
 
 func init() {
@@ -91,16 +92,15 @@ func handleShell(p subcmd.ParseFunc) error {
 			}
 		}
 		if err := runSelf(goDir, "rebase"); err != nil {
-			// An interactive rebase exits non-zero when it stops for conflicts or an "edit"/"break"
-			// step. That's exactly when an interactive shell is most useful, so report the problem
-			// but still open the shell instead of bailing out.
+			// An interactive rebase exits non-zero when it stops for a conflict or an "edit"/"break"
+			// step. Warn, but still open the shell so the user can resolve it there.
 			fmt.Printf("\nWARNING: 'git go-patch rebase' exited with an error: %v\n", err)
 			fmt.Println("If it stopped for conflicts or an 'edit'/'break' step, resolve it in the shell and run 'git rebase --continue' (or 'git rebase --abort').")
 		}
 	}
 
-	if os.Getenv(envInteractive) != "" {
-		fmt.Println("\nWARNING: it looks like you're already inside a 'git go-patch shell' (" + envInteractive + " is set).")
+	if alreadyInShellFor(goDir) {
+		fmt.Println("\nWARNING: it looks like you're already inside a 'git go-patch shell' for this submodule (" + envInteractive + " is set).")
 		fmt.Println("Opening another one will nest shells; remember to 'exit' each one.")
 	}
 
@@ -125,10 +125,8 @@ func handleShell(p subcmd.ParseFunc) error {
 		if *noExtract {
 			fmt.Println("\nSkipping 'extract' because -no-extract was specified.")
 		} else {
-			// shellErr is a non-nil *exec.ExitError here: the shell ran but exited non-zero, which
-			// we treat as a request to discard without rewriting the patch files. In bash/zsh a
-			// non-zero status can also just be the last command failing, so explain how to extract
-			// manually if saving was actually intended.
+			// The shell exited non-zero, which we treat as "discard": skip extract and leave the
+			// patch files alone. Tell the user how to extract manually in case they meant to save.
 			var exitErr *exec.ExitError
 			errors.As(shellErr, &exitErr)
 			fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
@@ -152,6 +150,29 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	fmt.Println("\nShell exited cleanly. Running 'git go-patch extract'.")
 	return runSelf(goDir, "extract")
+}
+
+// alreadyInShellFor reports whether this process is already running inside a 'git go-patch shell'
+// that targets the same submodule dir. Because the marker env var is inherited by every descendant
+// process, comparing the target dir avoids a spurious warning when a shell is opened for a different
+// repo from something launched inside the original shell (such as an editor's integrated terminal).
+func alreadyInShellFor(dir string) bool {
+	prev := os.Getenv(envInteractive)
+	if prev == "" {
+		return false
+	}
+	return sameDir(prev, dir)
+}
+
+// sameDir reports whether two paths refer to the same directory, comparing absolute, cleaned forms.
+func sameDir(a, b string) bool {
+	if absA, err := filepath.Abs(a); err == nil {
+		a = absA
+	}
+	if absB, err := filepath.Abs(b); err == nil {
+		b = absB
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 // shouldExtractPatch reports whether 'git go-patch extract' should run after the interactive shell
@@ -245,13 +266,14 @@ func runInteractiveShell(dir string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Mark the environment so scripts and a nested 'git go-patch shell' can detect this mode. The
-	// shell builders leave cmd.Env nil when they don't need to customize it, which means "inherit
-	// this process's environment"; start from os.Environ() in that case so appending doesn't drop it.
+	// Mark the environment with the target submodule so scripts and a nested 'git go-patch shell' can
+	// detect this mode. The shell builders leave cmd.Env nil when they don't need to customize it,
+	// which means "inherit this process's environment"; start from os.Environ() in that case so
+	// appending doesn't drop it.
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
-	cmd.Env = append(cmd.Env, envInteractive+"=1")
+	cmd.Env = append(cmd.Env, envInteractive+"="+dir)
 
 	// Unlike the rest of this package, run the shell directly instead of through executil.Run, which
 	// would print a "Running command" banner that's noise right before an interactive prompt.

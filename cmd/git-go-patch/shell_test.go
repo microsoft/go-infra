@@ -158,6 +158,45 @@ func TestCmdShellCmd(t *testing.T) {
 	}
 }
 
+func TestAlreadyInShellFor(t *testing.T) {
+	dir := t.TempDir()
+
+	// No marker set: not in a shell.
+	t.Setenv(envInteractive, "")
+	if alreadyInShellFor(dir) {
+		t.Error("alreadyInShellFor = true with no marker set, want false")
+	}
+
+	// Marker set to the same dir: in a shell for this submodule.
+	t.Setenv(envInteractive, dir)
+	if !alreadyInShellFor(dir) {
+		t.Error("alreadyInShellFor = false for the same dir, want true")
+	}
+
+	// A relative path to the same dir should still match, since paths are compared in absolute form.
+	if rel, err := filepath.Rel(mustGetwd(t), dir); err == nil {
+		if !alreadyInShellFor(rel) {
+			t.Errorf("alreadyInShellFor(%q) = false, want true for a relative path to the same dir", rel)
+		}
+	}
+
+	// Marker set to a different dir: not in a shell for this submodule (avoids the inherited-env
+	// false positive when a shell is opened for another repo).
+	t.Setenv(envInteractive, filepath.Join(dir, "other"))
+	if alreadyInShellFor(dir) {
+		t.Error("alreadyInShellFor = true for a different dir, want false")
+	}
+}
+
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd returned error: %v", err)
+	}
+	return wd
+}
+
 func TestShouldExtractPatch(t *testing.T) {
 	// shouldExtractPatch only inspects the error's type (via errors.As), not its exit code, so a
 	// zero-value *exec.ExitError stands in for "the shell ran and exited non-zero".
