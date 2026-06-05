@@ -89,7 +89,7 @@ func TestUnixShellCmdZsh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to read temp .zshenv: %v", err)
 	}
-	if !strings.Contains(string(zshenv), "/home/example/.zshenv") {
+	if !strings.Contains(string(zshenv), shellSingleQuote("/home/example")+"/.zshenv") {
 		t.Errorf(".zshenv = %q, want it to source the user's .zshenv", zshenv)
 	}
 
@@ -125,6 +125,26 @@ func TestUnixShellCmdDefault(t *testing.T) {
 	}
 	if !strings.Contains(ps1, "myprompt$ ") {
 		t.Errorf("PS1 = %q, want it to preserve the user's existing prompt", ps1)
+	}
+}
+
+func TestShellSingleQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "/home/example", `'/home/example'`},
+		{"space", "/home/with space", `'/home/with space'`},
+		{"single quote", `/home/wi'th`, `'/home/wi'\''th'`},
+		{"dollar and backtick", "/home/$x`y", "'/home/$x`y'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shellSingleQuote(tt.in); got != tt.want {
+				t.Errorf("shellSingleQuote(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 

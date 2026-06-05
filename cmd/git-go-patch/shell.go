@@ -128,8 +128,11 @@ func handleShell(p subcmd.ParseFunc) error {
 			// The shell exited non-zero, which we treat as "discard": skip extract and leave the
 			// patch files alone. Tell the user how to extract manually in case they meant to save.
 			var exitErr *exec.ExitError
-			errors.As(shellErr, &exitErr)
-			fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
+			if errors.As(shellErr, &exitErr) {
+				fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
+			} else {
+				fmt.Println("\nThe shell exited abnormally, so 'extract' was skipped and your patch files were left untouched.")
+			}
 			fmt.Println("If you meant to save your changes, run 'git go-patch extract'.")
 		}
 		return nil
@@ -387,13 +390,14 @@ func zshShellCmd(shell string) (*exec.Cmd, func(), error) {
 
 	files := map[string]string{
 		// Source the user's .zshenv, then re-assert ZDOTDIR in case the user's config changed it, so
-		// the temp .zshrc below is still picked up.
-		".zshenv": fmt.Sprintf(`[ -f "%s/.zshenv" ] && source "%s/.zshenv"
-export ZDOTDIR=%q
-`, origZDotDir, origZDotDir, tmpDir),
-		".zshrc": fmt.Sprintf(`[ -f "%s/.zshrc" ] && source "%s/.zshrc"
-PS1="%s$PS1"
-`, origZDotDir, origZDotDir, promptPrefix),
+		// the temp .zshrc below is still picked up. Paths are single-quoted so a home or temp dir
+		// containing spaces or shell metacharacters can't break sourcing.
+		".zshenv": fmt.Sprintf(`[ -f %[1]s/.zshenv ] && source %[1]s/.zshenv
+export ZDOTDIR=%[2]s
+`, shellSingleQuote(origZDotDir), shellSingleQuote(tmpDir)),
+		".zshrc": fmt.Sprintf(`[ -f %[1]s/.zshrc ] && source %[1]s/.zshrc
+PS1="%[2]s$PS1"
+`, shellSingleQuote(origZDotDir), promptPrefix),
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o600); err != nil {
@@ -405,6 +409,13 @@ PS1="%s$PS1"
 	cmd := exec.Command(shell, "-i")
 	cmd.Env = append(os.Environ(), "ZDOTDIR="+tmpDir)
 	return cmd, cleanup, nil
+}
+
+// shellSingleQuote quotes s so a POSIX-compatible shell treats it as a single literal word, even if
+// it contains spaces, quotes, "$", or backticks. It wraps the string in single quotes and escapes
+// any embedded single quote as '\”.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // writeTempRC writes content to a uniquely named temporary file and returns its path along with a
