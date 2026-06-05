@@ -40,7 +40,7 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 
 ### Streamlined workflow with `git go-patch shell`
 
-`git go-patch shell` automates the most common parts of the editing workflow. It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and it automatically runs `git go-patch extract` when you exit the shell. The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
+`git go-patch shell` automates the most common parts of the editing workflow. It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and when you exit the shell with a status of 0 it automatically runs `git go-patch extract`. The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
 
 A typical session looks like this:
 
@@ -50,6 +50,15 @@ git go-patch shell -apply
 exit
 # `git go-patch extract` runs automatically and rewrites the patch files
 ```
+
+#### Saving vs. discarding your changes on exit
+
+When you leave the shell, `extract` runs only if the shell exits with status `0`. This gives you an escape hatch: if you've made a mess of the commit history and don't want the tool to rewrite (or overwrite) your patch files, exit with a non-zero status instead.
+
+* **Save** &mdash; exit with status `0`: `exit 0` (or just `exit` in PowerShell, where a plain `exit` is always `0`). `git go-patch extract` runs and rewrites the patch files.
+* **Discard** &mdash; exit with a non-zero status: `exit 1`. `extract` is skipped and your patch files are left untouched. If you actually wanted to save, run `git go-patch extract` yourself afterward.
+
+Note the shell-specific behavior of a plain `exit`: in PowerShell it always reports status `0`, but in POSIX shells like bash and zsh it inherits the status of the last command you ran. So in bash/zsh, if your final command failed (for example a `grep` with no match), a plain `exit` can carry a non-zero status and skip `extract`. When in doubt, use `exit 0` explicitly to save.
 
 Useful flags:
 

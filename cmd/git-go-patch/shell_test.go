@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,6 +155,43 @@ func TestCmdShellCmd(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "$P$G") {
 		t.Errorf("PROMPT = %q, want it to preserve the default $P$G prompt", prompt)
+	}
+}
+
+func TestShouldExtractPatch(t *testing.T) {
+	// shouldExtractPatch only inspects the error's type (via errors.As), not its exit code, so a
+	// zero-value *exec.ExitError stands in for "the shell ran and exited non-zero".
+	nonZeroExit := &exec.ExitError{ProcessState: &os.ProcessState{}}
+	launchFailure := errors.New(`exec: "sh": executable file not found in $PATH`)
+
+	tests := []struct {
+		name          string
+		shellErr      error
+		noExtract     bool
+		wantExtract   bool
+		wantLaunchErr bool
+	}{
+		{"clean exit saves", nil, false, true, false},
+		{"clean exit with -no-extract skips", nil, true, false, false},
+		{"non-zero exit discards", nonZeroExit, false, false, false},
+		{"non-zero exit with -no-extract skips", nonZeroExit, true, false, false},
+		{"launch failure surfaces error", launchFailure, false, false, true},
+		{"launch failure surfaces error even with -no-extract", launchFailure, true, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotExtract, gotLaunchErr := shouldExtractPatch(tt.shellErr, tt.noExtract)
+			if gotExtract != tt.wantExtract {
+				t.Errorf("extract = %v, want %v", gotExtract, tt.wantExtract)
+			}
+			if (gotLaunchErr != nil) != tt.wantLaunchErr {
+				t.Errorf("launchErr = %v, want error present = %v", gotLaunchErr, tt.wantLaunchErr)
+			}
+			// When a launch error is reported, it must be the original error so the caller can wrap it.
+			if tt.wantLaunchErr && !errors.Is(gotLaunchErr, tt.shellErr) {
+				t.Errorf("launchErr = %v, want it to be %v", gotLaunchErr, tt.shellErr)
+			}
+		})
 	}
 }
 

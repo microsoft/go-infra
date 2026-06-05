@@ -47,6 +47,11 @@ runs to completion before the shell opens; if it stops (for example on a conflic
 "break" step) the shell still opens so you can resolve it and run "git rebase --continue". Use
 "-no-extract" if you want to run "extract" yourself instead of automatically on exit.
 
+When you exit, "extract" runs automatically only if the shell exits with status 0. Exit with a
+non-zero status (for example "exit 1") to leave without rewriting the patch files, which is useful
+if you've made a mess of the history and want to bail out. In PowerShell a plain "exit" always
+reports status 0; in bash or zsh a plain "exit" inherits the status of the last command you ran.
+
 If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, "extract"
 is skipped to avoid rewriting the patch files from an incomplete state.
 ` + repoRootSearchDescription,
@@ -101,24 +106,34 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	fmt.Printf("\nStarting an interactive shell in %#q.\n", goDir)
 	if *noExtract {
-		fmt.Println("Run 'git go-patch extract' yourself when you're done. Type 'exit' to leave the shell.")
+		fmt.Println("Type 'exit' to leave the shell. 'git go-patch extract' will NOT run automatically; run it yourself when you're ready.")
 	} else {
-		fmt.Println("'git go-patch extract' will run automatically when you exit. Type 'exit' to leave the shell.")
+		fmt.Println("Exit with status 0 ('exit 0', or just 'exit' in PowerShell) to save: 'git go-patch extract' runs automatically.")
+		fmt.Println("Exit with a non-zero status ('exit 1') to leave without saving, so your patch files stay untouched.")
 	}
 	fmt.Println()
 
-	if err := runInteractiveShell(goDir); err != nil {
-		// An interactive shell exits with the status of its last command, so a non-zero exit is
-		// usually just a failed final command (e.g. a grep with no match) and not a problem. Only
-		// warn when the shell itself failed to launch, which is the actionable case.
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			fmt.Printf("\nWARNING: failed to run the interactive shell: %v\n", err)
-		}
+	shellErr := runInteractiveShell(goDir)
+
+	extract, launchErr := shouldExtractPatch(shellErr, *noExtract)
+	if launchErr != nil {
+		// The shell never ran, so there's nothing to extract; surface the failure.
+		return fmt.Errorf("failed to run the interactive shell: %w", launchErr)
 	}
 
-	if *noExtract {
-		fmt.Println("\nSkipping 'extract' because -no-extract was specified.")
+	if !extract {
+		if *noExtract {
+			fmt.Println("\nSkipping 'extract' because -no-extract was specified.")
+		} else {
+			// shellErr is a non-nil *exec.ExitError here: the shell ran but exited non-zero, which
+			// we treat as a request to discard without rewriting the patch files. In bash/zsh a
+			// non-zero status can also just be the last command failing, so explain how to extract
+			// manually if saving was actually intended.
+			var exitErr *exec.ExitError
+			errors.As(shellErr, &exitErr)
+			fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
+			fmt.Println("If you meant to save your changes, run 'git go-patch extract'.")
+		}
 		return nil
 	}
 
@@ -135,8 +150,27 @@ func handleShell(p subcmd.ParseFunc) error {
 		return nil
 	}
 
-	fmt.Println("\nShell exited. Running 'git go-patch extract'.")
+	fmt.Println("\nShell exited cleanly. Running 'git go-patch extract'.")
 	return runSelf(goDir, "extract")
+}
+
+// shouldExtractPatch reports whether 'git go-patch extract' should run after the interactive shell
+// exits, given the shell's result and whether -no-extract was passed.
+//
+// Extraction happens only on a clean (status 0) shell exit when -no-extract was not passed. A
+// non-zero exit (shellErr is an *exec.ExitError) is treated as a deliberate request to discard the
+// session without rewriting the patch files. A shellErr that is not an *exec.ExitError means the
+// shell failed to launch at all; it is returned as launchErr so the caller can report the failure
+// rather than silently skipping extraction.
+func shouldExtractPatch(shellErr error, noExtract bool) (extract bool, launchErr error) {
+	var exitErr *exec.ExitError
+	if shellErr != nil && !errors.As(shellErr, &exitErr) {
+		return false, shellErr
+	}
+	if noExtract {
+		return false, nil
+	}
+	return shellErr == nil, nil
 }
 
 // gitOperationInProgress reports whether the Git repository at dir has an in-progress rebase, merge,
