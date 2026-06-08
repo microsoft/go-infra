@@ -310,6 +310,76 @@ func TestGitOperationInProgress(t *testing.T) {
 	}
 }
 
+func TestHasPatchCommitsToExtract(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	dir := t.TempDir()
+	gitEnv := append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+	)
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(git, args...)
+		cmd.Dir = dir
+		cmd.Env = gitEnv
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	headSHA := func() string {
+		t.Helper()
+		cmd := exec.Command(git, "rev-parse", "HEAD")
+		cmd.Dir = dir
+		cmd.Env = gitEnv
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git rev-parse HEAD failed: %v", err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	runGit("init")
+	runGit("commit", "--allow-empty", "-m", "base")
+	base := headSHA()
+
+	statusFile := filepath.Join(t.TempDir(), "prepatch")
+	writeStatus := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(statusFile, []byte(content), 0o600); err != nil {
+			t.Fatalf("unable to write status file: %v", err)
+		}
+	}
+
+	// Base == HEAD: no commits on top of the base, so extract would empty the patches.
+	writeStatus(base + "\n")
+	if has, err := hasPatchCommitsToExtract(statusFile, dir); err != nil {
+		t.Fatalf("hasPatchCommitsToExtract returned error: %v", err)
+	} else if has {
+		t.Error("expected no patch commits when HEAD is the recorded base")
+	}
+
+	// A commit on top of the base: now there is a patch commit to extract.
+	runGit("commit", "--allow-empty", "-m", "patch 1")
+	if has, err := hasPatchCommitsToExtract(statusFile, dir); err != nil {
+		t.Fatalf("hasPatchCommitsToExtract returned error: %v", err)
+	} else if !has {
+		t.Error("expected a patch commit to be detected after committing on top of the base")
+	}
+
+	// Missing status file: proceed (true) so 'extract' itself can report the problem.
+	if has, err := hasPatchCommitsToExtract(filepath.Join(dir, "does-not-exist"), dir); err != nil {
+		t.Fatalf("hasPatchCommitsToExtract returned error: %v", err)
+	} else if !has {
+		t.Error("expected to proceed (true) when the status file is missing")
+	}
+}
+
 // argAfter returns the element immediately following want in args, failing the test if want is not
 // present or is the last element.
 func argAfter(t *testing.T, args []string, want string) string {

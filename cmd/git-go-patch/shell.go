@@ -29,8 +29,9 @@ const envInteractive = "GIT_GO_PATCH_INTERACTIVE"
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
-		Name:    "shell",
-		Summary: "Open an interactive shell in the submodule, then run 'extract' on exit.",
+		Name:                   "shell",
+		Summary:                "Open an interactive shell in the submodule, then run 'extract' on exit.",
+		SuppressSuccessMessage: true,
 		Description: `
 
 This command streamlines the common "apply, edit, extract" workflow by starting an interactive
@@ -54,7 +55,9 @@ if you've made a mess of the history and want to bail out. In PowerShell a plain
 reports status 0; in bash or zsh a plain "exit" inherits the status of the last command you ran.
 
 If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, "extract"
-is skipped to avoid rewriting the patch files from an incomplete state.
+is skipped to avoid rewriting the patch files from an incomplete state. "extract" is also skipped if
+the submodule has no commits on top of the recorded base (for example if you didn't pass "-apply"
+and no patches are applied), since extracting from an empty history would delete every patch file.
 ` + repoRootSearchDescription,
 		Handle: handleShell,
 	})
@@ -151,6 +154,20 @@ func handleShell(p subcmd.ParseFunc) error {
 		return nil
 	}
 
+	// Guard against an empty extract. 'extract' overwrites the patches directory with one file per
+	// commit on top of the recorded base, so if the submodule has no such commits it would delete
+	// every existing patch file. This happens, for example, when 'shell' is run without '-apply' on a
+	// submodule that has no patches applied. Skip and explain rather than silently wiping the patches.
+	if has, err := hasPatchCommitsToExtract(config.FullPrePatchStatusFilePath(), goDir); err != nil {
+		fmt.Printf("\nWARNING: unable to determine whether the submodule has patch commits: %v\n", err)
+		fmt.Println("Skipping 'extract' to be safe. Run 'git go-patch extract' yourself if you intended to update the patch files.")
+		return nil
+	} else if !has {
+		fmt.Println("\nThe submodule has no commits on top of the recorded base, so 'extract' was skipped to avoid deleting the existing patch files.")
+		fmt.Println("If you meant to edit patches, start with 'git go-patch shell -apply'. To extract anyway, run 'git go-patch extract'.")
+		return nil
+	}
+
 	fmt.Println("\nShell exited cleanly. Running 'git go-patch extract'.")
 	return runSelf(goDir, "extract")
 }
@@ -224,6 +241,29 @@ func gitOperationInProgress(dir string) (bool, error) {
 	return false, nil
 }
 
+// hasPatchCommitsToExtract reports whether the submodule at goDir has any commits on top of the base
+// recorded by 'apply' (read from statusFilePath). 'extract' formats one patch file per such commit
+// and overwrites the patches directory with the result, so when there are none it would delete every
+// existing patch file. Returning false lets the caller skip extraction to avoid that data loss.
+//
+// If the base can't be read (for example 'apply' was never run), it returns true so the caller
+// proceeds and lets 'extract' report any problem itself, matching the behavior without this guard.
+func hasPatchCommitsToExtract(statusFilePath, goDir string) (bool, error) {
+	base, err := readStatusFile(statusFilePath)
+	if err != nil || base == "" {
+		return true, nil
+	}
+	// 'git format-patch <base>' formats the commits in <base>..HEAD, so count those to know whether
+	// extract would emit anything.
+	cmd := exec.Command("git", "rev-list", "--count", base+"..HEAD")
+	cmd.Dir = goDir
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("unable to count commits in %s..HEAD in %#q: %w", base, goDir, err)
+	}
+	return strings.TrimSpace(string(out)) != "0", nil
+}
+
 // runSelf runs this same git-go-patch executable with the given subcommand, in the given working
 // directory, inheriting the current stdio. It forwards the "-c" repo root flag if it was set, so the
 // child command targets the same repository. The working directory is set to the submodule so
@@ -250,6 +290,7 @@ func runSelf(dir, subcommand string) error {
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
+	cmd.Env = append(os.Environ(), subcmd.EnvSuppressSuccessMessage+"=1")
 	return executil.Run(cmd)
 }
 

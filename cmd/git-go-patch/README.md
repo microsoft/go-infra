@@ -66,7 +66,7 @@ Useful flags:
 * `-rebase`: run `git go-patch rebase` (an interactive rebase) before opening the shell. Combine with `-apply` to apply and then immediately start a rebase. The rebase runs to completion first; if it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`.
 * `-no-extract`: don't run `git go-patch extract` automatically on exit (run it yourself when ready).
 
-If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state.
+If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state. `extract` is likewise skipped when the submodule has no commits on top of the recorded base — for example if you open a plain `git go-patch shell` (without `-apply`) on a submodule that has no patches applied — because extracting from an empty history would delete every patch file. Pass `-apply` (or run `git go-patch apply` first) when you intend to edit and re-extract patches.
 
 The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode. The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
 
