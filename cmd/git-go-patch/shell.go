@@ -453,8 +453,9 @@ PS1="%[2]s$PS1"
 }
 
 // shellSingleQuote quotes s so a POSIX-compatible shell treats it as a single literal word, even if
-// it contains spaces, quotes, "$", or backticks. It wraps the string in single quotes and escapes
-// any embedded single quote as '\''.
+// it contains spaces, quotes, "$", or backticks. It wraps the string in single quotes and replaces
+// each embedded single quote with the standard close-quote, escaped-quote, reopen-quote sequence.
+func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
