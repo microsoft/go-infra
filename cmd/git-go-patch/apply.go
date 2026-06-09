@@ -58,26 +58,36 @@ func handleApply(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
+
+	branch := *b
+	if *before {
+		branch = stageDiffBeforeBranch
+	}
+	if *after {
+		branch = stageDiffAfterBranch
+	}
+
+	return applyPatches(config, *force, *noRefresh, branch)
+}
+
+// applyPatches applies the patch files as one commit each in the submodule and records the pre- and
+// post-patch commits so 'extract' can run later. If branch is non-empty, it is created or reset in
+// the submodule and checked out. applyPatches is the in-process implementation shared by the 'apply'
+// subcommand and 'git go-patch shell -apply'.
+func applyPatches(config *patch.FoundConfig, force, noRefresh bool, branch string) error {
 	rootDir, goDir := config.FullProjectRoots()
 
 	// If we're being careful, abort if the submodule commit isn't what we expect.
-	if !*force {
+	if !force {
 		if err := ensureSubmoduleCommitNotDirty(config); err != nil {
 			return err
 		}
 	}
 
-	if !*noRefresh {
-		if err := submodule.Reset(rootDir, goDir, *force); err != nil {
+	if !noRefresh {
+		if err := submodule.Reset(rootDir, goDir, force); err != nil {
 			return err
 		}
-	}
-
-	if *before {
-		*b = stageDiffBeforeBranch
-	}
-	if *after {
-		*b = stageDiffAfterBranch
 	}
 
 	prePatchHead, err := getCurrentCommit(goDir)
@@ -106,8 +116,8 @@ func handleApply(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if *b != "" {
-		if err := createBranch(goDir, *b); err != nil {
+	if branch != "" {
+		if err := createBranch(goDir, branch); err != nil {
 			return err
 		}
 	}

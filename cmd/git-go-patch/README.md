@@ -40,37 +40,51 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 
 ### Streamlined workflow with `git go-patch shell`
 
-`git go-patch shell` automates the most common parts of the editing workflow. It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and when you exit the shell with a status of 0 it automatically runs `git go-patch extract`. The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
+`git go-patch shell` automates the most common parts of the editing workflow.
+It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and when you exit the shell with a status of 0 it automatically runs `git go-patch extract`.
+The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
 
 A typical session looks like this:
 
 ```
 git go-patch shell -apply
 # edit commits in the submodule, e.g. with `git rebase -i` or `git go-patch rebase`
-exit
+exit 0
 # `git go-patch extract` runs automatically and rewrites the patch files
 ```
 
 #### Saving vs. discarding your changes on exit
 
-When you leave the shell, `extract` runs only if the shell exits with status `0`. This gives you an escape hatch: if you've made a mess of the commit history and don't want the tool to rewrite (or overwrite) your patch files, exit with a non-zero status instead.
+When you leave the shell, `extract` runs only if the shell exits with status `0`.
+This gives you an escape hatch: if you've made a mess of the commit history and don't want the tool to rewrite (or overwrite) your patch files, exit with a non-zero status instead.
 
-* **Save** &mdash; exit with status `0`: `exit 0` (or just `exit` in PowerShell, where a plain `exit` is always `0`). `git go-patch extract` runs and rewrites the patch files.
-* **Discard** &mdash; exit with a non-zero status: `exit 1`. `extract` is skipped and your patch files are left untouched. If you actually wanted to save, run `git go-patch extract` yourself afterward.
+* `exit 0` to **save all changes you made in the submodule to the patch files**.
+* `exit 1` to **discard your changes**.
 
-Note the shell-specific behavior of a plain `exit`: in PowerShell it always reports status `0`, but in POSIX shells like bash and zsh it inherits the status of the last command you ran. So in bash/zsh, if your final command failed (for example a `grep` with no match), a plain `exit` can carry a non-zero status and skip `extract`. When in doubt, use `exit 0` explicitly to save.
+> [!TIP]
+> In PowerShell, a plain `exit` always reports status `0`, but in POSIX shells like bash and zsh `exit` inherits the status of the last command you ran.
+> Due to this, we recommend always using `exit 0` so your result doesn't depend on the type of shell you are using at the time.
+>
+> If you use `exit` in a POSIX shell and accidentally discard your changes, you can run `git go-patch extract` to save the changes yourself.
 
-Useful flags:
+Commonly used flags:
 
 * `-apply`: run `git go-patch apply` before opening the shell.
-* `-rebase`: run `git go-patch rebase` (an interactive rebase) before opening the shell. Combine with `-apply` to apply and then immediately start a rebase. The rebase runs to completion first; if it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`.
+* `-rebase`: run `git go-patch rebase` (an interactive rebase) before opening the shell.
+  * Combine with `-apply` to apply and then immediately start a rebase.
+  * The rebase runs to completion first. If it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`. See [Fix up patch files after a submodule update](#fix-up-patch-files-after-a-submodule-update) for rebase conflict resolution techniques.
 * `-no-extract`: don't run `git go-patch extract` automatically on exit (run it yourself when ready).
 
-If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state. `extract` is likewise skipped when the submodule has no commits on top of the recorded base — for example if you open a plain `git go-patch shell` (without `-apply`) on a submodule that has no patches applied — because extracting from an empty history would delete every patch file. Pass `-apply` (or run `git go-patch apply` first) when you intend to edit and re-extract patches.
+If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state.
+`extract` is likewise skipped when the submodule has no commits on top of the recorded base — for example if you open a plain `git go-patch shell` (without `-apply`) on a submodule that has no patches applied — because extracting from an empty history would delete every patch file.
+Pass `-apply` (or run `git go-patch apply` first) when you intend to edit and re-extract patches.
 
-The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode. The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
+The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode.
+The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
 
-On zsh, the shell launches with a temporary `ZDOTDIR` so it can load your config and then prepend the prompt prefix. If your `.zshrc` sources split configuration relative to `$ZDOTDIR` (for example `source $ZDOTDIR/aliases.zsh`), those lookups resolve against the temporary directory and are silently skipped inside the git-go-patch shell. Reference such files by an absolute path or `$HOME` if you need them while in shell mode.
+On zsh, the shell launches with a temporary `ZDOTDIR` so it can load your config and then prepend the prompt prefix.
+If your `.zshrc` sources split configuration relative to `$ZDOTDIR` (for example `source $ZDOTDIR/aliases.zsh`), those lookups resolve against the temporary directory and are silently skipped inside the git-go-patch shell.
+Reference such files by an absolute path or `$HOME` if you need them while in shell mode.
 
 ### Manual workflow
 
@@ -166,7 +180,7 @@ Then:
 1. Stage your fixes.
 1. Run `git am --continue` to create the fixed-up commit.
 1. If there are more conflicts, go back to step 2. (The `git am --continue` command will tell you.)
-1. Run `git go-patch extract` to save the fixes to your repository's patch files.
+1. Run `git go-patch extract` to save the fixes to your repository's patch files, or exit from your `git go-patch shell` session if you started one.
 
 When creating a commit with the fixed patch files, make sure not to include the submodule change.
 `git go-patch apply` creates temporary local commits inside the submodule with unique commit hashes.

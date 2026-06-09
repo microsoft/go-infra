@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -44,6 +45,20 @@ func handleRebase(p subcmd.ParseFunc) error {
 	}
 	_, goDir := config.FullProjectRoots()
 
+	if err := rebasePatches(config); err != nil {
+		return err
+	}
+
+	warnIfOutsideSubmodule(goDir)
+	return nil
+}
+
+// rebasePatches starts an interactive rebase of the patch commits in the submodule, using the HEAD
+// recorded by 'apply' as the base. It is the in-process implementation shared by the 'rebase'
+// subcommand and 'git go-patch shell -rebase'.
+func rebasePatches(config *patch.FoundConfig) error {
+	_, goDir := config.FullProjectRoots()
+
 	since, err := readStatusFile(config.FullPrePatchStatusFilePath())
 	if err != nil {
 		return err
@@ -53,12 +68,7 @@ func handleRebase(p subcmd.ParseFunc) error {
 	cmd.Stdin = os.Stdin
 	cmd.Dir = goDir
 
-	if err := executil.Run(cmd); err != nil {
-		return err
-	}
-
-	warnIfOutsideSubmodule(goDir)
-	return nil
+	return executil.Run(cmd)
 }
 
 func warnIfOutsideSubmodule(submoduleDir string) {

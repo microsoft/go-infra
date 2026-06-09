@@ -10,10 +10,6 @@ import (
 	"os"
 )
 
-// EnvSuppressSuccessMessage suppresses the generic trailing "Success." printed after a subcommand
-// returns nil when set to a non-empty value.
-const EnvSuppressSuccessMessage = "GO_INFRA_SUBCMD_SUPPRESS_SUCCESS_MESSAGE"
-
 // ParseFunc parses all flags that have been set up. Include extra handling for "-h" help flag
 // detailed output, invalid args, and error conditions.
 type ParseFunc func() error
@@ -29,11 +25,6 @@ type Option struct {
 	// Description is a description of the option that will be printed directly appended to Summary
 	// to optionally add more detail to the option-specific help message.
 	Description string
-
-	// SuppressSuccessMessage suppresses the generic trailing "Success." printed after a subcommand
-	// returns nil. This is useful for subcommands that manage their own end-of-command messaging or
-	// invoke child subcommands whose own success messages would otherwise be duplicated.
-	SuppressSuccessMessage bool
 
 	// TakeArgsReason is a brief description of why this option takes non-flag args and what it will
 	// do with them, or empty string (default) if the option doesn't accept non-flag args. If empty
@@ -94,9 +85,7 @@ func Run(cmdBaseDoc, description string, options []Option) error {
 				os.Exit(1)
 			}
 
-			if !subCmd.SuppressSuccessMessage && os.Getenv(EnvSuppressSuccessMessage) == "" {
-				fmt.Println("\nSuccess.")
-			}
+			fmt.Println("\nSuccess.")
 			return nil
 		}
 	}
