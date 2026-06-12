@@ -102,7 +102,7 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 			return err
 		}
 		if !hasCommits {
-			return fmt.Errorf("no commits to extract into patch files: the submodule has no commits in %v..HEAD; run 'apply' and make your edits first", since)
+			return fmt.Errorf("no commits to extract into patch files: the submodule has no commits in %v..HEAD; did you miss running 'apply' first?", since)
 		}
 	}
 
@@ -283,7 +283,7 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 	if matcher != nil {
 		log.Printf(
 			"Of that time, reducing spurious changes took %v. "+
-				"If this is a burden, consider using '-verbatim' mode to allow spurious changes but take ~%v.\n",
+				"If this is a burden, consider using 'git go-patch extract -verbatim' to allow spurious changes but take ~%v.\n",
 			matchingStopwatch.ElapsedMillis(),
 			totalStopwatch.ElapsedMillis()-matchingStopwatch.ElapsedMillis())
 	}
