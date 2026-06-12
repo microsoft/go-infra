@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,10 +119,10 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	shellErr := runInteractiveShell(goDir)
 
-	extract, launchErr := shouldExtractPatch(shellErr, *noExtract)
-	if launchErr != nil {
+	extract, err := shouldExtractPatch(shellErr, *noExtract)
+	if err != nil {
 		// The shell never ran, so there's nothing to extract; surface the failure.
-		return fmt.Errorf("failed to run the interactive shell: %w", launchErr)
+		return fmt.Errorf("failed to run the interactive shell: %w", err)
 	}
 
 	if !extract {
@@ -129,15 +130,15 @@ func handleShell(p subcmd.ParseFunc) error {
 			fmt.Println("\nSkipping 'extract' because -no-extract was specified.")
 		} else {
 			// The shell exited non-zero, which we treat as "discard": skip extract and leave the
-			// patch files alone. Tell the user how to extract manually in case they meant to save.
+			// patch files alone.
 			var exitErr *exec.ExitError
 			if errors.As(shellErr, &exitErr) {
 				fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
 			} else {
 				fmt.Println("\nThe shell exited abnormally, so 'extract' was skipped and your patch files were left untouched.")
 			}
-			fmt.Println("If you meant to save your changes, run 'git go-patch extract'.")
 		}
+		fmt.Println("To manually save your changes, run 'git go-patch extract'.")
 		return nil
 	}
 
@@ -217,10 +218,11 @@ func gitOperationInProgress(dir string) (bool, error) {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(dir, p)
 		}
-		switch _, err := os.Stat(p); {
-		case err == nil:
+		_, err = os.Stat(p)
+		if err == nil {
 			return true, nil
-		case !os.IsNotExist(err):
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
 			return false, fmt.Errorf("unable to stat %q: %w", p, err)
 		}
 	}
