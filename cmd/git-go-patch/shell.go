@@ -34,30 +34,15 @@ func init() {
 		Description: `
 
 This command streamlines the common "apply, edit, extract" workflow by starting an interactive
-shell with its working directory set to the submodule, so no manual "cd" is necessary. When you exit
-the shell (for example by running "exit"), "git go-patch extract" runs automatically to rewrite the
-patch files based on the commits in the submodule.
+shell with its working directory set to the submodule, so no manual "cd" is necessary.
 
-Inside the shell you can edit commits however you like, for example with "git rebase -i", and you
-can run "code ." to open an editor scoped to the submodule's history.
+When the shell exits successfully (when you execute "exit 0"), the "extract" subcommand runs
+automatically. When the shell exits with a non-zero exit code (for example when you execute
+"exit 1"), the "extract" subcommand is not run. This allows you to skip extraction.
 
-Use "-apply" to run "git go-patch apply" before opening the shell, and "-rebase" to start an
-interactive rebase. Both can be combined, in which case "apply" runs first. The "-rebase" rebase
-runs to completion before the shell opens; if it stops (for example on a conflict or an "edit" or
-"break" step) the shell still opens so you can resolve it and run "git rebase --continue". Use
-"-no-extract" if you want to run "extract" yourself instead of automatically on exit.
-
-When you exit, "git go-patch extract" runs automatically only if the shell exits with status 0.
-Use "exit 0" to save the changes you made in the submodule to the patch files, or "exit 1" to
-discard them and leave the patch files untouched. We recommend always using "exit 0" explicitly: in
-PowerShell a plain "exit" always reports status 0, but in bash or zsh a plain "exit" inherits the
-status of the last command you ran. If you discard by accident, run "git go-patch extract" yourself
-to save the changes.
-
-If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, "extract"
-is skipped to avoid rewriting the patch files from an incomplete state. "extract" is also skipped if
-the submodule has no commits on top of the recorded base (for example if you didn't pass "-apply"
-and no patches are applied), since extracting from an empty history would delete every patch file.
+The "extract" subcommand is also skipped in situations where it is very likely undesirable:
+- If a rebase, merge, cherry-pick, or revert is still in progress.
+- If the submodule has no commits on top of the recorded base.
 ` + repoRootSearchDescription,
 		Handle: handleShell,
 	})
@@ -122,11 +107,11 @@ func handleShell(p subcmd.ParseFunc) error {
 	}
 
 	fmt.Printf("\nStarting an interactive shell in %#q.\n", goDir)
+	fmt.Println("Edit the commits in the submodule however you like; run 'code .' to open an editor scoped to its history.")
 	if *noExtract {
-		fmt.Println("Type 'exit' to leave the shell. 'git go-patch extract' will NOT run automatically; run it yourself when you're ready.")
+		fmt.Println("When you're done with your changes, type 'exit' to leave the shell. 'git go-patch extract' will NOT run automatically; run it yourself when you're ready.")
 	} else {
-		fmt.Println("Use 'exit 0' to save your changes to the patch files, or 'exit 1' to discard them.")
-		fmt.Println("(In PowerShell a plain 'exit' is always 0; in bash/zsh it inherits the last command's status, so prefer 'exit 0'.)")
+		fmt.Println("When you're done with your changes, use 'exit 0' to save them to the patch files, or 'exit 1' to discard them.")
 	}
 	fmt.Println()
 
