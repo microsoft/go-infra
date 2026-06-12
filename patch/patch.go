@@ -70,6 +70,38 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 	return executil.Run(cmd)
 }
 
+// ApplyIndividually applies each patch one at a time, calling afterApply with
+// the patch file path after each successful application. This is needed for
+// auto-vendor workflows where "go mod vendor" must run between patches.
+func ApplyIndividually(config *FoundConfig, mode ApplyMode, afterApply func(patchPath string) error) error {
+	_, goDir := config.FullProjectRoots()
+
+	return WalkGoPatches(config, func(file string) error {
+		cmd := exec.Command("git")
+		cmd.Dir = goDir
+
+		switch mode {
+		case ApplyModeCommits:
+			cmd.Args = append(cmd.Args, "am")
+		case ApplyModeIndex:
+			cmd.Args = append(cmd.Args, "apply", "--index")
+		default:
+			return fmt.Errorf("invalid patch mode '%v'", mode)
+		}
+
+		cmd.Args = append(cmd.Args, "--whitespace=nowarn", file)
+
+		if err := executil.Run(cmd); err != nil {
+			return err
+		}
+
+		if afterApply != nil {
+			return afterApply(file)
+		}
+		return nil
+	})
+}
+
 // WalkGoPatches finds patches in the given Microsoft build of Go repository root directory and runs fn once
 // per patch file path. If fn returns an error, walking terminates and the error is returned. The
 // walk iterates in the order the patches should be applied (alphabetical filename order).

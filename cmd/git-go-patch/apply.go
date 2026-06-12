@@ -97,8 +97,26 @@ func handleApply(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
+	// Check if any patches have auto-vendor commands. If so, we need to apply
+	// patches one at a time so we can run "go mod vendor" between patches.
+	autoVendorMap, err := patch.ScanAutoVendorPatches(config)
+	if err != nil {
 		return err
+	}
+
+	if len(autoVendorMap) > 0 {
+		if err := patch.ApplyIndividually(config, patch.ApplyModeCommits, func(patchPath string) error {
+			if dirs, ok := autoVendorMap[patchPath]; ok {
+				return patch.RunGoModVendor(goDir, dirs, true)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	} else {
+		if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
+			return err
+		}
 	}
 
 	postPatchHead, err := getCurrentCommit(goDir)
