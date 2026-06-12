@@ -199,6 +199,27 @@ func RunGoModVendor(submoduleDir string, moduleDirs []string, amend bool) error 
 		if vendorErr != nil {
 			return fmt.Errorf("go mod vendor in %s: %w", dir, vendorErr)
 		}
+
+		// Fix modules.txt: "go mod vendor" recorded the lowered go versions
+		// for local replace targets. Now that we've restored the originals in
+		// their go.mod files, modules.txt must match to pass vendor checks.
+		moduleVersions := make(map[string]string)
+		for _, s := range saved {
+			if s.dir == absDir {
+				continue // Main module's version isn't in modules.txt.
+			}
+			modPath, err := readModulePath(s.dir)
+			if err != nil {
+				return fmt.Errorf("reading module path from %s: %w", s.dir, err)
+			}
+			moduleVersions[modPath] = s.version
+		}
+		if len(moduleVersions) > 0 {
+			vendorTxt := filepath.Join(absDir, "vendor", "modules.txt")
+			if err := fixModulesTxtGoVersions(vendorTxt, moduleVersions); err != nil {
+				return fmt.Errorf("fixing modules.txt go versions in %s: %w", dir, err)
+			}
+		}
 	}
 
 	if err := gitcmd.Run(submoduleDir, "add", "-A"); err != nil {
@@ -312,4 +333,62 @@ func readGoDirective(dir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no go directive found in %s/go.mod", dir)
+}
+
+// readModulePath reads the module path from go.mod in the given directory.
+func readModulePath(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		}
+	}
+	return "", fmt.Errorf("no module directive found in %s/go.mod", dir)
+}
+
+// fixModulesTxtGoVersions updates vendor/modules.txt to reflect restored go
+// directive versions for local replace targets. When we temporarily lower go
+// directives for "go mod vendor" compatibility, the generated modules.txt
+// records the lowered versions. After restoring go.mod, we fix modules.txt
+// so post-build vendor checks pass.
+func fixModulesTxtGoVersions(modulesTxtPath string, moduleVersions map[string]string) error {
+	data, err := os.ReadFile(modulesTxtPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var currentModule string
+	changed := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "# ") {
+			// Extract module path from "# module version [=> replacement]"
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				currentModule = fields[1]
+			}
+		}
+		if strings.HasPrefix(line, "## explicit") && currentModule != "" {
+			if version, ok := moduleVersions[currentModule]; ok {
+				newLine := "## explicit; go " + version
+				if lines[i] != newLine {
+					lines[i] = newLine
+					changed = true
+				}
+				currentModule = "" // Only fix once per module.
+			}
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return os.WriteFile(modulesTxtPath, []byte(strings.Join(lines, "\n")), 0o644)
 }

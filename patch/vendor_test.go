@@ -292,3 +292,95 @@ func TestReadGoDirective_Missing(t *testing.T) {
 		t.Error("expected error for missing go directive")
 	}
 }
+
+func TestReadModulePath(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "go.mod"), []byte("module github.com/example/foo\n\ngo 1.27\n"))
+
+	modPath, err := readModulePath(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modPath != "github.com/example/foo" {
+		t.Errorf("expected github.com/example/foo, got %s", modPath)
+	}
+}
+
+func TestReadModulePath_Missing(t *testing.T) {
+	tmp := t.TempDir()
+	writeFile(t, filepath.Join(tmp, "go.mod"), []byte("go 1.27\n"))
+
+	_, err := readModulePath(tmp)
+	if err == nil {
+		t.Error("expected error for missing module directive")
+	}
+}
+
+func TestFixModulesTxtGoVersions(t *testing.T) {
+	tmp := t.TempDir()
+	modulesTxt := filepath.Join(tmp, "modules.txt")
+
+	content := "# github.com/microsoft/go-crypto-openssl v0.0.0\n" +
+		"## explicit; go 1.25\n" +
+		"github.com/microsoft/go-crypto-openssl\n" +
+		"# github.com/microsoft/go/cryptobackend v0.0.0 => ../../cryptobackend\n" +
+		"## explicit; go 1.25\n" +
+		"github.com/microsoft/go/cryptobackend\n" +
+		"github.com/microsoft/go/cryptobackend/aes\n"
+	writeFile(t, modulesTxt, []byte(content))
+
+	versions := map[string]string{
+		"github.com/microsoft/go/cryptobackend": "1.26",
+	}
+	if err := fixModulesTxtGoVersions(modulesTxt, versions); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(modulesTxt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := string(data)
+
+	// cryptobackend should be updated to 1.26
+	if !strings.Contains(result, "# github.com/microsoft/go/cryptobackend v0.0.0 => ../../cryptobackend\n## explicit; go 1.26\n") {
+		t.Errorf("expected cryptobackend go version to be 1.26, got:\n%s", result)
+	}
+	// go-crypto-openssl should remain 1.25 (not in moduleVersions)
+	if !strings.Contains(result, "# github.com/microsoft/go-crypto-openssl v0.0.0\n## explicit; go 1.25\n") {
+		t.Errorf("expected go-crypto-openssl go version to remain 1.25, got:\n%s", result)
+	}
+}
+
+func TestFixModulesTxtGoVersions_NoChange(t *testing.T) {
+	tmp := t.TempDir()
+	modulesTxt := filepath.Join(tmp, "modules.txt")
+
+	content := "# github.com/microsoft/go/cryptobackend v0.0.0\n" +
+		"## explicit; go 1.26\n" +
+		"github.com/microsoft/go/cryptobackend\n"
+	writeFile(t, modulesTxt, []byte(content))
+
+	versions := map[string]string{
+		"github.com/microsoft/go/cryptobackend": "1.26",
+	}
+	if err := fixModulesTxtGoVersions(modulesTxt, versions); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(modulesTxt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != content {
+		t.Errorf("file should not have changed, got:\n%s", string(data))
+	}
+}
+
+func TestFixModulesTxtGoVersions_MissingFile(t *testing.T) {
+	// Should not error if modules.txt doesn't exist.
+	err := fixModulesTxtGoVersions(filepath.Join(t.TempDir(), "modules.txt"), map[string]string{"foo": "1.26"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
