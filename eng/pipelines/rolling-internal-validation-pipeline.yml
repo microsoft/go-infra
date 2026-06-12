@@ -14,11 +14,13 @@
 
 parameters:
   - name: enableCodeQL
-    displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications in dev branches.'
+    displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications
+      in dev branches.'
     type: boolean
     default: false
   - name: disableTSA
-    displayName: '[Debug input] Disable TSA reporting. Use to try modifications in dev branches.'
+    displayName: '[Debug input] Disable TSA reporting. Use to try modifications in
+      dev branches.'
     type: boolean
     default: false
 trigger: none
