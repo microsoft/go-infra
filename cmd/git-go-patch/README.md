@@ -81,12 +81,16 @@ This avoids writing patches from an incomplete state:
 * The submodule has no commits on top of the recorded base.
   * For example, if you use `git submodule update` and then `git go-patch shell` (without `-apply`), extracting from the empty history would delete every patch file.
 
-The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode.
-The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
+By default the shell is your `$SHELL` on macOS and Linux, or PowerShell (falling back to `cmd.exe`) on Windows.
+Use `-shell` to launch a different one (for example `-shell pwsh` on Linux, or `-shell bash` on Windows).
 
-On zsh, the shell launches with a temporary `ZDOTDIR` so it can load your config and then prepend the prompt prefix.
-If your `.zshrc` sources split configuration relative to `$ZDOTDIR` (for example `source $ZDOTDIR/aliases.zsh`), those lookups resolve against the temporary directory and are silently skipped inside the git-go-patch shell.
-Reference such files by an absolute path or `$HOME` if you need them while in shell mode.
+The shell sets `GIT_GO_PATCH_INTERACTIVE` to the submodule's path.
+This lets scripts reliably detect the mode, and lets `git go-patch shell` refuse to open a nested shell for the same submodule (pass `-allow-self-nest` to override).
+In PowerShell and `cmd.exe` the prompt is also prefixed with `(git-go-patch)`, but this is best effort: other shells are launched without modifying your prompt, and prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the prefix.
+
+> [!TIP]
+> The printed banner and the `GIT_GO_PATCH_INTERACTIVE` environment variable are the reliable indicators that you're in shell mode.
+> Consider referencing `GIT_GO_PATCH_INTERACTIVE` in your shell's prompt if you'd like a visible indicator in every shell.
 
 ### Manual workflow
 

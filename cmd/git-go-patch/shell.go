@@ -34,10 +34,9 @@ func init() {
 		Description: `
 
 This command streamlines the common "apply, edit, extract" workflow by starting an interactive
-shell with its working directory set to the submodule, so no manual "cd" is necessary. The shell
-prompt is prefixed with "` + strings.TrimSpace(promptPrefix) + `" to make it clear the shell is in
-this special mode. When you exit the shell (for example by running "exit"), "git go-patch extract"
-runs automatically to rewrite the patch files based on the commits in the submodule.
+shell with its working directory set to the submodule, so no manual "cd" is necessary. When you exit
+the shell (for example by running "exit"), "git go-patch extract" runs automatically to rewrite the
+patch files based on the commits in the submodule.
 
 Inside the shell you can edit commits however you like, for example with "git rebase -i", and you
 can run "code ." to open an editor scoped to the submodule's history.
@@ -70,6 +69,12 @@ func handleShell(p subcmd.ParseFunc) error {
 	noExtract := flag.Bool(
 		"no-extract", false,
 		"Don't automatically run 'git go-patch extract' when the shell exits.")
+	shellFlag := flag.String(
+		"shell", "",
+		"Shell to launch. Defaults to $SHELL on macOS/Linux, or PowerShell (falling back to cmd.exe) on Windows.")
+	allowSelfNest := flag.Bool(
+		"allow-self-nest", false,
+		"Open the shell even if it looks like you're already inside a 'git go-patch shell' for this submodule.")
 
 	if err := p(); err != nil {
 		return err
@@ -80,6 +85,15 @@ func handleShell(p subcmd.ParseFunc) error {
 		return err
 	}
 	_, goDir := config.FullProjectRoots()
+
+	// Refuse to nest a shell for the same submodule. The marker env var is inherited by every child
+	// process, so this also catches re-running the command from, say, an editor terminal opened inside
+	// the shell. Nesting has no real use (each exit would redundantly run 'extract'), so fail early
+	// rather than warn; -allow-self-nest overrides for the rare case the user really wants it.
+	if alreadyInShellFor(goDir) && !*allowSelfNest {
+		return fmt.Errorf("already inside a 'git go-patch shell' for this submodule (%s is set); "+
+			"exit it first, or pass -allow-self-nest to open a nested shell anyway", envInteractive)
+	}
 
 	if *apply {
 		if err := applyPatches(config, false, false, ""); err != nil {
@@ -103,9 +117,8 @@ func handleShell(p subcmd.ParseFunc) error {
 		}
 	}
 
-	if alreadyInShellFor(goDir) {
-		fmt.Println("\nWARNING: it looks like you're already inside a 'git go-patch shell' for this submodule (" + envInteractive + " is set).")
-		fmt.Println("Opening another one will nest shells; remember to 'exit' each one.")
+	if alreadyInShellFor(goDir) && *allowSelfNest {
+		fmt.Println("\nWARNING: opening a nested 'git go-patch shell' for this submodule because -allow-self-nest was passed; remember to 'exit' each one.")
 	}
 
 	fmt.Printf("\nStarting an interactive shell in %#q.\n", goDir)
@@ -117,7 +130,7 @@ func handleShell(p subcmd.ParseFunc) error {
 	}
 	fmt.Println()
 
-	shellErr := runInteractiveShell(goDir)
+	shellErr := runInteractiveShell(goDir, *shellFlag)
 
 	extract, err := shouldExtractPatch(shellErr, *noExtract)
 	if err != nil {
@@ -229,26 +242,19 @@ func gitOperationInProgress(dir string) (bool, error) {
 	return false, nil
 }
 
-// runInteractiveShell starts an interactive shell with its working directory set to dir and the
-// prompt prefixed with promptPrefix. It blocks until the shell exits.
-func runInteractiveShell(dir string) error {
-	cmd, cleanup, err := interactiveShellCmd()
-	if err != nil {
-		return err
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-
+// runInteractiveShell starts an interactive shell with its working directory set to dir, marks the
+// session via the GIT_GO_PATCH_INTERACTIVE environment variable, and blocks until the shell exits.
+// shellOverride, if non-empty, names the shell to launch instead of the default.
+func runInteractiveShell(dir, shellOverride string) error {
+	cmd := interactiveShellCmd(shellOverride)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Mark the environment with the target submodule so scripts and a nested 'git go-patch shell' can
-	// detect this mode. The shell builders leave cmd.Env nil when they don't need to customize it,
-	// which means "inherit this process's environment"; start from os.Environ() in that case so
-	// appending doesn't drop it.
+	// Mark the environment with the target submodule so scripts and a nested 'git go-patch shell'
+	// can detect this mode. interactiveShellCmd may leave cmd.Env nil (meaning "inherit this
+	// process's environment"); start from os.Environ() in that case so appending doesn't drop it.
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
@@ -259,31 +265,67 @@ func runInteractiveShell(dir string) error {
 	return cmd.Run()
 }
 
-// interactiveShellCmd builds an *exec.Cmd that launches the user's interactive shell with a prompt
-// that indicates git-go-patch mode. It returns an optional cleanup func to remove any temporary
-// files created to customize the prompt.
-func interactiveShellCmd() (cmd *exec.Cmd, cleanup func(), err error) {
-	if runtime.GOOS == "windows" {
-		return windowsShellCmd()
+// interactiveShellCmd builds an *exec.Cmd that launches an interactive shell. If shellOverride is
+// non-empty it names the shell to launch; otherwise the shell is chosen by selectShell. The prompt
+// is prefixed with promptPrefix only for shells where that is non-invasive (PowerShell and cmd.exe).
+// For any other shell, the GIT_GO_PATCH_INTERACTIVE environment variable and the printed banner are
+// the indicators that you're in shell mode.
+func interactiveShellCmd(shellOverride string) *exec.Cmd {
+	shell := selectShell(shellOverride)
+	switch shellKind(shell) {
+	case shellKindPowerShell:
+		return powerShellCmd(shell)
+	case shellKindCmd:
+		return cmdShellCmd(shell)
+	default:
+		return exec.Command(shell, "-i")
 	}
-	return unixShellCmd()
 }
 
-func windowsShellCmd() (*exec.Cmd, func(), error) {
-	// Prefer PowerShell, which is the common shell for Microsoft build of Go development. Fall back
-	// to cmd.exe if PowerShell isn't available.
-	if pwsh, err := exec.LookPath("pwsh"); err == nil {
-		return powerShellCmd(pwsh), nil, nil
+// selectShell returns the shell to launch. An explicit override wins. Otherwise, on Windows it
+// prefers PowerShell and falls back to cmd.exe; on other platforms it honors $SHELL (the user's
+// configured shell) and falls back to /bin/sh.
+func selectShell(override string) string {
+	if override != "" {
+		return override
 	}
-	if powershell, err := exec.LookPath("powershell"); err == nil {
-		return powerShellCmd(powershell), nil, nil
+	if runtime.GOOS == "windows" {
+		if pwsh, err := exec.LookPath("pwsh"); err == nil {
+			return pwsh
+		}
+		if powershell, err := exec.LookPath("powershell"); err == nil {
+			return powershell
+		}
+		if comspec := os.Getenv("COMSPEC"); comspec != "" {
+			return comspec
+		}
+		return "cmd.exe"
 	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell
+	}
+	return "/bin/sh"
+}
 
-	comspec := os.Getenv("COMSPEC")
-	if comspec == "" {
-		comspec = "cmd.exe"
+type shellKindValue int
+
+const (
+	shellKindOther shellKindValue = iota
+	shellKindPowerShell
+	shellKindCmd
+)
+
+// shellKind classifies shell by its base name so the launcher knows whether it can prefix the prompt
+// non-invasively.
+func shellKind(shell string) shellKindValue {
+	switch strings.ToLower(strings.TrimSuffix(filepath.Base(shell), ".exe")) {
+	case "pwsh", "powershell":
+		return shellKindPowerShell
+	case "cmd":
+		return shellKindCmd
+	default:
+		return shellKindOther
 	}
-	return cmdShellCmd(comspec), nil, nil
 }
 
 func cmdShellCmd(comspec string) *exec.Cmd {
@@ -303,117 +345,4 @@ func powerShellCmd(shell string) *exec.Cmd {
 			"function global:prompt { '%s' + (& $global:__goPatchPrompt) }",
 		promptPrefix)
 	return exec.Command(shell, "-NoLogo", "-NoExit", "-Command", promptCommand)
-}
-
-func unixShellCmd() (*exec.Cmd, func(), error) {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-
-	switch filepath.Base(shell) {
-	case "bash":
-		return bashShellCmd(shell)
-	case "zsh":
-		return zshShellCmd(shell)
-	default:
-		// For sh, dash, and other shells, the PS1 environment variable is honored by the
-		// interactive shell, so prepend the indicator to whatever PS1 is already set.
-		cmd := exec.Command(shell, "-i")
-		ps1 := os.Getenv("PS1")
-		if ps1 == "" {
-			ps1 = "$ "
-		}
-		cmd.Env = append(os.Environ(), "PS1="+promptPrefix+ps1)
-		return cmd, nil, nil
-	}
-}
-
-func bashShellCmd(shell string) (*exec.Cmd, func(), error) {
-	// bash interactive shells set PS1 from their startup files, overriding any inherited value. Use
-	// a temporary init file that sources the user's normal config first, then prepends the
-	// indicator to the resulting prompt.
-	rcContent := `[ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-PS1="` + promptPrefix + `$PS1"
-`
-	rcFile, cleanup, err := writeTempRC("git-go-patch-bashrc", rcContent)
-	if err != nil {
-		return nil, nil, err
-	}
-	return exec.Command(shell, "--rcfile", rcFile, "-i"), cleanup, nil
-}
-
-func zshShellCmd(shell string) (*exec.Cmd, func(), error) {
-	// zsh reads .zshrc from ZDOTDIR. Point ZDOTDIR at a temporary directory whose .zshrc sources
-	// the user's normal config and then prepends the indicator to the prompt.
-	tmpDir, err := os.MkdirTemp("", "git-go-patch-zdotdir-*")
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to create temp ZDOTDIR: %w", err)
-	}
-	cleanup := func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			fmt.Printf("WARNING: unable to clean up temp dir %#q: %v\n", tmpDir, err)
-		}
-	}
-
-	// Because ZDOTDIR is overridden below, zsh resolves all of its startup files from the temp dir.
-	// Recreate the ones a non-login interactive shell uses so the user's environment still loads:
-	// .zshenv (always sourced, commonly sets PATH and other critical env) and .zshrc.
-	origZDotDir := os.Getenv("ZDOTDIR")
-	if origZDotDir == "" {
-		origZDotDir = os.Getenv("HOME")
-	}
-
-	files := map[string]string{
-		// Source the user's .zshenv, then re-assert ZDOTDIR in case the user's config changed it, so
-		// the temp .zshrc below is still picked up. Paths are single-quoted so a home or temp dir
-		// containing spaces or shell metacharacters can't break sourcing.
-		".zshenv": fmt.Sprintf(`[ -f %[1]s/.zshenv ] && source %[1]s/.zshenv
-export ZDOTDIR=%[2]s
-`, shellSingleQuote(origZDotDir), shellSingleQuote(tmpDir)),
-		".zshrc": fmt.Sprintf(`[ -f %[1]s/.zshrc ] && source %[1]s/.zshrc
-PS1="%[2]s$PS1"
-`, shellSingleQuote(origZDotDir), promptPrefix),
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0o600); err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("unable to write temp %s: %w", name, err)
-		}
-	}
-
-	cmd := exec.Command(shell, "-i")
-	cmd.Env = append(os.Environ(), "ZDOTDIR="+tmpDir)
-	return cmd, cleanup, nil
-}
-
-// shellSingleQuote quotes s so a POSIX-compatible shell treats it as a single literal word, even if
-// it contains spaces, quotes, "$", or backticks. It wraps the string in single quotes and replaces
-// each embedded single quote with the standard close-quote, escaped-quote, reopen-quote sequence.
-func shellSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// writeTempRC writes content to a uniquely named temporary file and returns its path along with a
-// cleanup func that removes it.
-func writeTempRC(pattern, content string) (string, func(), error) {
-	f, err := os.CreateTemp("", pattern+"-*")
-	if err != nil {
-		return "", nil, fmt.Errorf("unable to create temp shell init file: %w", err)
-	}
-	cleanup := func() {
-		if err := os.Remove(f.Name()); err != nil {
-			fmt.Printf("WARNING: unable to clean up temp file %#q: %v\n", f.Name(), err)
-		}
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		cleanup()
-		return "", nil, fmt.Errorf("unable to write temp shell init file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("unable to close temp shell init file: %w", err)
-	}
-	return f.Name(), cleanup, nil
 }

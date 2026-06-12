@@ -8,143 +8,63 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 )
 
-func TestWriteTempRC(t *testing.T) {
-	content := "echo hello\n"
-	path, cleanup, err := writeTempRC("git-go-patch-test", content)
-	if err != nil {
-		t.Fatalf("writeTempRC returned error: %v", err)
+func TestSelectShell(t *testing.T) {
+	// An explicit override always wins, regardless of platform.
+	if got := selectShell("/custom/shell"); got != "/custom/shell" {
+		t.Errorf("selectShell(override) = %q, want /custom/shell", got)
 	}
 
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("unable to read temp file: %v", err)
-	}
-	if string(got) != content {
-		t.Errorf("temp file content = %q, want %q", got, content)
-	}
-
-	cleanup()
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("expected temp file %q to be removed after cleanup, stat err = %v", path, err)
+	if runtime.GOOS != "windows" {
+		// On non-Windows, the default honors $SHELL, falling back to /bin/sh when it's unset.
+		t.Setenv("SHELL", "/usr/bin/fish")
+		if got := selectShell(""); got != "/usr/bin/fish" {
+			t.Errorf("selectShell(\"\") = %q, want /usr/bin/fish from $SHELL", got)
+		}
+		t.Setenv("SHELL", "")
+		if got := selectShell(""); got != "/bin/sh" {
+			t.Errorf("selectShell(\"\") = %q, want /bin/sh fallback", got)
+		}
 	}
 }
 
-func TestUnixShellCmdBash(t *testing.T) {
-	t.Setenv("SHELL", "/usr/bin/bash")
-
-	cmd, cleanup, err := unixShellCmd()
-	if err != nil {
-		t.Fatalf("unixShellCmd returned error: %v", err)
-	}
-	if cleanup == nil {
-		t.Fatal("expected a non-nil cleanup func for bash")
-	}
-
-	if !slices.Contains(cmd.Args, "-i") {
-		t.Errorf("bash args = %v, want to contain -i", cmd.Args)
-	}
-	rc := argAfter(t, cmd.Args, "--rcfile")
-	data, err := os.ReadFile(rc)
-	if err != nil {
-		t.Fatalf("unable to read rcfile %q: %v", rc, err)
-	}
-	if !strings.Contains(string(data), promptPrefix) {
-		t.Errorf("rcfile %q content = %q, want to contain prompt prefix %q", rc, data, promptPrefix)
-	}
-	if !strings.Contains(string(data), ".bashrc") {
-		t.Errorf("rcfile %q should source the user's .bashrc", rc)
-	}
-
-	cleanup()
-	if _, err := os.Stat(rc); !os.IsNotExist(err) {
-		t.Errorf("expected rcfile %q to be removed after cleanup, stat err = %v", rc, err)
-	}
-}
-
-func TestUnixShellCmdZsh(t *testing.T) {
-	t.Setenv("SHELL", "/usr/bin/zsh")
-	t.Setenv("ZDOTDIR", "")
-	t.Setenv("HOME", "/home/example")
-
-	cmd, cleanup, err := unixShellCmd()
-	if err != nil {
-		t.Fatalf("unixShellCmd returned error: %v", err)
-	}
-	if cleanup == nil {
-		t.Fatal("expected a non-nil cleanup func for zsh")
-	}
-	defer cleanup()
-
-	zdot := envValue(cmd.Env, "ZDOTDIR")
-	if zdot == "" {
-		t.Fatal("expected ZDOTDIR to be set in the zsh command environment")
-	}
-
-	zshenv, err := os.ReadFile(filepath.Join(zdot, ".zshenv"))
-	if err != nil {
-		t.Fatalf("unable to read temp .zshenv: %v", err)
-	}
-	if !strings.Contains(string(zshenv), shellSingleQuote("/home/example")+"/.zshenv") {
-		t.Errorf(".zshenv = %q, want it to source the user's .zshenv", zshenv)
-	}
-
-	zshrc, err := os.ReadFile(filepath.Join(zdot, ".zshrc"))
-	if err != nil {
-		t.Fatalf("unable to read temp .zshrc: %v", err)
-	}
-	if !strings.Contains(string(zshrc), promptPrefix) {
-		t.Errorf(".zshrc = %q, want to contain prompt prefix %q", zshrc, promptPrefix)
-	}
-
-	cleanup()
-	if _, err := os.Stat(zdot); !os.IsNotExist(err) {
-		t.Errorf("expected temp ZDOTDIR %q to be removed after cleanup, stat err = %v", zdot, err)
-	}
-}
-
-func TestUnixShellCmdDefault(t *testing.T) {
-	t.Setenv("SHELL", "/bin/sh")
-	t.Setenv("PS1", "myprompt$ ")
-
-	cmd, cleanup, err := unixShellCmd()
-	if err != nil {
-		t.Fatalf("unixShellCmd returned error: %v", err)
-	}
-	if cleanup != nil {
-		t.Error("expected a nil cleanup func for the default shell path")
-	}
-
-	ps1 := envValue(cmd.Env, "PS1")
-	if !strings.HasPrefix(ps1, promptPrefix) {
-		t.Errorf("PS1 = %q, want it to start with prompt prefix %q", ps1, promptPrefix)
-	}
-	if !strings.Contains(ps1, "myprompt$ ") {
-		t.Errorf("PS1 = %q, want it to preserve the user's existing prompt", ps1)
-	}
-}
-
-func TestShellSingleQuote(t *testing.T) {
+func TestShellKind(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		want string
+		shell string
+		want  shellKindValue
 	}{
-		{"plain", "/home/example", `'/home/example'`},
-		{"space", "/home/with space", `'/home/with space'`},
-		{"single quote", `/home/wi'th`, `'/home/wi'\''th'`},
-		{"dollar and backtick", "/home/$x`y", "'/home/$x`y'"},
+		{"pwsh", shellKindPowerShell},
+		{"/usr/bin/pwsh", shellKindPowerShell},
+		{"pwsh.exe", shellKindPowerShell},
+		{"powershell", shellKindPowerShell},
+		{"powershell.exe", shellKindPowerShell},
+		{"cmd", shellKindCmd},
+		{"cmd.exe", shellKindCmd},
+		{"/bin/bash", shellKindOther},
+		{"/usr/bin/zsh", shellKindOther},
+		{"/bin/sh", shellKindOther},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shellSingleQuote(tt.in); got != tt.want {
-				t.Errorf("shellSingleQuote(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
+		if got := shellKind(tt.shell); got != tt.want {
+			t.Errorf("shellKind(%q) = %v, want %v", tt.shell, got, tt.want)
+		}
+	}
+}
+
+func TestInteractiveShellCmdOther(t *testing.T) {
+	// A non-PowerShell, non-cmd shell is launched interactively with no prompt munging: the command
+	// is just the shell with -i, and the builder injects no prompt-related environment.
+	cmd := interactiveShellCmd("/usr/bin/bash")
+	if len(cmd.Args) != 2 || cmd.Args[0] != "/usr/bin/bash" || cmd.Args[1] != "-i" {
+		t.Errorf("args = %v, want [/usr/bin/bash -i]", cmd.Args)
+	}
+	if cmd.Env != nil {
+		t.Errorf("expected no custom env for a plain shell, got %v", cmd.Env)
 	}
 }
 
@@ -308,22 +228,6 @@ func TestGitOperationInProgress(t *testing.T) {
 	} else if !inProgress {
 		t.Error("expected an in-progress cherry-pick to be detected")
 	}
-}
-
-// argAfter returns the element immediately following want in args, failing the test if want is not
-// present or is the last element.
-func argAfter(t *testing.T, args []string, want string) string {
-	t.Helper()
-	for i, a := range args {
-		if a == want {
-			if i+1 >= len(args) {
-				t.Fatalf("no argument after %q in %v", want, args)
-			}
-			return args[i+1]
-		}
-	}
-	t.Fatalf("argument %q not found in %v", want, args)
-	return ""
 }
 
 // envValue returns the value of the last assignment of key in a KEY=VALUE environment slice, or the
