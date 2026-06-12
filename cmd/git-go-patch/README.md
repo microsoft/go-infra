@@ -42,7 +42,6 @@ Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and
 
 `git go-patch shell` automates the most common parts of the editing workflow.
 It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and when you exit the shell with a status of 0 it automatically runs `git go-patch extract`.
-The shell's prompt is prefixed with `(git-go-patch)` to indicate you're in this mode.
 
 A typical session looks like this:
 
@@ -75,9 +74,12 @@ Commonly used flags:
   * The rebase runs to completion first. If it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`. See [Fix up patch files after a submodule update](#fix-up-patch-files-after-a-submodule-update) for rebase conflict resolution techniques.
 * `-no-extract`: don't run `git go-patch extract` automatically on exit (run it yourself when ready).
 
-If a rebase, merge, cherry-pick, or revert is still in progress when you exit the shell, `extract` is skipped automatically so the patch files aren't rewritten from an incomplete state.
-`extract` is likewise skipped when the submodule has no commits on top of the recorded base — for example if you open a plain `git go-patch shell` (without `-apply`) on a submodule that has no patches applied — because extracting from an empty history would delete every patch file.
-Pass `-apply` (or run `git go-patch apply` first) when you intend to edit and re-extract patches.
+There are some conditions where `extract` will be skipped regardless of exit code in order to fail safe.
+This avoids writing patches from an incomplete state:
+
+* A rebase, merge, cherry-pick, or revert is still in progress.
+* The submodule has no commits on top of the recorded base.
+  * For example, if you use `git submodule update` and then `git go-patch shell` (without `-apply`), extracting from the empty history would delete every patch file.
 
 The shell sets `GIT_GO_PATCH_INTERACTIVE` in its environment (to the submodule's path) so scripts (and an accidental nested `git go-patch shell` for the same submodule) can reliably detect the mode.
 The prompt is also prefixed on a best-effort basis, but prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the `(git-go-patch)` prefix; the printed banner and the environment variable are the reliable indicators that you're in shell mode.
