@@ -117,9 +117,12 @@ func (b BuildAssets) GoVersion() *goversion.GoVersion {
 // archiving infra is stored in each release branch to make it local to the code it operates on and
 // less likely to unintentionally break, so some of that information is duplicated here.
 var (
-	archiveSuffixes   = []string{".tar.gz", ".zip"}
-	checksumSuffix    = ".sha256"
-	signatureSuffixes = []string{".sig", ".asc"}
+	archiveSuffixes = []string{".tar.gz", ".zip"}
+	checksumSuffix  = ".sha256"
+	// signatureSuffixes are the extensions used to store signatures, in alphabetical order. Both
+	// formats are produced and shipped: ".asc" is an ASCII-armored PGP signature and ".sig" is its
+	// binary equivalent.
+	signatureSuffixes = []string{".asc", ".sig"}
 )
 
 // BuildResultsDirectoryInfo points to locations in the filesystem that contain a Go build from
@@ -246,25 +249,20 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				continue
 			}
 
-			// Is it a signature file? Check .sig and .asc.
-			// Prefer .sig when both exist (signatureSuffixes is ordered by preference).
-			var sigAssociatedName string
-			var isSig bool
-			for _, suffix := range signatureSuffixes {
-				if name, ok := stringutil.CutSuffix(e.Name(), suffix); ok {
-					sigAssociatedName = name
-					isSig = true
-					break
-				}
-			}
-			if isSig {
-				a := getOrCreateArch(sigAssociatedName)
-
-				// Skip if we already have a signature URL (e.g. .sig was already found).
-				if a.PGPSignatureURL != "" {
-					continue
-				}
+			// Is it a .sig (binary PGP) signature file?
+			if sigName, ok := stringutil.CutSuffix(e.Name(), ".sig"); ok {
+				a := getOrCreateArch(sigName)
 				a.PGPSignatureURL, err = getURL(e.Name())
+				if err != nil {
+					return nil, fmt.Errorf("unable to get URL for signature file %q: %w", e.Name(), err)
+				}
+				continue
+			}
+
+			// Is it a .asc (ASCII-armored PGP) signature file?
+			if ascName, ok := stringutil.CutSuffix(e.Name(), ".asc"); ok {
+				a := getOrCreateArch(ascName)
+				a.ASCSignatureURL, err = getURL(e.Name())
 				if err != nil {
 					return nil, fmt.Errorf("unable to get URL for signature file %q: %w", e.Name(), err)
 				}

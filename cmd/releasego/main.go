@@ -47,6 +47,7 @@ func appendPathAndVerificationFilePaths(p []string, path string) []string {
 	p = append(p, path, path+".sha256")
 	if strings.HasSuffix(path, ".tar.gz") {
 		p = append(p, path+".sig")
+		p = append(p, path+".asc")
 	}
 	return p
 }
@@ -77,6 +78,13 @@ func appendReleaseURLs(urls []string, assets *buildassets.BuildAssets, assetJSON
 			}
 		} else {
 			urls = append(urls, a.PGPSignatureURL)
+		}
+		if a.ASCSignatureURL == "" {
+			if strings.HasSuffix(a.URL, ".tar.gz") {
+				urls = append(urls, a.URL+".asc")
+			}
+		} else {
+			urls = append(urls, a.ASCSignatureURL)
 		}
 	}
 	if !addedSrc {
