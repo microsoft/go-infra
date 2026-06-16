@@ -38,6 +38,64 @@ git go-patch -h
 
 Sometimes you have to fix a bug in a patch file, add a new patch file, etc., and `apply`, `rebase`, and `extract` can help.
 
+### Streamlined workflow with `git go-patch shell`
+
+`git go-patch shell` automates the most common parts of the editing workflow.
+It opens an interactive shell whose working directory is already set to the submodule (so there's no need to `cd`), and when you exit the shell with a status of 0 it automatically runs `git go-patch extract`.
+
+A typical session looks like this:
+
+```
+git go-patch shell -apply
+# edit commits in the submodule, e.g. with `git rebase -i` or `git go-patch rebase`
+exit 0
+# `git go-patch extract` runs automatically and rewrites the patch files
+```
+
+#### Saving vs. discarding your changes on exit
+
+When you leave the shell, `extract` runs only if the shell exits with status `0`.
+This gives you an escape hatch: if you've made a mess of the commit history and don't want the tool to rewrite (or overwrite) your patch files, exit with a non-zero status instead.
+
+* `exit 0` to **save all changes you made in the submodule to the patch files**.
+* `exit 1` to **discard your changes**.
+
+> [!TIP]
+> In PowerShell, a plain `exit` always reports status `0`, but in POSIX shells like bash and zsh `exit` inherits the status of the last command you ran.
+> Due to this, we recommend always using `exit 0` so your result doesn't depend on the type of shell you are using at the time.
+>
+> If you use `exit` in a POSIX shell and accidentally discard your changes, you can run `git go-patch extract` to save the changes yourself.
+
+Commonly used flags:
+
+* `-apply`: run `git go-patch apply` before opening the shell.
+* `-rebase`: run `git go-patch rebase` (an interactive rebase) before opening the shell.
+  * Combine with `-apply` to apply and then immediately start a rebase.
+  * The rebase runs to completion first. If it stops (for example on a conflict or an `edit`/`break` step) the shell still opens so you can resolve it and run `git rebase --continue`. See [Fix up patch files after a submodule update](#fix-up-patch-files-after-a-submodule-update) for rebase conflict resolution techniques.
+* `-no-extract`: don't run `git go-patch extract` automatically on exit (run it yourself when ready).
+
+There are some conditions where `extract` will be skipped regardless of exit code in order to fail safe.
+This avoids writing patches from an incomplete state:
+
+* A rebase, merge, cherry-pick, or revert is still in progress.
+* The submodule has no commits on top of the recorded base.
+  * For example, if you use `git submodule update` and then `git go-patch shell` (without `-apply`), extracting from the empty history would delete every patch file.
+
+By default the shell is your `$SHELL` on macOS and Linux, or PowerShell (falling back to `cmd.exe`) on Windows.
+Use `-shell` to launch a different one (for example `-shell pwsh` on Linux, or `-shell bash` on Windows).
+
+The shell sets `GIT_GO_PATCH_INTERACTIVE` to the submodule's path.
+This lets scripts reliably detect the mode, and lets `git go-patch shell` refuse to open a nested shell for the same submodule (pass `-allow-self-nest` to override).
+In PowerShell and `cmd.exe` the prompt is also prefixed with `(git-go-patch)`, but this is best effort: other shells are launched without modifying your prompt, and prompt frameworks that re-render the prompt on every command (for example powerlevel10k or oh-my-posh transient prompts) may drop the prefix.
+
+> [!TIP]
+> The printed banner and the `GIT_GO_PATCH_INTERACTIVE` environment variable are the reliable indicators that you're in shell mode.
+> Consider referencing `GIT_GO_PATCH_INTERACTIVE` in your shell's prompt if you'd like a visible indicator in every shell.
+
+### Manual workflow
+
+You can also run each step yourself:
+
 1. Open a terminal anywhere within the repository containing the patch files or the submodule.
 1. Use `git go-patch apply` to apply patches onto the submodule as a series of commits.
 1. Navigate into the submodule.
@@ -128,7 +186,7 @@ Then:
 1. Stage your fixes.
 1. Run `git am --continue` to create the fixed-up commit.
 1. If there are more conflicts, go back to step 2. (The `git am --continue` command will tell you.)
-1. Run `git go-patch extract` to save the fixes to your repository's patch files.
+1. Run `git go-patch extract` to save the fixes to your repository's patch files, or exit from your `git go-patch shell` session if you started one.
 
 When creating a commit with the fixed patch files, make sure not to include the submodule change.
 `git go-patch apply` creates temporary local commits inside the submodule with unique commit hashes.

@@ -65,23 +65,44 @@ func handleExtract(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	config, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	return extractPatches(config, *sinceFlag, *verbatim, *keepTemp)
+}
+
+// extractPatches formats each new commit in the submodule as a patch file. It is the in-process
+// implementation shared by the 'extract' subcommand and 'git go-patch shell'. since is the commit or
+// ref to begin formatting at; if empty, the commit recorded by 'apply' is used.
+func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp bool) error {
 	// Keep track of time. Finding spurious changes takes a surprisingly long time, and devs should
 	// be able to make an informed decision about '-verbatim'.
 	var totalStopwatch, matchingStopwatch stopwatch
 	totalStopwatch.Start()
 
-	config, err := loadConfig()
-	if err != nil {
-		return err
-	}
 	rootDir, goDir := config.FullProjectRoots()
 	patchDir := filepath.Join(rootDir, config.PatchesDir)
 
-	since := *sinceFlag
 	if since == "" {
+		var err error
 		since, err = readStatusFile(config.FullPrePatchStatusFilePath())
 		if err != nil {
 			return err
+		}
+	}
+
+	// Guard against an empty extract. 'git format-patch' emits one file per commit in since..HEAD,
+	// and the patches directory is overwritten with the result, so extracting with no such commits
+	// would delete every existing patch file. Refuse instead: no caller wants 'extract' to wipe all
+	// patches, and this catches mistakes like running it before 'apply' or before making any commits.
+	if since != "" {
+		hasCommits, err := submoduleHasPatchCommits(goDir, since)
+		if err != nil {
+			return err
+		}
+		if !hasCommits {
+			return fmt.Errorf("no commits to extract into patch files: the submodule has no commits in %v..HEAD; did you miss running 'apply' first?", since)
 		}
 	}
 
@@ -91,7 +112,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	if *keepTemp {
+	if keepTemp {
 		log.Printf("Created dir %#q to process patch files.\n", tmpPatchDir)
 	} else {
 		log.Printf("Created temp dir %#q to process patch files. The dir will be deleted when patch processing completes.\n", tmpPatchDir)
@@ -137,13 +158,13 @@ func handleExtract(p subcmd.ParseFunc) error {
 
 	// Set up a checker that will determine which patch files actually need to change.
 	var matcher *patch.MatchCheckRepo
-	if !*verbatim {
+	if !verbatim {
 		matchingStopwatch.Start()
 		matcher, err = patch.NewMatchCheckRepo(goDir, since, patchDir)
 		if err != nil {
 			return failSuggestVerbatim("failed to create patch checking context", err)
 		}
-		if !*keepTemp {
+		if !keepTemp {
 			defer matcher.AttemptDelete()
 		}
 		matchingStopwatch.Stop()
@@ -262,7 +283,7 @@ func handleExtract(p subcmd.ParseFunc) error {
 	if matcher != nil {
 		log.Printf(
 			"Of that time, reducing spurious changes took %v. "+
-				"If this is a burden, consider using '-verbatim' mode to allow spurious changes but take ~%v.\n",
+				"If this is a burden, consider using 'git go-patch extract -verbatim' to allow spurious changes but take ~%v.\n",
 			matchingStopwatch.ElapsedMillis(),
 			totalStopwatch.ElapsedMillis()-matchingStopwatch.ElapsedMillis())
 	}
@@ -272,6 +293,18 @@ func handleExtract(p subcmd.ParseFunc) error {
 // failSuggestVerbatim creates an error message that suggests using '-verbatim' as an alternative.
 func failSuggestVerbatim(description string, err error) error {
 	return fmt.Errorf("%v; use '-verbatim' or fix the underlying issue: %v", description, err)
+}
+
+// submoduleHasPatchCommits reports whether the submodule at goDir has any commits in since..HEAD,
+// which are the commits 'extract' would format into patch files.
+func submoduleHasPatchCommits(goDir, since string) (bool, error) {
+	cmd := exec.Command("git", "rev-list", "--count", since+"..HEAD")
+	cmd.Dir = goDir
+	out, err := executil.SpaceTrimmedCombinedOutput(cmd)
+	if err != nil {
+		return false, fmt.Errorf("unable to count commits in %v..HEAD in %#q: %w", since, goDir, err)
+	}
+	return out != "0", nil
 }
 
 // readPatchCommands reads the given patch file's header and returns all potential commands, with
