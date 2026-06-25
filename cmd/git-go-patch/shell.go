@@ -149,8 +149,8 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	extract, err := shouldExtractPatch(shellErr, *noExtract)
 	if err != nil {
-		// The shell never ran, so there's nothing to extract; surface the failure without a closing
-		// banner so it's clear no interactive session actually started.
+		// shouldExtractPatch only returns an error when the shell failed to launch, so no interactive
+		// session ran and there's nothing to extract; surface the failure.
 		return fmt.Errorf("failed to run the interactive shell: %w", err)
 	}
 
