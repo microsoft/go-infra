@@ -17,6 +17,11 @@ import (
 	"github.com/microsoft/go-infra/submodule"
 )
 
+// errSubmoduleDirty indicates that reapplying patches would discard unexpected changes in the
+// submodule. It is wrapped into the abort error so callers (such as 'shell -apply', which has no -f
+// flag of its own) can intercept it with errors.Is and offer a more specific hint.
+var errSubmoduleDirty = errors.New("reapplying patches would discard changes in submodule")
+
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "apply",
@@ -213,9 +218,10 @@ func ensureSubmoduleCommitNotDirty(config *patch.FoundConfig) error {
 			"  last post-patch commit: %v\n"+
 			"  last pre-patch commit: %v\n"+
 			"  current commit in outer repo index: %v\n"+
-			"Aborting: reapplying patches would discard changes in submodule. Use '-f' to proceed anyway",
+			"Aborting: %w. Use '-f' to proceed anyway",
 		preResetCommit,
 		lastPostPatchCommit,
 		lastPrePatchCommit,
-		currentTargetCommit)
+		currentTargetCommit,
+		errSubmoduleDirty)
 }

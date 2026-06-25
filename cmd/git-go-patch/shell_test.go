@@ -36,7 +36,7 @@ func TestSelectShell(t *testing.T) {
 func TestShellKind(t *testing.T) {
 	tests := []struct {
 		shell string
-		want  shellKindValue
+		want  shellKind
 	}{
 		{"pwsh", shellKindPowerShell},
 		{"/usr/bin/pwsh", shellKindPowerShell},
@@ -50,8 +50,8 @@ func TestShellKind(t *testing.T) {
 		{"/bin/sh", shellKindOther},
 	}
 	for _, tt := range tests {
-		if got := shellKind(tt.shell); got != tt.want {
-			t.Errorf("shellKind(%q) = %v, want %v", tt.shell, got, tt.want)
+		if got := parseShellBaseName(tt.shell); got != tt.want {
+			t.Errorf("parseShellBaseName(%q) = %v, want %v", tt.shell, got, tt.want)
 		}
 	}
 }
