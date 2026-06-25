@@ -94,7 +94,7 @@ func handleShell(p subcmd.ParseFunc) error {
 				return fmt.Errorf("%w\n\n"+
 					"'git go-patch shell -apply' will not discard these changes for you. Run "+
 					"'git go-patch apply -f' to discard them, or re-run 'git go-patch shell' without "+
-					"'-apply' to keep them.", err)
+					"'-apply' to keep them", err)
 			}
 			return err
 		}
@@ -129,6 +129,12 @@ func handleShell(p subcmd.ParseFunc) error {
 		}
 	}
 
+	shell := selectShell(*shellFlag)
+	resolvedShell, err := exec.LookPath(shell)
+	if err != nil {
+		return fmt.Errorf("failed to resolve interactive shell %q: %w", shell, err)
+	}
+
 	fmt.Println("\n" + sessionBanner)
 	fmt.Printf("Starting an interactive shell in %#q.\n", goDir)
 	fmt.Println("Edit the commits in the submodule however you like; run 'code .' to open an editor scoped to its history.")
@@ -139,7 +145,7 @@ func handleShell(p subcmd.ParseFunc) error {
 	}
 	fmt.Println()
 
-	shellErr := runInteractiveShell(goDir, *shellFlag)
+	shellErr := runInteractiveShell(goDir, resolvedShell)
 
 	extract, err := shouldExtractPatch(shellErr, *noExtract)
 	if err != nil {
@@ -257,9 +263,9 @@ func gitOperationInProgress(dir string) (bool, error) {
 
 // runInteractiveShell starts an interactive shell with its working directory set to dir, marks the
 // session via the GIT_GO_PATCH_INTERACTIVE environment variable, and blocks until the shell exits.
-// shellOverride, if non-empty, names the shell to launch instead of the default.
-func runInteractiveShell(dir, shellOverride string) error {
-	cmd := interactiveShellCmd(shellOverride)
+// shell must already point to a runnable executable.
+func runInteractiveShell(dir, shell string) error {
+	cmd := interactiveShellCmd(shell)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -278,13 +284,11 @@ func runInteractiveShell(dir, shellOverride string) error {
 	return cmd.Run()
 }
 
-// interactiveShellCmd builds an *exec.Cmd that launches an interactive shell. If shellOverride is
-// non-empty it names the shell to launch; otherwise the shell is chosen by selectShell. The prompt
+// interactiveShellCmd builds an *exec.Cmd that launches an interactive shell executable. The prompt
 // is prefixed with promptPrefix only for shells where that is non-invasive (PowerShell and cmd.exe).
 // For any other shell, the GIT_GO_PATCH_INTERACTIVE environment variable and the printed banner are
 // the indicators that you're in shell mode.
-func interactiveShellCmd(shellOverride string) *exec.Cmd {
-	shell := selectShell(shellOverride)
+func interactiveShellCmd(shell string) *exec.Cmd {
 	switch parseShellBaseName(shell) {
 	case shellKindPowerShell:
 		return powerShellCmd(shell)
