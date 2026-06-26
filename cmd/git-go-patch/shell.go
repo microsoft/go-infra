@@ -27,6 +27,11 @@ const promptPrefix = "(git-go-patch) "
 // inherited by every descendant, a bare flag would false-positive for a shell opened on another repo.
 const envInteractive = "GIT_GO_PATCH_INTERACTIVE"
 
+// sessionBanner visually brackets the interactive shell session in the terminal output. The matching
+// lines printed when the shell launches and when it exits make it easy to see at a glance where the
+// real interactive session began and ended, versus a quick error message printed without launching.
+var sessionBanner = strings.Repeat("=", 80)
+
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "shell",
@@ -82,6 +87,15 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	if *apply {
 		if err := applyPatches(config, false, false, ""); err != nil {
+			if errors.Is(err, errSubmoduleDirty) {
+				// applyPatches refuses to overwrite unexpected submodule changes without -f, but 'shell'
+				// has no -f of its own. Point the user at the underlying command rather than leaving them
+				// with the bare "use -f" hint that doesn't match any 'shell' flag.
+				return fmt.Errorf("%w\n\n"+
+					"'git go-patch shell -apply' will not discard these changes for you. Run "+
+					"'git go-patch apply -f' to discard them, or re-run 'git go-patch shell' without "+
+					"'-apply' to keep them", err)
+			}
 			return err
 		}
 	}
@@ -106,7 +120,23 @@ func handleShell(p subcmd.ParseFunc) error {
 		fmt.Println("\nWARNING: opening a nested 'git go-patch shell' for this submodule because -allow-self-nest was passed; remember to 'exit' each one.")
 	}
 
-	fmt.Printf("\nStarting an interactive shell in %#q.\n", goDir)
+	// If the user didn't ask us to apply or rebase, the submodule may already be mid-operation from a
+	// previous session. Point it out now so it's not a surprise when 'extract' is skipped on exit.
+	if !*apply && !*rebase {
+		if inProgress, err := gitOperationInProgress(goDir); err == nil && inProgress {
+			fmt.Println("\nNote: a rebase, merge, cherry-pick, or revert is already in progress in the submodule.")
+			fmt.Println("Finish or abort it before exiting, or 'extract' will be skipped to avoid saving incomplete work.")
+		}
+	}
+
+	shell := selectShell(*shellFlag)
+	resolvedShell, err := exec.LookPath(shell)
+	if err != nil {
+		return fmt.Errorf("failed to resolve interactive shell %q: %w", shell, err)
+	}
+
+	fmt.Println("\n" + sessionBanner)
+	fmt.Printf("Starting an interactive shell in %#q.\n", goDir)
 	fmt.Println("Edit the commits in the submodule however you like; run 'code .' to open an editor scoped to its history.")
 	if *noExtract {
 		fmt.Println("When you're done with your changes, type 'exit' to leave the shell. 'git go-patch extract' will NOT run automatically; run it yourself when you're ready.")
@@ -115,13 +145,17 @@ func handleShell(p subcmd.ParseFunc) error {
 	}
 	fmt.Println()
 
-	shellErr := runInteractiveShell(goDir, *shellFlag)
+	shellErr := runInteractiveShell(goDir, resolvedShell)
 
 	extract, err := shouldExtractPatch(shellErr, *noExtract)
 	if err != nil {
-		// The shell never ran, so there's nothing to extract; surface the failure.
+		// shouldExtractPatch only returns an error when the shell failed to launch, so no interactive
+		// session ran and there's nothing to extract; surface the failure.
 		return fmt.Errorf("failed to run the interactive shell: %w", err)
 	}
+
+	// The shell actually ran; close the visual session banner before printing the outcome.
+	fmt.Println(sessionBanner)
 
 	if !extract {
 		if *noExtract {
@@ -229,9 +263,9 @@ func gitOperationInProgress(dir string) (bool, error) {
 
 // runInteractiveShell starts an interactive shell with its working directory set to dir, marks the
 // session via the GIT_GO_PATCH_INTERACTIVE environment variable, and blocks until the shell exits.
-// shellOverride, if non-empty, names the shell to launch instead of the default.
-func runInteractiveShell(dir, shellOverride string) error {
-	cmd := interactiveShellCmd(shellOverride)
+// shell must already point to a runnable executable.
+func runInteractiveShell(dir, shell string) error {
+	cmd := interactiveShellCmd(shell)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -250,14 +284,12 @@ func runInteractiveShell(dir, shellOverride string) error {
 	return cmd.Run()
 }
 
-// interactiveShellCmd builds an *exec.Cmd that launches an interactive shell. If shellOverride is
-// non-empty it names the shell to launch; otherwise the shell is chosen by selectShell. The prompt
+// interactiveShellCmd builds an *exec.Cmd that launches an interactive shell executable. The prompt
 // is prefixed with promptPrefix only for shells where that is non-invasive (PowerShell and cmd.exe).
 // For any other shell, the GIT_GO_PATCH_INTERACTIVE environment variable and the printed banner are
 // the indicators that you're in shell mode.
-func interactiveShellCmd(shellOverride string) *exec.Cmd {
-	shell := selectShell(shellOverride)
-	switch shellKind(shell) {
+func interactiveShellCmd(shell string) *exec.Cmd {
+	switch parseShellBaseName(shell) {
 	case shellKindPowerShell:
 		return powerShellCmd(shell)
 	case shellKindCmd:
@@ -292,17 +324,17 @@ func selectShell(override string) string {
 	return "/bin/sh"
 }
 
-type shellKindValue int
+type shellKind int
 
 const (
-	shellKindOther shellKindValue = iota
+	shellKindOther shellKind = iota
 	shellKindPowerShell
 	shellKindCmd
 )
 
-// shellKind classifies shell by its base name so the launcher knows whether it can prefix the prompt
-// non-invasively.
-func shellKind(shell string) shellKindValue {
+// parseShellBaseName classifies shell by its base name so the launcher knows whether it can prefix
+// the prompt non-invasively.
+func parseShellBaseName(shell string) shellKind {
 	switch strings.ToLower(strings.TrimSuffix(filepath.Base(shell), ".exe")) {
 	case "pwsh", "powershell":
 		return shellKindPowerShell
