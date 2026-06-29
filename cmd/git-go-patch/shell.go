@@ -147,15 +147,16 @@ func handleShell(p subcmd.ParseFunc) error {
 
 	shellErr := runInteractiveShell(goDir, resolvedShell)
 
+	// Print the closing banner whether or not the shell exited cleanly. The user can't tell at
+	// first glance whether there was a problem setting up the subprocess or not: the first thing
+	// they need to know is that they definitely aren't in a subshell anymore.
+	fmt.Println(sessionBanner)
+
 	extract, err := shouldExtractPatch(shellErr, *noExtract)
 	if err != nil {
-		// shouldExtractPatch only returns an error when the shell failed to launch, so no interactive
-		// session ran and there's nothing to extract; surface the failure.
-		return fmt.Errorf("failed to run the interactive shell: %w", err)
+		// Something went wrong and it doesn't make sense to even consider extracting patches.
+		return err
 	}
-
-	// The shell actually ran; close the visual session banner before printing the outcome.
-	fmt.Println(sessionBanner)
 
 	if !extract {
 		if *noExtract {
@@ -215,17 +216,18 @@ func sameDir(a, b string) bool {
 }
 
 // shouldExtractPatch reports whether 'git go-patch extract' should run after the interactive shell
-// exits, given the shell's result and whether -no-extract was passed.
+// exits, given the shell's result and whether -no-extract was passed, or returns a detailed error
+// describing why it doesn't make sense to even consider extraction.
 //
 // Extraction happens only on a clean (status 0) shell exit when -no-extract was not passed. A
 // non-zero exit (shellErr is an *exec.ExitError) is treated as a deliberate request to discard the
 // session without rewriting the patch files. A shellErr that is not an *exec.ExitError means the
-// shell failed to launch at all; it is returned as launchErr so the caller can report the failure
+// shell failed to launch at all; it is wrapped and returned so the caller can report the failure
 // rather than silently skipping extraction.
-func shouldExtractPatch(shellErr error, noExtract bool) (extract bool, launchErr error) {
+func shouldExtractPatch(shellErr error, noExtract bool) (extract bool, err error) {
 	var exitErr *exec.ExitError
 	if shellErr != nil && !errors.As(shellErr, &exitErr) {
-		return false, shellErr
+		return false, fmt.Errorf("failed to run the interactive shell: %w", shellErr)
 	}
 	if noExtract {
 		return false, nil
