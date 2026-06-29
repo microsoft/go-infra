@@ -19,7 +19,7 @@ require (
 	golang.org/x/perf v0.0.0-20260409210113-8e83ce0f7b1c
 	golang.org/x/sync v0.21.0
 	golang.org/x/text v0.38.0
-	golang.org/x/tools v0.46.0
+	golang.org/x/tools v0.47.0
 )
 
 require (
