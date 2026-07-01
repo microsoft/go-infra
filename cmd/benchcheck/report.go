@@ -35,7 +35,7 @@ func cmdReport(args []string) {
 	}
 
 	resultsDir := fs.Arg(0)
-	jobURLs := loadJobURLs(*jobURLsFile)
+	jobURLs, readErr := loadJobURLs(*jobURLsFile)
 
 	var buf strings.Builder
 
@@ -82,8 +82,9 @@ func cmdReport(args []string) {
 			jobURL = *runURL
 		}
 		status := readJobStatus(filepath.Join(dir, "status.json"))
-		failures := readFileContent(filepath.Join(dir, "failures.txt"))
-		regressions := readFileContent(filepath.Join(dir, "regressions.txt"))
+		failures, failErr := readFileContent(filepath.Join(dir, "failures.txt"))
+		regressions, regErr := readFileContent(filepath.Join(dir, "regressions.txt"))
+		readErr = errors.Join(readErr, failErr, regErr)
 
 		if status.Failed() {
 			buf.WriteString("<details>\n")
@@ -122,6 +123,13 @@ func cmdReport(args []string) {
 	}
 
 	fmt.Print(output)
+
+	// A missing result file is expected (a job may not produce one); a genuine
+	// read error is not, and must fail the report rather than be swallowed.
+	if readErr != nil {
+		fmt.Fprintf(os.Stderr, "benchcheck report: %v\n", readErr)
+		os.Exit(1)
+	}
 }
 
 func readJobStatus(path string) Status {
@@ -141,17 +149,17 @@ func readJobStatus(path string) Status {
 	return s
 }
 
-func loadJobURLs(path string) map[string]string {
+func loadJobURLs(path string) (map[string]string, error) {
 	urls := make(map[string]string)
 	if path == "" {
-		return urls
+		return urls, nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "reading %s: %v\n", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return urls, nil
 		}
-		return urls
+		return urls, fmt.Errorf("reading %s: %w", path, err)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
 		parts := strings.SplitN(line, "\t", 2)
@@ -159,16 +167,16 @@ func loadJobURLs(path string) map[string]string {
 			urls[parts[0]] = parts[1]
 		}
 	}
-	return urls
+	return urls, nil
 }
 
-func readFileContent(path string) string {
+func readFileContent(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "reading %s: %v\n", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
 		}
-		return ""
+		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(data)), nil
 }
