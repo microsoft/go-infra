@@ -37,8 +37,8 @@ type regression struct {
 	PctChange  float64
 	PValue     float64
 	BaseVal    float64
-	BaseSpread string // base confidence-interval range, e.g. "±3%"
-	HeadSpread string // head confidence-interval range
+	BaseSpread string // base confidence-interval range, e.g. "3%"
+	HeadSpread string // head confidence-interval range, e.g. "3%"
 }
 
 func cmdCheck(args []string) {
@@ -117,9 +117,9 @@ Flags:
 	var regressionLines []string
 	for _, r := range regressions {
 		if isAllocUnit(r.Unit) {
-			regressionLines = append(regressionLines, fmt.Sprintf("alloc regression: %s [%s] +%.2f%% (p=%.3f, base ±%s, head ±%s)", r.Name, r.Unit, r.PctChange, r.PValue, r.BaseSpread, r.HeadSpread))
+			regressionLines = append(regressionLines, fmt.Sprintf("alloc regression: %s [%s] +%.2f%% (p=%.3f, base %s, head %s)", r.Name, r.Unit, r.PctChange, r.PValue, r.BaseSpread, r.HeadSpread))
 		} else {
-			regressionLines = append(regressionLines, fmt.Sprintf("time regression: %s +%.2f%% (p=%.3f, base=%.2g sec ±%s, head ±%s)", r.Name, r.PctChange, r.PValue, r.BaseVal, r.BaseSpread, r.HeadSpread))
+			regressionLines = append(regressionLines, fmt.Sprintf("time regression: %s +%.2f%% (p=%.3f, base=%.2g sec %s, head %s)", r.Name, r.PctChange, r.PValue, r.BaseVal, r.BaseSpread, r.HeadSpread))
 		}
 	}
 	writeErr := errors.Join(
