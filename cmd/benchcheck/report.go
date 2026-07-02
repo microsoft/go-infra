@@ -35,7 +35,7 @@ func cmdReport(args []string) {
 	}
 
 	resultsDir := fs.Arg(0)
-	jobURLs := loadJobURLs(*jobURLsFile)
+	jobURLs, readErr := readJobURLsFileIfExists(*jobURLsFile)
 
 	var buf strings.Builder
 
@@ -82,8 +82,9 @@ func cmdReport(args []string) {
 			jobURL = *runURL
 		}
 		status := readJobStatus(filepath.Join(dir, "status.json"))
-		failures := readFileContent(filepath.Join(dir, "failures.txt"))
-		regressions := readFileContent(filepath.Join(dir, "regressions.txt"))
+		failures, failErr := readTrimmedContentIfExists(filepath.Join(dir, "failures.txt"))
+		regressions, regErr := readTrimmedContentIfExists(filepath.Join(dir, "regressions.txt"))
+		readErr = errors.Join(readErr, failErr, regErr)
 
 		if status.Failed() {
 			buf.WriteString("<details>\n")
@@ -122,6 +123,13 @@ func cmdReport(args []string) {
 	}
 
 	fmt.Print(output)
+
+	// A missing result file is expected (a job may not produce one); a genuine
+	// read error is not, and must fail the report rather than be swallowed.
+	if readErr != nil {
+		fmt.Fprintf(os.Stderr, "benchcheck report: %v\n", readErr)
+		os.Exit(1)
+	}
 }
 
 func readJobStatus(path string) Status {
@@ -141,34 +149,37 @@ func readJobStatus(path string) Status {
 	return s
 }
 
-func loadJobURLs(path string) map[string]string {
+func readJobURLsFileIfExists(path string) (map[string]string, error) {
 	urls := make(map[string]string)
 	if path == "" {
-		return urls
+		return urls, nil
 	}
-	data, err := os.ReadFile(path)
+	content, err := readTrimmedContentIfExists(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "reading %s: %v\n", path, err)
-		}
-		return urls
+		return urls, err
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	if content == "" {
+		return urls, nil
+	}
+	for _, line := range strings.Split(content, "\n") {
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) == 2 {
 			urls[parts[0]] = parts[1]
 		}
 	}
-	return urls
+	return urls, nil
 }
 
-func readFileContent(path string) string {
+// readTrimmedContentIfExists reads path and returns its whitespace-trimmed
+// contents. A missing file is not an error: it returns an empty string and a
+// nil error. Any other read error is returned to the caller.
+func readTrimmedContentIfExists(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "reading %s: %v\n", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
 		}
-		return ""
+		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(string(data)), nil
 }
