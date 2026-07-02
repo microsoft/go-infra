@@ -35,7 +35,7 @@ func cmdReport(args []string) {
 	}
 
 	resultsDir := fs.Arg(0)
-	jobURLs, readErr := loadJobURLs(*jobURLsFile)
+	jobURLs, readErr := readJobURLsFileIfExists(*jobURLsFile)
 
 	var buf strings.Builder
 
@@ -82,8 +82,8 @@ func cmdReport(args []string) {
 			jobURL = *runURL
 		}
 		status := readJobStatus(filepath.Join(dir, "status.json"))
-		failures, failErr := readFileContent(filepath.Join(dir, "failures.txt"))
-		regressions, regErr := readFileContent(filepath.Join(dir, "regressions.txt"))
+		failures, failErr := readTrimmedContentIfExists(filepath.Join(dir, "failures.txt"))
+		regressions, regErr := readTrimmedContentIfExists(filepath.Join(dir, "regressions.txt"))
 		readErr = errors.Join(readErr, failErr, regErr)
 
 		if status.Failed() {
@@ -149,19 +149,19 @@ func readJobStatus(path string) Status {
 	return s
 }
 
-func loadJobURLs(path string) (map[string]string, error) {
+func readJobURLsFileIfExists(path string) (map[string]string, error) {
 	urls := make(map[string]string)
 	if path == "" {
 		return urls, nil
 	}
-	data, err := os.ReadFile(path)
+	content, err := readTrimmedContentIfExists(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return urls, nil
-		}
-		return urls, fmt.Errorf("reading %s: %w", path, err)
+		return urls, err
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+	if content == "" {
+		return urls, nil
+	}
+	for _, line := range strings.Split(content, "\n") {
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) == 2 {
 			urls[parts[0]] = parts[1]
@@ -170,7 +170,10 @@ func loadJobURLs(path string) (map[string]string, error) {
 	return urls, nil
 }
 
-func readFileContent(path string) (string, error) {
+// readTrimmedContentIfExists reads path and returns its whitespace-trimmed
+// contents. A missing file is not an error: it returns an empty string and a
+// nil error. Any other read error is returned to the caller.
+func readTrimmedContentIfExists(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

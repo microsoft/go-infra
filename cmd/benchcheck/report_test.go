@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-func TestReadFileContent(t *testing.T) {
+func TestReadTrimmedContentIfExists(t *testing.T) {
 	dir := t.TempDir()
 
 	// A missing file is expected and not an error.
-	if got, err := readFileContent(filepath.Join(dir, "absent.txt")); err != nil || got != "" {
+	if got, err := readTrimmedContentIfExists(filepath.Join(dir, "absent.txt")); err != nil || got != "" {
 		t.Errorf("absent file: got (%q, %v), want (\"\", nil)", got, err)
 	}
 
@@ -22,24 +22,24 @@ func TestReadFileContent(t *testing.T) {
 	if err := os.WriteFile(p, []byte("  hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := readFileContent(p); err != nil || got != "hello" {
+	if got, err := readTrimmedContentIfExists(p); err != nil || got != "hello" {
 		t.Errorf("existing file: got (%q, %v), want (\"hello\", nil)", got, err)
 	}
 
 	// A genuine read error (here, reading a directory) must be reported.
-	if _, err := readFileContent(dir); err == nil {
+	if _, err := readTrimmedContentIfExists(dir); err == nil {
 		t.Error("expected an error reading a directory, got nil")
 	}
 }
 
-func TestLoadJobURLs(t *testing.T) {
+func TestReadJobURLsFileIfExists(t *testing.T) {
 	dir := t.TempDir()
 
 	// Empty path and missing file both yield an empty map without error.
-	if m, err := loadJobURLs(""); err != nil || len(m) != 0 {
+	if m, err := readJobURLsFileIfExists(""); err != nil || len(m) != 0 {
 		t.Errorf("empty path: got (%v, %v)", m, err)
 	}
-	if m, err := loadJobURLs(filepath.Join(dir, "absent.tsv")); err != nil || len(m) != 0 {
+	if m, err := readJobURLsFileIfExists(filepath.Join(dir, "absent.tsv")); err != nil || len(m) != 0 {
 		t.Errorf("absent file: got (%v, %v)", m, err)
 	}
 
@@ -48,7 +48,7 @@ func TestLoadJobURLs(t *testing.T) {
 	if err := os.WriteFile(p, []byte("label-a\thttps://x/1\nlabel-b\thttps://x/2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	m, err := loadJobURLs(p)
+	m, err := readJobURLsFileIfExists(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestLoadJobURLs(t *testing.T) {
 	}
 
 	// A genuine read error (directory) must be reported.
-	if _, err := loadJobURLs(dir); err == nil {
+	if _, err := readJobURLsFileIfExists(dir); err == nil {
 		t.Error("expected an error reading a directory, got nil")
 	}
 }
