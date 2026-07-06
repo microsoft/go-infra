@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -178,103 +179,116 @@ func TestParseBenchmarks(t *testing.T) {
 	}
 }
 
-func TestExtractFailures_BuildErrors(t *testing.T) {
-	input := "# runtime/cgo\ncgo-gcc-prolog:3:20: error: call to undeclared function\nFAIL\tgithub.com/example [build failed]\n"
-	lines, err := extractFailures(strings.NewReader(input), "")
+func TestParseTestJSON_TestFailure(t *testing.T) {
+	// A failing test: its output (minus the "=== RUN" framing) is captured; the
+	// package-level FAIL summary is captured too. Benchmark output from a passing
+	// package is not treated as a failure.
+	input := strings.Join([]string{
+		`{"Action":"run","Package":"ex","Test":"TestFoo"}`,
+		`{"Action":"output","Package":"ex","Test":"TestFoo","Output":"=== RUN   TestFoo\n"}`,
+		`{"Action":"output","Package":"ex","Test":"TestFoo","Output":"    foo_test.go:42: expected 1, got 2\n"}`,
+		`{"Action":"output","Package":"ex","Test":"TestFoo","Output":"--- FAIL: TestFoo (0.01s)\n"}`,
+		`{"Action":"fail","Package":"ex","Test":"TestFoo"}`,
+		`{"Action":"output","Package":"ex","Output":"FAIL\tex\t0.123s\n"}`,
+		`{"Action":"fail","Package":"ex"}`,
+	}, "\n") + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "head: ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d: %v", len(lines), lines)
+	want := []string{
+		"head:     foo_test.go:42: expected 1, got 2",
+		"head: --- FAIL: TestFoo (0.01s)",
+		"head: FAIL\tex\t0.123s",
 	}
-	if !strings.HasPrefix(lines[0], "# ") {
-		t.Errorf("expected build error line, got: %s", lines[0])
-	}
-	if !strings.HasPrefix(lines[1], "FAIL\t") {
-		t.Errorf("expected FAIL line, got: %s", lines[1])
+	if !slices.Equal(got.Failures, want) {
+		t.Errorf("failures = %#v, want %#v", got.Failures, want)
 	}
 }
 
-func TestExtractFailures_TestFailures(t *testing.T) {
-	input := "--- FAIL: TestFoo (0.01s)\n    foo_test.go:42: expected 1, got 2\nFAIL\tgithub.com/example\t0.123s\n"
-	lines, err := extractFailures(strings.NewReader(input), "pfx: ")
+func TestParseTestJSON_BuildFailure(t *testing.T) {
+	input := strings.Join([]string{
+		`{"Action":"output","Package":"ex","Output":"# ex\n"}`,
+		`{"Action":"output","Package":"ex","Output":"foo.go:3:2: undefined: bar\n"}`,
+		`{"Action":"output","Package":"ex","Output":"FAIL\tex [build failed]\n"}`,
+		`{"Action":"fail","Package":"ex"}`,
+	}, "\n") + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines, got %d: %v", len(lines), lines)
+	want := []string{
+		"# ex",
+		"foo.go:3:2: undefined: bar",
+		"FAIL\tex [build failed]",
 	}
-	if lines[0] != "pfx: --- FAIL: TestFoo (0.01s)" {
-		t.Errorf("unexpected line: %s", lines[0])
-	}
-	if lines[1] != "pfx: FAIL\tgithub.com/example\t0.123s" {
-		t.Errorf("unexpected line: %s", lines[1])
+	if !slices.Equal(got.Failures, want) {
+		t.Errorf("failures = %#v, want %#v", got.Failures, want)
 	}
 }
 
-func TestExtractFailures_CrashTrace(t *testing.T) {
-	input := "SIGSEGV: segmentation violation\nPC=0x1234\ngoroutine 1 [running]:\nmain.foo()\n\tfile.go:10\n\ngoroutine 2 [sleep]:\ntime.Sleep()\n"
-	lines, err := extractFailures(strings.NewReader(input), "")
+func TestParseTestJSON_Crash(t *testing.T) {
+	input := strings.Join([]string{
+		`{"Action":"output","Package":"ex","Test":"TestFoo","Output":"panic: runtime error: index out of range\n"}`,
+		`{"Action":"output","Package":"ex","Test":"TestFoo","Output":"goroutine 1 [running]:\n"}`,
+		`{"Action":"fail","Package":"ex","Test":"TestFoo"}`,
+		`{"Action":"fail","Package":"ex"}`,
+	}, "\n") + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should capture lines up to and including the blank line, not goroutine 2.
-	found := false
-	for _, l := range lines {
-		if strings.Contains(l, "goroutine 2") {
-			t.Error("should not capture second goroutine")
-		}
-		if strings.Contains(l, "SIGSEGV") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected SIGSEGV line")
+	if len(got.Failures) == 0 || !strings.HasPrefix(got.Failures[0], "panic:") {
+		t.Errorf("expected panic line first, got %#v", got.Failures)
 	}
 }
 
-func TestExtractFailures_Panic(t *testing.T) {
-	input := "panic: runtime error: index out of range\ngoroutine 1 [running]:\nmain.foo()\n\n"
-	lines, err := extractFailures(strings.NewReader(input), "")
+func TestParseTestJSON_NoFailures(t *testing.T) {
+	// A passing benchmark run: reconstructed text feeds benchfmt, no failures.
+	input := strings.Join([]string{
+		`{"Action":"run","Package":"ex","Test":"BenchmarkFoo"}`,
+		`{"Action":"output","Package":"ex","Output":"BenchmarkFoo-8\t1000\t1234 ns/op\t56 B/op\t3 allocs/op\n"}`,
+		`{"Action":"output","Package":"ex","Output":"PASS\n"}`,
+		`{"Action":"output","Package":"ex","Output":"ok\tex\t1.234s\n"}`,
+		`{"Action":"pass","Package":"ex"}`,
+	}, "\n") + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) == 0 {
-		t.Fatal("expected panic lines")
+	if len(got.Failures) != 0 {
+		t.Errorf("expected no failures, got %#v", got.Failures)
 	}
-	if !strings.HasPrefix(lines[0], "panic:") {
-		t.Errorf("expected panic line, got: %s", lines[0])
+	want := "BenchmarkFoo-8\t1000\t1234 ns/op\t56 B/op\t3 allocs/op\nPASS\nok\tex\t1.234s\n"
+	if got.BenchText != want {
+		t.Errorf("BenchText = %q, want %q", got.BenchText, want)
+	}
+	// The reconstructed text must parse as benchmark results.
+	values := parse(t, got.BenchText)
+	if len(values[benchKey{Name: "Foo-8", Unit: "sec/op"}]) != 1 {
+		t.Errorf("expected 1 sec/op value, got values %v", values)
 	}
 }
 
-func TestExtractFailures_NoFailures(t *testing.T) {
-	input := "BenchmarkFoo-8\t1000\t1234 ns/op\t56 B/op\t3 allocs/op\nok\tgithub.com/example\t1.234s\n"
-	lines, err := extractFailures(strings.NewReader(input), "")
+func TestParseTestJSON_NonJSONTolerated(t *testing.T) {
+	// Stray non-JSON lines (e.g. tool diagnostics) are skipped, not fatal.
+	input := "not json at all\n" +
+		`{"Action":"output","Package":"ex","Output":"BenchmarkFoo-8\t10\t5 ns/op\n"}` + "\n" +
+		"another stray line\n" +
+		`{"Action":"pass","Package":"ex"}` + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lines) != 0 {
-		t.Errorf("expected no failures, got %d: %v", len(lines), lines)
+	if got.BenchText != "BenchmarkFoo-8\t10\t5 ns/op\n" {
+		t.Errorf("BenchText = %q", got.BenchText)
 	}
-}
-
-func TestIsCrashLine(t *testing.T) {
-	tests := []struct {
-		line string
-		want bool
-	}{
-		{"SIGSEGV: segmentation violation", true},
-		{"SIGABRT: abort", true},
-		{"panic: runtime error", true},
-		{"SIGTERM", false},       // no colon
-		{"SIG: bad", false},      // no uppercase letters between SIG and :
-		{"SIGNATURE: foo", true}, // SIG + uppercase + colon
-		{"something else", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		if got := isCrashLine(tt.line); got != tt.want {
-			t.Errorf("isCrashLine(%q) = %v, want %v", tt.line, got, tt.want)
-		}
+	if len(got.Failures) != 0 {
+		t.Errorf("expected no failures, got %#v", got.Failures)
 	}
 }

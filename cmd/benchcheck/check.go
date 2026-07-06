@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -47,15 +46,20 @@ func cmdCheck(args []string) {
 	regressionsOut := fs.String("o-regressions", "", "output file for regression details (skipped if empty)")
 	failuresOut := fs.String("o-failures", "", "output file for test failure details (skipped if empty)")
 	statusOut := fs.String("o-status", "", "output file for machine-readable status JSON (skipped if empty)")
+	baseTextOut := fs.String("o-base-text", "", "output file for reconstructed base benchmark text, for benchstat (skipped if empty)")
+	headTextOut := fs.String("o-head-text", "", "output file for reconstructed head benchmark text, for benchstat (skipped if empty)")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, `usage: benchcheck check [flags] base.txt head.txt
+		fmt.Fprintf(os.Stderr, `usage: benchcheck check [flags] base.json head.json
 
 Compare base and head benchmark results, detect regressions and test failures.
+The inputs are `+"`go test -json`"+` (test2json) output files.
 
 Writes the following output files (only if the corresponding flag is set):
   -o-regressions  One-line summary per detected regression.
   -o-failures     Extracted build errors, test failures, and crash traces.
   -o-status       Machine-readable JSON status for the report subcommand.
+  -o-base-text    Reconstructed plain-text base output, for benchstat.
+  -o-head-text    Reconstructed plain-text head output, for benchstat.
 
 Exits 0 if no issues are found, 1 if regressions, failures, or write errors occur.
 
@@ -80,29 +84,26 @@ Flags:
 
 	basePath, headPath := fs.Arg(0), fs.Arg(1)
 
-	// Extract test failures from both files.
-	var failureLines []string
-	var err error
-	if failureLines, err = appendFailuresFromFile(failureLines, basePath, "base: "); err != nil {
+	// Parse the test2json inputs once each: this yields both the extracted
+	// failures and the reconstructed plain-text benchmark output.
+	var benchError bool
+	base, err := parseTestJSONFile(basePath, "base: ")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "reading %s: %v\n", basePath, err)
+		benchError = true
 	}
-	if failureLines, err = appendFailuresFromFile(failureLines, headPath, "head: "); err != nil {
+	head, err := parseTestJSONFile(headPath, "head: ")
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "reading %s: %v\n", headPath, err)
+		benchError = true
 	}
+
+	failureLines := append(append([]string{}, base.Failures...), head.Failures...)
 	hasFailures := len(failureLines) > 0
 
-	// Parse benchmarks and check regressions.
-	var benchError bool
-	baseValues, err := parseBenchmarksFromFile(basePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reading %s: %v\n", basePath, err)
-		benchError = true
-	}
-	headValues, err := parseBenchmarksFromFile(headPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reading %s: %v\n", headPath, err)
-		benchError = true
-	}
+	// Parse benchmarks from the reconstructed text and check regressions.
+	baseValues := parseBenchmarks(strings.NewReader(base.BenchText), basePath)
+	headValues := parseBenchmarks(strings.NewReader(head.BenchText), headPath)
 	regressions := checkRegressions(baseValues, headValues, cfg)
 	hasRegressions := len(regressions) > 0
 
@@ -121,6 +122,8 @@ Flags:
 		}
 	}
 	writeErr := errors.Join(
+		writeTextFile(*baseTextOut, base.BenchText),
+		writeTextFile(*headTextOut, head.BenchText),
 		writeLines(*regressionsOut, regressionLines),
 		writeLines(*failuresOut, failureLines),
 		writeStatus(*statusOut, Status{
@@ -159,73 +162,6 @@ Flags:
 	if hasRegressions || hasFailures || benchError || writeErr != nil {
 		os.Exit(1)
 	}
-}
-
-func appendFailuresFromFile(lines []string, path, prefix string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return lines, err
-	}
-	defer f.Close()
-	result, err := extractFailures(f, prefix)
-	return append(lines, result...), err
-}
-
-// extractFailures parses go test output and returns lines related to
-// build errors, test failures, and crash traces.
-func extractFailures(r io.Reader, prefix string) ([]string, error) {
-	var lines []string
-	scanner := bufio.NewScanner(r)
-	// go test output can contain very long lines (long panic frames, generated
-	// file paths, JSON-formatted log lines). Bump the limit well above the
-	// 64KiB default so Scan does not bail out partway through with ErrTooLong.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	inCrash := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "# "):
-			lines = append(lines, prefix+line)
-		case strings.HasPrefix(line, "--- FAIL"):
-			lines = append(lines, prefix+line)
-		case strings.HasPrefix(line, "FAIL\t"):
-			lines = append(lines, prefix+line)
-		case !inCrash && isCrashLine(line):
-			inCrash = true
-			lines = append(lines, prefix+line)
-		case inCrash && line == "":
-			inCrash = false
-			lines = append(lines, "")
-		case inCrash:
-			lines = append(lines, prefix+line)
-		}
-	}
-	return lines, scanner.Err()
-}
-
-// isCrashLine returns true for signal or panic lines (e.g. "SIGSEGV:", "panic:").
-func isCrashLine(line string) bool {
-	if strings.HasPrefix(line, "panic:") {
-		return true
-	}
-	if !strings.HasPrefix(line, "SIG") {
-		return false
-	}
-	// Match SIG followed by uppercase letters then ':'.
-	i := 3
-	for i < len(line) && line[i] >= 'A' && line[i] <= 'Z' {
-		i++
-	}
-	return i > 3 && i < len(line) && line[i] == ':'
-}
-
-func parseBenchmarksFromFile(path string) (map[benchKey][]float64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return parseBenchmarks(f, path), nil
 }
 
 func parseBenchmarks(r io.Reader, name string) map[benchKey][]float64 {
@@ -323,6 +259,14 @@ func writeLines(path string, lines []string) error {
 		data = []byte(strings.Join(lines, "\n") + "\n")
 	}
 	return writeFile(path, data)
+}
+
+// writeTextFile writes content verbatim to path, skipping if path is empty.
+func writeTextFile(path, content string) error {
+	if path == "" {
+		return nil
+	}
+	return writeFile(path, []byte(content))
 }
 
 // Status is the machine-readable status written by check and read by report.
