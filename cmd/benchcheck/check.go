@@ -32,11 +32,13 @@ type config struct {
 }
 
 type regression struct {
-	Name      string
-	Unit      string
-	PctChange float64
-	PValue    float64
-	BaseVal   float64
+	Name       string
+	Unit       string
+	PctChange  float64
+	PValue     float64
+	BaseVal    float64
+	BaseSpread string // base confidence-interval range, e.g. "3%"
+	HeadSpread string // head confidence-interval range, e.g. "3%"
 }
 
 func cmdCheck(args []string) {
@@ -115,9 +117,9 @@ Flags:
 	var regressionLines []string
 	for _, r := range regressions {
 		if isAllocUnit(r.Unit) {
-			regressionLines = append(regressionLines, fmt.Sprintf("alloc regression: %s [%s] +%.2f%% (p=%.3f)", r.Name, r.Unit, r.PctChange, r.PValue))
+			regressionLines = append(regressionLines, fmt.Sprintf("alloc regression: %s [%s] +%.2f%% (p=%.3f, base %s, head %s)", r.Name, r.Unit, r.PctChange, r.PValue, r.BaseSpread, r.HeadSpread))
 		} else {
-			regressionLines = append(regressionLines, fmt.Sprintf("time regression: %s +%.2f%% (p=%.3f, base=%.2g sec)", r.Name, r.PctChange, r.PValue, r.BaseVal))
+			regressionLines = append(regressionLines, fmt.Sprintf("time regression: %s +%.2f%% (p=%.3f, base=%.2g sec %s, head %s)", r.Name, r.PctChange, r.PValue, r.BaseVal, r.BaseSpread, r.HeadSpread))
 		}
 	}
 	writeErr := errors.Join(
@@ -267,41 +269,59 @@ func checkRegressions(base, head map[benchKey][]float64, cfg config) []regressio
 		baseSummary := benchmath.AssumeNothing.Summary(baseSample, 0.95)
 		headSummary := benchmath.AssumeNothing.Summary(headSample, 0.95)
 
-		if headSummary.Center <= baseSummary.Center {
-			continue // improvement or same
+		// Record each sample's confidence-interval range so the report can show
+		// how noisy the benchmark is.
+		baseSpread := baseSummary.PctRangeString()
+		headSpread := headSummary.PctRangeString()
+
+		// Compare the least-performant base (upper CI bound) against the
+		// best-performing head (lower CI bound), flagging a regression only when
+		// the confidence intervals don't overlap. For zero-variance samples this
+		// reduces to comparing Centers.
+		baseWorst := baseSummary.Hi
+		headBest := headSummary.Lo
+
+		if headBest <= baseWorst {
+			continue // improvement, no change, or within variance
 		}
 
-		if baseSummary.Center == 0 {
-			// Base is zero; only flag allocation units (sec/op can't be 0 meaningfully).
+		if baseWorst == 0 {
+			// Base upper bound is zero; only flag allocation units (sec/op can't be 0 meaningfully).
 			if isAllocUnit(key.Unit) {
 				regressions = append(regressions, regression{
-					Name:      key.Name,
-					Unit:      key.Unit,
-					PctChange: 100, // 0 → non-zero
-					PValue:    cmp.P,
+					Name:       key.Name,
+					Unit:       key.Unit,
+					PctChange:  100, // 0 → non-zero
+					PValue:     cmp.P,
+					BaseSpread: baseSpread,
+					HeadSpread: headSpread,
 				})
 			}
 			continue
 		}
 
-		pctChange := (headSummary.Center - baseSummary.Center) / baseSummary.Center * 100
+		pctChange := (headBest - baseWorst) / baseWorst * 100
 
 		switch {
 		case isAllocUnit(key.Unit):
 			regressions = append(regressions, regression{
-				Name:      key.Name,
-				Unit:      key.Unit,
-				PctChange: pctChange,
-				PValue:    cmp.P,
+				Name:       key.Name,
+				Unit:       key.Unit,
+				PctChange:  pctChange,
+				PValue:     cmp.P,
+				BaseSpread: baseSpread,
+				HeadSpread: headSpread,
 			})
 		case key.Unit == "sec/op":
 			if baseSummary.Center >= cfg.MinTime && pctChange >= cfg.TimeThreshold {
 				regressions = append(regressions, regression{
-					Name:      key.Name,
-					Unit:      key.Unit,
-					PctChange: pctChange,
-					PValue:    cmp.P,
-					BaseVal:   baseSummary.Center,
+					Name:       key.Name,
+					Unit:       key.Unit,
+					PctChange:  pctChange,
+					PValue:     cmp.P,
+					BaseVal:    baseSummary.Center,
+					BaseSpread: baseSpread,
+					HeadSpread: headSpread,
 				})
 			}
 		}

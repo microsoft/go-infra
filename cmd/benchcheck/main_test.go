@@ -156,6 +156,58 @@ func TestCustomThresholds(t *testing.T) {
 	}
 }
 
+func TestVarianceRobust_OverlapNotFlagged(t *testing.T) {
+	// Base and head medians differ (~+10%), but the samples overlap heavily, so
+	// the confidence intervals overlap and no confident regression exists.
+	base := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {3e-6, 4e-6, 5e-6, 6e-6, 7e-6, 3.5e-6, 4.5e-6, 5.5e-6, 6.5e-6, 5e-6},
+	}
+	head := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {3.3e-6, 4.4e-6, 5.5e-6, 6.6e-6, 7.7e-6, 3.85e-6, 4.95e-6, 6.05e-6, 7.15e-6, 5.5e-6},
+	}
+	if r := checkRegressions(base, head, defaultCfg()); len(r) != 0 {
+		t.Errorf("expected no regression for overlapping samples, got %+v", r)
+	}
+}
+
+func TestVarianceRobust_SeparatedFlagged(t *testing.T) {
+	// Tight, clearly separated distributions: even the best-performing head is
+	// worse than the least-performant base, so the regression is still flagged.
+	base := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {5e-6, 5.01e-6, 4.99e-6, 5.005e-6, 4.995e-6, 5e-6, 5.01e-6, 4.99e-6, 5e-6, 5e-6},
+	}
+	head := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {9e-6, 9.01e-6, 8.99e-6, 9.005e-6, 8.995e-6, 9e-6, 9.01e-6, 8.99e-6, 9e-6, 9e-6},
+	}
+	found := false
+	for _, reg := range checkRegressions(base, head, defaultCfg()) {
+		if reg.Unit == "sec/op" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected sec/op regression for clearly separated samples, got none")
+	}
+}
+
+func TestRegressionCarriesSpread(t *testing.T) {
+	// A flagged regression records each sample's confidence-interval spread so
+	// the report can surface how noisy the benchmark is.
+	base := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {5e-6, 5.01e-6, 4.99e-6, 5.005e-6, 4.995e-6, 5e-6, 5.01e-6, 4.99e-6, 5e-6, 5e-6},
+	}
+	head := map[benchKey][]float64{
+		{Name: "Foo-8", Unit: "sec/op"}: {9e-6, 9.3e-6, 8.7e-6, 9.1e-6, 8.9e-6, 9e-6, 9.2e-6, 8.8e-6, 9e-6, 9e-6},
+	}
+	regs := checkRegressions(base, head, defaultCfg())
+	if len(regs) != 1 {
+		t.Fatalf("expected 1 regression, got %d: %+v", len(regs), regs)
+	}
+	if regs[0].BaseSpread == "" || regs[0].HeadSpread == "" {
+		t.Errorf("expected non-empty spreads, got base=%q head=%q", regs[0].BaseSpread, regs[0].HeadSpread)
+	}
+}
+
 func TestParseBenchmarks(t *testing.T) {
 	input := "BenchmarkSHA256-8\t1000\t1234 ns/op\t56 B/op\t3 allocs/op\n" +
 		"BenchmarkSHA256-8\t1000\t1245 ns/op\t56 B/op\t3 allocs/op\n" +

@@ -85,7 +85,13 @@ jobs:
     steps:
       - name: Initialize status
         shell: bash
-        run: echo '{"regression":false,"test_failures":false,"benchmark_error":true}' > status.json
+        # Seed the result files up front so the report step can always rely on
+        # their presence. benchcheck overwrites them when it runs; if the job
+        # dies earlier, empty files plus benchmark_error=true still upload.
+        run: |
+          echo '{"regression":false,"test_failures":false,"benchmark_error":true}' > status.json
+          : > failures.txt
+          : > regressions.txt
 
       - name: Container setup
         if: matrix.container-setup != ''
