@@ -82,8 +82,8 @@ func cmdReport(args []string) {
 			jobURL = *runURL
 		}
 		status := readJobStatus(filepath.Join(dir, "status.json"))
-		failures, failErr := readTrimmedContentIfExists(filepath.Join(dir, "failures.txt"))
-		regressions, regErr := readTrimmedContentIfExists(filepath.Join(dir, "regressions.txt"))
+		failures, failErr := readTrimmedFile(filepath.Join(dir, "failures.txt"))
+		regressions, regErr := readTrimmedFile(filepath.Join(dir, "regressions.txt"))
 		readErr = errors.Join(readErr, failErr, regErr)
 
 		if status.Failed() {
@@ -124,8 +124,10 @@ func cmdReport(args []string) {
 
 	fmt.Print(output)
 
-	// A missing result file is expected (a job may not produce one); a genuine
-	// read error is not, and must fail the report rather than be swallowed.
+	// The benchmark job always writes failures.txt and regressions.txt (empty
+	// when there is nothing to report), so any read error—including a missing
+	// file—means the artifact is incomplete and must fail the report rather than
+	// be swallowed.
 	if readErr != nil {
 		fmt.Fprintf(os.Stderr, "benchcheck report: %v\n", readErr)
 		os.Exit(1)
@@ -172,13 +174,27 @@ func readJobURLsFileIfExists(path string) (map[string]string, error) {
 
 // readTrimmedContentIfExists reads path and returns its whitespace-trimmed
 // contents. A missing file is not an error: it returns an empty string and a
-// nil error. Any other read error is returned to the caller.
+// nil error. This suits optional inputs (such as the job-URLs file) whose
+// absence simply means "not provided". Any other read error is returned to the
+// caller.
 func readTrimmedContentIfExists(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// readTrimmedFile reads path and returns its whitespace-trimmed contents. Unlike
+// readTrimmedContentIfExists, a missing file is an error: the benchmark job
+// always writes its result files (empty when there is nothing to report), so an
+// absent file means the artifact is incomplete.
+func readTrimmedFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(data)), nil

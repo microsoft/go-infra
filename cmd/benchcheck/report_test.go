@@ -32,6 +32,33 @@ func TestReadTrimmedContentIfExists(t *testing.T) {
 	}
 }
 
+func TestReadTrimmedFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// A missing file is an error: result files are always expected to exist.
+	if _, err := readTrimmedFile(filepath.Join(dir, "absent.txt")); err == nil {
+		t.Error("expected an error for a missing file, got nil")
+	}
+
+	// An empty file yields an empty string without error.
+	empty := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readTrimmedFile(empty); err != nil || got != "" {
+		t.Errorf("empty file: got (%q, %v), want (\"\", nil)", got, err)
+	}
+
+	// An existing file is read and trimmed.
+	p := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(p, []byte("  hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readTrimmedFile(p); err != nil || got != "hello" {
+		t.Errorf("existing file: got (%q, %v), want (\"hello\", nil)", got, err)
+	}
+}
+
 func TestReadJobURLsFileIfExists(t *testing.T) {
 	dir := t.TempDir()
 
