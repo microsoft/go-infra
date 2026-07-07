@@ -7,6 +7,7 @@
 //
 //	benchcheck check [flags] base.json head.json
 //	benchcheck report [flags] results-dir
+//	benchcheck job-urls [jobs.json]
 package main
 
 import (
@@ -17,8 +18,9 @@ import (
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage: benchcheck <command> [flags] [args]\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
-	fmt.Fprintf(os.Stderr, "  check   Compare benchmarks, detect regressions and test failures\n")
-	fmt.Fprintf(os.Stderr, "  report  Build a markdown report from benchmark artifacts\n")
+	fmt.Fprintf(os.Stderr, "  check     Compare benchmarks, detect regressions and test failures\n")
+	fmt.Fprintf(os.Stderr, "  report    Build a markdown report from benchmark artifacts\n")
+	fmt.Fprintf(os.Stderr, "  job-urls  Map benchmark job labels to job URLs from the jobs API\n")
 	os.Exit(2)
 }
 
@@ -31,6 +33,8 @@ func main() {
 		cmdCheck(os.Args[2:])
 	case "report":
 		cmdReport(os.Args[2:])
+	case "job-urls":
+		cmdJobURLs(os.Args[2:])
 	case "-h", "-help", "--help", "help":
 		usage()
 	default:

@@ -217,28 +217,26 @@ jobs:
           go-version: ${{ inputs.go-version }}
           cache-dependency-path: _go-infra/go.sum
 
+      - name: Build benchcheck
+        run: go build -C _go-infra/cmd/benchcheck -o "$RUNNER_TEMP/benchcheck" .
+
       - name: Fetch job URLs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Reusable-workflow matrix jobs are named "<caller-job-name> / bench (<label>)";
-          # strip the "<caller-job-name> / " prefix and "bench (...)" wrapper to get the
-          # label, which matches the artifact-name suffix used by the report.
+          # Reusable-workflow matrix jobs are named "<caller-job-name> / bench (<label>)".
+          # benchcheck job-urls extracts each label and its job URL (deep-linked
+          # to the compare step) from the jobs API response, matching the
+          # artifact-name suffix the report keys on.
           gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
-            --paginate --jq '
-              .jobs[] | select(.name | test(" / bench \\(")) |
-              (.name | sub("^.* / bench \\("; "") | sub("\\)$"; "")) as $label |
-              # Find the Compare step that actually ran (not skipped).
-              (first(.steps[] | select((.name | test("[Cc]ompare")) and .conclusion != "skipped") | .number) // null) as $step |
-              "\($label)\t\(.html_url)\(if $step then "#step:\($step):1" else "" end)"' \
-            > job_urls.tsv || true
+            --paginate > jobs.json || true
+          "$RUNNER_TEMP/benchcheck" job-urls jobs.json > job_urls.tsv || true
           cat job_urls.tsv
 
       - name: Build report
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          go build -C _go-infra/cmd/benchcheck -o "$RUNNER_TEMP/benchcheck" .
           "$RUNNER_TEMP/benchcheck" report \
             -run-url="$RUN_URL" \
             -job-urls=job_urls.tsv \
