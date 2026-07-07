@@ -320,9 +320,9 @@ func TestParseTestJSON_LongLine(t *testing.T) {
 
 // sliceHead returns a copy of s truncated for readable test failure messages.
 func sliceHead(s []string) []string {
-	const max = 5
-	if len(s) > max {
-		return s[:max]
+	const limit = 5
+	if len(s) > limit {
+		return s[:limit]
 	}
 	return s
 }
