@@ -142,13 +142,13 @@ jobs:
         shell: bash
         working-directory: base
         run: |
-          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m -json ./... > ../base.json || true
+          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m -json ./... > ../base.json 2>&1 || true
 
       - name: Run benchmarks (head)
         shell: bash
         working-directory: head
         run: |
-          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m -json ./... > ../head.json || true
+          go test -run='^$' -bench=. -count=10 -benchmem -timeout 60m -json ./... > ../head.json 2>&1 || true
 
       - name: "📊 Compare and check"
         shell: bash

@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -59,34 +60,45 @@ func parseTestJSON(r io.Reader, prefix string) (testJSON, error) {
 	// flushed into the failure list.
 	buffered := make(map[scopeKey][]string)
 
-	scanner := bufio.NewScanner(r)
-	// Benchmark output and panic traces can produce very long lines; raise the
-	// limit well above the 64KiB default so Scan does not bail out with
-	// ErrTooLong partway through.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	// Read line by line with a bufio.Reader rather than a bufio.Scanner: a
+	// single test2json event (e.g. an Output field carrying a very long panic
+	// or log line) can exceed Scanner's fixed token limit, which would abort
+	// parsing partway through and silently drop later failures and benchmark
+	// output. ReadBytes grows as needed, bounded only by one line's length.
+	br := bufio.NewReader(r)
 
 	var failures []string
-	for scanner.Scan() {
-		var e testEvent
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			continue // not a JSON event; ignore
-		}
-		key := scopeKey{e.Package, e.Test}
-		switch e.Action {
-		case "output":
-			bench.WriteString(e.Output)
-			buffered[key] = append(buffered[key], e.Output)
-		case "pass", "skip":
-			// The scope succeeded; its output is not a failure.
-			delete(buffered, key)
-		case "fail":
-			for _, line := range failureContext(buffered[key]) {
-				failures = append(failures, prefix+line)
+	for {
+		line, readErr := br.ReadBytes('\n')
+		if len(line) > 0 {
+			var e testEvent
+			if err := json.Unmarshal(line, &e); err == nil {
+				key := scopeKey{e.Package, e.Test}
+				switch e.Action {
+				case "output":
+					bench.WriteString(e.Output)
+					buffered[key] = append(buffered[key], e.Output)
+				case "pass", "skip":
+					// The scope succeeded; its output is not a failure.
+					delete(buffered, key)
+				case "fail":
+					for _, l := range failureContext(buffered[key]) {
+						failures = append(failures, prefix+l)
+					}
+					delete(buffered, key)
+				}
 			}
-			delete(buffered, key)
+			// A line that does not parse as a JSON event (e.g. stray tool
+			// output) is tolerated and skipped.
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return testJSON{BenchText: bench.String(), Failures: failures}, readErr
 		}
 	}
-	return testJSON{BenchText: bench.String(), Failures: failures}, scanner.Err()
+	return testJSON{BenchText: bench.String(), Failures: failures}, nil
 }
 
 // failureContext turns a failing scope's raw output events into concise,

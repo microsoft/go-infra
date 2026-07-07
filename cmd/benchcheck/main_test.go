@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -291,4 +292,37 @@ func TestParseTestJSON_NonJSONTolerated(t *testing.T) {
 	if len(got.Failures) != 0 {
 		t.Errorf("expected no failures, got %#v", got.Failures)
 	}
+}
+
+func TestParseTestJSON_LongLine(t *testing.T) {
+	// A single event larger than bufio.Scanner's fixed token limit must not
+	// abort parsing and drop the events that follow it.
+	huge := strings.Repeat("x", 4*1024*1024)
+	blob, err := json.Marshal(testEvent{Action: "output", Package: "ex", Test: "TestBig", Output: huge + "\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := string(blob) + "\n" +
+		`{"Action":"fail","Package":"ex","Test":"TestBig"}` + "\n" +
+		`{"Action":"output","Package":"ex","Output":"FAIL\tex\t0.10s\n"}` + "\n" +
+		`{"Action":"fail","Package":"ex"}` + "\n"
+
+	got, err := parseTestJSON(strings.NewReader(input), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The failure after the huge line must still be captured.
+	if !slices.Contains(got.Failures, "FAIL\tex\t0.10s") {
+		t.Errorf("expected the trailing package FAIL line to be captured, got %#v",
+			sliceHead(got.Failures))
+	}
+}
+
+// sliceHead returns a copy of s truncated for readable test failure messages.
+func sliceHead(s []string) []string {
+	const max = 5
+	if len(s) > max {
+		return s[:max]
+	}
+	return s
 }
