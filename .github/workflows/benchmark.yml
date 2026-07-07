@@ -155,18 +155,26 @@ jobs:
         run: |
           go build -C _go-infra/cmd/benchcheck -o "$PWD/benchcheck" .
           # benchcheck reads the test2json output for structured failure
-          # detection and reconstructs the plain benchmark text that benchstat
-          # consumes. Run it first (capturing its exit code) so benchstat still
-          # runs even when a regression or failure makes check exit non-zero.
+          # detection and reconstructs the plain benchmark text (base.txt and
+          # head.txt) that the benchstat step below consumes. It runs last in
+          # this step, so its exit code marks the job failed on a regression or
+          # failure; the benchstat step still runs via if: always().
           ./benchcheck check \
             -o-base-text=base.txt \
             -o-head-text=head.txt \
             -o-regressions=regressions.txt \
             -o-failures=failures.txt \
             -o-status=status.json \
-            base.json head.json && rc=0 || rc=$?
+            base.json head.json
+
+      - name: "📈 Summarize with benchstat"
+        # Run even when the check step marked the job failed, so the human-
+        # readable diff is always produced. benchcheck writes base.txt/head.txt
+        # before exiting, so they are available here regardless.
+        if: always()
+        shell: bash
+        run: |
           go -C _go-infra tool benchstat "$GITHUB_WORKSPACE/base.txt" "$GITHUB_WORKSPACE/head.txt" | tee benchstat.txt || true
-          exit $rc
 
       - name: Upload results
         if: always()
