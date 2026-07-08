@@ -12,7 +12,8 @@
       "sha256": "11cb59a7da47abfdb8b88be7339d97ce1e9e0ca3ebd8e0fbdc1cfde73d547279",
       "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/4f51/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz",
       "sha256ChecksumUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/3df7/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.sha256",
-      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c211/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.sig"
+      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c211/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.sig",
+      "ascSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c211/go1.23-0def9d5c-20240709.2.linux-armv6l.tar.gz.asc"
     },
     {
       "env": {
@@ -31,7 +32,8 @@
       "sha256": "4d43335c30e564053b32a0f4489eeaf399d49fe5a201961a573e42234201e5d3",
       "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c226/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz",
       "sha256ChecksumUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/3507/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.sha256",
-      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/20eb/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.sig"
+      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/20eb/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.sig",
+      "ascSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/20eb/go1.23-0def9d5c-20240709.2.linux-amd64.tar.gz.asc"
     },
     {
       "env": {
@@ -41,13 +43,15 @@
       "sha256": "4ff938e9b8bafe42809d441ec288679fb9759b34a5c4b162e0e4c335ecb4bcdd",
       "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/cee0/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz",
       "sha256ChecksumUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/a6f0/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.sha256",
-      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c815f/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.sig"
+      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c815f/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.sig",
+      "ascSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/c815f/go1.23-0def9d5c-20240709.2.linux-arm64.tar.gz.asc"
     },
     {
       "sha256": "e18be7a50671fa8fce652bf58cb5e0960b2ebcd064d526c7616274ad3799a1cf",
       "url": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/e035/go1.23-0def9d5c-20240709.2.src.tar.gz",
       "sha256ChecksumUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/85a9/go1.23-0def9d5c-20240709.2.src.tar.gz.sha256",
-      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/eb070/go1.23-0def9d5c-20240709.2.src.tar.gz.sig"
+      "pgpSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/eb070/go1.23-0def9d5c-20240709.2.src.tar.gz.sig",
+      "ascSignatureUrl": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/eb070/go1.23-0def9d5c-20240709.2.src.tar.gz.asc"
     }
   ],
   "goSrcURL": "https://download.visualstudio.microsoft.com/download/pr/1234-56-78-123456/e035/go1.23-0def9d5c-20240709.2.src.tar.gz",
