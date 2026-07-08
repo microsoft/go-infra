@@ -85,13 +85,14 @@ type Arch struct {
 	// If not specified, the file can be reached by appending ".sha256" to the URL.
 	SHA256ChecksumURL string `json:"sha256ChecksumUrl,omitempty"`
 
-	// PGPSignatureURL is the URL of a binary PGP signature file (.sig) for this artifact, commonly
+	// PGPSignatureURL is the URL of a PGP signature file (.sig) for this artifact, commonly
 	// verified using the "gpg" tool.
 	//
 	// If not specified, the file can be reached by appending ".sig" to the URL.
 	PGPSignatureURL string `json:"pgpSignatureUrl,omitempty"`
 
-	// ASCSignatureURL is the URL of an ASCII-armored PGP signature file (.asc) for this artifact.
+	// ASCSignatureURL is the URL of a .asc copy of the PGP signature for this artifact. It holds
+	// identical content to the .sig file, published under the ".asc" name that some tools expect.
 	//
 	// If not specified, the file can be reached by appending ".asc" to the URL.
 	ASCSignatureURL string `json:"ascSignatureUrl,omitempty"`

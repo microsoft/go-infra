@@ -120,8 +120,8 @@ var (
 	archiveSuffixes = []string{".tar.gz", ".zip"}
 	checksumSuffix  = ".sha256"
 	// signatureSuffixes are the extensions used to store signatures, in alphabetical order. Both
-	// formats are produced and shipped: ".asc" is an ASCII-armored PGP signature and ".sig" is its
-	// binary equivalent.
+	// hold identical content (the same PGP signature file); we publish it under both extensions so
+	// consumers can find it by whichever name they expect. Both are produced and shipped.
 	signatureSuffixes = []string{".asc", ".sig"}
 )
 
@@ -249,7 +249,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				continue
 			}
 
-			// Is it a .sig (binary PGP) signature file?
+			// Is it a .sig signature file?
 			if sigName, ok := stringutil.CutSuffix(e.Name(), ".sig"); ok {
 				a := getOrCreateArch(sigName)
 				a.PGPSignatureURL, err = getURL(e.Name())
@@ -259,7 +259,7 @@ func (b BuildResultsDirectoryInfo) CreateSummary() (*BuildAssets, error) {
 				continue
 			}
 
-			// Is it a .asc (ASCII-armored PGP) signature file?
+			// Is it a .asc signature file? Identical content to .sig, published under both names.
 			if ascName, ok := stringutil.CutSuffix(e.Name(), ".asc"); ok {
 				a := getOrCreateArch(ascName)
 				a.ASCSignatureURL, err = getURL(e.Name())
