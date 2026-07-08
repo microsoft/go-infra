@@ -5,7 +5,7 @@
 //
 // Commands:
 //
-//	benchcheck check [flags] base.txt head.txt
+//	benchcheck check [flags] base.json head.json
 //	benchcheck report [flags] results-dir
 package main
 
