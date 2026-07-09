@@ -5,12 +5,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -40,29 +42,48 @@ const benchJobMarker = " / bench ("
 
 func cmdJobURLs(args []string) {
 	fs := flag.NewFlagSet("job-urls", flag.ExitOnError)
+	repo := fs.String("repo", "", "GitHub repository (OWNER/REPO) whose run jobs to fetch via gh")
+	runID := fs.String("id", "", "workflow run ID whose jobs to fetch via gh")
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, `usage: benchcheck job-urls [jobs.json]
+		fmt.Fprintf(os.Stderr, `usage: benchcheck job-urls -repo OWNER/REPO -id RUN_ID
+       benchcheck job-urls [jobs.json]
 
-Read the GitHub "list jobs for a workflow run" API response (from the given
-file, or stdin if omitted) and write a TSV mapping each benchmark artifact
-label to its job URL, deep-linked to the compare step when available.
+Write a TSV mapping each benchmark artifact label to its job URL, deep-linked
+to the compare step when available. The output is consumed by
+"benchcheck report -job-urls".
 
-The input is the raw output of:
-  gh api "repos/OWNER/REPO/actions/runs/RUN_ID/jobs" --paginate
-
-The output is consumed by "benchcheck report -job-urls".
+With -repo and -id, the GitHub "list jobs for a workflow run" API is fetched
+via gh (which handles authentication and pagination). Otherwise the API
+response is read from the given file, or stdin if omitted.
 `)
 	}
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	if fs.NArg() > 1 {
+
+	if (*repo == "") != (*runID == "") {
+		fmt.Fprintln(os.Stderr, "benchcheck job-urls: -repo and -id must be used together")
+		os.Exit(2)
+	}
+	if (*repo != "") && fs.NArg() > 0 {
+		fmt.Fprintln(os.Stderr, "benchcheck job-urls: cannot use -repo/-id together with a file argument")
+		os.Exit(2)
+	}
+	if *repo == "" && fs.NArg() > 1 {
 		fs.Usage()
 		os.Exit(2)
 	}
 
-	in := os.Stdin
-	if fs.NArg() == 1 {
+	var in io.Reader
+	switch {
+	case *repo != "":
+		data, err := fetchJobs(*repo, *runID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "benchcheck job-urls: %v\n", err)
+			os.Exit(1)
+		}
+		in = bytes.NewReader(data)
+	case fs.NArg() == 1:
 		f, err := os.Open(fs.Arg(0))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "benchcheck job-urls: %v\n", err)
@@ -70,6 +91,8 @@ The output is consumed by "benchcheck report -job-urls".
 		}
 		defer f.Close()
 		in = f
+	default:
+		in = os.Stdin
 	}
 
 	lines, err := jobURLs(in)
@@ -86,6 +109,25 @@ The output is consumed by "benchcheck report -job-urls".
 		fmt.Fprintf(os.Stderr, "benchcheck job-urls: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// fetchJobs runs `gh api` to retrieve the "list jobs for a workflow run" API
+// response for repo and runID, following pagination. gh supplies auth from the
+// GH_TOKEN/GITHUB_TOKEN environment. repo and runID come from trusted workflow
+// context and are passed as single arguments (no shell), so they cannot inject.
+func fetchJobs(repo, runID string) ([]byte, error) {
+	endpoint := fmt.Sprintf("repos/%s/actions/runs/%s/jobs", repo, runID)
+	cmd := exec.Command("gh", "api", endpoint, "--paginate")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return nil, fmt.Errorf("gh api %s: %w: %s", endpoint, err, msg)
+		}
+		return nil, fmt.Errorf("gh api %s: %w", endpoint, err)
+	}
+	return out, nil
 }
 
 // jobURLs parses one or more concatenated pages of the jobs API response (as

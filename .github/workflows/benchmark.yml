@@ -224,13 +224,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Reusable-workflow matrix jobs are named "<caller-job-name> / bench (<label>)".
-          # benchcheck job-urls extracts each label and its job URL (deep-linked
-          # to the compare step) from the jobs API response, matching the
-          # artifact-name suffix the report keys on.
-          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" \
-            --paginate > jobs.json || true
-          "$RUNNER_TEMP/benchcheck" job-urls jobs.json > job_urls.tsv || true
+          # benchcheck job-urls calls the GitHub jobs API (via gh, which handles
+          # auth and pagination) and writes a TSV mapping each matrix job
+          # "<caller-job-name> / bench (<label>)" to its URL, deep-linked to the
+          # compare step, matching the artifact-name suffix the report keys on.
+          "$RUNNER_TEMP/benchcheck" job-urls \
+            -repo "${{ github.repository }}" \
+            -id "${{ github.run_id }}" \
+            > job_urls.tsv
           cat job_urls.tsv
 
       - name: Build report

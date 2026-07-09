@@ -7,7 +7,7 @@
 //
 //	benchcheck check [flags] base.json head.json
 //	benchcheck report [flags] results-dir
-//	benchcheck job-urls [jobs.json]
+//	benchcheck job-urls -repo OWNER/REPO -id RUN_ID
 package main
 
 import (
