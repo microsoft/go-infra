@@ -43,13 +43,11 @@ func Test_createLinkPairs(t *testing.T) {
 				URL:               "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/333aa/go1.23-90bcc55-20240626.1.linux-amd64.tar.gz",
 				SHA256ChecksumURL: "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/87654/go1.23-90bcc55-20240626.1.linux-amd64.tar.gz.sha256",
 				PGPSignatureURL:   "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/12345/go1.23-90bcc55-20240626.1.linux-amd64.tar.gz.sig",
-				ASCSignatureURL:   "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/12346/go1.23-90bcc55-20240626.1.linux-amd64.tar.gz.asc",
 			},
 			{
 				URL:               "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/3b32d/go1.23-90bcc55-20240626.1.src.tar.gz",
 				SHA256ChecksumURL: "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/66dda/go1.23-90bcc55-20240626.1.src.tar.gz.sha256",
 				PGPSignatureURL:   "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/af253/go1.23-90bcc55-20240626.1.src.tar.gz.sig",
-				ASCSignatureURL:   "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/af254/go1.23-90bcc55-20240626.1.src.tar.gz.asc",
 			},
 		},
 		GoSrcURL: "https://download.visualstudio.microsoft.com/download/pr/8330ba2b/3b32d/go1.23-90bcc55-20240626.1.src.tar.gz",

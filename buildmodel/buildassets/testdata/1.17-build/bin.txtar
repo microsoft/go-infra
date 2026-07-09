@@ -6,14 +6,11 @@ files have been truncated to have no content.
 -- go.linux-amd64.tar.gz.sha256 --
 0000000000000000000000000000000000000000000000000000000000000000  go.linux-amd64.tar.gz
 -- go.linux-amd64.tar.gz.sig --
--- go.linux-amd64.tar.gz.asc --
 -- go.linux-arm64.tar.gz --
 -- go.linux-arm64.tar.gz.sha256 --
 0000000000000000000000000000000000000000000000000000000000000000  go.linux-arm64.tar.gz
 -- go.linux-arm64.tar.gz.sig --
--- go.linux-arm64.tar.gz.asc --
 -- go.linux-armv6l.tar.gz --
 -- go.linux-armv6l.tar.gz.sha256 --
 0000000000000000000000000000000000000000000000000000000000000000  go.linux-armv6l.tar.gz
 -- go.linux-armv6l.tar.gz.sig --
--- go.linux-armv6l.tar.gz.asc --
