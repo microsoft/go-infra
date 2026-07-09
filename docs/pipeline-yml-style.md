@@ -131,6 +131,42 @@ To help a user that left it at `Cancel` realize their mistake as soon as possibl
 This way, the user can fix the issue quickly without even waiting for the pipeline to start.
 The error message that is shown to the user is not ideal, but it includes the message and is clear enough for us.
 
+### Always specify a default, even for single-value parameters
+
+When a parameter uses `values:` with only one option, it's tempting to omit `default:` because there's nothing for a user to choose.
+For example, we use a single-value string parameter as a purely informational label:
+
+```yml
+  - name: _info
+    displayName: ℹ️ This pipeline runs rolling validation, like CodeQL.
+    type: string
+    values:
+      - ${ cat "🔵 " .output " 🔵 🔵" }
+```
+
+This works fine for a manual queue: AzDO automatically selects the only available option, so no user input is required.
+However, it fails for some automated scenarios that don't go through the "Run" dialog, such as scheduled triggers and runs started via the AzDO REST API.
+In those cases, AzDO doesn't auto-select the single value, and the run fails with an error like:
+
+```
+A value for the '_info' parameter must be provided.
+```
+
+or, when starting the run via the REST API, a `400` response.
+
+To make these automated scenarios work, duplicate the single value as the `default`:
+
+```yml
+  - name: _info
+    displayName: ℹ️ This pipeline runs rolling validation, like CodeQL.
+    type: string
+    default: ${ cat "🔵 " .output " 🔵 🔵" }
+    values:
+      - ${ cat "🔵 " .output " 🔵 🔵" }
+```
+
+Note that we've only observed this effect with string parameters that use `values:`.
+
 ## Templates for data reuse
 
 AzDO supports [variable templates](https://docs.microsoft.com/en-us/azure/devops/pipelines/process/templates?view=azure-devops#variable-templates-with-parameter), but it's hard to determine where variables defined this way are usable.
@@ -141,7 +177,7 @@ For example, when defining a job's pool name:
 * A runtime expression `$[example]` will not evaluate in either case.
 * A template expression `${{ example }}` will always work.
 
-As well as only being evaluted in certain contexts, each of these types of expression strings also each have their own rules on what expressions they can evaluate and what data they have access to.
+As well as only being evaluated in certain contexts, each of these types of expression string also has its own rules on what expressions it can evaluate and what data it has access to.
 
 Template expressions have the broadest applicability, so we prefer templates and `parameters` (rather than `matrix` and `variables`) to share logic and values between stages.
 
@@ -161,7 +197,7 @@ Despite the benefits, we don't always use `pipelineymlgen` for templating:
 ### Compile-time variable usage
 
 In a given YAML file, you can use `${{ variables['example'] }}` to access a variable defined in that file, or in a variable template used by the file.
-You can even use a previously defined variable to determine the value of a new variable within the sames `variables` block.
+You can even use a previously defined variable to determine the value of a new variable within the same `variables` block.
 This can be useful to calculate some values that would otherwise require deep template nesting.
 
 However, these variables don't generally pass through to jobs/stages template files.
@@ -169,7 +205,7 @@ The behavior makes it appear that jobs and stages templates have their own `vari
 
 We tried to pass in the pipeline `variables` to job/stage `variables` using `parameters` and re-expansion.
 This partially works.
-However, because it requires piping variables through as `parameters` and a decent amount of duplicated logic to re-insert as `variables`, so we might as well just use the `parameters`.
+However, because it requires piping variables through as `parameters` and a decent amount of duplicated logic to re-insert as `variables`, we might as well just use the `parameters`.
 We can still use `variables` to perform chained reuse, but values that come from the parent might need to be accessed from `parameters` rather than `variables`.
 
 Templates are (generally) evaluated in text order.
@@ -200,7 +236,7 @@ extends:
 (With [`pipeline.yml`](https://github.com/microsoft/go/blob/9ab06144d6e90e1686f7916bb6acc46134f0bd72/eng/pipeline/variables/pipeline.yml) variables template.)
 
 However, in other cases, we need to make separate pipeline entrypoint files.
-For example, the CI trigger can disabled in the AzDO UI, but a scheduled trigger can't be disabled.
+For example, the CI trigger can be disabled in the AzDO UI, but a scheduled trigger can't be disabled.
 A scheduled trigger can only be overridden to a different schedule, and that schedule must have some triggers in it, not zero.
 
 > [!NOTE]
