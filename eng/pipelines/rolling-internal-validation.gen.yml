@@ -1,6 +1,5 @@
 # Copyright (c) Microsoft Corporation.
-# Use of this source code is governed by a BSD-style
-# license that can be found in the LICENSE file.
+# Licensed under the MIT License.
 
 # This pipeline runs rolling validation.
 # For go-infra: CodeQL on active branch.
@@ -20,6 +19,8 @@ pipelineymlgen:
 ---
 
 parameters:
+  - ${ inlinetemplate "util/info.gen.yml" }:
+      desc: This pipeline runs rolling validation, like CodeQL, for go-infra and internal go-mirror branches.
   - name: enableCodeQL
     displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications in dev branches.'
     type: boolean

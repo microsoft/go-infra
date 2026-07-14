@@ -5,6 +5,14 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
+  - name: _info
+    displayName: >
+      Info: This pipeline releases Microsoft build of Go images and related release outputs after Microsoft build of Go artifacts are available.
+    type: string
+    values:
+      - release-go-images-pipeline.yml
+    default: release-go-images-pipeline.yml
+
   - name: releaseVersions
     displayName: >
       List of versions to release. Include Microsoft revision suffix (-1) and boring/FIPS suffix

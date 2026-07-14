@@ -5,6 +5,14 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
+  - name: _info
+    displayName: >
+      Info: This pipeline updates Azure Linux Go package sources from Microsoft build of Go artifacts and can create an Azure Linux pull request.
+    type: string
+    values:
+      - update-azure-linux-pipeline.yml
+    default: update-azure-linux-pipeline.yml
+
   - name: pipelineBuildID
     displayName: 'The microsoft-go pipeline run ID that built the artifacts to submit to Azure Linux.'
     type: string

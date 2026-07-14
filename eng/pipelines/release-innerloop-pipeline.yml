@@ -5,6 +5,14 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
+  - name: _info
+    displayName: >
+      Info: This pipeline runs internal innerloop validation for a Microsoft build of Go commit during release.
+    type: string
+    values:
+      - release-innerloop-pipeline.yml
+    default: release-innerloop-pipeline.yml
+
   - name: releaseVersion
     displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
     type: string

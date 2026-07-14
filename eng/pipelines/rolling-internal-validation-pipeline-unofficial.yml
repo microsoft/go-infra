@@ -2,8 +2,7 @@
 # Origin file: rolling-internal-validation.gen.yml
 
 # Copyright (c) Microsoft Corporation.
-# Use of this source code is governed by a BSD-style
-# license that can be found in the LICENSE file.
+# Licensed under the MIT License.
 
 # This pipeline runs rolling validation.
 # For go-infra: CodeQL on active branch.
@@ -13,6 +12,15 @@
 # unofficial: https://dev.azure.com/dnceng/internal/_build?definitionId=1496
 
 parameters:
+  - name: _info
+    displayName: ℹ️ This pipeline runs rolling validation, like CodeQL, for go-infra
+      and internal go-mirror branches.
+    type: string
+    values:
+      - "\U0001F535  rolling-internal-validation-pipeline-unofficial.yml  \U0001F535
+        \U0001F535"
+    default: "\U0001F535  rolling-internal-validation-pipeline-unofficial.yml  \U0001F535
+      \U0001F535"
   - name: enableCodeQL
     displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications
       in dev branches.'

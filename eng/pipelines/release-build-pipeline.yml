@@ -5,6 +5,14 @@
 
 # For info about runtime parameters, see https://github.com/microsoft/go-infra/blob/main/docs/pipeline-yml-style.md#runtime-parameters
 parameters:
+  - name: _info
+    displayName: >
+      Info: This pipeline releases a Microsoft build of Go by coordinating the microsoft/go PR, internal build, tags, GitHub release, aka.ms updates, and Go image update.
+    type: string
+    values:
+      - release-build-pipeline.yml
+    default: release-build-pipeline.yml
+
   - name: releaseVersion
     displayName: Version to release, including Microsoft revision suffix (-1) and boring/FIPS suffix (-fips) if they apply.
     type: string

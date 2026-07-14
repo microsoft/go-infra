@@ -7,7 +7,14 @@
 # official: https://dev.azure.com/dnceng/internal/_build?definitionId=1061
 # unofficial: https://dev.azure.com/dnceng/internal/_build?definitionId=1495
 
-parameters: []
+parameters:
+  - name: _info
+    displayName: ℹ️ This pipeline syncs upstream Go changes into the microsoft/go
+      repository by creating update PRs.
+    type: string
+    values:
+      - "\U0001F535  upstream-sync-pipeline-unofficial.yml  \U0001F535 \U0001F535"
+    default: "\U0001F535  upstream-sync-pipeline-unofficial.yml  \U0001F535 \U0001F535"
 trigger: none
 pr: none
 schedules: []
