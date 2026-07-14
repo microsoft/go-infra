@@ -14,7 +14,9 @@ pipelineymlgen:
         official: true
 ---
 
-parameters: []
+parameters:
+  - ${ inlinetemplate "util/info.gen.yml" }:
+      desc: This pipeline syncs upstream Go changes into the microsoft/go repository by creating update PRs.
 
 trigger: none
 pr: none

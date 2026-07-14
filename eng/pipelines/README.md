@@ -8,3 +8,5 @@ This directory contains Azure DevOps (AzDO) YAML pipelines for CI and utilities.
 Each pipeline yml file contains links to its pipeline or pipelines.
 
 See [the release process design docs](/docs/release-process/design.md) for more information about the sequence of the `release-*` pipelines.
+
+For information about the style of these pipelines, see [the AzDO pipeline yml style guide](/docs/pipeline-yml-style.md).
