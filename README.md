@@ -15,6 +15,8 @@ distribution.
 Visit the [docs](docs) directory for more information about the infrastructure
 implemented in this repository.
 
+For build and release pipeline entry points, see the [pipeline docs](eng/pipelines/README.md).
+
 ## Contributing
 
 This project welcomes contributions and suggestions. Most contributions require you to agree to a
