@@ -125,8 +125,9 @@ func run() error {
 		line := "  " + l
 		// Annotate the gh aw managed lines (the gh-aw-actions ignore and the
 		// lock-file exclude-paths) so readers know they're compiler-locked.
-		if t := strings.TrimSpace(l); strings.HasPrefix(t, "- ") &&
-			(strings.Contains(t, lockWorkflowGlob) || strings.Contains(t, ghawDependencyName)) {
+		t := strings.TrimSpace(l)
+		isGHAWManaged := strings.HasPrefix(t, "- ") && (strings.Contains(t, lockWorkflowGlob) || strings.Contains(t, ghawDependencyName))
+		if isGHAWManaged {
 			line += " " + ghawManagedComment
 		}
 		newLines = append(newLines, line)
