@@ -182,6 +182,10 @@ const ghawDependencyName = "github/gh-aw-actions*"
 // Dependabot. It's appended to both the ignore and exclude-paths lines.
 const ghawManagedComment = "# Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump."
 
+// copilotSetupStepsPath is the well-known location of the Copilot agentic
+// workflow setup file that Dependabot should not attempt to update directly.
+const copilotSetupStepsPath = ".github/workflows/copilot-setup-steps.yml"
+
 // goModEntries returns a dependabot entry for every Go module tracked in the
 // repository, grouping each module's production dependencies together.
 func goModEntries(root string) ([]dependabotEntry, error) {
@@ -210,7 +214,8 @@ func goModEntries(root string) ([]dependabotEntry, error) {
 // gitHubActionsEntries returns a dependabot entry for GitHub Actions when the
 // repository contains a CodeQL workflow and/or gh aw managed lock workflows.
 // The CodeQL updates are grouped so they land in a single PR, and the gh aw
-// managed lock files are excluded from direct updates.
+// managed lock files and the Copilot setup-steps file are excluded from direct
+// updates.
 func gitHubActionsEntries(root string) ([]dependabotEntry, error) {
 	hasCodeQL, err := hasCodeQLWorkflow(root)
 	if err != nil {
@@ -220,7 +225,11 @@ func gitHubActionsEntries(root string) ([]dependabotEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("detect gh aw lock workflow: %v", err)
 	}
-	if !hasCodeQL && !hasLock {
+	hasCopilot, err := hasCopilotSetupStepsWorkflow(root)
+	if err != nil {
+		return nil, fmt.Errorf("detect copilot setup steps workflow: %v", err)
+	}
+	if !hasCodeQL && !hasLock && !hasCopilot {
 		return nil, nil
 	}
 	entry := dependabotEntry{
@@ -241,6 +250,9 @@ func gitHubActionsEntries(root string) ([]dependabotEntry, error) {
 			{"dependency-name": ghawDependencyName},
 		}
 		entry.ExcludePaths = []string{lockWorkflowGlob}
+	}
+	if hasCopilot {
+		entry.ExcludePaths = append(entry.ExcludePaths, copilotSetupStepsPath)
 	}
 	return []dependabotEntry{entry}, nil
 }
@@ -330,6 +342,22 @@ func hasLockWorkflow(root string) (bool, error) {
 			continue
 		}
 		if strings.HasSuffix(name, ".lock.yml") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// hasCopilotSetupStepsWorkflow reports whether the Copilot agentic workflow
+// setup file (".github/workflows/copilot-setup-steps.yml") is tracked in the
+// repository.
+func hasCopilotSetupStepsWorkflow(root string) (bool, error) {
+	files, err := gitTrackedFiles(root)
+	if err != nil {
+		return false, err
+	}
+	for _, f := range files {
+		if f == copilotSetupStepsPath {
 			return true, nil
 		}
 	}
