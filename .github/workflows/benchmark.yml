@@ -104,13 +104,13 @@ jobs:
           go-download-base-url: ${{ matrix.go-download-base-url || 'https://aka.ms/golang/release/latest' }}
 
       - name: Checkout HEAD
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.head-ref }}
           path: head
 
       - name: Checkout BASE
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.setup.outputs.base-ref }}
           path: base
@@ -118,7 +118,7 @@ jobs:
       # job.workflow_sha is the SHA the caller pinned microsoft/go-infra to.
       # (github.workflow_sha would point at the caller's workflow file instead.)
       - name: Checkout go-infra (for benchcheck)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: microsoft/go-infra
           ref: ${{ job.workflow_sha }}
@@ -206,7 +206,7 @@ jobs:
           pattern: benchstat-*
 
       - name: Checkout go-infra (for benchcheck)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: microsoft/go-infra
           ref: ${{ job.workflow_sha }}
