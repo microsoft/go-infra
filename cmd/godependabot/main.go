@@ -15,7 +15,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/microsoft/go-infra/gitcmd"
@@ -314,7 +313,7 @@ func findGoModuleDirs(files []string) []string {
 			dirs = append(dirs, pre)
 		}
 	}
-	sort.Strings(dirs)
+	slices.Sort(dirs)
 	return dirs
 }
 
