@@ -22,7 +22,7 @@ releaseagent coordinates a release of Microsoft build of Go repository.
 var subcommands []subcmd.Option
 
 func main() {
-	if err := subcmd.Run("releasego", description, subcommands); err != nil {
+	if err := subcmd.Run("releaseagent", description, subcommands); err != nil {
 		log.Fatal(err)
 	}
 }
