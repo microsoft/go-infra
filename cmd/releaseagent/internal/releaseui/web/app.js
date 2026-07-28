@@ -25,6 +25,10 @@ const smokeConfirmation = document.querySelector("#smoke-confirmation");
 const smokeButton = document.querySelector("#smoke-button");
 const planDigest = document.querySelector("#plan-digest");
 const pipelineRunLink = document.querySelector("#pipeline-run-link");
+const findRunsButton = document.querySelector("#find-runs-button");
+const runCandidates = document.querySelector("#run-candidates");
+const candidateCount = document.querySelector("#candidate-count");
+const candidateList = document.querySelector("#candidate-list");
 
 const smokeConfirmationPhrase = "QUEUE PIPELINE 1151 SMOKE TEST";
 
@@ -41,19 +45,10 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   setBusy(planButton, true, "Building plan…");
   try {
-    const versions = document.querySelector("#versions").value
-      .split(/[\n,]+/)
-      .map((version) => version.trim())
-      .filter(Boolean);
+    const input = currentFormInput();
     plan = await requestJSON("/api/plan", {
       method: "POST",
-      body: JSON.stringify({
-        versions,
-        runner: document.querySelector("#runner").value.trim(),
-        security: document.querySelector("#security").checked,
-        variableGroup: document.querySelector("#variable-group").value.trim(),
-        releaseIssue: Number(document.querySelector("#release-issue").value) || 0,
-      }),
+      body: JSON.stringify(input),
     });
     renderPlan(plan);
     connectEvents();
@@ -61,6 +56,22 @@ form.addEventListener("submit", async (event) => {
     showError(error.message);
   } finally {
     setBusy(planButton, false, "Build go-images plan");
+  }
+});
+
+findRunsButton.addEventListener("click", async () => {
+  setBusy(findRunsButton, true, "Searching recent runs…");
+  try {
+    const { versions } = currentFormInput();
+    const result = await requestJSON("/api/go-images/runs/search", {
+      method: "POST",
+      body: JSON.stringify({ versions }),
+    });
+    renderCandidates(result.candidates, result.versions);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(findRunsButton, false, "Find existing runs for versions");
   }
 });
 
@@ -104,14 +115,29 @@ function renderPlan(nextPlan) {
   emptyState.hidden = true;
   planContent.hidden = false;
   const restored = nextPlan.restored ? " · restored from disk" : "";
-  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · execution disabled${restored}`;
+  const imported = nextPlan.run?.imported ? " · imported existing run" : "";
+  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · execution disabled${restored}${imported}`;
   renderPipeline(nextPlan.pipeline);
   renderPipelineRun(nextPlan.run);
   planDigest.textContent = nextPlan.planDigest;
   stepList.replaceChildren(...nextPlan.steps.map(createStepCard));
   demoButton.disabled = false;
-  updateProgress({ active: false, steps: nextPlan.steps.map((step) => ({ ...step, status: "waiting" })) });
+  const snapshot = initialPlanSnapshot(nextPlan);
+  updateSteps(snapshot);
+  updateProgress(snapshot);
   updateSmokeControls();
+}
+
+function initialPlanSnapshot(nextPlan) {
+  const steps = nextPlan.steps.map((step) => ({ ...step, status: "waiting" }));
+  if (nextPlan.run?.buildId) {
+    const queue = steps.find((step) => step.id === "go-images.release-pipeline.queue");
+    if (queue) queue.status = "succeeded";
+  }
+  if (nextPlan.run?.complete) {
+    for (const step of steps) step.status = "succeeded";
+  }
+  return { active: false, steps };
 }
 
 function renderPipeline(pipeline) {
@@ -156,11 +182,102 @@ async function loadPreflight() {
     if (preflight.externalExecutionEnabled) {
       safetyTitle.textContent = "One-time smoke execution ready";
       safetyCopy.textContent = "Authenticated pipeline 1151 access is enabled, with every release action forced off.";
+      findRunsButton.hidden = false;
     }
     updateSmokeControls();
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
+}
+
+function currentFormInput() {
+  return {
+    versions: document.querySelector("#versions").value
+      .split(/[\n,]+/)
+      .map((version) => version.trim())
+      .filter(Boolean),
+    runner: document.querySelector("#runner").value.trim(),
+    security: document.querySelector("#security").checked,
+    variableGroup: document.querySelector("#variable-group").value.trim(),
+    releaseIssue: Number(document.querySelector("#release-issue").value) || 0,
+  };
+}
+
+function renderCandidates(candidates, versions) {
+  runCandidates.hidden = false;
+  candidateCount.textContent = `${candidates.length} found`;
+  if (!candidates.length) {
+    const empty = document.createElement("p");
+    empty.className = "candidate-empty";
+    empty.textContent = `No recent pipeline 1151 runs matched ${versions.join(", ")}.`;
+    candidateList.replaceChildren(empty);
+    return;
+  }
+  candidateList.replaceChildren(...candidates.map((candidate) => createCandidate(candidate, versions)));
+}
+
+function createCandidate(candidate, versions) {
+  const card = document.createElement("article");
+  card.className = "candidate-card";
+  card.dataset.status = candidate.state;
+
+  const header = document.createElement("div");
+  header.className = "candidate-card-heading";
+  const title = document.createElement("strong");
+  title.textContent = `Build ${candidate.buildId}`;
+  const status = document.createElement("span");
+  status.className = "status-badge";
+  status.textContent = candidate.state;
+  header.append(title, status);
+
+  const details = document.createElement("p");
+  const queued = candidate.queueTime ? new Date(candidate.queueTime).toLocaleString() : "queue time unavailable";
+  details.textContent = `${queued} · ${candidate.createdByUI ? "release UI run" : "legacy run"}`;
+
+  const switches = document.createElement("p");
+  switches.className = "candidate-switches";
+  const parameters = candidate.parameters || {};
+  switches.textContent = [
+    `images ${parameters.runGoImagesBuild ?? "unknown"}`,
+    `announcement ${parameters.runPublishAnnouncement ?? "unknown"}`,
+    `DL ${parameters.runUpdateDL ?? "unknown"}`,
+    `MAR check ${parameters.runGoImageVersionCheck ?? "unknown"}`,
+  ].join(" · ");
+
+  const actions = document.createElement("div");
+  actions.className = "candidate-actions";
+  if (candidate.url) {
+    const link = document.createElement("a");
+    link.href = candidate.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = "Open Azure run";
+    actions.append(link);
+  }
+  const importButton = document.createElement("button");
+  importButton.type = "button";
+  importButton.className = "button button-secondary";
+  importButton.textContent = candidate.state === "succeeded" ? "Load completed run" : "Load and monitor";
+  importButton.addEventListener("click", async () => {
+    setBusy(importButton, true, "Validating run…");
+    try {
+      const input = currentFormInput();
+      input.versions = versions;
+      plan = await requestJSON("/api/go-images/runs/import", {
+        method: "POST",
+        body: JSON.stringify({ buildId: candidate.buildId, ...input }),
+      });
+      renderPlan(plan);
+      connectEvents();
+      runCandidates.hidden = true;
+    } catch (error) {
+      showError(error.message);
+      setBusy(importButton, false, candidate.state === "succeeded" ? "Load completed run" : "Load and monitor");
+    }
+  });
+  actions.append(importButton);
+  card.append(header, details, switches, actions);
+  return card;
 }
 
 function updateSmokeControls() {
@@ -186,7 +303,8 @@ function renderPipelineRun(run) {
     return;
   }
   pipelineRunLink.href = run.url;
-  pipelineRunLink.textContent = `Open Azure Pipeline run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}`;
+  const origin = run.imported ? " · imported" : "";
+  pipelineRunLink.textContent = `Open Azure Pipeline run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}${origin}`;
   pipelineRunLink.hidden = false;
 }
 

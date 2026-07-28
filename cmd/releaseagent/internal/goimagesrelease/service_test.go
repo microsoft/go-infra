@@ -26,6 +26,7 @@ type fakePipelineClient struct {
 	existing     *azdopipeline.Build
 	findErr      error
 	getBuilds    []*azdopipeline.Build
+	recentBuilds []*azdopipeline.Build
 	getErr       error
 	getCalls     int
 }
@@ -51,6 +52,10 @@ func (c *fakePipelineClient) Get(_ context.Context, _ int) (*azdopipeline.Build,
 	return c.getBuilds[index], nil
 }
 
+func (c *fakePipelineClient) ListRecent(_ context.Context, _ int) ([]*azdopipeline.Build, error) {
+	return c.recentBuilds, nil
+}
+
 func TestTriggerReconcilesExistingRun(t *testing.T) {
 	client := &fakePipelineClient{existing: &azdopipeline.Build{ID: 123}}
 	service := newTestService(t, client)
@@ -63,6 +68,22 @@ func TestTriggerReconcilesExistingRun(t *testing.T) {
 	}
 	if client.queueRequest != nil {
 		t.Fatal("reconciled run was queued again")
+	}
+}
+
+func TestTriggerRejectsConflictingCorrelatedRun(t *testing.T) {
+	client := &fakePipelineClient{existing: &azdopipeline.Build{
+		ID: 123,
+		Parameters: map[string]string{
+			VersionsVariable: `["1.25.6-1"]`,
+		},
+	}}
+	service := newTestService(t, client)
+	if _, err := service.TriggerBuildPipeline(context.Background(), 1151, nil, nil, nil); err == nil {
+		t.Fatal("conflicting correlated run was accepted")
+	}
+	if client.queueRequest != nil {
+		t.Fatal("a new run was queued after reconciliation conflict")
 	}
 }
 
@@ -86,6 +107,12 @@ func TestTriggerQueuesCorrelatedRun(t *testing.T) {
 	if client.queueRequest.Variables[CorrelationVariable] != "session-1" {
 		t.Fatalf("variables = %#v", client.queueRequest.Variables)
 	}
+	if client.queueRequest.Variables[WorkflowVariable] != WorkflowID ||
+		client.queueRequest.Variables[VersionsVariable] != `["1.26.1-1"]` ||
+		client.queueRequest.Variables[ExecutionDigestVariable] != "digest-1" {
+
+		t.Fatalf("discovery variables = %#v", client.queueRequest.Variables)
+	}
 }
 
 func TestTriggerRejectsUnexpectedPipeline(t *testing.T) {
@@ -103,9 +130,11 @@ func TestPollPipelineComplete(t *testing.T) {
 	}}
 	sleeps := 0
 	service, err := New(client, Config{
-		DefinitionID: 1151,
-		SessionID:    "session-1",
-		PollInterval: time.Millisecond,
+		DefinitionID:    1151,
+		SessionID:       "session-1",
+		Versions:        []string{"1.26.1-1"},
+		ExecutionDigest: "digest-1",
+		PollInterval:    time.Millisecond,
 	}, func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -138,9 +167,11 @@ func TestPollPipelineFailure(t *testing.T) {
 func TestPollHonorsCancellation(t *testing.T) {
 	client := &fakePipelineClient{getBuilds: []*azdopipeline.Build{{ID: 321, Status: "inProgress"}}}
 	service, err := New(client, Config{
-		DefinitionID: 1151,
-		SessionID:    "session-1",
-		PollInterval: time.Hour,
+		DefinitionID:    1151,
+		SessionID:       "session-1",
+		Versions:        []string{"1.26.1-1"},
+		ExecutionDigest: "digest-1",
+		PollInterval:    time.Hour,
 	}, func(ctx context.Context, _ time.Duration) error {
 		return ctx.Err()
 	})
@@ -151,6 +182,98 @@ func TestPollHonorsCancellation(t *testing.T) {
 	cancel()
 	if err := service.PollPipelineComplete(ctx, "321", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context cancellation", err)
+	}
+}
+
+func TestCanonicalVersionSet(t *testing.T) {
+	got, err := CanonicalVersionSet([]string{"1.26.1-1", "1.25.6-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `["1.25.6-1","1.26.1-1"]` {
+		t.Fatalf("version set = %q", got)
+	}
+}
+
+func TestFindCandidatesByVersionSet(t *testing.T) {
+	queueTime := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	client := &fakePipelineClient{recentBuilds: []*azdopipeline.Build{
+		{
+			ID:           10,
+			DefinitionID: 1151,
+			Status:       "inProgress",
+			QueueTime:    queueTime,
+			TemplateParameters: map[string]any{
+				"releaseVersions":        []any{"1.26.1-1", "1.25.6-1"},
+				"runGoImagesBuild":       false,
+				"runPublishAnnouncement": false,
+			},
+			Parameters: map[string]string{
+				WorkflowVariable:        WorkflowID,
+				VersionsVariable:        `["1.25.6-1","1.26.1-1"]`,
+				CorrelationVariable:     "session-old",
+				ExecutionDigestVariable: "digest-old",
+			},
+		},
+		{
+			ID:                 9,
+			DefinitionID:       1151,
+			Status:             "completed",
+			Result:             "succeeded",
+			Parameters:         map[string]string{},
+			TemplateParameters: map[string]any{"releaseVersions": []any{"1.26.1-1", "1.25.6-1"}},
+		},
+		{
+			ID:                 8,
+			DefinitionID:       1151,
+			Status:             "completed",
+			Result:             "failed",
+			Parameters:         map[string]string{},
+			TemplateParameters: map[string]any{"releaseVersions": []any{"1.24.1-1"}},
+		},
+	}}
+	service, err := New(client, Config{
+		DefinitionID:    1151,
+		SessionID:       "discovery-only",
+		Versions:        []string{"1.26.1-1", "1.25.6-1"},
+		ExecutionDigest: "discovery-only",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := service.FindCandidates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidate count = %d, want 2", len(candidates))
+	}
+	if !candidates[0].CreatedByUI || candidates[0].SessionID != "session-old" || candidates[0].QueueTime != queueTime {
+		t.Fatalf("UI candidate = %#v", candidates[0])
+	}
+	if candidates[0].Parameters["runGoImagesBuild"] != "false" || candidates[0].Parameters["runPublishAnnouncement"] != "false" {
+		t.Fatalf("candidate parameters = %#v", candidates[0].Parameters)
+	}
+	if candidates[1].CreatedByUI || candidates[1].BuildID != 9 {
+		t.Fatalf("legacy candidate = %#v", candidates[1])
+	}
+}
+
+func TestValidateCandidate(t *testing.T) {
+	client := &fakePipelineClient{getBuilds: []*azdopipeline.Build{{
+		ID:                 10,
+		DefinitionID:       1151,
+		Status:             "inProgress",
+		Parameters:         map[string]string{},
+		TemplateParameters: map[string]any{"releaseVersions": []any{"1.26.1-1"}},
+	}}}
+	service := newTestService(t, client)
+	candidate, err := service.ValidateCandidate(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.BuildID != 10 || candidate.State != azdopipeline.RunStateRunning {
+		t.Fatalf("candidate = %#v", candidate)
 	}
 }
 
@@ -185,9 +308,11 @@ func TestFocusedGraphWithFakeAzureDevOps(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, err := New(client, Config{
-		DefinitionID: 1151,
-		SessionID:    "session-1",
-		PollInterval: time.Millisecond,
+		DefinitionID:    1151,
+		SessionID:       "session-1",
+		Versions:        []string{"1.26.1-1"},
+		ExecutionDigest: "digest-1",
+		PollInterval:    time.Millisecond,
 	}, func(context.Context, time.Duration) error { return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -230,9 +355,11 @@ func TestFocusedGraphWithFakeAzureDevOps(t *testing.T) {
 func newTestService(t *testing.T, client PipelineClient) *Service {
 	t.Helper()
 	service, err := New(client, Config{
-		DefinitionID: 1151,
-		SessionID:    "session-1",
-		PollInterval: time.Millisecond,
+		DefinitionID:    1151,
+		SessionID:       "session-1",
+		Versions:        []string{"1.26.1-1"},
+		ExecutionDigest: "digest-1",
+		PollInterval:    time.Millisecond,
 	}, func(context.Context, time.Duration) error { return nil })
 	if err != nil {
 		t.Fatal(err)

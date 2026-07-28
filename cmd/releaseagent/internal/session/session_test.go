@@ -125,6 +125,17 @@ func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
 	if !updated.UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("updated time = %v, want %v", updated.UpdatedAt, updatedAt)
 	}
+	if updated.ExecutionDigest != document.ExecutionDigest {
+		t.Fatalf("state update changed execution digest: %q != %q", updated.ExecutionDigest, document.ExecutionDigest)
+	}
+}
+
+func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
+	document := testDocument(t)
+	document.Input.RunnerGitHubUser = "someone-else"
+	if err := document.Validate(); err == nil {
+		t.Fatal("modified immutable input unexpectedly passed validation")
+	}
 }
 
 func TestFileStoreRejectsUnknownAndInvalidDocuments(t *testing.T) {

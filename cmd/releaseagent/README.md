@@ -84,6 +84,13 @@ requires a persisted smoke plan, an exact plan-digest match, and typing
 `QUEUE PIPELINE 1151 SMOKE TEST` in the browser. The session correlation ID is attached to the
 Azure run so restart/retry reconciliation reuses an existing build instead of queueing another.
 
+The same mode can discover recent pipeline `1151` runs by canonical version set. The UI shows each
+candidate's build ID, status/result, queue time, origin, Azure link, and actual release-action
+switches. Selecting a candidate triggers a fresh server-side definition/version validation before
+creating a local session. Imported runs are monitored by build ID and are never re-queued. Future
+UI-created runs stamp workflow, canonical version set, session ID, and execution digest variables;
+legacy runs are discovered from their `releaseVersions` template parameter when Azure exposes it.
+
 The server only binds to a loopback address. A random one-time launch token establishes an
 HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.
 

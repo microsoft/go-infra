@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxResponseSize = 4 << 20
@@ -49,11 +50,14 @@ type QueueRequest struct {
 
 // Build is the release UI's stable view of an Azure Pipelines run.
 type Build struct {
-	ID         int
-	Status     string
-	Result     string
-	WebURL     string
-	Parameters map[string]string
+	ID                 int
+	DefinitionID       int
+	Status             string
+	Result             string
+	WebURL             string
+	Parameters         map[string]string
+	TemplateParameters map[string]any
+	QueueTime          time.Time
 }
 
 // Definition is the allowlist-relevant metadata of an Azure Pipeline definition.
@@ -201,6 +205,58 @@ func (c *Client) FindLatestByVariable(ctx context.Context, definitionID int, nam
 	if name == "" || value == "" {
 		return nil, errors.New("correlation variable name and value are required")
 	}
+	builds, err := c.ListRecentByVariables(ctx, definitionID, map[string]string{name: value})
+	if err != nil {
+		return nil, err
+	}
+	if len(builds) == 0 {
+		return nil, nil
+	}
+	return builds[0], nil
+}
+
+// ListRecentByVariables returns recent runs whose pipeline variables contain every required pair.
+func (c *Client) ListRecentByVariables(
+	ctx context.Context,
+	definitionID int,
+	required map[string]string,
+) ([]*Build, error) {
+	if definitionID <= 0 {
+		return nil, errors.New("pipeline definition ID must be positive")
+	}
+	if len(required) == 0 {
+		return nil, errors.New("at least one required pipeline variable is needed")
+	}
+	for name, value := range required {
+		if name == "" || value == "" {
+			return nil, errors.New("required pipeline variable names and values must not be empty")
+		}
+	}
+	builds, err := c.ListRecent(ctx, definitionID)
+	if err != nil {
+		return nil, err
+	}
+	var matches []*Build
+	for _, build := range builds {
+		match := true
+		for name, value := range required {
+			if build.Parameters[name] != value {
+				match = false
+				break
+			}
+		}
+		if match {
+			matches = append(matches, build)
+		}
+	}
+	return matches, nil
+}
+
+// ListRecent returns up to 50 recent runs of a pipeline, newest first.
+func (c *Client) ListRecent(ctx context.Context, definitionID int) ([]*Build, error) {
+	if definitionID <= 0 {
+		return nil, errors.New("pipeline definition ID must be positive")
+	}
 	query := url.Values{
 		"definitions": {strconv.Itoa(definitionID)},
 		"queryOrder":  {"queueTimeDescending"},
@@ -213,16 +269,15 @@ func (c *Client) FindLatestByVariable(ctx context.Context, definitionID int, nam
 	if err := c.doJSON(ctx, http.MethodGet, c.buildsURL(query), nil, &response); err != nil {
 		return nil, err
 	}
+	builds := make([]*Build, 0, len(response.Value))
 	for _, candidate := range response.Value {
 		build, err := candidate.build()
 		if err != nil {
 			return nil, err
 		}
-		if build.Parameters[name] == value {
-			return build, nil
-		}
+		builds = append(builds, build)
 	}
-	return nil, nil
+	return builds, nil
 }
 
 // State normalizes Azure status and result values for UI workflows.
@@ -302,11 +357,16 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, body io.Re
 }
 
 type apiBuild struct {
-	ID         int             `json:"id"`
-	Status     string          `json:"status"`
-	Result     string          `json:"result"`
-	Parameters string          `json:"parameters"`
-	Links      json.RawMessage `json:"_links"`
+	ID                 int            `json:"id"`
+	Status             string         `json:"status"`
+	Result             string         `json:"result"`
+	Parameters         string         `json:"parameters"`
+	TemplateParameters map[string]any `json:"templateParameters"`
+	QueueTime          time.Time      `json:"queueTime"`
+	Definition         struct {
+		ID int `json:"id"`
+	} `json:"definition"`
+	Links json.RawMessage `json:"_links"`
 }
 
 func (b apiBuild) build() (*Build, error) {
@@ -318,11 +378,14 @@ func (b apiBuild) build() (*Build, error) {
 		return nil, fmt.Errorf("decode build %d parameters: %w", b.ID, err)
 	}
 	return &Build{
-		ID:         b.ID,
-		Status:     b.Status,
-		Result:     b.Result,
-		WebURL:     decodeWebURL(b.Links),
-		Parameters: parameters,
+		ID:                 b.ID,
+		DefinitionID:       b.Definition.ID,
+		Status:             b.Status,
+		Result:             b.Result,
+		WebURL:             decodeWebURL(b.Links),
+		Parameters:         parameters,
+		TemplateParameters: b.TemplateParameters,
+		QueueTime:          b.QueueTime,
 	}, nil
 }
 

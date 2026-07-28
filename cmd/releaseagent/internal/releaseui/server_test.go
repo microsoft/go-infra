@@ -187,8 +187,14 @@ func TestSmokeExecutionRequiresConfirmedSafePlan(t *testing.T) {
 			Preflight: func(context.Context) (string, error) {
 				return "fake preflight passed", nil
 			},
-			NewService: func(string) (releasesteps.GoImagesReleaseService, error) {
+			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
 				return service, nil
+			},
+			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
+				return nil, nil
+			},
+			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
+				return PipelineRunCandidate{}, errors.New("no candidate configured")
 			},
 		}),
 	)
@@ -252,6 +258,163 @@ func TestSmokeExecutionRequiresConfirmedSafePlan(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict || service.queued != 1 {
 		t.Fatalf("second-run status = %d, queued = %d", response.StatusCode, service.queued)
+	}
+}
+
+func TestFindAndImportExistingRun(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := PipelineRunCandidate{
+		BuildID:     777,
+		Status:      "inProgress",
+		State:       "running",
+		URL:         "https://example/build/777",
+		QueueTime:   time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		VersionSet:  `["1.25.6-1","1.26.1-1"]`,
+		CreatedByUI: false,
+		Parameters: map[string]string{
+			"runGoImagesBuild":       "true",
+			"runPublishAnnouncement": "true",
+			"runUpdateDL":            "false",
+			"runGoImageVersionCheck": "true",
+		},
+	}
+	validated := false
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
+			DefinitionID:  goImagesReleasePipelineID,
+			VariableGroup: "test-release-config",
+			Preflight: func(context.Context) (string, error) {
+				return "fake preflight passed", nil
+			},
+			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
+				return &fakeSmokeService{}, nil
+			},
+			FindRuns: func(_ context.Context, versions []string) ([]PipelineRunCandidate, error) {
+				if strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
+					t.Fatalf("versions = %#v", versions)
+				}
+				return []PipelineRunCandidate{candidate}, nil
+			},
+			ValidateRun: func(_ context.Context, buildID int, versions []string) (PipelineRunCandidate, error) {
+				validated = true
+				if buildID != 777 || strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
+					t.Fatalf("build ID = %d, versions = %#v", buildID, versions)
+				}
+				return candidate, nil
+			},
+		}),
+	)
+
+	response := postJSON(t, ui, "/api/go-images/runs/search", `{"versions":["1.26.1-1","1.25.6-1"]}`)
+	var search struct {
+		Versions   []string               `json:"versions"`
+		Candidates []PipelineRunCandidate `json:"candidates"`
+	}
+	decodeResponse(t, response, &search)
+	if response.StatusCode != http.StatusOK || len(search.Candidates) != 1 || search.Candidates[0].BuildID != 777 {
+		t.Fatalf("search status = %d, response = %#v", response.StatusCode, search)
+	}
+
+	response = postJSON(t, ui, "/api/go-images/runs/import", `{
+		"buildId":777,
+		"versions":["1.26.1-1","1.25.6-1"],
+		"runner":"ghost",
+		"security":false,
+		"variableGroup":"test-release-config"
+	}`)
+	var imported planResponse
+	decodeResponse(t, response, &imported)
+	if response.StatusCode != http.StatusOK || !validated {
+		t.Fatalf("import status = %d, validated = %v", response.StatusCode, validated)
+	}
+	if imported.Run.BuildID != "777" || imported.Run.Complete || !imported.Run.Imported {
+		t.Fatalf("imported run = %#v", imported.Run)
+	}
+	if imported.Pipeline.Parameters["runGoImagesBuild"] != "true" ||
+		imported.Pipeline.Parameters["runPublishAnnouncement"] != "true" {
+
+		t.Fatalf("imported parameters = %#v", imported.Pipeline.Parameters)
+	}
+	persisted, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.State.Day.GoImagesReleaseBuildID != "777" {
+		t.Fatalf("persisted build ID = %q", persisted.State.Day.GoImagesReleaseBuildID)
+	}
+	restoredUI := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
+			DefinitionID:  goImagesReleasePipelineID,
+			VariableGroup: "test-release-config",
+			Preflight:     func(context.Context) (string, error) { return "ok", nil },
+			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
+				return &fakeSmokeService{}, nil
+			},
+			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
+			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
+				return candidate, nil
+			},
+		}),
+	)
+	response, err = restoredUI.client.Get(restoredUI.http.URL + "/api/plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored planResponse
+	decodeResponse(t, response, &restored)
+	if restored.Run.BuildID != "777" || !restored.Run.Imported {
+		t.Fatalf("restored imported run = %#v", restored.Run)
+	}
+}
+
+func TestImportRejectsConflictingExecutionDigest(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := PipelineRunCandidate{
+		BuildID:         778,
+		Status:          "inProgress",
+		State:           "running",
+		VersionSet:      `["1.26.1-1"]`,
+		ExecutionDigest: "different-execution",
+		CreatedByUI:     true,
+	}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
+			DefinitionID:  goImagesReleasePipelineID,
+			VariableGroup: "test-release-config",
+			Preflight:     func(context.Context) (string, error) { return "ok", nil },
+			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
+				return &fakeSmokeService{}, nil
+			},
+			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
+				return []PipelineRunCandidate{candidate}, nil
+			},
+			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
+				return candidate, nil
+			},
+		}),
+	)
+	response := postJSON(t, ui, "/api/go-images/runs/import", `{
+		"buildId":778,
+		"versions":["1.26.1-1"],
+		"runner":"ghost",
+		"security":false,
+		"variableGroup":"test-release-config"
+	}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("import status = %d, want %d", response.StatusCode, http.StatusConflict)
+	}
+	if _, err := store.Load(context.Background()); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("conflicting import unexpectedly persisted a session: %v", err)
 	}
 }
 

@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +74,31 @@ type GoImagesSmokeExecution struct {
 	DefinitionID  int
 	VariableGroup string
 	Preflight     func(context.Context) (string, error)
-	NewService    func(sessionID string) (releasesteps.GoImagesReleaseService, error)
+	NewService    func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error)
+	FindRuns      func(context.Context, []string) ([]PipelineRunCandidate, error)
+	ValidateRun   func(context.Context, int, []string) (PipelineRunCandidate, error)
+}
+
+// GoImagesServiceRequest binds queued-run metadata to immutable confirmed input.
+type GoImagesServiceRequest struct {
+	SessionID       string
+	Versions        []string
+	ExecutionDigest string
+}
+
+// PipelineRunCandidate is a recent run matching a canonical version set.
+type PipelineRunCandidate struct {
+	BuildID         int               `json:"buildId"`
+	Status          string            `json:"status"`
+	Result          string            `json:"result,omitempty"`
+	State           string            `json:"state"`
+	URL             string            `json:"url,omitempty"`
+	QueueTime       time.Time         `json:"queueTime,omitempty"`
+	SessionID       string            `json:"sessionId,omitempty"`
+	VersionSet      string            `json:"versionSet"`
+	ExecutionDigest string            `json:"executionDigest,omitempty"`
+	CreatedByUI     bool              `json:"createdByUI"`
+	Parameters      map[string]string `json:"parameters,omitempty"`
 }
 
 // Option customizes a Server.
@@ -143,8 +169,10 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		if server.smoke.VariableGroup == "" {
 			return nil, errors.New("go-images smoke variable-group allowlist is empty")
 		}
-		if server.smoke.Preflight == nil || server.smoke.NewService == nil {
-			return nil, errors.New("go-images smoke execution is missing preflight or service factory")
+		if server.smoke.Preflight == nil || server.smoke.NewService == nil ||
+			server.smoke.FindRuns == nil || server.smoke.ValidateRun == nil {
+
+			return nil, errors.New("go-images smoke execution is missing preflight, service, or discovery behavior")
 		}
 	}
 	if err := server.restoreSession(); err != nil {
@@ -184,6 +212,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/preflight", s.handlePreflight)
 	mux.HandleFunc("POST /api/demo/start", s.handleDemoStart)
 	mux.HandleFunc("POST /api/go-images/smoke/start", s.handleSmokeStart)
+	mux.HandleFunc("POST /api/go-images/runs/search", s.handleRunSearch)
+	mux.HandleFunc("POST /api/go-images/runs/import", s.handleRunImport)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withSecurityHeaders(s.authenticate(mux))
@@ -243,6 +273,7 @@ type pipelineRun struct {
 	BuildID  string `json:"buildId,omitempty"`
 	URL      string `json:"url,omitempty"`
 	Complete bool   `json:"complete"`
+	Imported bool   `json:"imported"`
 }
 
 func (s *Server) handleGetPlan(response http.ResponseWriter, _ *http.Request) {
@@ -272,6 +303,9 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	if err != nil {
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
+	}
+	if s.smoke != nil {
+		normalized.ReleaseIssue = 0
 	}
 
 	releaseInput := &releasesteps.Input{
@@ -339,6 +373,9 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 		releaseIssue = s.releaseState.Day.ReleaseIssue
 	}
 	parameters, _ := releasesteps.GoImagesReleasePipelineParameters(s.releaseInput, releaseIssue)
+	if s.document != nil && len(s.document.State.Day.GoImagesReleaseParameters) != 0 {
+		parameters = clonePipelineParameters(s.document.State.Day.GoImagesReleaseParameters)
+	}
 	result := planResponse{
 		Input: s.input,
 		Steps: describeSteps(s.steps),
@@ -355,11 +392,12 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 	}
 	if s.document != nil {
 		result.SessionID = s.document.ID
-		result.PlanDigest = s.document.Plan.Digest
+		result.PlanDigest = s.document.ExecutionDigest
 	}
 	if s.document != nil {
 		result.Run.BuildID = s.document.State.Day.GoImagesReleaseBuildID
 		result.Run.Complete = s.document.State.Day.GoImagesReleaseComplete
+		result.Run.Imported = s.document.State.Day.GoImagesReleaseImported
 	} else if s.releaseState != nil {
 		result.Run.BuildID = s.releaseState.Day.GoImagesReleaseBuildID
 		result.Run.Complete = s.releaseState.Day.GoImagesReleaseComplete
@@ -467,7 +505,7 @@ func (s *Server) handleSmokeStart(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusConflict, "create and persist a smoke-test plan first")
 		return
 	}
-	if start.PlanDigest != s.document.Plan.Digest {
+	if start.PlanDigest != s.document.ExecutionDigest {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "confirmation does not match the current plan digest")
 		return
@@ -506,7 +544,11 @@ func (s *Server) handleSmokeStart(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
 		return
 	}
-	service, err := newService(sessionID)
+	service, err := newService(GoImagesServiceRequest{
+		SessionID:       sessionID,
+		Versions:        append([]string(nil), input.Versions...),
+		ExecutionDigest: document.ExecutionDigest,
+	})
 	if err != nil {
 		s.finishExternalRun()
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create Azure pipeline service: %v", err))
@@ -551,6 +593,164 @@ func (s *Server) finishExternalRun() {
 	s.mu.Unlock()
 }
 
+type runSearchRequest struct {
+	Versions []string `json:"versions"`
+}
+
+func (s *Server) handleRunSearch(response http.ResponseWriter, request *http.Request) {
+	if !sameOrigin(request) {
+		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
+		return
+	}
+	var search runSearchRequest
+	if err := decodeJSON(response, request, &search); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	versions, err := normalizeVersions(search.Versions)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.mu.Lock()
+	if s.smoke == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "go-images run discovery is not enabled")
+		return
+	}
+	preflight := s.smoke.Preflight
+	findRuns := s.smoke.FindRuns
+	s.mu.Unlock()
+	if _, err := preflight(request.Context()); err != nil {
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
+		return
+	}
+	candidates, err := findRuns(request.Context(), versions)
+	if err != nil {
+		writeError(response, http.StatusBadGateway, fmt.Sprintf("find go-images runs: %v", err))
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"versions":   versions,
+		"candidates": candidates,
+	})
+}
+
+type runImportRequest struct {
+	BuildID       int      `json:"buildId"`
+	Versions      []string `json:"versions"`
+	Runner        string   `json:"runner"`
+	Security      bool     `json:"security"`
+	VariableGroup string   `json:"variableGroup"`
+	ReleaseIssue  int      `json:"releaseIssue,omitempty"`
+}
+
+func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Request) {
+	if !sameOrigin(request) {
+		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
+		return
+	}
+	var importRequest runImportRequest
+	if err := decodeJSON(response, request, &importRequest); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	if importRequest.BuildID <= 0 {
+		writeError(response, http.StatusBadRequest, "build ID must be positive")
+		return
+	}
+	normalized, err := normalizeInput(PlanInput{
+		Versions:      importRequest.Versions,
+		Runner:        importRequest.Runner,
+		Security:      importRequest.Security,
+		VariableGroup: importRequest.VariableGroup,
+		ReleaseIssue:  importRequest.ReleaseIssue,
+	})
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	normalized.ReleaseIssue = 0
+
+	s.mu.Lock()
+	if s.smoke == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "go-images run import is not enabled")
+		return
+	}
+	if normalized.VariableGroup != s.smoke.VariableGroup {
+		s.mu.Unlock()
+		writeError(response, http.StatusBadRequest, "variable group is not allowlisted for run import")
+		return
+	}
+	if s.demoRunning || s.externalRunning {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "cannot import while a workflow is running")
+		return
+	}
+	preflight := s.smoke.Preflight
+	validateRun := s.smoke.ValidateRun
+	s.mu.Unlock()
+	if _, err := preflight(request.Context()); err != nil {
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
+		return
+	}
+	candidate, err := validateRun(request.Context(), importRequest.BuildID, normalized.Versions)
+	if err != nil {
+		writeError(response, http.StatusConflict, fmt.Sprintf("validate selected run: %v", err))
+		return
+	}
+
+	releaseInput := &releasesteps.Input{
+		Versions:                         normalized.Versions,
+		Security:                         normalized.Security,
+		RunnerGitHubUser:                 normalized.Runner,
+		ReleaseConfigVariableGroup:       normalized.VariableGroup,
+		MicrosoftGoImagesReleasePipeline: goImagesReleasePipelineID,
+		GoImagesReleaseSmokeTest:         true,
+	}
+	steps, releaseState, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
+		releaseInput,
+		nil,
+		nil,
+		disabledServices{},
+		s.checkpointReleaseState,
+	)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create imported run plan: %v", err))
+		return
+	}
+	releaseState.Day.GoImagesReleaseBuildID = strconv.Itoa(candidate.BuildID)
+	releaseState.Day.GoImagesReleaseComplete = candidate.State == "succeeded"
+	releaseState.Day.GoImagesReleaseImported = true
+	releaseState.Day.GoImagesReleaseParameters = clonePipelineParameters(candidate.Parameters)
+	document, err := session.NewDocument(releaseInput, releaseState, steps, time.Now())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create imported run session: %v", err))
+		return
+	}
+	if candidate.CreatedByUI && candidate.ExecutionDigest != "" && candidate.ExecutionDigest != document.ExecutionDigest {
+		writeError(response, http.StatusConflict, "selected UI run does not match the reconstructed execution digest")
+		return
+	}
+	if err := s.sessionStore.Save(request.Context(), document); err != nil {
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("persist imported run: %v", err))
+		return
+	}
+
+	s.mu.Lock()
+	s.steps = steps
+	s.input = normalized
+	s.releaseInput = releaseInput
+	s.releaseState = releaseState
+	s.document = document
+	s.runner = &coordinator.StepRunner{}
+	s.restoredFromDisk = false
+	result := s.planResponseLocked(false)
+	s.mu.Unlock()
+	writeJSON(response, http.StatusOK, result)
+}
+
 func normalizeInput(input PlanInput) (PlanInput, error) {
 	if len(input.Versions) == 0 {
 		return PlanInput{}, errors.New("at least one release version is required")
@@ -578,19 +778,36 @@ func normalizeInput(input PlanInput) (PlanInput, error) {
 		return PlanInput{}, errors.New("release issue cannot be negative")
 	}
 
-	seen := make(map[string]struct{}, len(input.Versions))
-	for _, rawVersion := range input.Versions {
+	normalizedVersions, err := normalizeVersions(input.Versions)
+	if err != nil {
+		return PlanInput{}, err
+	}
+	normalized.Versions = normalizedVersions
+	return normalized, nil
+}
+
+func normalizeVersions(versions []string) ([]string, error) {
+	if len(versions) == 0 {
+		return nil, errors.New("at least one release version is required")
+	}
+	if len(versions) > 8 {
+		return nil, errors.New("at most eight release versions can be planned at once")
+	}
+	seen := make(map[string]struct{}, len(versions))
+	var normalized []string
+	for _, rawVersion := range versions {
 		rawVersion = strings.TrimSpace(rawVersion)
 		if !versionPattern.MatchString(rawVersion) {
-			return PlanInput{}, fmt.Errorf("release version %q is invalid; include the Microsoft revision, for example 1.26.1-1", rawVersion)
+			return nil, fmt.Errorf("release version %q is invalid; include the Microsoft revision, for example 1.26.1-1", rawVersion)
 		}
 		version := goversion.New(rawVersion).Full()
 		if _, ok := seen[version]; ok {
-			return PlanInput{}, fmt.Errorf("release version %q is duplicated", version)
+			return nil, fmt.Errorf("release version %q is duplicated", version)
 		}
 		seen[version] = struct{}{}
-		normalized.Versions = append(normalized.Versions, version)
+		normalized = append(normalized, version)
 	}
+	sort.Strings(normalized)
 	return normalized, nil
 }
 
@@ -611,6 +828,14 @@ func describeSteps(steps []*coordinator.Step) []planStep {
 		descriptions = append(descriptions, description)
 	}
 	return descriptions
+}
+
+func clonePipelineParameters(values map[string]string) map[string]string {
+	clone := make(map[string]string, len(values))
+	for name, value := range values {
+		clone[name] = value
+	}
+	return clone
 }
 
 func (s *Server) handleDemoStart(response http.ResponseWriter, request *http.Request) {

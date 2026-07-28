@@ -77,7 +77,9 @@ func TestFindLatestByVariable(t *testing.T) {
 		}
 		_, _ = response.Write([]byte(`{"value":[` +
 			`{"id":12,"status":"inProgress","parameters":"{\"ReleaseUISessionID\":\"other\"}"},` +
-			`{"id":11,"status":"notStarted","parameters":"{\"ReleaseUISessionID\":{\"value\":\"session-1\"}}"}` +
+			`{"id":11,"status":"notStarted","queueTime":"2026-07-28T12:00:00Z",` +
+			`"definition":{"id":1151},"templateParameters":{"releaseVersions":["1.26.1-1"]},` +
+			`"parameters":"{\"ReleaseUISessionID\":{\"value\":\"session-1\"}}"}` +
 			`]}`))
 	}))
 	defer server.Close()
@@ -91,6 +93,9 @@ func TestFindLatestByVariable(t *testing.T) {
 	}
 	if build == nil || build.ID != 11 {
 		t.Fatalf("build = %#v, want ID 11", build)
+	}
+	if build.DefinitionID != 1151 || build.TemplateParameters["releaseVersions"] == nil || build.QueueTime.IsZero() {
+		t.Fatalf("build metadata = %#v", build)
 	}
 }
 

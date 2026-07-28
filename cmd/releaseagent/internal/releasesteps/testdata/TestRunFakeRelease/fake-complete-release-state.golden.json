@@ -6,6 +6,8 @@
     "GoImagesOfficialBuildID": "12345-running-pipeline",
     "GoImagesReleaseBuildID": "",
     "GoImagesReleaseComplete": false,
+    "GoImagesReleaseImported": false,
+    "GoImagesReleaseParameters": null,
     "AnnouncementWritten": true,
     "MARVersionChecked": true
   },

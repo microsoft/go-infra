@@ -20,23 +20,24 @@ import (
 
 const (
 	// CurrentSchemaVersion is the only session document schema understood by this version.
-	CurrentSchemaVersion = 1
+	CurrentSchemaVersion = 2
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
 	// even if step IDs and dependencies have not changed.
-	CurrentWorkflowRevision = 2
+	CurrentWorkflowRevision = 3
 )
 
 // Document is the durable, non-secret state needed to reconstruct a release plan.
 //
 // Credentials are deliberately excluded. They must be reacquired when the application starts.
 type Document struct {
-	SchemaVersion int                `json:"schemaVersion"`
-	ID            string             `json:"id"`
-	CreatedAt     time.Time          `json:"createdAt"`
-	UpdatedAt     time.Time          `json:"updatedAt"`
-	Input         releasesteps.Input `json:"input"`
-	State         releasesteps.State `json:"state"`
-	Plan          Plan               `json:"plan"`
+	SchemaVersion   int                `json:"schemaVersion"`
+	ID              string             `json:"id"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
+	Input           releasesteps.Input `json:"input"`
+	State           releasesteps.State `json:"state"`
+	Plan            Plan               `json:"plan"`
+	ExecutionDigest string             `json:"executionDigest"`
 }
 
 // Plan is the persisted structural identity of a release DAG.
@@ -92,6 +93,10 @@ func NewDocument(input *releasesteps.Input, state *releasesteps.State, steps []*
 		Input:         inputCopy,
 		State:         stateCopy,
 		Plan:          plan,
+	}
+	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
+	if err != nil {
+		return nil, err
 	}
 	if err := document.Validate(); err != nil {
 		return nil, err
@@ -162,6 +167,13 @@ func (d *Document) Validate() error {
 	}
 	if d.Plan.Digest != digest {
 		return fmt.Errorf("session plan digest mismatch: stored %q, calculated %q", d.Plan.Digest, digest)
+	}
+	executionDigest, err := executionDigest(d.Input, d.Plan)
+	if err != nil {
+		return err
+	}
+	if d.ExecutionDigest != executionDigest {
+		return fmt.Errorf("session execution digest mismatch: stored %q, calculated %q", d.ExecutionDigest, executionDigest)
 	}
 	return nil
 }
@@ -283,6 +295,23 @@ func planDigest(steps []PlanStep) (string, error) {
 	data, err := json.Marshal(steps)
 	if err != nil {
 		return "", fmt.Errorf("marshal session plan: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func executionDigest(input releasesteps.Input, plan Plan) (string, error) {
+	data, err := json.Marshal(struct {
+		Input            releasesteps.Input `json:"input"`
+		PlanDigest       string             `json:"planDigest"`
+		WorkflowRevision int                `json:"workflowRevision"`
+	}{
+		Input:            input,
+		PlanDigest:       plan.Digest,
+		WorkflowRevision: plan.WorkflowRevision,
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshal session execution identity: %w", err)
 	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil

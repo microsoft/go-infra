@@ -97,12 +97,50 @@ func handleServe(parse subcmd.ParseFunc) error {
 				}
 				return "Authenticated and verified production pipeline 1151. All release actions are forced off.", nil
 			},
-			NewService: func(sessionID string) (releasesteps.GoImagesReleaseService, error) {
+			NewService: func(request releaseui.GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
 				return goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID: 1151,
-					SessionID:    sessionID,
-					PollInterval: 5 * time.Second,
+					DefinitionID:    1151,
+					SessionID:       request.SessionID,
+					Versions:        request.Versions,
+					ExecutionDigest: request.ExecutionDigest,
+					PollInterval:    5 * time.Second,
 				}, nil)
+			},
+			FindRuns: func(ctx context.Context, versions []string) ([]releaseui.PipelineRunCandidate, error) {
+				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
+					DefinitionID:    1151,
+					SessionID:       "discovery-only",
+					Versions:        versions,
+					ExecutionDigest: "discovery-only",
+				}, nil)
+				if err != nil {
+					return nil, err
+				}
+				candidates, err := service.FindCandidates(ctx)
+				if err != nil {
+					return nil, err
+				}
+				result := make([]releaseui.PipelineRunCandidate, 0, len(candidates))
+				for _, candidate := range candidates {
+					result = append(result, convertRunCandidate(candidate))
+				}
+				return result, nil
+			},
+			ValidateRun: func(ctx context.Context, buildID int, versions []string) (releaseui.PipelineRunCandidate, error) {
+				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
+					DefinitionID:    1151,
+					SessionID:       "discovery-only",
+					Versions:        versions,
+					ExecutionDigest: "discovery-only",
+				}, nil)
+				if err != nil {
+					return releaseui.PipelineRunCandidate{}, err
+				}
+				candidate, err := service.ValidateCandidate(ctx, buildID)
+				if err != nil {
+					return releaseui.PipelineRunCandidate{}, err
+				}
+				return convertRunCandidate(candidate), nil
 			},
 		}))
 	}
@@ -170,4 +208,20 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return fmt.Errorf("shut down release UI: %w", err)
 	}
 	return nil
+}
+
+func convertRunCandidate(candidate goimagesrelease.Candidate) releaseui.PipelineRunCandidate {
+	return releaseui.PipelineRunCandidate{
+		BuildID:         candidate.BuildID,
+		Status:          candidate.Status,
+		Result:          candidate.Result,
+		State:           string(candidate.State),
+		URL:             candidate.URL,
+		QueueTime:       candidate.QueueTime,
+		SessionID:       candidate.SessionID,
+		VersionSet:      candidate.VersionSet,
+		ExecutionDigest: candidate.ExecutionDigest,
+		CreatedByUI:     candidate.CreatedByUI,
+		Parameters:      candidate.Parameters,
+	}
 }

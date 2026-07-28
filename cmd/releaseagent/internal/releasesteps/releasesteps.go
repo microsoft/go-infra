@@ -100,10 +100,12 @@ type DayState struct {
 	// ReleaseIssue is the ID of the release issue to supply with updates.
 	ReleaseIssue int
 
-	GoImagesCommit          string
-	GoImagesOfficialBuildID string
-	GoImagesReleaseBuildID  string
-	GoImagesReleaseComplete bool
+	GoImagesCommit            string
+	GoImagesOfficialBuildID   string
+	GoImagesReleaseBuildID    string
+	GoImagesReleaseComplete   bool
+	GoImagesReleaseImported   bool
+	GoImagesReleaseParameters map[string]string
 
 	AnnouncementWritten bool
 	MARVersionChecked   bool
@@ -342,6 +344,8 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 			}
 			return state.update(ctx, func(s *State) {
 				s.Day.GoImagesReleaseBuildID = buildID
+				s.Day.GoImagesReleaseImported = false
+				s.Day.GoImagesReleaseParameters = cloneStringMap(parameters)
 			})
 		},
 	)
@@ -373,6 +377,17 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 	}
 	wrapStepsWithStateFlush(steps, state, checkpoint)
 	return steps, rs, nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func initializeState(ri *Input, rs *State) (*State, error) {

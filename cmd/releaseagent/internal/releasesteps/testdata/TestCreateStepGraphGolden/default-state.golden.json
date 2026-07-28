@@ -6,6 +6,8 @@
     "GoImagesOfficialBuildID": "",
     "GoImagesReleaseBuildID": "",
     "GoImagesReleaseComplete": false,
+    "GoImagesReleaseImported": false,
+    "GoImagesReleaseParameters": null,
     "AnnouncementWritten": false,
     "MARVersionChecked": false
   },
