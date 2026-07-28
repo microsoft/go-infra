@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,7 +21,10 @@ type StepFunc func(ctx context.Context) error
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
 type Step struct {
-	// Name is the name of the step. It must be unique within the release step graph.
+	// ID is the stable, machine-readable identity of the step. It must be unique within the release
+	// step graph and must not change when display text changes.
+	ID string
+	// Name is the human-readable name of the step.
 	Name string
 	// Timeout defines the deadline that should be set up for the ctx passed to Func.
 	// If NoTimeout (zero), no deadline is set.
@@ -34,8 +38,9 @@ type Step struct {
 }
 
 // NewRootStep creates a new step with the given name, implementation, and no dependencies.
-func NewRootStep(name string, timeout time.Duration, f StepFunc) *Step {
+func NewRootStep(id, name string, timeout time.Duration, f StepFunc) *Step {
 	return &Step{
+		ID:      id,
 		Name:    name,
 		Timeout: timeout,
 		Func:    f,
@@ -47,11 +52,12 @@ func NewRootStep(name string, timeout time.Duration, f StepFunc) *Step {
 //
 // If there are no dependencies, use NewRootStep instead. These funcs are separate to prevent
 // accidentally creating a root step by omitting dependencies.
-func NewStep(name string, timeout time.Duration, f StepFunc, dependsOn ...*Step) *Step {
+func NewStep(id, name string, timeout time.Duration, f StepFunc, dependsOn ...*Step) *Step {
 	if len(dependsOn) < 1 {
 		panic("at least one dependency required to create " + name)
 	}
 	return &Step{
+		ID:        id,
 		Name:      name,
 		Timeout:   timeout,
 		Func:      f,
@@ -62,8 +68,9 @@ func NewStep(name string, timeout time.Duration, f StepFunc, dependsOn ...*Step)
 // NewIndicatorStep creates a new step with the given name and no implementation. An indicator step
 // generally helps a release runner understand the step graph more easily by indicating what it
 // means for a set of steps to complete, and clarify what other steps take a dependency on.
-func NewIndicatorStep(name string, dependsOnAdditional ...*Step) *Step {
+func NewIndicatorStep(id, name string, dependsOnAdditional ...*Step) *Step {
 	return NewStep(
+		id,
 		name,
 		NoTimeout,
 		func(context.Context) error { return nil },
@@ -73,13 +80,111 @@ func NewIndicatorStep(name string, dependsOnAdditional ...*Step) *Step {
 
 // Then creates a new step that depends on s and returns the new step. This can be used when
 // defining a step graph to chain a sequence of steps together without as much syntactic clutter.
-func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdditional ...*Step) *Step {
+func (s *Step) Then(id, name string, timeout time.Duration, f StepFunc, dependsOnAdditional ...*Step) *Step {
 	return &Step{
+		ID:        id,
 		Name:      name,
 		Timeout:   timeout,
 		Func:      f,
 		DependsOn: append(dependsOnAdditional, s),
 	}
+}
+
+// ValidateSteps checks that steps form a complete, executable directed acyclic graph.
+func ValidateSteps(steps []*Step) error {
+	if len(steps) == 0 {
+		return errors.New("step graph is empty")
+	}
+
+	stepSet := make(map[*Step]struct{}, len(steps))
+	ids := make(map[string]*Step, len(steps))
+	for i, step := range steps {
+		if step == nil {
+			return fmt.Errorf("step at index %d is nil", i)
+		}
+		if _, ok := stepSet[step]; ok {
+			return fmt.Errorf("step %q (%q) appears more than once", step.ID, step.Name)
+		}
+		stepSet[step] = struct{}{}
+		if step.ID == "" {
+			return fmt.Errorf("step %q has an empty ID", step.Name)
+		}
+		if existing, ok := ids[step.ID]; ok {
+			return fmt.Errorf("steps %q and %q use duplicate ID %q", existing.Name, step.Name, step.ID)
+		}
+		ids[step.ID] = step
+		if step.Name == "" {
+			return fmt.Errorf("step %q has an empty name", step.ID)
+		}
+		if step.Func == nil {
+			return fmt.Errorf("step %q (%q) has no implementation", step.ID, step.Name)
+		}
+	}
+
+	for _, step := range steps {
+		dependencies := make(map[*Step]struct{}, len(step.DependsOn))
+		for i, dependency := range step.DependsOn {
+			if dependency == nil {
+				return fmt.Errorf("step %q has a nil dependency at index %d", step.ID, i)
+			}
+			if _, ok := stepSet[dependency]; !ok {
+				return fmt.Errorf("step %q depends on unknown step %q", step.ID, dependency.ID)
+			}
+			if _, ok := dependencies[dependency]; ok {
+				return fmt.Errorf("step %q depends on step %q more than once", step.ID, dependency.ID)
+			}
+			dependencies[dependency] = struct{}{}
+		}
+	}
+
+	type visitState int
+	const (
+		unvisited visitState = iota
+		visiting
+		visited
+	)
+	visits := make(map[*Step]visitState, len(steps))
+	var path []*Step
+	var visit func(*Step) error
+	visit = func(step *Step) error {
+		switch visits[step] {
+		case visiting:
+			cycleStart := 0
+			for i, candidate := range path {
+				if candidate == step {
+					cycleStart = i
+					break
+				}
+			}
+			cycle := append(append([]*Step(nil), path[cycleStart:]...), step)
+			ids := make([]string, len(cycle))
+			for i, cycleStep := range cycle {
+				ids[i] = cycleStep.ID
+			}
+			return fmt.Errorf("encountered cycle: %s", strings.Join(ids, " <- "))
+		case visited:
+			return nil
+		}
+
+		visits[step] = visiting
+		path = append(path, step)
+		for _, dependency := range step.DependsOn {
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		visits[step] = visited
+		return nil
+	}
+	for _, step := range steps {
+		if visits[step] == unvisited {
+			if err := visit(step); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // TransitiveDependencies returns all the steps s transitively depends on. Returns an error if a
@@ -93,6 +198,10 @@ func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdd
 //
 // The result is reproducible for a given slice of steps and their dependency slices.
 func (s *Step) TransitiveDependencies() ([]*Step, error) {
+	if s == nil {
+		return nil, errors.New("cannot traverse dependencies of a nil step")
+	}
+
 	type visitState int
 	v := make(map[*Step]visitState)
 	const (
@@ -111,6 +220,9 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 	// If there is no cycle, returns nil. If there is a cycle, returns the step names in the cycle.
 	var visit func(s *Step) []string
 	visit = func(s *Step) []string {
+		if s == nil {
+			return []string{"<nil>"}
+		}
 		switch v[s] {
 		case visiting:
 			// Cycle.
@@ -138,6 +250,9 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 	}
 	if cycle := visit(s); cycle != nil {
 		return nil, fmt.Errorf("encountered cycle: %v", strings.Join(cycle, " <- "))
+	}
+	if err := ValidateSteps(sortedSteps); err != nil {
+		return nil, err
 	}
 	return sortedSteps, nil
 }

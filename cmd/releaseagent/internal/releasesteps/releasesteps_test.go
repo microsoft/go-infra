@@ -6,6 +6,7 @@ package releasesteps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
@@ -24,11 +25,147 @@ var exampleInput = &Input{
 	TargetGoImagesRepo:     "microsoft/go-images",
 	TargetAzDOGoImagesRepo: "dnceng/internal/_git/microsoft-go-images",
 
-	MicrosoftGoPipeline:          20,
-	MicrosoftGoInnerloopPipeline: 30,
-	MicrosoftGoImagesPipeline:    40,
-	MicrosoftGoAkaMSPipeline:     50,
-	AzureLinuxCreatePRPipeline:   60,
+	MicrosoftGoPipeline:              20,
+	MicrosoftGoInnerloopPipeline:     30,
+	MicrosoftGoImagesPipeline:        40,
+	MicrosoftGoImagesReleasePipeline: 1151,
+	MicrosoftGoAkaMSPipeline:         50,
+	AzureLinuxCreatePRPipeline:       60,
+}
+
+func TestGoImagesReleasePipelineParameters(t *testing.T) {
+	parameters, err := GoImagesReleasePipelineParameters(exampleInput, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"releaseVersions":                  `["1.22.10-1","1.23.4-1"]`,
+		"releaseIssue":                     "42",
+		"isSecurityRelease":                "false",
+		"approveAheadOfTime":               "false",
+		"runGoImagesBuild":                 "true",
+		"runPublishAnnouncement":           "false",
+		"runUpdateDL":                      "false",
+		"runGoImageVersionCheck":           "true",
+		"poll1MicrosoftGoImagesCommitHash": "nil",
+		"poll2MicrosoftGoImagesBuildID":    "nil",
+		"notify":                           "ghost",
+		"goReleaseConfigVariableGroup":     "go-release-variables",
+	}
+	if actual, expected := mustJSON(t, parameters), mustJSON(t, want); actual != expected {
+		t.Fatalf("parameters mismatch\nactual: %s\nwant:   %s", actual, expected)
+	}
+}
+
+func TestRunFakeGoImagesReleasePipeline(t *testing.T) {
+	input := *exampleInput
+	input.ReleaseIssue = 42
+	var queued bool
+	var polled bool
+	sb := &ServiceBundleMock{
+		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
+			queued = true
+			if pipelineID != 1151 {
+				t.Fatalf("pipeline ID = %d, want 1151", pipelineID)
+			}
+			if parameters["runPublishAnnouncement"] != "false" || parameters["runUpdateDL"] != "false" {
+				t.Fatalf("unexpected side-effect parameters: %#v", parameters)
+			}
+			if optionalParameters != nil {
+				t.Fatalf("optional parameters = %#v, want nil", optionalParameters)
+			}
+			return "build-123", nil
+		},
+		PollPipelineCompleteFunc: func(_ context.Context, buildID string, _ *Secret) error {
+			polled = true
+			if buildID != "build-123" {
+				t.Fatalf("build ID = %q, want build-123", buildID)
+			}
+			return nil
+		},
+	}
+	var checkpoints []State
+	steps, state, err := CreateGoImagesReleasePipelineGraphWithCheckpoint(
+		&input,
+		exampleSecret,
+		nil,
+		sb,
+		func(_ context.Context, state *State) error {
+			data, err := json.Marshal(state)
+			if err != nil {
+				return err
+			}
+			var clone State
+			if err := json.Unmarshal(data, &clone); err != nil {
+				return err
+			}
+			checkpoints = append(checkpoints, clone)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 3 {
+		t.Fatalf("step count = %d, want 3", len(steps))
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+	if !queued || !polled {
+		t.Fatalf("queued = %v, polled = %v; want both true", queued, polled)
+	}
+	if state.Day.GoImagesReleaseBuildID != "build-123" || !state.Day.GoImagesReleaseComplete {
+		t.Fatalf("unexpected final state: %#v", state.Day)
+	}
+	if len(checkpoints) != 2 {
+		t.Fatalf("checkpoint count = %d, want 2", len(checkpoints))
+	}
+	if checkpoints[0].Day.GoImagesReleaseBuildID != "build-123" || checkpoints[0].Day.GoImagesReleaseComplete {
+		t.Fatalf("unexpected queue checkpoint: %#v", checkpoints[0].Day)
+	}
+}
+
+func TestGoImagesReleasePipelineResume(t *testing.T) {
+	input := *exampleInput
+	state, err := initializeState(&input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Day.GoImagesReleaseBuildID = "existing-build"
+	sb := &ServiceBundleMock{
+		TriggerBuildPipelineFunc: func(context.Context, int, map[string]string, map[string]string, *Secret) (string, error) {
+			t.Fatal("pipeline was queued again")
+			return "", nil
+		},
+		PollPipelineCompleteFunc: func(_ context.Context, buildID string, _ *Secret) error {
+			if buildID != "existing-build" {
+				t.Fatalf("build ID = %q, want existing-build", buildID)
+			}
+			return nil
+		},
+	}
+	steps, state, err := CreateGoImagesReleasePipelineGraph(&input, exampleSecret, state, sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Day.GoImagesReleaseComplete {
+		t.Fatal("restored pipeline was not marked complete")
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 var exampleSecret = &Secret{
@@ -124,7 +261,20 @@ func TestRunFakeRelease(t *testing.T) {
 		},
 	}
 
-	steps, state, err := CreateStepGraph(exampleInput, exampleSecret, nil, sb)
+	var checkpoints []State
+	checkpoint := func(ctx context.Context, state *State) error {
+		data, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		var clone State
+		if err := json.Unmarshal(data, &clone); err != nil {
+			return err
+		}
+		checkpoints = append(checkpoints, clone)
+		return nil
+	}
+	steps, state, err := CreateStepGraphWithCheckpoint(exampleInput, exampleSecret, nil, sb, checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +293,22 @@ func TestRunFakeRelease(t *testing.T) {
 			t.Errorf("expected version 1.22.10-1, got %s", sb.CreateReleaseDayTrackingIssueCalls()[0].Versions[0])
 		}
 	}
+	for _, call := range sb.CreateDockerImagesPRCalls() {
+		if call.Repo != exampleInput.TargetGoImagesRepo {
+			t.Errorf("CreateDockerImagesPR repo = %q, want %q", call.Repo, exampleInput.TargetGoImagesRepo)
+		}
+	}
+	for _, call := range sb.PollMergedGitHubPRCommitCalls() {
+		if call.Pr == 50 && call.Repo != exampleInput.TargetGoImagesRepo {
+			t.Errorf("image PR merge poll repo = %q, want %q", call.Repo, exampleInput.TargetGoImagesRepo)
+		}
+	}
+	if len(checkpoints) == 0 {
+		t.Fatal("release completed without recording any state checkpoints")
+	}
+	if checkpoints[0].Day.ReleaseIssue != releaseIssueNumber {
+		t.Fatalf("first checkpoint release issue = %d, want %d", checkpoints[0].Day.ReleaseIssue, releaseIssueNumber)
+	}
 
 	// Verify all release state as a golden file. It's intended to be human-readable.
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
@@ -150,4 +316,69 @@ func TestRunFakeRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	goldentest.Check(t, "fake-complete-release-state.golden.json", string(stateJSON))
+	lastCheckpointJSON, err := json.MarshalIndent(checkpoints[len(checkpoints)-1], "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(lastCheckpointJSON) != string(stateJSON) {
+		t.Fatalf("last checkpoint does not match final release state\ncheckpoint:\n%s\nfinal:\n%s", lastCheckpointJSON, stateJSON)
+	}
+}
+
+func TestCheckpointFailureStopsRelease(t *testing.T) {
+	checkpointErr := errors.New("checkpoint unavailable")
+	sb := &ServiceBundleMock{
+		CreateReleaseDayTrackingIssueFunc: func(context.Context, string, string, []string, *Secret) (int, error) {
+			return 42, nil
+		},
+	}
+	steps, state, err := CreateStepGraphWithCheckpoint(
+		&Input{Versions: []string{"1.26.1-1"}},
+		&Secret{},
+		nil,
+		sb,
+		func(context.Context, *State) error { return checkpointErr },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); !errors.Is(err, checkpointErr) {
+		t.Fatalf("Execute error = %v, want checkpoint error", err)
+	}
+	if state.Day.ReleaseIssue != 42 {
+		t.Fatalf("in-memory release issue = %d, want 42", state.Day.ReleaseIssue)
+	}
+}
+
+func TestStateAccessRetriesDirtyCheckpoint(t *testing.T) {
+	checkpointErr := errors.New("checkpoint unavailable")
+	fail := true
+	checkpointCalls := 0
+	state := &State{}
+	access := &stateAccess{
+		state: state,
+		checkpoint: func(context.Context, *State) error {
+			checkpointCalls++
+			if fail {
+				return checkpointErr
+			}
+			return nil
+		},
+	}
+	if err := access.update(context.Background(), func(state *State) {
+		state.Day.ReleaseIssue = 42
+	}); !errors.Is(err, checkpointErr) {
+		t.Fatalf("update error = %v, want checkpoint error", err)
+	}
+	fail = false
+	if err := access.flush(context.Background()); err != nil {
+		t.Fatalf("flush failed: %v", err)
+	}
+	if checkpointCalls != 2 {
+		t.Fatalf("checkpoint calls = %d, want 2", checkpointCalls)
+	}
+	if state.Day.ReleaseIssue != 42 {
+		t.Fatalf("release issue = %d, want 42", state.Day.ReleaseIssue)
+	}
 }

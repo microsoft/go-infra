@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
@@ -33,6 +35,10 @@ type Input struct {
 	// GitHub has reserved as a placeholder.
 	RunnerGitHubUser string
 
+	// ReleaseIssue is an existing microsoft/go tracking issue to update, or zero for none. The
+	// focused go-images flow does not create this issue itself.
+	ReleaseIssue int
+
 	// ReleaseConfigVariableGroup is the name of the AzDO variable group containing the release
 	// configuration, mainly secrets. This is passed to child pipelines that need access.
 	ReleaseConfigVariableGroup string
@@ -44,11 +50,12 @@ type Input struct {
 	TargetGoImagesRepo     string
 	TargetAzDOGoImagesRepo string
 
-	MicrosoftGoPipeline          int
-	MicrosoftGoInnerloopPipeline int
-	MicrosoftGoImagesPipeline    int
-	MicrosoftGoAkaMSPipeline     int
-	AzureLinuxCreatePRPipeline   int
+	MicrosoftGoPipeline              int
+	MicrosoftGoInnerloopPipeline     int
+	MicrosoftGoImagesPipeline        int
+	MicrosoftGoImagesReleasePipeline int
+	MicrosoftGoAkaMSPipeline         int
+	AzureLinuxCreatePRPipeline       int
 }
 
 func (i *Input) checksum() (uint32, error) {
@@ -94,6 +101,8 @@ type DayState struct {
 
 	GoImagesCommit          string
 	GoImagesOfficialBuildID string
+	GoImagesReleaseBuildID  string
+	GoImagesReleaseComplete bool
 
 	AnnouncementWritten bool
 	MARVersionChecked   bool
@@ -143,6 +152,59 @@ type ServiceBundle interface {
 	CreateAnnouncementBlogFile(ctx context.Context, versions []string, user string, security bool, secret *Secret) error
 }
 
+// GoImagesReleaseService is the intentionally narrow external surface required by the first UI
+// integration. Implementing it cannot accidentally enable unrelated GitHub or publishing steps.
+type GoImagesReleaseService interface {
+	TriggerBuildPipeline(ctx context.Context, pipelineID int, parameters, optionalParameters map[string]string, secret *Secret) (string, error)
+	PollPipelineComplete(ctx context.Context, buildID string, secret *Secret) error
+}
+
+// StateCheckpoint durably records state. The state pointer is valid only for the duration of the
+// call and must not be retained or modified. It is called while release-state mutations are
+// serialized, so the implementation may safely encode the complete state.
+type StateCheckpoint func(ctx context.Context, state *State) error
+
+type stateAccess struct {
+	mu         sync.Mutex
+	state      *State
+	checkpoint StateCheckpoint
+	dirty      bool
+}
+
+func (a *stateAccess) update(ctx context.Context, update func(*State)) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	update(a.state)
+	if a.checkpoint == nil {
+		return nil
+	}
+	a.dirty = true
+	return a.flushLocked(ctx)
+}
+
+func (a *stateAccess) flush(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.flushLocked(ctx)
+}
+
+func (a *stateAccess) flushLocked(ctx context.Context) error {
+	if !a.dirty || a.checkpoint == nil {
+		return nil
+	}
+	if err := a.checkpoint(ctx, a.state); err != nil {
+		return err
+	}
+	a.dirty = false
+	return nil
+}
+
+func stateValue[T any](a *stateAccess, value func(*State) T) T {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return value(a.state)
+}
+
 // Common timeout values. The goal is for each timeout to be low enough to improve response time
 // when manual intervention is necessary, but high enough that they don't trip on transient issues.
 const (
@@ -172,7 +234,179 @@ const (
 
 	microsoftGoImagesPRCITimeout       = 2 * time.Hour
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
+	goImagesReleasePipelineTimeout     = 26 * time.Hour
 )
+
+// GoImagesReleasePipelineParameters returns the complete parameter set for the existing
+// microsoft-go-infra-release-go-images pipeline. This first integration is intentionally limited
+// to image build/publish and image version verification; announcement and DL updates are disabled.
+func GoImagesReleasePipelineParameters(ri *Input, releaseIssue int) (map[string]string, error) {
+	if ri == nil || len(ri.Versions) == 0 {
+		return nil, fmt.Errorf("no versions to release")
+	}
+	if ri.ReleaseConfigVariableGroup == "" {
+		return nil, fmt.Errorf("no release configuration variable group specified")
+	}
+	if ri.RunnerGitHubUser == "" {
+		return nil, fmt.Errorf("no release runner specified")
+	}
+	versions, err := json.Marshal(ri.Versions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal go-images release versions: %w", err)
+	}
+	releaseIssueValue := "nil"
+	if releaseIssue != 0 {
+		releaseIssueValue = strconv.Itoa(releaseIssue)
+	}
+	return map[string]string{
+		"releaseVersions":                  string(versions),
+		"releaseIssue":                     releaseIssueValue,
+		"isSecurityRelease":                strconv.FormatBool(ri.Security),
+		"approveAheadOfTime":               "false",
+		"runGoImagesBuild":                 "true",
+		"runPublishAnnouncement":           "false",
+		"runUpdateDL":                      "false",
+		"runGoImageVersionCheck":           "true",
+		"poll1MicrosoftGoImagesCommitHash": "nil",
+		"poll2MicrosoftGoImagesBuildID":    "nil",
+		"notify":                           ri.RunnerGitHubUser,
+		"goReleaseConfigVariableGroup":     ri.ReleaseConfigVariableGroup,
+	}, nil
+}
+
+// CreateGoImagesReleasePipelineGraph creates the initial focused workflow that queues and monitors
+// the existing microsoft-go-infra-release-go-images pipeline as one coarse-grained operation.
+func CreateGoImagesReleasePipelineGraph(
+	ri *Input,
+	secret *Secret,
+	rs *State,
+	sb GoImagesReleaseService,
+) ([]*coordinator.Step, *State, error) {
+	return CreateGoImagesReleasePipelineGraphWithCheckpoint(ri, secret, rs, sb, nil)
+}
+
+// CreateGoImagesReleasePipelineGraphWithCheckpoint is like CreateGoImagesReleasePipelineGraph and
+// durably records the queued pipeline ID and successful completion.
+func CreateGoImagesReleasePipelineGraphWithCheckpoint(
+	ri *Input,
+	secret *Secret,
+	rs *State,
+	sb GoImagesReleaseService,
+	checkpoint StateCheckpoint,
+) ([]*coordinator.Step, *State, error) {
+	if ri == nil || ri.MicrosoftGoImagesReleasePipeline == 0 {
+		return nil, nil, fmt.Errorf("no go-images release pipeline specified")
+	}
+	var err error
+	rs, err = initializeState(ri, rs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rs.Day.ReleaseIssue == 0 {
+		rs.Day.ReleaseIssue = ri.ReleaseIssue
+	}
+	state := &stateAccess{state: rs, checkpoint: checkpoint}
+	releaseIssue := stateValue(state, func(s *State) int { return s.Day.ReleaseIssue })
+	parameters, err := GoImagesReleasePipelineParameters(ri, releaseIssue)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	queue := coordinator.NewRootStep(
+		"go-images.release-pipeline.queue",
+		"🚀 Queue go-images release pipeline",
+		shortTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
+				return nil
+			}
+			buildID, err := sb.TriggerBuildPipeline(
+				ctx,
+				ri.MicrosoftGoImagesReleasePipeline,
+				parameters,
+				nil,
+				secret,
+			)
+			if err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesReleaseBuildID = buildID
+			})
+		},
+	)
+	wait := queue.Then(
+		"go-images.release-pipeline.wait",
+		"⌚ Wait for go-images release pipeline",
+		goImagesReleasePipelineTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseComplete }) {
+				return nil
+			}
+			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID })
+			if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesReleaseComplete = true
+			})
+		},
+	)
+	complete := coordinator.NewIndicatorStep(
+		"go-images.release-pipeline.complete",
+		"✅ Go-images release pipeline complete",
+		wait,
+	)
+	steps, err := complete.TransitiveDependencies()
+	if err != nil {
+		return nil, nil, err
+	}
+	wrapStepsWithStateFlush(steps, state, checkpoint)
+	return steps, rs, nil
+}
+
+func initializeState(ri *Input, rs *State) (*State, error) {
+	if ri == nil || len(ri.Versions) == 0 {
+		return nil, fmt.Errorf("no versions to release")
+	}
+	riChecksum, err := ri.checksum()
+	if err != nil {
+		return nil, fmt.Errorf("failed to checksum release input: %v", err)
+	}
+	if rs == nil {
+		rs = &State{InputChecksum: riChecksum}
+	} else if riChecksum != rs.InputChecksum {
+		return nil, fmt.Errorf(
+			"release input doesn't match initial input: expected checksum %v (from state), got %v (by calculation)",
+			rs.InputChecksum,
+			riChecksum,
+		)
+	}
+	if rs.Versions == nil {
+		rs.Versions = make(map[string]*VersionState)
+	}
+	for _, version := range ri.Versions {
+		if _, ok := rs.Versions[version]; !ok {
+			rs.Versions[version] = &VersionState{}
+		}
+	}
+	return rs, nil
+}
+
+func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, checkpoint StateCheckpoint) {
+	if checkpoint == nil {
+		return
+	}
+	for _, step := range steps {
+		run := step.Func
+		step.Func = func(ctx context.Context) error {
+			if err := state.flush(ctx); err != nil {
+				return fmt.Errorf("flush pending release state before step: %w", err)
+			}
+			return run(ctx)
+		}
+	}
+}
 
 // CreateStepGraph creates the steps for a release of one or more versions of Microsoft build of Go. The
 // returned step graph is not running.
@@ -188,50 +422,41 @@ const (
 // between steps through the State and synchronizing). All work involving external resources should
 // be done by calling methods on the ServiceBundle.
 func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]*coordinator.Step, *State, error) {
-	if ri == nil || len(ri.Versions) == 0 {
-		return nil, nil, fmt.Errorf("no versions to release")
-	}
+	return CreateStepGraphWithCheckpoint(ri, secret, rs, sb, nil)
+}
 
-	// Don't use simple "err" variable name here to avoid having "err" in scope during step
-	// creation. It is easy to accidentally capture it while writing new steps, and that results in
-	// a data race.
-	riChecksum, checksumErr := ri.checksum()
-	if checksumErr != nil {
-		return nil, nil, fmt.Errorf("failed to checksum release input: %v", checksumErr)
+// CreateStepGraphWithCheckpoint is like CreateStepGraph, and also records State after every
+// meaningful mutation. External service calls are never made while the State lock is held.
+func CreateStepGraphWithCheckpoint(
+	ri *Input,
+	secret *Secret,
+	rs *State,
+	sb ServiceBundle,
+	checkpoint StateCheckpoint,
+) ([]*coordinator.Step, *State, error) {
+	var initializeErr error
+	rs, initializeErr = initializeState(ri, rs)
+	if initializeErr != nil {
+		return nil, nil, initializeErr
 	}
-
-	// Either create a new state or validate the existing one's checksum.
-	if rs == nil {
-		rs = &State{
-			InputChecksum: riChecksum,
-		}
-	} else if riChecksum != rs.InputChecksum {
-		return nil, nil, fmt.Errorf(
-			"release input doesn't match initial input: expected checksum %v (from state), got %v (by calculation)",
-			rs.InputChecksum, riChecksum)
-	}
-
-	// Ensure state is initialized.
-	if rs.Versions == nil {
-		rs.Versions = make(map[string]*VersionState)
-	}
-	for _, version := range ri.Versions {
-		if _, ok := rs.Versions[version]; !ok {
-			rs.Versions[version] = &VersionState{}
-		}
-	}
+	state := &stateAccess{state: rs, checkpoint: checkpoint}
 
 	createStatusReportIssue := coordinator.NewRootStep(
+		"release-day.issue",
 		"Create release day issue",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if rs.Day.ReleaseIssue != 0 {
+			if stateValue(state, func(s *State) int { return s.Day.ReleaseIssue }) != 0 {
 				return nil
 			}
-			var err error
-			rs.Day.ReleaseIssue, err = sb.CreateReleaseDayTrackingIssue(
+			issue, err := sb.CreateReleaseDayTrackingIssue(
 				ctx, ri.TargetRepo, ri.RunnerGitHubUser, ri.Versions, secret)
-			return err
+			if err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.ReleaseIssue = issue
+			})
 		},
 	)
 
@@ -239,94 +464,130 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 	var versionSpecificPublishSteps []*coordinator.Step
 
 	for _, version := range ri.Versions {
-		vs := rs.Versions[version]
+		id := func(id string) string {
+			return fmt.Sprintf("version.%s.%s", version, id)
+		}
 		name := func(n string) string {
 			return fmt.Sprintf("%s, %s", n, version)
 		}
 
 		syncUpdate := coordinator.NewStep(
+			id("upstream-commit"),
 			name("⌚ Get upstream commit for release"),
 			noTimeout,
 			func(ctx context.Context) error {
-				if vs.UpstreamCommit != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].UpstreamCommit }) != "" {
 					return nil
 				}
-				var err error
-				vs.UpstreamCommit, err = sb.PollUpstreamTagCommit(ctx, version)
-				return err
+				commit, err := sb.PollUpstreamTagCommit(ctx, version)
+				if err != nil {
+					return err
+				}
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].UpstreamCommit = commit
+				})
 			},
 			createStatusReportIssue,
 		).Then(
+			id("sync-pr"),
 			name("Create sync PR"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.UpdatePR != 0 {
+				if stateValue(state, func(s *State) int { return s.Versions[version].UpdatePR }) != 0 {
 					return nil
 				}
-				var err error
-				vs.UpdatePR, err = sb.CreateGitHubSyncPR(ctx, ri.TargetRepo, vs.UpstreamCommit, secret)
-				return err
+				upstreamCommit := stateValue(state, func(s *State) string { return s.Versions[version].UpstreamCommit })
+				pr, err := sb.CreateGitHubSyncPR(ctx, ri.TargetRepo, upstreamCommit, secret)
+				if err != nil {
+					return err
+				}
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].UpdatePR = pr
+				})
 			},
 		).Then(
+			id("sync-pr-merge"),
 			name("⌚ Wait for PR merge"),
 			microsoftGoPRCITimeout,
 			func(ctx context.Context) error {
-				if vs.Commit != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].Commit }) != "" {
 					return nil
 				}
-				var err error
-				vs.Commit, err = sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, vs.UpdatePR, secret)
-				return err
+				pr := stateValue(state, func(s *State) int { return s.Versions[version].UpdatePR })
+				commit, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, pr, secret)
+				if err != nil {
+					return err
+				}
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].Commit = commit
+				})
 			},
 		).Then(
+			id("azdo-sync"),
 			name("⌚ Wait for AzDO sync"),
 			internalMirrorTimeout,
 			func(ctx context.Context) error {
-				return sb.PollAzDOMirror(ctx, ri.TargetAzDORepo, vs.Commit, secret)
+				commit := stateValue(state, func(s *State) string { return s.Versions[version].Commit })
+				return sb.PollAzDOMirror(ctx, ri.TargetAzDORepo, commit, secret)
 			},
 		)
 
 		officialBuild := coordinator.NewStep(
+			id("official-build-trigger"),
 			name("🚀 Trigger official build"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.OfficialBuildID != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID }) != "" {
 					return nil
 				}
-				var err error
-				vs.OfficialBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoPipeline, nil, nil, secret)
-				return err
+				buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoPipeline, nil, nil, secret)
+				if err != nil {
+					return err
+				}
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].OfficialBuildID = buildID
+				})
 			},
 			syncUpdate,
 		).Then(
+			id("official-build-wait"),
 			name("⌚ Wait for official build"),
 			microsoftGoOfficialCITimeout,
 			func(ctx context.Context) error {
-				return sb.PollPipelineComplete(ctx, vs.OfficialBuildID, secret)
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
+				return sb.PollPipelineComplete(ctx, buildID, secret)
 			},
 		)
 
 		testOfficialBuildCommit := coordinator.NewStep(
+			id("innerloop-build-trigger"),
 			name("🚀 Trigger innerloop build"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.InnerloopBuildID != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].InnerloopBuildID }) != "" {
 					return nil
 				}
-				var err error
-				vs.InnerloopBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoInnerloopPipeline, nil, nil, secret)
-				return err
+				buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoInnerloopPipeline, nil, nil, secret)
+				if err != nil {
+					return err
+				}
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].InnerloopBuildID = buildID
+				})
 			},
 			syncUpdate,
 		).Then(
+			id("innerloop-build-wait"),
 			name("⌚ Wait for innerloop build"),
 			microsoftGoInnerloopCITimeout,
 			func(ctx context.Context) error {
-				return sb.PollPipelineComplete(ctx, vs.InnerloopBuildID, secret)
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].InnerloopBuildID })
+				return sb.PollPipelineComplete(ctx, buildID, secret)
 			},
 		)
 
 		readyForPublish := coordinator.NewIndicatorStep(
+			id("artifacts-ready"),
 			name("✅ Artifacts ok to publish"),
 			officialBuild,
 			testOfficialBuildCommit,
@@ -344,12 +605,14 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		downloadAssetMetadata := coordinator.NewStep(
+			id("asset-metadata-download"),
 			name("Download asset metadata"),
 			shortTimeout,
 			func(ctx context.Context) error {
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
 				dir, err := sb.DownloadPipelineArtifactToDir(
 					ctx,
-					vs.OfficialBuildID,
+					buildID,
 					"BuildAssets",
 					secret,
 				)
@@ -363,13 +626,15 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		downloadArtifacts := coordinator.NewStep(
+			id("artifacts-download"),
 			name("Download artifacts"),
 			shortTimeout,
 			func(ctx context.Context) error {
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
 				var err error
 				artifactsDir, err = sb.DownloadPipelineArtifactToDir(
 					ctx,
-					vs.OfficialBuildID,
+					buildID,
 					"Binaries Signed",
 					secret,
 				)
@@ -379,54 +644,69 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		githubPublish := coordinator.NewStep(
+			id("github-tag"),
 			name("🎓 Create GitHub tag"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.GitHubTag != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].GitHubTag }) != "" {
 					return nil
 				}
 				tag := fmt.Sprintf("v%s", version)
-				err := sb.CreateGitHubTag(ctx, version, ri.TargetRepo, tag, vs.Commit, secret)
+				commit := stateValue(state, func(s *State) string { return s.Versions[version].Commit })
+				err := sb.CreateGitHubTag(ctx, version, ri.TargetRepo, tag, commit, secret)
 				if err != nil {
 					return err
 				}
-				vs.GitHubTag = tag
-				return nil
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].GitHubTag = tag
+				})
 			},
 			readyForPublish,
 		).Then(
+			id("github-release"),
 			name("🎓 Create GitHub release"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.GitHubRelease != "" {
+				if stateValue(state, func(s *State) string { return s.Versions[version].GitHubRelease }) != "" {
 					return nil
 				}
-				err := sb.CreateGitHubRelease(ctx, ri.TargetRepo, vs.GitHubTag, assetJSONPath, artifactsDir, secret)
+				tag := stateValue(state, func(s *State) string { return s.Versions[version].GitHubTag })
+				err := sb.CreateGitHubRelease(ctx, ri.TargetRepo, tag, assetJSONPath, artifactsDir, secret)
 				if err != nil {
 					return err
 				}
-				vs.GitHubRelease = vs.GitHubTag
-				return nil
+				return state.update(ctx, func(s *State) {
+					s.Versions[version].GitHubRelease = tag
+				})
 			},
 			downloadAssetMetadata, downloadArtifacts,
 		)
 
 		akaMSPublish := coordinator.NewStep(
+			id("akams-update"),
 			name("🎓 Update aka.ms links"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.AkaMSBuildID == "" {
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].AkaMSBuildID })
+				if buildID == "" {
 					var err error
-					vs.AkaMSBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoAkaMSPipeline, nil, nil, secret)
+					buildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoAkaMSPipeline, nil, nil, secret)
 					if err != nil {
 						return err
 					}
-				}
-				if !vs.AkaMSUpdated {
-					if err := sb.PollPipelineComplete(ctx, vs.AkaMSBuildID, secret); err != nil {
+					if err := state.update(ctx, func(s *State) {
+						s.Versions[version].AkaMSBuildID = buildID
+					}); err != nil {
 						return err
 					}
-					vs.AkaMSUpdated = true
+				}
+				if !stateValue(state, func(s *State) bool { return s.Versions[version].AkaMSUpdated }) {
+					if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+						return err
+					}
+					return state.update(ctx, func(s *State) {
+						s.Versions[version].AkaMSUpdated = true
+					})
 				}
 				return nil
 			},
@@ -434,31 +714,40 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		dockerfilePublish := coordinator.NewStep(
+			id("dockerfiles-update"),
 			name("Update Dockerfiles"),
 			// Set timeout to expect one CI run per version. This accounts for the worst case: each
 			// version contributes a Dockerfile update to the shared PR just before CI finishes.
 			microsoftGoImagesPRCITimeout*time.Duration(len(ri.Versions)),
 			func(ctx context.Context) error {
-				if vs.ImageUpdatePR == 0 {
+				imageUpdatePR := stateValue(state, func(s *State) int { return s.Versions[version].ImageUpdatePR })
+				if imageUpdatePR == 0 {
 					var err error
-					vs.ImageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetRepo, assetJSONPath, "", secret)
+					imageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetGoImagesRepo, assetJSONPath, "", secret)
 					if err != nil {
+						return err
+					}
+					if err := state.update(ctx, func(s *State) {
+						s.Versions[version].ImageUpdatePR = imageUpdatePR
+					}); err != nil {
 						return err
 					}
 				}
-				if !vs.ImagesUpdated {
-					var err error
-					_, err = sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, vs.ImageUpdatePR, secret)
+				if !stateValue(state, func(s *State) bool { return s.Versions[version].ImagesUpdated }) {
+					_, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetGoImagesRepo, imageUpdatePR, secret)
 					if err != nil {
 						return err
 					}
-					vs.ImagesUpdated = true
+					return state.update(ctx, func(s *State) {
+						s.Versions[version].ImagesUpdated = true
+					})
 				}
 				return nil
 			},
 			readyForPublish, downloadAssetMetadata,
 		)
 		versionCompleteSteps = append(versionCompleteSteps, coordinator.NewIndicatorStep(
+			id("microsoft-go-publish-complete"),
 			name("✅ microsoft/go publish and go-images PR complete"),
 			githubPublish,
 			akaMSPublish,
@@ -466,21 +755,30 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		))
 
 		azureLinuxPRPublish := coordinator.NewStep(
+			id("azure-linux-pr"),
 			name("🚀 Trigger Azure Linux PR creation"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if vs.AzureLinuxUpdateBuildID == "" {
+				buildID := stateValue(state, func(s *State) string { return s.Versions[version].AzureLinuxUpdateBuildID })
+				if buildID == "" {
 					var err error
-					vs.AzureLinuxUpdateBuildID, err = sb.TriggerBuildPipeline(ctx, ri.AzureLinuxCreatePRPipeline, nil, nil, secret)
+					buildID, err = sb.TriggerBuildPipeline(ctx, ri.AzureLinuxCreatePRPipeline, nil, nil, secret)
 					if err != nil {
 						return err
 					}
-				}
-				if !vs.AzureLinuxPRSubmitted {
-					if err := sb.PollPipelineComplete(ctx, vs.AzureLinuxUpdateBuildID, secret); err != nil {
+					if err := state.update(ctx, func(s *State) {
+						s.Versions[version].AzureLinuxUpdateBuildID = buildID
+					}); err != nil {
 						return err
 					}
-					vs.AzureLinuxPRSubmitted = true
+				}
+				if !stateValue(state, func(s *State) bool { return s.Versions[version].AzureLinuxPRSubmitted }) {
+					if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+						return err
+					}
+					return state.update(ctx, func(s *State) {
+						s.Versions[version].AzureLinuxPRSubmitted = true
+					})
 				}
 				// Note: we don't keep track of the PR inside this process because it may take
 				// an arbitrary time to get approval to merge.
@@ -490,81 +788,102 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		versionSpecificPublishSteps = append(versionSpecificPublishSteps, coordinator.NewIndicatorStep(
+			id("external-publish-complete"),
 			name("✅ External publish complete"),
 			azureLinuxPRPublish,
 		))
 	}
 
 	versionsComplete := coordinator.NewIndicatorStep(
+		"versions.publish-complete",
 		"✅ All microsoft/go publish and go-images PRs complete",
 		versionCompleteSteps...,
 	)
 
 	imagesReady := coordinator.NewStep(
+		"images.commit",
 		"Get go-images commit",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if rs.Day.GoImagesCommit == "" {
+			commit := stateValue(state, func(s *State) string { return s.Day.GoImagesCommit })
+			if commit == "" {
 				var err error
-				rs.Day.GoImagesCommit, err = sb.PollImagesCommit(ctx, ri.Versions, secret)
+				commit, err = sb.PollImagesCommit(ctx, ri.Versions, secret)
 				if err != nil {
 					return err
 				}
+				if err := state.update(ctx, func(s *State) {
+					s.Day.GoImagesCommit = commit
+				}); err != nil {
+					return err
+				}
 			}
-			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, rs.Day.GoImagesCommit, secret)
+			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, commit, secret)
 		},
 		versionsComplete,
 	).Then(
+		"images.build-trigger",
 		"🚀 Trigger go-image build/publish",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if rs.Day.GoImagesOfficialBuildID != "" {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesOfficialBuildID }) != "" {
 				return nil
 			}
-			var err error
-			rs.Day.GoImagesOfficialBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoImagesPipeline, nil, nil, secret)
-			return err
+			buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoImagesPipeline, nil, nil, secret)
+			if err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesOfficialBuildID = buildID
+			})
 		},
 	).Then(
+		"images.build-wait",
 		"⌚ Wait for go-image build/publish",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
-			return sb.PollPipelineComplete(ctx, rs.Day.GoImagesOfficialBuildID, secret)
+			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesOfficialBuildID })
+			return sb.PollPipelineComplete(ctx, buildID, secret)
 		},
 	).Then(
+		"images.version-check",
 		"🌊 Check published image version",
 		// This may need to be expanded to deal with MAR latency.
 		// Alternatively, the go-images build can wait: https://github.com/microsoft/go/issues/1258
 		shortTimeout,
 		func(ctx context.Context) error {
-			if rs.Day.MARVersionChecked {
+			if stateValue(state, func(s *State) bool { return s.Day.MARVersionChecked }) {
 				return nil
 			}
 			if err := sb.CheckLatestMARGoVersion(ctx, ri.Versions); err != nil {
 				return err
 			}
-			rs.Day.MARVersionChecked = true
-			return nil
+			return state.update(ctx, func(s *State) {
+				s.Day.MARVersionChecked = true
+			})
 		},
 	)
 
 	createBlog := coordinator.NewStep(
+		"announcement.create",
 		"📰 Create blog post markdown",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if rs.Day.AnnouncementWritten {
+			if stateValue(state, func(s *State) bool { return s.Day.AnnouncementWritten }) {
 				return nil
 			}
 			if err := sb.CreateAnnouncementBlogFile(ctx, ri.Versions, ri.RunnerGitHubUser, ri.Security, secret); err != nil {
 				return err
 			}
-			rs.Day.AnnouncementWritten = true
-			return nil
+			return state.update(ctx, func(s *State) {
+				s.Day.AnnouncementWritten = true
+			})
 		},
 		versionsComplete, imagesReady,
 	)
 
 	completeStep := coordinator.NewIndicatorStep(
+		"release.complete",
 		"✅ Complete",
 		append(
 			versionSpecificPublishSteps,
@@ -577,5 +896,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 	if err != nil {
 		return nil, nil, err
 	}
+	wrapStepsWithStateFlush(allSteps, state, checkpoint)
 	return allSteps, rs, nil
 }

@@ -1,9 +1,11 @@
 {
-  "InputChecksum": 3437148890,
+  "InputChecksum": 4141618848,
   "Day": {
     "ReleaseIssue": 42,
     "GoImagesCommit": "abcdef-images-with-versions",
     "GoImagesOfficialBuildID": "12345-running-pipeline",
+    "GoImagesReleaseBuildID": "",
+    "GoImagesReleaseComplete": false,
     "AnnouncementWritten": true,
     "MARVersionChecked": true
   },

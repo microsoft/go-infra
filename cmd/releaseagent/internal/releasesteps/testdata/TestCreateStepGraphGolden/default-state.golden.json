@@ -1,9 +1,11 @@
 {
-  "InputChecksum": 3437148890,
+  "InputChecksum": 4141618848,
   "Day": {
     "ReleaseIssue": 0,
     "GoImagesCommit": "",
     "GoImagesOfficialBuildID": "",
+    "GoImagesReleaseBuildID": "",
+    "GoImagesReleaseComplete": false,
     "AnnouncementWritten": false,
     "MARVersionChecked": false
   },
