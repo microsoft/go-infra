@@ -32,8 +32,8 @@
       <div class="safety-card">
         <span class="safety-icon" aria-hidden="true">✓</span>
         <div>
-          <strong>External execution disabled</strong>
-          <p>The UI can prepare and simulate pipeline 1151, but it cannot queue it or contact Azure DevOps.</p>
+          <strong id="safety-title">External execution disabled</strong>
+          <p id="safety-copy">The UI can prepare and simulate pipeline 1151, but it cannot queue it or contact Azure DevOps.</p>
           <ul id="preflight-list" class="preflight-list" aria-label="Local readiness checks"></ul>
         </div>
       </div>
@@ -124,6 +124,24 @@
               <span id="pipeline-target" class="pipeline-target"></span>
             </div>
             <dl id="pipeline-parameters" class="pipeline-parameters"></dl>
+          </section>
+          <section id="smoke-controls" class="smoke-controls" hidden>
+            <p class="eyebrow">One-time authorized smoke test</p>
+            <h3>Queue pipeline 1151 with all release actions disabled</h3>
+            <p>
+              This queues a real orchestration run, but forces image build, announcement, DL
+              update, MAR verification, issue reporting, and approval off.
+            </p>
+            <div class="digest-row">
+              <span>Confirmed plan digest</span>
+              <code id="plan-digest"></code>
+            </div>
+            <label for="smoke-confirmation">Type <strong>QUEUE PIPELINE 1151 SMOKE TEST</strong></label>
+            <input id="smoke-confirmation" autocomplete="off" spellcheck="false">
+            <button id="smoke-button" class="button button-danger" type="button" disabled>
+              Queue one-time smoke test
+            </button>
+            <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
           </section>
           <ol id="step-list" class="step-list"></ol>
         </div>

@@ -54,6 +54,7 @@ type Input struct {
 	MicrosoftGoInnerloopPipeline     int
 	MicrosoftGoImagesPipeline        int
 	MicrosoftGoImagesReleasePipeline int
+	GoImagesReleaseSmokeTest         bool
 	MicrosoftGoAkaMSPipeline         int
 	AzureLinuxCreatePRPipeline       int
 }
@@ -258,7 +259,7 @@ func GoImagesReleasePipelineParameters(ri *Input, releaseIssue int) (map[string]
 	if releaseIssue != 0 {
 		releaseIssueValue = strconv.Itoa(releaseIssue)
 	}
-	return map[string]string{
+	parameters := map[string]string{
 		"releaseVersions":                  string(versions),
 		"releaseIssue":                     releaseIssueValue,
 		"isSecurityRelease":                strconv.FormatBool(ri.Security),
@@ -271,7 +272,16 @@ func GoImagesReleasePipelineParameters(ri *Input, releaseIssue int) (map[string]
 		"poll2MicrosoftGoImagesBuildID":    "nil",
 		"notify":                           ri.RunnerGitHubUser,
 		"goReleaseConfigVariableGroup":     ri.ReleaseConfigVariableGroup,
-	}, nil
+	}
+	if ri.GoImagesReleaseSmokeTest {
+		parameters["releaseIssue"] = "nil"
+		parameters["approveAheadOfTime"] = "true"
+		parameters["runGoImagesBuild"] = "false"
+		parameters["runPublishAnnouncement"] = "false"
+		parameters["runUpdateDL"] = "false"
+		parameters["runGoImageVersionCheck"] = "false"
+	}
+	return parameters, nil
 }
 
 // CreateGoImagesReleasePipelineGraph creates the initial focused workflow that queues and monitors

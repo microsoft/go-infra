@@ -3,7 +3,10 @@
 
 package releaseui
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
 // CheckStatus is the outcome of a local readiness check.
 type CheckStatus string
@@ -30,7 +33,7 @@ type PreflightReport struct {
 
 type executableLookup func(string) (string, error)
 
-func (s *Server) preflightReport() PreflightReport {
+func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 	report := PreflightReport{
 		ExternalExecutionEnabled: false,
 		Checks: []PreflightCheck{
@@ -82,11 +85,31 @@ func (s *Server) preflightReport() PreflightReport {
 			Details: "Found at " + path + ". Authentication was not attempted.",
 		})
 	}
+	if s.smoke == nil {
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID:      "external-execution",
+			Name:    "External release execution",
+			Status:  CheckStatusUnavailable,
+			Details: "Disabled. No GitHub, Azure DevOps, or publishing operation can be started.",
+		})
+		return report
+	}
+	details, err := s.smoke.Preflight(ctx)
+	if err != nil {
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID:      "external-execution",
+			Name:    "Pipeline 1151 smoke execution",
+			Status:  CheckStatusWarning,
+			Details: err.Error(),
+		})
+		return report
+	}
+	report.ExternalExecutionEnabled = true
 	report.Checks = append(report.Checks, PreflightCheck{
 		ID:      "external-execution",
-		Name:    "External release execution",
-		Status:  CheckStatusUnavailable,
-		Details: "Disabled in this build. No GitHub, Azure DevOps, or publishing operation can be started.",
+		Name:    "Pipeline 1151 smoke execution",
+		Status:  CheckStatusPassed,
+		Details: details,
 	})
 	return report
 }

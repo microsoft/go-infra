@@ -31,7 +31,10 @@ import (
 
 const sessionCookieName = "releaseui_session"
 
-const goImagesReleasePipelineID = 1151
+const (
+	goImagesReleasePipelineID = 1151
+	smokeConfirmationPhrase   = "QUEUE PIPELINE 1151 SMOKE TEST"
+)
 
 var (
 	//go:embed web/*
@@ -49,6 +52,7 @@ type Server struct {
 	lookPath  executableLookup
 
 	sessionStore session.Store
+	smoke        *GoImagesSmokeExecution
 
 	mu               sync.Mutex
 	steps            []*coordinator.Step
@@ -58,7 +62,17 @@ type Server struct {
 	document         *session.Document
 	runner           *coordinator.StepRunner
 	demoRunning      bool
+	externalRunning  bool
 	restoredFromDisk bool
+}
+
+// GoImagesSmokeExecution is the explicitly enabled, server-controlled real execution boundary.
+// Browser input cannot change the definition ID, variable-group allowlist, or service factory.
+type GoImagesSmokeExecution struct {
+	DefinitionID  int
+	VariableGroup string
+	Preflight     func(context.Context) (string, error)
+	NewService    func(sessionID string) (releasesteps.GoImagesReleaseService, error)
 }
 
 // Option customizes a Server.
@@ -82,6 +96,13 @@ func WithSessionStore(store session.Store) Option {
 func WithExecutableLookup(lookup func(string) (string, error)) Option {
 	return func(server *Server) {
 		server.lookPath = lookup
+	}
+}
+
+// WithGoImagesSmokeExecution enables the confirmation-protected one-time smoke-test path.
+func WithGoImagesSmokeExecution(execution GoImagesSmokeExecution) Option {
+	return func(server *Server) {
+		server.smoke = &execution
 	}
 }
 
@@ -111,6 +132,20 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	}
 	if server.lookPath == nil {
 		return nil, errors.New("executable lookup is nil")
+	}
+	if server.smoke != nil {
+		if server.sessionStore == nil {
+			return nil, errors.New("go-images smoke execution requires a durable session store")
+		}
+		if server.smoke.DefinitionID != goImagesReleasePipelineID {
+			return nil, fmt.Errorf("go-images smoke definition %d is not allowlisted", server.smoke.DefinitionID)
+		}
+		if server.smoke.VariableGroup == "" {
+			return nil, errors.New("go-images smoke variable-group allowlist is empty")
+		}
+		if server.smoke.Preflight == nil || server.smoke.NewService == nil {
+			return nil, errors.New("go-images smoke execution is missing preflight or service factory")
+		}
 	}
 	if err := server.restoreSession(); err != nil {
 		return nil, err
@@ -148,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("GET /api/preflight", s.handlePreflight)
 	mux.HandleFunc("POST /api/demo/start", s.handleDemoStart)
+	mux.HandleFunc("POST /api/go-images/smoke/start", s.handleSmokeStart)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withSecurityHeaders(s.authenticate(mux))
@@ -184,12 +220,15 @@ type planStep struct {
 }
 
 type planResponse struct {
-	Input     PlanInput       `json:"input"`
-	Steps     []planStep      `json:"steps"`
-	Pipeline  pipelinePreview `json:"pipeline"`
-	DemoOnly  bool            `json:"demoOnly"`
-	SessionID string          `json:"sessionId,omitempty"`
-	Restored  bool            `json:"restored"`
+	Input      PlanInput       `json:"input"`
+	Steps      []planStep      `json:"steps"`
+	Pipeline   pipelinePreview `json:"pipeline"`
+	DemoOnly   bool            `json:"demoOnly"`
+	SessionID  string          `json:"sessionId,omitempty"`
+	Restored   bool            `json:"restored"`
+	PlanDigest string          `json:"planDigest"`
+	SmokeTest  bool            `json:"smokeTest"`
+	Run        pipelineRun     `json:"run"`
 }
 
 type pipelinePreview struct {
@@ -198,6 +237,12 @@ type pipelinePreview struct {
 	Project      string            `json:"project"`
 	Name         string            `json:"name"`
 	Parameters   map[string]string `json:"parameters"`
+}
+
+type pipelineRun struct {
+	BuildID  string `json:"buildId,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Complete bool   `json:"complete"`
 }
 
 func (s *Server) handleGetPlan(response http.ResponseWriter, _ *http.Request) {
@@ -236,6 +281,11 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		ReleaseIssue:                     normalized.ReleaseIssue,
 		ReleaseConfigVariableGroup:       normalized.VariableGroup,
 		MicrosoftGoImagesReleasePipeline: goImagesReleasePipelineID,
+		GoImagesReleaseSmokeTest:         s.smoke != nil,
+	}
+	if s.smoke != nil && normalized.VariableGroup != s.smoke.VariableGroup {
+		writeError(response, http.StatusBadRequest, "variable group is not allowlisted for the smoke test")
+		return
 	}
 	steps, releaseState, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
 		releaseInput,
@@ -256,9 +306,9 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	}
 
 	s.mu.Lock()
-	if s.demoRunning {
+	if s.demoRunning || s.externalRunning {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "cannot replace the plan while a demo is running")
+		writeError(response, http.StatusConflict, "cannot replace the plan while a workflow is running")
 		return
 	}
 	if s.sessionStore != nil {
@@ -283,7 +333,9 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 
 func (s *Server) planResponseLocked(restored bool) planResponse {
 	releaseIssue := 0
-	if s.releaseState != nil {
+	if s.document != nil {
+		releaseIssue = s.document.State.Day.ReleaseIssue
+	} else if s.releaseState != nil {
 		releaseIssue = s.releaseState.Day.ReleaseIssue
 	}
 	parameters, _ := releasesteps.GoImagesReleasePipelineParameters(s.releaseInput, releaseIssue)
@@ -297,11 +349,23 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 			Name:         "microsoft-go-infra-release-go-images",
 			Parameters:   parameters,
 		},
-		DemoOnly: true,
-		Restored: restored,
+		DemoOnly:  true,
+		Restored:  restored,
+		SmokeTest: s.releaseInput != nil && s.releaseInput.GoImagesReleaseSmokeTest,
 	}
 	if s.document != nil {
 		result.SessionID = s.document.ID
+		result.PlanDigest = s.document.Plan.Digest
+	}
+	if s.document != nil {
+		result.Run.BuildID = s.document.State.Day.GoImagesReleaseBuildID
+		result.Run.Complete = s.document.State.Day.GoImagesReleaseComplete
+	} else if s.releaseState != nil {
+		result.Run.BuildID = s.releaseState.Day.GoImagesReleaseBuildID
+		result.Run.Complete = s.releaseState.Day.GoImagesReleaseComplete
+	}
+	if result.Run.BuildID != "" {
+		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
 	}
 	return result
 }
@@ -372,8 +436,119 @@ func (s *Server) checkpointReleaseState(ctx context.Context, state *releasesteps
 	return nil
 }
 
-func (s *Server) handlePreflight(response http.ResponseWriter, _ *http.Request) {
-	writeJSON(response, http.StatusOK, s.preflightReport())
+func (s *Server) handlePreflight(response http.ResponseWriter, request *http.Request) {
+	writeJSON(response, http.StatusOK, s.preflightReport(request.Context()))
+}
+
+type smokeStartRequest struct {
+	PlanDigest   string `json:"planDigest"`
+	Confirmation string `json:"confirmation"`
+}
+
+func (s *Server) handleSmokeStart(response http.ResponseWriter, request *http.Request) {
+	if !sameOrigin(request) {
+		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
+		return
+	}
+	var start smokeStartRequest
+	if err := decodeJSON(response, request, &start); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	s.mu.Lock()
+	if s.smoke == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "go-images smoke execution is not enabled")
+		return
+	}
+	if s.document == nil || s.releaseInput == nil || s.releaseState == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "create and persist a smoke-test plan first")
+		return
+	}
+	if start.PlanDigest != s.document.Plan.Digest {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "confirmation does not match the current plan digest")
+		return
+	}
+	if start.Confirmation != smokeConfirmationPhrase {
+		s.mu.Unlock()
+		writeError(response, http.StatusBadRequest, "confirmation phrase is incorrect")
+		return
+	}
+	if !s.releaseInput.GoImagesReleaseSmokeTest || s.releaseInput.ReleaseConfigVariableGroup != s.smoke.VariableGroup {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "persisted plan is not an allowlisted smoke test")
+		return
+	}
+	if s.demoRunning || s.externalRunning {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "a workflow is already running")
+		return
+	}
+	if s.releaseState.Day.GoImagesReleaseComplete {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "the one-time smoke test is already complete")
+		return
+	}
+	preflight := s.smoke.Preflight
+	newService := s.smoke.NewService
+	sessionID := s.document.ID
+	document := s.document
+	input := *s.releaseInput
+	state := s.releaseState
+	s.externalRunning = true
+	s.mu.Unlock()
+
+	if _, err := preflight(request.Context()); err != nil {
+		s.finishExternalRun()
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
+		return
+	}
+	service, err := newService(sessionID)
+	if err != nil {
+		s.finishExternalRun()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create Azure pipeline service: %v", err))
+		return
+	}
+	steps, state, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
+		&input,
+		nil,
+		state,
+		service,
+		s.checkpointReleaseState,
+	)
+	if err != nil {
+		s.finishExternalRun()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create smoke-test graph: %v", err))
+		return
+	}
+	plan, err := session.NewPlan(steps)
+	if err != nil || document.MatchesPlan(plan) != nil {
+		s.finishExternalRun()
+		writeError(response, http.StatusConflict, "smoke-test graph no longer matches the confirmed plan")
+		return
+	}
+
+	s.mu.Lock()
+	s.steps = steps
+	s.releaseState = state
+	s.externalRunning = true
+	runner := s.runner
+	s.mu.Unlock()
+
+	go func() {
+		_ = runner.Execute(s.ctx, steps)
+		s.finishExternalRun()
+	}()
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "go-images smoke test started"})
+}
+
+func (s *Server) finishExternalRun() {
+	s.mu.Lock()
+	s.externalRunning = false
+	s.mu.Unlock()
 }
 
 func normalizeInput(input PlanInput) (PlanInput, error) {

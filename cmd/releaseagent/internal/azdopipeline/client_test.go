@@ -94,6 +94,36 @@ func TestFindLatestByVariable(t *testing.T) {
 	}
 }
 
+func TestGetDefinition(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/internal/_apis/build/definitions/1151" {
+			t.Fatalf("path = %q", request.URL.Path)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":1151,
+			"name":"microsoft-go-infra-release-go-images (official)",
+			"queueStatus":"enabled",
+			"process":{"yamlFilename":"eng/pipelines/release-go-images-pipeline.yml"},
+			"repository":{"defaultBranch":"refs/heads/main"}
+		}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, err := client.GetDefinition(context.Background(), 1151)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.ID != 1151 || definition.QueueStatus != "enabled" ||
+		definition.DefaultBranch != "refs/heads/main" ||
+		definition.YAMLPath != "eng/pipelines/release-go-images-pipeline.yml" {
+
+		t.Fatalf("definition = %#v", definition)
+	}
+}
+
 func TestRunState(t *testing.T) {
 	for _, test := range []struct {
 		status string

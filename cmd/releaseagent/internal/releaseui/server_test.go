@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
@@ -135,6 +137,121 @@ func TestPreflightIsLocalAndExternalExecutionDisabled(t *testing.T) {
 	}
 	if statusByID["github-cli"] != CheckStatusPassed || statusByID["azure-cli"] != CheckStatusWarning || statusByID["external-execution"] != CheckStatusUnavailable {
 		t.Fatalf("unexpected preflight statuses: %#v", statusByID)
+	}
+}
+
+type fakeSmokeService struct {
+	queued int
+	polled int
+}
+
+func (s *fakeSmokeService) TriggerBuildPipeline(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *releasesteps.Secret) (string, error) {
+	s.queued++
+	if pipelineID != goImagesReleasePipelineID {
+		return "", fmt.Errorf("unexpected pipeline %d", pipelineID)
+	}
+	if parameters["approveAheadOfTime"] != "true" ||
+		parameters["runGoImagesBuild"] != "false" ||
+		parameters["runPublishAnnouncement"] != "false" ||
+		parameters["runUpdateDL"] != "false" ||
+		parameters["runGoImageVersionCheck"] != "false" ||
+		parameters["releaseIssue"] != "nil" {
+
+		return "", fmt.Errorf("unsafe smoke parameters: %#v", parameters)
+	}
+	if len(optionalParameters) != 0 {
+		return "", fmt.Errorf("unexpected optional parameters: %#v", optionalParameters)
+	}
+	return "321", nil
+}
+
+func (s *fakeSmokeService) PollPipelineComplete(_ context.Context, buildID string, _ *releasesteps.Secret) error {
+	s.polled++
+	if buildID != "321" {
+		return fmt.Errorf("unexpected build ID %q", buildID)
+	}
+	return nil
+}
+
+func TestSmokeExecutionRequiresConfirmedSafePlan(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &fakeSmokeService{}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
+			DefinitionID:  goImagesReleasePipelineID,
+			VariableGroup: "test-release-config",
+			Preflight: func(context.Context) (string, error) {
+				return "fake preflight passed", nil
+			},
+			NewService: func(string) (releasesteps.GoImagesReleaseService, error) {
+				return service, nil
+			},
+		}),
+	)
+	plan := createTestPlan(t, ui)
+	if !plan.SmokeTest {
+		t.Fatal("plan is not marked as a smoke test")
+	}
+	for _, name := range []string{
+		"runGoImagesBuild",
+		"runPublishAnnouncement",
+		"runUpdateDL",
+		"runGoImageVersionCheck",
+	} {
+		if plan.Pipeline.Parameters[name] != "false" {
+			t.Fatalf("%s = %q, want false", name, plan.Pipeline.Parameters[name])
+		}
+	}
+	if plan.Pipeline.Parameters["approveAheadOfTime"] != "true" || plan.Pipeline.Parameters["releaseIssue"] != "nil" {
+		t.Fatalf("unsafe smoke parameters: %#v", plan.Pipeline.Parameters)
+	}
+
+	response := postJSON(t, ui, "/api/go-images/smoke/start", `{"planDigest":"wrong","confirmation":"QUEUE PIPELINE 1151 SMOKE TEST"}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || service.queued != 0 {
+		t.Fatalf("wrong-digest status = %d, queued = %d", response.StatusCode, service.queued)
+	}
+
+	body, err := json.Marshal(smokeStartRequest{
+		PlanDigest:   plan.PlanDigest,
+		Confirmation: smokeConfirmationPhrase,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = postJSON(t, ui, "/api/go-images/smoke/start", string(body))
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("smoke start status = %d, want %d", response.StatusCode, http.StatusAccepted)
+	}
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		ui.server.mu.Lock()
+		complete := ui.server.document.State.Day.GoImagesReleaseComplete
+		active := ui.server.externalRunning
+		ui.server.mu.Unlock()
+		if complete && !active {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for fake smoke execution")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if service.queued != 1 || service.polled != 1 {
+		t.Fatalf("queued = %d, polled = %d; want 1 each", service.queued, service.polled)
+	}
+	response = postJSON(t, ui, "/api/go-images/smoke/start", string(body))
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || service.queued != 1 {
+		t.Fatalf("second-run status = %d, queued = %d", response.StatusCode, service.queued)
 	}
 }
 

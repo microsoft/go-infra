@@ -56,6 +56,15 @@ type Build struct {
 	Parameters map[string]string
 }
 
+// Definition is the allowlist-relevant metadata of an Azure Pipeline definition.
+type Definition struct {
+	ID            int
+	Name          string
+	QueueStatus   string
+	DefaultBranch string
+	YAMLPath      string
+}
+
 // RunState is the normalized lifecycle of an Azure Pipelines run.
 type RunState string
 
@@ -149,6 +158,39 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 		return nil, err
 	}
 	return response.build()
+}
+
+// GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.
+func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definition, error) {
+	if definitionID <= 0 {
+		return nil, errors.New("pipeline definition ID must be positive")
+	}
+	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/build/definitions/" +
+		strconv.Itoa(definitionID) + "?api-version=7.1"
+	var response struct {
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
+		QueueStatus string `json:"queueStatus"`
+		Process     struct {
+			YAMLPath string `json:"yamlFilename"`
+		} `json:"process"`
+		Repository struct {
+			DefaultBranch string `json:"defaultBranch"`
+		} `json:"repository"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+		return nil, err
+	}
+	if response.ID != definitionID {
+		return nil, fmt.Errorf("azure DevOps returned definition %d, expected %d", response.ID, definitionID)
+	}
+	return &Definition{
+		ID:            response.ID,
+		Name:          response.Name,
+		QueueStatus:   response.QueueStatus,
+		DefaultBranch: response.Repository.DefaultBranch,
+		YAMLPath:      response.Process.YAMLPath,
+	}, nil
 }
 
 // FindLatestByVariable returns the newest recent run of definitionID carrying name=value.

@@ -15,6 +15,9 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 	"github.com/microsoft/go-infra/subcmd"
@@ -34,8 +37,16 @@ func handleServe(parse subcmd.ParseFunc) error {
 	noOpen := flag.Bool("no-open", false, "Do not automatically open the UI in the default browser")
 	demoDelay := flag.Duration("demo-step-delay", 250*time.Millisecond, "Duration of each step in the safe simulation")
 	sessionFile := flag.String("session-file", "", "Optional JSON file used to persist and restore the non-secret release plan")
+	enableSmoke := flag.Bool("enable-go-images-smoke-test", false, "Enable confirmation-protected one-time queueing of pipeline 1151 with all release actions disabled")
+	smokeVariableGroup := flag.String("go-images-smoke-variable-group", "", "The only variable group accepted by the enabled pipeline 1151 smoke test")
 	if err := parse(); err != nil {
 		return err
+	}
+	if *enableSmoke && *sessionFile == "" {
+		return errors.New("-enable-go-images-smoke-test requires -session-file")
+	}
+	if *enableSmoke && *smokeVariableGroup == "" {
+		return errors.New("-enable-go-images-smoke-test requires -go-images-smoke-variable-group")
 	}
 
 	var options []releaseui.Option
@@ -57,6 +68,43 @@ func handleServe(parse subcmd.ParseFunc) error {
 		}()
 		sessionPath = store.Path()
 		options = append(options, releaseui.WithSessionStore(store))
+	}
+	if *enableSmoke {
+		azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
+		azureClient, err := azdopipeline.NewClient(
+			"https://dev.azure.com/dnceng",
+			"internal",
+			azureHTTPClient,
+			azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
+		)
+		if err != nil {
+			return err
+		}
+		options = append(options, releaseui.WithGoImagesSmokeExecution(releaseui.GoImagesSmokeExecution{
+			DefinitionID:  1151,
+			VariableGroup: *smokeVariableGroup,
+			Preflight: func(ctx context.Context) (string, error) {
+				definition, err := azureClient.GetDefinition(ctx, 1151)
+				if err != nil {
+					return "", err
+				}
+				if definition.Name != "microsoft-go-infra-release-go-images (official)" ||
+					definition.QueueStatus != "enabled" ||
+					definition.DefaultBranch != "refs/heads/main" ||
+					definition.YAMLPath != "eng/pipelines/release-go-images-pipeline.yml" {
+
+					return "", fmt.Errorf("pipeline 1151 does not match the smoke-test allowlist: %#v", definition)
+				}
+				return "Authenticated and verified production pipeline 1151. All release actions are forced off.", nil
+			},
+			NewService: func(sessionID string) (releasesteps.GoImagesReleaseService, error) {
+				return goimagesrelease.New(azureClient, goimagesrelease.Config{
+					DefinitionID: 1151,
+					SessionID:    sessionID,
+					PollInterval: 5 * time.Second,
+				}, nil)
+			},
+		}))
 	}
 
 	listener, err := net.Listen("tcp", *listenAddress)
@@ -94,7 +142,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 
 	fmt.Printf("Release UI listening at %s\n", launchURL)
-	fmt.Println("Go-images pipeline execution is disabled; this UI can only plan and simulate it.")
+	if *enableSmoke {
+		fmt.Println("One-time pipeline 1151 smoke execution is enabled with every release action forced off.")
+	} else {
+		fmt.Println("Go-images pipeline execution is disabled; this UI can only plan and simulate it.")
+	}
 	if sessionPath != "" {
 		fmt.Printf("Durable session file: %s\n", sessionPath)
 	}

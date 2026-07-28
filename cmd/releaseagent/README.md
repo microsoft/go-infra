@@ -60,9 +60,29 @@ The focused workflow has hermetic tests for:
 * Correlation-based reconciliation that reuses an existing build rather than queueing twice.
 * An end-to-end focused DAG run against a loopback fake Azure DevOps server.
 
-The real Azure client and token provider are not wired into the HTTP server. The next test gate is a
-separate non-production pipeline definition and variable group, followed by explicit confirmation
-and allowlisting. Production pipeline `1151` must remain disabled until that test succeeds.
+The real Azure client and token provider are wired only behind an explicit, default-off smoke-test
+flag, a fixed definition allowlist, a variable-group allowlist, durable state, and digest-bound
+confirmation. Normal UI startup still cannot perform external operations.
+
+### One-time pipeline 1151 smoke mode
+
+An explicitly enabled mode is available for an authorized queue/monitor smoke test against
+production definition `1151`. It requires a durable session and a server-allowlisted variable
+group. The server forces `approveAheadOfTime=true`, `releaseIssue=nil`, and every release action
+switch to `false`, so the orchestration run does not build/publish images, publish announcements,
+update DL, query MAR, or report to a release issue.
+
+```console
+go run ./cmd/releaseagent serve \
+	-session-file "$HOME/.config/microsoft-go/release-session.json" \
+	-enable-go-images-smoke-test \
+	-go-images-smoke-variable-group '<approved-variable-group>'
+```
+
+Starting in this mode performs authenticated read-only preflight but does not queue a run. Queueing
+requires a persisted smoke plan, an exact plan-digest match, and typing
+`QUEUE PIPELINE 1151 SMOKE TEST` in the browser. The session correlation ID is attached to the
+Azure run so restart/retry reconciliation reuses an existing build instead of queueing another.
 
 The server only binds to a loopback address. A random one-time launch token establishes an
 HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.

@@ -18,10 +18,21 @@ const preflightList = document.querySelector("#preflight-list");
 const pipelineID = document.querySelector("#pipeline-id");
 const pipelineTarget = document.querySelector("#pipeline-target");
 const pipelineParameters = document.querySelector("#pipeline-parameters");
+const safetyTitle = document.querySelector("#safety-title");
+const safetyCopy = document.querySelector("#safety-copy");
+const smokeControls = document.querySelector("#smoke-controls");
+const smokeConfirmation = document.querySelector("#smoke-confirmation");
+const smokeButton = document.querySelector("#smoke-button");
+const planDigest = document.querySelector("#plan-digest");
+const pipelineRunLink = document.querySelector("#pipeline-run-link");
+
+const smokeConfirmationPhrase = "QUEUE PIPELINE 1151 SMOKE TEST";
 
 let plan = null;
 let eventSource = null;
 let toastTimer = null;
+let preflight = null;
+let executionActive = false;
 
 loadExistingPlan();
 loadPreflight();
@@ -63,6 +74,27 @@ demoButton.addEventListener("click", async () => {
   }
 });
 
+smokeConfirmation.addEventListener("input", updateSmokeControls);
+
+smokeButton.addEventListener("click", async () => {
+  setBusy(smokeButton, true, "Starting real smoke test…");
+  try {
+    await requestJSON("/api/go-images/smoke/start", {
+      method: "POST",
+      body: JSON.stringify({
+        planDigest: plan.planDigest,
+        confirmation: smokeConfirmation.value,
+      }),
+    });
+    executionActive = true;
+    updateSmokeControls();
+    await refreshPlanMetadata();
+  } catch (error) {
+    showError(error.message);
+    updateSmokeControls();
+  }
+});
+
 function renderPlan(nextPlan) {
   document.querySelector("#versions").value = nextPlan.input.versions.join("\n");
   document.querySelector("#runner").value = nextPlan.input.runner;
@@ -74,9 +106,12 @@ function renderPlan(nextPlan) {
   const restored = nextPlan.restored ? " · restored from disk" : "";
   planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · execution disabled${restored}`;
   renderPipeline(nextPlan.pipeline);
+  renderPipelineRun(nextPlan.run);
+  planDigest.textContent = nextPlan.planDigest;
   stepList.replaceChildren(...nextPlan.steps.map(createStepCard));
   demoButton.disabled = false;
   updateProgress({ active: false, steps: nextPlan.steps.map((step) => ({ ...step, status: "waiting" })) });
+  updateSmokeControls();
 }
 
 function renderPipeline(pipeline) {
@@ -110,17 +145,59 @@ async function loadExistingPlan() {
 
 async function loadPreflight() {
   try {
-    const report = await requestJSON("/api/preflight");
-    preflightList.replaceChildren(...report.checks.map((check) => {
+    preflight = await requestJSON("/api/preflight");
+    preflightList.replaceChildren(...preflight.checks.map((check) => {
       const item = document.createElement("li");
       item.dataset.status = check.status;
       item.title = check.details;
       item.textContent = check.name;
       return item;
     }));
+    if (preflight.externalExecutionEnabled) {
+      safetyTitle.textContent = "One-time smoke execution ready";
+      safetyCopy.textContent = "Authenticated pipeline 1151 access is enabled, with every release action forced off.";
+    }
+    updateSmokeControls();
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
+}
+
+function updateSmokeControls() {
+  const enabled = Boolean(plan?.smokeTest && preflight?.externalExecutionEnabled);
+  smokeControls.hidden = !enabled;
+  if (!enabled) return;
+  const alreadyComplete = Boolean(plan.run?.complete);
+  smokeButton.disabled = alreadyComplete || executionActive || smokeConfirmation.value !== smokeConfirmationPhrase;
+  if (alreadyComplete) {
+    smokeButton.textContent = "Smoke test already completed";
+  } else if (executionActive) {
+    smokeButton.textContent = "Smoke test running…";
+  } else {
+    smokeButton.textContent = plan.run?.buildId ? "Resume smoke-test monitoring" : "Queue one-time smoke test";
+  }
+}
+
+function renderPipelineRun(run) {
+  if (!run?.buildId) {
+    pipelineRunLink.hidden = true;
+    pipelineRunLink.removeAttribute("href");
+    pipelineRunLink.textContent = "";
+    return;
+  }
+  pipelineRunLink.href = run.url;
+  pipelineRunLink.textContent = `Open Azure Pipeline run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}`;
+  pipelineRunLink.hidden = false;
+}
+
+async function refreshPlanMetadata() {
+  const response = await fetch("/api/plan");
+  if (!response.ok) return;
+  const latest = await response.json();
+  if (!plan || latest.sessionId !== plan.sessionId) return;
+  plan.run = latest.run;
+  renderPipelineRun(plan.run);
+  updateSmokeControls();
 }
 
 function createStepCard(step) {
@@ -167,14 +244,19 @@ function connectEvents() {
   eventSource.addEventListener("error", () => setConnection(false));
   eventSource.addEventListener("state", (event) => {
     const snapshot = JSON.parse(event.data);
+    executionActive = snapshot.active;
     if (snapshot.steps.length) {
       updateSteps(snapshot);
       updateProgress(snapshot);
     }
     demoButton.disabled = snapshot.active;
     demoButton.textContent = snapshot.active ? "Simulation running…" : "Simulate queue and monitor";
+    updateSmokeControls();
     if (!snapshot.active && snapshot.error) {
       showError(snapshot.error);
+    }
+    if (snapshot.steps.some((step) => step.id === "go-images.release-pipeline.queue" && step.status === "succeeded") || !snapshot.active) {
+      refreshPlanMetadata().catch((error) => showError(error.message));
     }
   });
 }
