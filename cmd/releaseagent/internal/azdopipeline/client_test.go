@@ -5,7 +5,6 @@ package azdopipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,69 +16,16 @@ type staticToken string
 
 func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
 
-func TestQueueRequest(t *testing.T) {
+func TestListRecent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/internal/_apis/build/builds" {
-			t.Fatalf("request = %s %s, want POST /internal/_apis/build/builds", request.Method, request.URL.Path)
-		}
-		if request.Header.Get("Authorization") != "Bearer test-token" {
-			t.Fatalf("Authorization = %q", request.Header.Get("Authorization"))
-		}
-		if request.URL.Query().Get("definitionId") != "1151" {
-			t.Fatalf("definitionId = %q, want 1151", request.URL.Query().Get("definitionId"))
-		}
-		var body struct {
-			Definition struct {
-				ID int `json:"id"`
-			} `json:"definition"`
-			TemplateParameters map[string]string `json:"templateParameters"`
-			Parameters         string            `json:"parameters"`
-		}
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body.Definition.ID != 1151 || body.TemplateParameters["runGoImagesBuild"] != "true" {
-			t.Fatalf("unexpected request body: %#v", body)
-		}
-		var variables map[string]string
-		if err := json.Unmarshal([]byte(body.Parameters), &variables); err != nil {
-			t.Fatal(err)
-		}
-		if variables["ReleaseUISessionID"] != "session-1" {
-			t.Fatalf("variables = %#v", variables)
-		}
-		response.Header().Set("Content-Type", "application/json")
-		_, _ = response.Write([]byte(`{"id":321,"status":"notStarted","parameters":"{\"ReleaseUISessionID\":\"session-1\"}","_links":{"web":{"href":"https://example/build/321"}}}`))
-	}))
-	defer server.Close()
-
-	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	build, err := client.Queue(context.Background(), QueueRequest{
-		DefinitionID: 1151,
-		Parameters:   map[string]string{"runGoImagesBuild": "true"},
-		Variables:    map[string]string{"ReleaseUISessionID": "session-1"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if build.ID != 321 || build.WebURL != "https://example/build/321" {
-		t.Fatalf("build = %#v", build)
-	}
-}
-
-func TestFindLatestByVariable(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Query().Get("definitions") != "1151" || request.URL.Query().Get("$top") != "50" {
+		if request.Method != http.MethodGet || request.URL.Query().Get("definitions") != "1023" || request.URL.Query().Get("$top") != "50" {
 			t.Fatalf("unexpected query: %s", request.URL.RawQuery)
 		}
 		_, _ = response.Write([]byte(`{"value":[` +
-			`{"id":12,"status":"inProgress","parameters":"{\"ReleaseUISessionID\":\"other\"}"},` +
 			`{"id":11,"status":"notStarted","queueTime":"2026-07-28T12:00:00Z",` +
-			`"definition":{"id":1151},"templateParameters":{"releaseVersions":["1.26.1-1"]},` +
-			`"parameters":"{\"ReleaseUISessionID\":{\"value\":\"session-1\"}}"}` +
+			`"definition":{"id":1023},"sourceBranch":"refs/heads/microsoft/main",` +
+			`"sourceVersion":"81ce9afc2b75ec4e153dd15fc3c7539b12024945",` +
+			`"templateParameters":{"publishRepoPrefix":"public/"}}` +
 			`]}`))
 	}))
 	defer server.Close()
@@ -87,29 +33,32 @@ func TestFindLatestByVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	build, err := client.FindLatestByVariable(context.Background(), 1151, "ReleaseUISessionID", "session-1")
+	builds, err := client.ListRecent(context.Background(), 1023)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if build == nil || build.ID != 11 {
-		t.Fatalf("build = %#v, want ID 11", build)
+	if len(builds) != 1 || builds[0].ID != 11 {
+		t.Fatalf("builds = %#v, want ID 11", builds)
 	}
-	if build.DefinitionID != 1151 || build.TemplateParameters["releaseVersions"] == nil || build.QueueTime.IsZero() {
+	build := builds[0]
+	if build.DefinitionID != 1023 || build.TemplateParameters["publishRepoPrefix"] != "public/" || build.QueueTime.IsZero() ||
+		build.SourceBranch != "refs/heads/microsoft/main" || build.SourceVersion == "" {
+
 		t.Fatalf("build metadata = %#v", build)
 	}
 }
 
 func TestGetDefinition(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/internal/_apis/build/definitions/1151" {
+		if request.URL.Path != "/internal/_apis/build/definitions/1023" {
 			t.Fatalf("path = %q", request.URL.Path)
 		}
 		_, _ = response.Write([]byte(`{
-			"id":1151,
-			"name":"microsoft-go-infra-release-go-images (official)",
+			"id":1023,
+			"name":"microsoft-go-images (official)",
 			"queueStatus":"enabled",
-			"process":{"yamlFilename":"eng/pipelines/release-go-images-pipeline.yml"},
-			"repository":{"defaultBranch":"refs/heads/main"}
+			"process":{"yamlFilename":"eng/pipeline/go-docker-rolling-internal-pipeline.yml"},
+			"repository":{"defaultBranch":"refs/heads/microsoft/main","name":"microsoft-go-images"}
 		}`))
 	}))
 	defer server.Close()
@@ -117,13 +66,13 @@ func TestGetDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition, err := client.GetDefinition(context.Background(), 1151)
+	definition, err := client.GetDefinition(context.Background(), 1023)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if definition.ID != 1151 || definition.QueueStatus != "enabled" ||
-		definition.DefaultBranch != "refs/heads/main" ||
-		definition.YAMLPath != "eng/pipelines/release-go-images-pipeline.yml" {
+	if definition.ID != 1023 || definition.QueueStatus != "enabled" ||
+		definition.DefaultBranch != "refs/heads/microsoft/main" || definition.Repository != "microsoft-go-images" ||
+		definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
 
 		t.Fatalf("definition = %#v", definition)
 	}
@@ -174,22 +123,22 @@ func TestHTTPErrorDoesNotExposeToken(t *testing.T) {
 	}
 }
 
-func TestQueueBadRequest(t *testing.T) {
+func TestGetBadRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusBadRequest)
-		_, _ = response.Write([]byte(`{"message":"Unexpected parameter 'runSomething'"}`))
+		_, _ = response.Write([]byte(`{"message":"invalid build"}`))
 	}))
 	defer server.Close()
 	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Queue(context.Background(), QueueRequest{DefinitionID: 1151})
+	_, err = client.Get(context.Background(), 123)
 	var httpErr *HTTPError
 	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest {
 		t.Fatalf("error = %v, want HTTP 400", err)
 	}
-	if !strings.Contains(httpErr.Body, "Unexpected parameter") {
+	if !strings.Contains(httpErr.Body, "invalid build") {
 		t.Fatalf("error body = %q", httpErr.Body)
 	}
 }

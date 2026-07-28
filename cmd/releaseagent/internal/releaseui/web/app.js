@@ -20,17 +20,11 @@ const pipelineTarget = document.querySelector("#pipeline-target");
 const pipelineParameters = document.querySelector("#pipeline-parameters");
 const safetyTitle = document.querySelector("#safety-title");
 const safetyCopy = document.querySelector("#safety-copy");
-const smokeControls = document.querySelector("#smoke-controls");
-const smokeConfirmation = document.querySelector("#smoke-confirmation");
-const smokeButton = document.querySelector("#smoke-button");
-const planDigest = document.querySelector("#plan-digest");
 const pipelineRunLink = document.querySelector("#pipeline-run-link");
 const findRunsButton = document.querySelector("#find-runs-button");
 const runCandidates = document.querySelector("#run-candidates");
 const candidateCount = document.querySelector("#candidate-count");
 const candidateList = document.querySelector("#candidate-list");
-
-const smokeConfirmationPhrase = "QUEUE PIPELINE 1151 SMOKE TEST";
 
 let plan = null;
 let eventSource = null;
@@ -85,53 +79,27 @@ demoButton.addEventListener("click", async () => {
   }
 });
 
-smokeConfirmation.addEventListener("input", updateSmokeControls);
-
-smokeButton.addEventListener("click", async () => {
-  setBusy(smokeButton, true, "Starting real smoke test…");
-  try {
-    await requestJSON("/api/go-images/smoke/start", {
-      method: "POST",
-      body: JSON.stringify({
-        planDigest: plan.planDigest,
-        confirmation: smokeConfirmation.value,
-      }),
-    });
-    executionActive = true;
-    updateSmokeControls();
-    await refreshPlanMetadata();
-  } catch (error) {
-    showError(error.message);
-    updateSmokeControls();
-  }
-});
-
 function renderPlan(nextPlan) {
   document.querySelector("#versions").value = nextPlan.input.versions.join("\n");
-  document.querySelector("#runner").value = nextPlan.input.runner;
-  document.querySelector("#security").checked = nextPlan.input.security;
-  document.querySelector("#variable-group").value = nextPlan.input.variableGroup;
-  document.querySelector("#release-issue").value = nextPlan.input.releaseIssue || "";
   emptyState.hidden = true;
   planContent.hidden = false;
   const restored = nextPlan.restored ? " · restored from disk" : "";
   const imported = nextPlan.run?.imported ? " · imported existing run" : "";
-  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · execution disabled${restored}${imported}`;
+  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · direct pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · queueing disabled${restored}${imported}`;
   renderPipeline(nextPlan.pipeline);
   renderPipelineRun(nextPlan.run);
-  planDigest.textContent = nextPlan.planDigest;
   stepList.replaceChildren(...nextPlan.steps.map(createStepCard));
-  demoButton.disabled = false;
+  demoButton.disabled = Boolean(nextPlan.run?.imported);
+  demoButton.textContent = nextPlan.run?.imported ? "Imported run loaded" : "Simulate queue and monitor";
   const snapshot = initialPlanSnapshot(nextPlan);
   updateSteps(snapshot);
   updateProgress(snapshot);
-  updateSmokeControls();
 }
 
 function initialPlanSnapshot(nextPlan) {
   const steps = nextPlan.steps.map((step) => ({ ...step, status: "waiting" }));
   if (nextPlan.run?.buildId) {
-    const queue = steps.find((step) => step.id === "go-images.release-pipeline.queue");
+    const queue = steps.find((step) => step.id === "go-images.pipeline.queue");
     if (queue) queue.status = "succeeded";
   }
   if (nextPlan.run?.complete) {
@@ -179,12 +147,11 @@ async function loadPreflight() {
       item.textContent = check.name;
       return item;
     }));
-    if (preflight.externalExecutionEnabled) {
-      safetyTitle.textContent = "One-time smoke execution ready";
-      safetyCopy.textContent = "Authenticated pipeline 1151 access is enabled, with every release action forced off.";
+    if (preflight.azureReadOnlyEnabled) {
+      safetyTitle.textContent = "Read-only Azure discovery ready";
+      safetyCopy.textContent = "Authenticated pipeline 1023 lookup is enabled. No endpoint can queue, cancel, or approve a run.";
       findRunsButton.hidden = false;
     }
-    updateSmokeControls();
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
@@ -196,10 +163,6 @@ function currentFormInput() {
       .split(/[\n,]+/)
       .map((version) => version.trim())
       .filter(Boolean),
-    runner: document.querySelector("#runner").value.trim(),
-    security: document.querySelector("#security").checked,
-    variableGroup: document.querySelector("#variable-group").value.trim(),
-    releaseIssue: Number(document.querySelector("#release-issue").value) || 0,
   };
 }
 
@@ -209,7 +172,7 @@ function renderCandidates(candidates, versions) {
   if (!candidates.length) {
     const empty = document.createElement("p");
     empty.className = "candidate-empty";
-    empty.textContent = `No recent pipeline 1151 runs matched ${versions.join(", ")}.`;
+    empty.textContent = `No recent pipeline 1023 source commits contained ${versions.join(", ")}.`;
     candidateList.replaceChildren(empty);
     return;
   }
@@ -232,16 +195,16 @@ function createCandidate(candidate, versions) {
 
   const details = document.createElement("p");
   const queued = candidate.queueTime ? new Date(candidate.queueTime).toLocaleString() : "queue time unavailable";
-  details.textContent = `${queued} · ${candidate.createdByUI ? "release UI run" : "legacy run"}`;
+  const commit = candidate.sourceVersion ? candidate.sourceVersion.slice(0, 12) : "commit unavailable";
+  const branch = candidate.sourceBranch || "branch unavailable";
+  details.textContent = `${queued} · ${branch} @ ${commit}`;
 
   const switches = document.createElement("p");
   switches.className = "candidate-switches";
   const parameters = candidate.parameters || {};
   switches.textContent = [
-    `images ${parameters.runGoImagesBuild ?? "unknown"}`,
-    `announcement ${parameters.runPublishAnnouncement ?? "unknown"}`,
-    `DL ${parameters.runUpdateDL ?? "unknown"}`,
-    `MAR check ${parameters.runGoImageVersionCheck ?? "unknown"}`,
+    `artifact source ${parameters.sourceBuildPipelineRunId ?? "pipeline default"}`,
+    `publish prefix ${parameters.publishRepoPrefix ?? "pipeline default"}`,
   ].join(" · ");
 
   const actions = document.createElement("div");
@@ -270,6 +233,10 @@ function createCandidate(candidate, versions) {
       renderPlan(plan);
       connectEvents();
       runCandidates.hidden = true;
+      if (!plan.run.complete) {
+        await requestJSON("/api/go-images/runs/monitor", { method: "POST", body: "{}" });
+        executionActive = true;
+      }
     } catch (error) {
       showError(error.message);
       setBusy(importButton, false, candidate.state === "succeeded" ? "Load completed run" : "Load and monitor");
@@ -278,21 +245,6 @@ function createCandidate(candidate, versions) {
   actions.append(importButton);
   card.append(header, details, switches, actions);
   return card;
-}
-
-function updateSmokeControls() {
-  const enabled = Boolean(plan?.smokeTest && preflight?.externalExecutionEnabled);
-  smokeControls.hidden = !enabled;
-  if (!enabled) return;
-  const alreadyComplete = Boolean(plan.run?.complete);
-  smokeButton.disabled = alreadyComplete || executionActive || smokeConfirmation.value !== smokeConfirmationPhrase;
-  if (alreadyComplete) {
-    smokeButton.textContent = "Smoke test already completed";
-  } else if (executionActive) {
-    smokeButton.textContent = "Smoke test running…";
-  } else {
-    smokeButton.textContent = plan.run?.buildId ? "Resume smoke-test monitoring" : "Queue one-time smoke test";
-  }
 }
 
 function renderPipelineRun(run) {
@@ -304,7 +256,8 @@ function renderPipelineRun(run) {
   }
   pipelineRunLink.href = run.url;
   const origin = run.imported ? " · imported" : "";
-  pipelineRunLink.textContent = `Open Azure Pipeline run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}${origin}`;
+  const source = run.sourceVersion ? ` · ${run.sourceVersion.slice(0, 12)}` : "";
+  pipelineRunLink.textContent = `Open Azure Pipeline run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}${source}${origin}`;
   pipelineRunLink.hidden = false;
 }
 
@@ -315,7 +268,6 @@ async function refreshPlanMetadata() {
   if (!plan || latest.sessionId !== plan.sessionId) return;
   plan.run = latest.run;
   renderPipelineRun(plan.run);
-  updateSmokeControls();
 }
 
 function createStepCard(step) {
@@ -367,13 +319,14 @@ function connectEvents() {
       updateSteps(snapshot);
       updateProgress(snapshot);
     }
-    demoButton.disabled = snapshot.active;
-    demoButton.textContent = snapshot.active ? "Simulation running…" : "Simulate queue and monitor";
-    updateSmokeControls();
+    demoButton.disabled = snapshot.active || Boolean(plan?.run?.imported);
+    demoButton.textContent = plan?.run?.imported
+      ? snapshot.active ? "Monitoring imported run…" : "Imported run loaded"
+      : snapshot.active ? "Simulation running…" : "Simulate queue and monitor";
     if (!snapshot.active && snapshot.error) {
       showError(snapshot.error);
     }
-    if (snapshot.steps.some((step) => step.id === "go-images.release-pipeline.queue" && step.status === "succeeded") || !snapshot.active) {
+    if (snapshot.steps.some((step) => step.id === "go-images.pipeline.queue" && step.status === "succeeded") || !snapshot.active) {
       refreshPlanMetadata().catch((error) => showError(error.message));
     }
   });
@@ -410,7 +363,12 @@ function updateProgress(snapshot) {
 
   progressCount.textContent = `${complete} / ${steps.length} complete`;
   progressBar.style.width = `${percent}%`;
-  progressLabel.textContent = snapshot.active ? "Simulation in progress" : complete === steps.length && steps.length ? "Simulation complete" : "Ready to simulate";
+  const imported = Boolean(plan?.run?.imported);
+  progressLabel.textContent = snapshot.active
+    ? imported ? "Monitoring imported run" : "Simulation in progress"
+    : complete === steps.length && steps.length
+      ? imported ? "Imported run complete" : "Simulation complete"
+      : imported ? "Imported run ready to monitor" : "Ready to simulate";
 
   const counts = new Map();
   for (const step of steps) counts.set(step.status, (counts.get(step.status) || 0) + 1);
@@ -420,7 +378,7 @@ function updateProgress(snapshot) {
     return label;
   }));
   if (!snapshot.active && complete === steps.length && succeeded === steps.length && steps.length) {
-    progressLabel.textContent = "Simulation completed successfully";
+    progressLabel.textContent = imported ? "Imported run completed successfully" : "Simulation completed successfully";
   }
 }
 

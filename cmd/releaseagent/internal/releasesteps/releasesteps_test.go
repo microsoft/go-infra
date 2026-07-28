@@ -25,39 +25,25 @@ var exampleInput = &Input{
 	TargetGoImagesRepo:     "microsoft/go-images",
 	TargetAzDOGoImagesRepo: "dnceng/internal/_git/microsoft-go-images",
 
-	MicrosoftGoPipeline:              20,
-	MicrosoftGoInnerloopPipeline:     30,
-	MicrosoftGoImagesPipeline:        40,
-	MicrosoftGoImagesReleasePipeline: 1151,
-	MicrosoftGoAkaMSPipeline:         50,
-	AzureLinuxCreatePRPipeline:       60,
+	MicrosoftGoPipeline:          20,
+	MicrosoftGoInnerloopPipeline: 30,
+	MicrosoftGoImagesPipeline:    1023,
+	MicrosoftGoAkaMSPipeline:     50,
+	AzureLinuxCreatePRPipeline:   60,
 }
 
-func TestGoImagesReleasePipelineParameters(t *testing.T) {
-	parameters, err := GoImagesReleasePipelineParameters(exampleInput, 42)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestGoImagesPipelineParameters(t *testing.T) {
+	parameters := GoImagesPipelineParameters()
 	want := map[string]string{
-		"releaseVersions":                  `["1.22.10-1","1.23.4-1"]`,
-		"releaseIssue":                     "42",
-		"isSecurityRelease":                "false",
-		"approveAheadOfTime":               "false",
-		"runGoImagesBuild":                 "true",
-		"runPublishAnnouncement":           "false",
-		"runUpdateDL":                      "false",
-		"runGoImageVersionCheck":           "true",
-		"poll1MicrosoftGoImagesCommitHash": "nil",
-		"poll2MicrosoftGoImagesBuildID":    "nil",
-		"notify":                           "ghost",
-		"goReleaseConfigVariableGroup":     "go-release-variables",
+		"sourceBuildPipelineRunId": "$(Build.BuildId)",
+		"publishRepoPrefix":        "public/",
 	}
 	if actual, expected := mustJSON(t, parameters), mustJSON(t, want); actual != expected {
 		t.Fatalf("parameters mismatch\nactual: %s\nwant:   %s", actual, expected)
 	}
 }
 
-func TestRunFakeGoImagesReleasePipeline(t *testing.T) {
+func TestRunFakeGoImagesPipeline(t *testing.T) {
 	input := *exampleInput
 	input.ReleaseIssue = 42
 	var queued bool
@@ -65,11 +51,11 @@ func TestRunFakeGoImagesReleasePipeline(t *testing.T) {
 	sb := &ServiceBundleMock{
 		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
 			queued = true
-			if pipelineID != 1151 {
-				t.Fatalf("pipeline ID = %d, want 1151", pipelineID)
+			if pipelineID != 1023 {
+				t.Fatalf("pipeline ID = %d, want 1023", pipelineID)
 			}
-			if parameters["runPublishAnnouncement"] != "false" || parameters["runUpdateDL"] != "false" {
-				t.Fatalf("unexpected side-effect parameters: %#v", parameters)
+			if parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" || parameters["publishRepoPrefix"] != "public/" {
+				t.Fatalf("unexpected direct pipeline parameters: %#v", parameters)
 			}
 			if optionalParameters != nil {
 				t.Fatalf("optional parameters = %#v, want nil", optionalParameters)
@@ -85,7 +71,7 @@ func TestRunFakeGoImagesReleasePipeline(t *testing.T) {
 		},
 	}
 	var checkpoints []State
-	steps, state, err := CreateGoImagesReleasePipelineGraphWithCheckpoint(
+	steps, state, err := CreateGoImagesPipelineGraphWithCheckpoint(
 		&input,
 		exampleSecret,
 		nil,
@@ -146,7 +132,7 @@ func TestGoImagesReleasePipelineResume(t *testing.T) {
 			return nil
 		},
 	}
-	steps, state, err := CreateGoImagesReleasePipelineGraph(&input, exampleSecret, state, sb)
+	steps, state, err := CreateGoImagesPipelineGraph(&input, exampleSecret, state, sb)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -234,14 +234,6 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .pipeline-parameters dt { color: #8cabc5; background: rgb(18 42 64 / 72%); }
 .pipeline-parameters dd { color: var(--text); background: rgb(6 17 30 / 65%); }
 .pipeline-parameters > :nth-last-child(-n+2) { border-bottom: 0; }
-.smoke-controls { margin-bottom: 18px; padding: 18px; border: 1px solid rgb(255 123 135 / 34%); border-radius: 14px; background: linear-gradient(145deg, rgb(255 123 135 / 9%), rgb(7 19 33 / 76%)); }
-.smoke-controls h3 { margin: 0; font-size: 14px; }
-.smoke-controls > p:not(.eyebrow) { margin: 8px 0 15px; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.smoke-controls label { margin-top: 14px; }
-.smoke-controls .button { width: 100%; margin-top: 12px; }
-.digest-row { display: grid; gap: 5px; padding: 10px; border-radius: 9px; background: rgb(5 16 29 / 70%); }
-.digest-row span { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
-.digest-row code { color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; overflow-wrap: anywhere; }
 .pipeline-run-link { display: block; margin-top: 12px; color: var(--cyan); font-size: 11px; text-align: center; }
 
 .step-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 10px; max-height: 760px; margin: 0; padding: 1px; overflow: auto; list-style: none; }

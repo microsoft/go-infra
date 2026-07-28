@@ -6,7 +6,6 @@
 package azdopipeline
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,15 +38,6 @@ type Client struct {
 	tokens  TokenProvider
 }
 
-// QueueRequest describes one Azure Pipelines run request.
-type QueueRequest struct {
-	DefinitionID  int
-	SourceBranch  string
-	SourceVersion string
-	Parameters    map[string]string
-	Variables     map[string]string
-}
-
 // Build is the release UI's stable view of an Azure Pipelines run.
 type Build struct {
 	ID                 int
@@ -55,6 +45,8 @@ type Build struct {
 	Status             string
 	Result             string
 	WebURL             string
+	SourceBranch       string
+	SourceVersion      string
 	Parameters         map[string]string
 	TemplateParameters map[string]any
 	QueueTime          time.Time
@@ -66,6 +58,7 @@ type Definition struct {
 	Name          string
 	QueueStatus   string
 	DefaultBranch string
+	Repository    string
 	YAMLPath      string
 }
 
@@ -115,42 +108,6 @@ func NewClient(baseURL, project string, httpClient HTTPDoer, tokens TokenProvide
 	}, nil
 }
 
-// Queue starts a pipeline run and returns its assigned build ID.
-func (c *Client) Queue(ctx context.Context, request QueueRequest) (*Build, error) {
-	if request.DefinitionID <= 0 {
-		return nil, errors.New("pipeline definition ID must be positive")
-	}
-	variables, err := json.Marshal(request.Variables)
-	if err != nil {
-		return nil, fmt.Errorf("marshal pipeline variables: %w", err)
-	}
-	body := map[string]any{
-		"definition":         map[string]int{"id": request.DefinitionID},
-		"templateParameters": request.Parameters,
-		// The Build API's legacy "parameters" field carries pipeline variables as a JSON string.
-		"parameters": string(variables),
-	}
-	if request.SourceBranch != "" {
-		body["sourceBranch"] = request.SourceBranch
-	}
-	if request.SourceVersion != "" {
-		body["sourceVersion"] = request.SourceVersion
-	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("marshal pipeline request: %w", err)
-	}
-	query := url.Values{
-		"definitionId": {strconv.Itoa(request.DefinitionID)},
-		"api-version":  {"7.1-preview.7"},
-	}
-	var response apiBuild
-	if err := c.doJSON(ctx, http.MethodPost, c.buildsURL(query), bytes.NewReader(encoded), &response); err != nil {
-		return nil, err
-	}
-	return response.build()
-}
-
 // Get returns one pipeline run.
 func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 	if buildID <= 0 {
@@ -158,7 +115,7 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 	}
 	endpoint := c.buildsURL(nil) + "/" + strconv.Itoa(buildID) + "?api-version=7.1"
 	var response apiBuild
-	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+	if err := c.getJSON(ctx, endpoint, &response); err != nil {
 		return nil, err
 	}
 	return response.build()
@@ -180,9 +137,10 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 		} `json:"process"`
 		Repository struct {
 			DefaultBranch string `json:"defaultBranch"`
+			Name          string `json:"name"`
 		} `json:"repository"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &response); err != nil {
+	if err := c.getJSON(ctx, endpoint, &response); err != nil {
 		return nil, err
 	}
 	if response.ID != definitionID {
@@ -193,63 +151,9 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 		Name:          response.Name,
 		QueueStatus:   response.QueueStatus,
 		DefaultBranch: response.Repository.DefaultBranch,
+		Repository:    response.Repository.Name,
 		YAMLPath:      response.Process.YAMLPath,
 	}, nil
-}
-
-// FindLatestByVariable returns the newest recent run of definitionID carrying name=value.
-func (c *Client) FindLatestByVariable(ctx context.Context, definitionID int, name, value string) (*Build, error) {
-	if definitionID <= 0 {
-		return nil, errors.New("pipeline definition ID must be positive")
-	}
-	if name == "" || value == "" {
-		return nil, errors.New("correlation variable name and value are required")
-	}
-	builds, err := c.ListRecentByVariables(ctx, definitionID, map[string]string{name: value})
-	if err != nil {
-		return nil, err
-	}
-	if len(builds) == 0 {
-		return nil, nil
-	}
-	return builds[0], nil
-}
-
-// ListRecentByVariables returns recent runs whose pipeline variables contain every required pair.
-func (c *Client) ListRecentByVariables(
-	ctx context.Context,
-	definitionID int,
-	required map[string]string,
-) ([]*Build, error) {
-	if definitionID <= 0 {
-		return nil, errors.New("pipeline definition ID must be positive")
-	}
-	if len(required) == 0 {
-		return nil, errors.New("at least one required pipeline variable is needed")
-	}
-	for name, value := range required {
-		if name == "" || value == "" {
-			return nil, errors.New("required pipeline variable names and values must not be empty")
-		}
-	}
-	builds, err := c.ListRecent(ctx, definitionID)
-	if err != nil {
-		return nil, err
-	}
-	var matches []*Build
-	for _, build := range builds {
-		match := true
-		for name, value := range required {
-			if build.Parameters[name] != value {
-				match = false
-				break
-			}
-		}
-		if match {
-			matches = append(matches, build)
-		}
-	}
-	return matches, nil
 }
 
 // ListRecent returns up to 50 recent runs of a pipeline, newest first.
@@ -266,7 +170,7 @@ func (c *Client) ListRecent(ctx context.Context, definitionID int) ([]*Build, er
 	var response struct {
 		Value []apiBuild `json:"value"`
 	}
-	if err := c.doJSON(ctx, http.MethodGet, c.buildsURL(query), nil, &response); err != nil {
+	if err := c.getJSON(ctx, c.buildsURL(query), &response); err != nil {
 		return nil, err
 	}
 	builds := make([]*Build, 0, len(response.Value))
@@ -311,7 +215,7 @@ func (c *Client) buildsURL(query url.Values) string {
 	return endpoint
 }
 
-func (c *Client) doJSON(ctx context.Context, method, endpoint string, body io.Reader, target any) error {
+func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire Azure DevOps token: %w", err)
@@ -319,15 +223,12 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, body io.Re
 	if token == "" {
 		return errors.New("azure DevOps token provider returned an empty token")
 	}
-	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("create Azure DevOps request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json; charset=utf-8")
-	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("send Azure DevOps request: %w", err)
@@ -345,7 +246,7 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, body io.Re
 		responseBody = strings.ReplaceAll(responseBody, token, "[REDACTED]")
 		return &HTTPError{
 			StatusCode: response.StatusCode,
-			Method:     method,
+			Method:     http.MethodGet,
 			URL:        endpoint,
 			Body:       responseBody,
 		}
@@ -360,6 +261,8 @@ type apiBuild struct {
 	ID                 int            `json:"id"`
 	Status             string         `json:"status"`
 	Result             string         `json:"result"`
+	SourceBranch       string         `json:"sourceBranch"`
+	SourceVersion      string         `json:"sourceVersion"`
 	Parameters         string         `json:"parameters"`
 	TemplateParameters map[string]any `json:"templateParameters"`
 	QueueTime          time.Time      `json:"queueTime"`
@@ -383,6 +286,8 @@ func (b apiBuild) build() (*Build, error) {
 		Status:             b.Status,
 		Result:             b.Result,
 		WebURL:             decodeWebURL(b.Links),
+		SourceBranch:       b.SourceBranch,
+		SourceVersion:      b.SourceVersion,
 		Parameters:         parameters,
 		TemplateParameters: b.TemplateParameters,
 		QueueTime:          b.QueueTime,

@@ -13,11 +13,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"time"
 
+	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 	"github.com/microsoft/go-infra/subcmd"
@@ -27,7 +29,7 @@ func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "serve",
 		Summary:     "Start the local go-images release pipeline planning UI",
-		Description: "\n\nThis iteration previews and simulates pipeline 1151. It performs no external operations.\n",
+		Description: "\n\nThis iteration previews and simulates pipeline 1023. Optional Azure access is read-only.\n",
 		Handle:      handleServe,
 	})
 }
@@ -37,16 +39,12 @@ func handleServe(parse subcmd.ParseFunc) error {
 	noOpen := flag.Bool("no-open", false, "Do not automatically open the UI in the default browser")
 	demoDelay := flag.Duration("demo-step-delay", 250*time.Millisecond, "Duration of each step in the safe simulation")
 	sessionFile := flag.String("session-file", "", "Optional JSON file used to persist and restore the non-secret release plan")
-	enableSmoke := flag.Bool("enable-go-images-smoke-test", false, "Enable confirmation-protected one-time queueing of pipeline 1151 with all release actions disabled")
-	smokeVariableGroup := flag.String("go-images-smoke-variable-group", "", "The only variable group accepted by the enabled pipeline 1151 smoke test")
+	enableAzureReadOnly := flag.Bool("enable-go-images-azure-read-only", false, "Enable authenticated read-only discovery of pipeline 1023 runs")
 	if err := parse(); err != nil {
 		return err
 	}
-	if *enableSmoke && *sessionFile == "" {
-		return errors.New("-enable-go-images-smoke-test requires -session-file")
-	}
-	if *enableSmoke && *smokeVariableGroup == "" {
-		return errors.New("-enable-go-images-smoke-test requires -go-images-smoke-variable-group")
+	if *enableAzureReadOnly && *sessionFile == "" {
+		return errors.New("-enable-go-images-azure-read-only requires -session-file")
 	}
 
 	var options []releaseui.Option
@@ -69,49 +67,65 @@ func handleServe(parse subcmd.ParseFunc) error {
 		sessionPath = store.Path()
 		options = append(options, releaseui.WithSessionStore(store))
 	}
-	if *enableSmoke {
+	if *enableAzureReadOnly {
 		azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
+		tokenProvider := &azdopipeline.CachingTokenProvider{
+			Provider: azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
+			TTL:      5 * time.Minute,
+		}
 		azureClient, err := azdopipeline.NewClient(
 			"https://dev.azure.com/dnceng",
 			"internal",
 			azureHTTPClient,
-			azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
+			tokenProvider,
 		)
 		if err != nil {
 			return err
 		}
-		options = append(options, releaseui.WithGoImagesSmokeExecution(releaseui.GoImagesSmokeExecution{
-			DefinitionID:  1151,
-			VariableGroup: *smokeVariableGroup,
+		repoClient, err := azdorepo.NewClient(
+			"https://dev.azure.com/dnceng",
+			"internal",
+			"microsoft-go-images",
+			azureHTTPClient,
+			tokenProvider,
+		)
+		if err != nil {
+			return err
+		}
+		versionResolver := goimagesrelease.VersionResolverFunc(func(ctx context.Context, commit string) ([]string, error) {
+			var model dockerversions.Versions
+			if err := repoClient.GetJSONFileAtCommit(ctx, "/src/microsoft/versions.json", commit, &model); err != nil {
+				return nil, err
+			}
+			versions := make([]string, 0, len(model))
+			for _, version := range model {
+				versions = append(versions, version.GoVersion().Full())
+			}
+			sort.Strings(versions)
+			return versions, nil
+		})
+		options = append(options, releaseui.WithGoImagesReadOnlyIntegration(releaseui.GoImagesReadOnlyIntegration{
+			DefinitionID: 1023,
 			Preflight: func(ctx context.Context) (string, error) {
-				definition, err := azureClient.GetDefinition(ctx, 1151)
+				definition, err := azureClient.GetDefinition(ctx, 1023)
 				if err != nil {
 					return "", err
 				}
-				if definition.Name != "microsoft-go-infra-release-go-images (official)" ||
+				if definition.Name != "microsoft-go-images (official)" ||
 					definition.QueueStatus != "enabled" ||
-					definition.DefaultBranch != "refs/heads/main" ||
-					definition.YAMLPath != "eng/pipelines/release-go-images-pipeline.yml" {
+					definition.DefaultBranch != "refs/heads/microsoft/main" ||
+					definition.Repository != "microsoft-go-images" ||
+					definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
 
-					return "", fmt.Errorf("pipeline 1151 does not match the smoke-test allowlist: %#v", definition)
+					return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
 				}
-				return "Authenticated and verified production pipeline 1151. All release actions are forced off.", nil
-			},
-			NewService: func(request releaseui.GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
-				return goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1151,
-					SessionID:       request.SessionID,
-					Versions:        request.Versions,
-					ExecutionDigest: request.ExecutionDigest,
-					PollInterval:    5 * time.Second,
-				}, nil)
+				return "Authenticated and verified direct go-images pipeline 1023. Access is read-only.", nil
 			},
 			FindRuns: func(ctx context.Context, versions []string) ([]releaseui.PipelineRunCandidate, error) {
 				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1151,
-					SessionID:       "discovery-only",
+					DefinitionID:    1023,
 					Versions:        versions,
-					ExecutionDigest: "discovery-only",
+					VersionResolver: versionResolver,
 				}, nil)
 				if err != nil {
 					return nil, err
@@ -128,10 +142,9 @@ func handleServe(parse subcmd.ParseFunc) error {
 			},
 			ValidateRun: func(ctx context.Context, buildID int, versions []string) (releaseui.PipelineRunCandidate, error) {
 				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1151,
-					SessionID:       "discovery-only",
+					DefinitionID:    1023,
 					Versions:        versions,
-					ExecutionDigest: "discovery-only",
+					VersionResolver: versionResolver,
 				}, nil)
 				if err != nil {
 					return releaseui.PipelineRunCandidate{}, err
@@ -141,6 +154,18 @@ func handleServe(parse subcmd.ParseFunc) error {
 					return releaseui.PipelineRunCandidate{}, err
 				}
 				return convertRunCandidate(candidate), nil
+			},
+			MonitorRun: func(ctx context.Context, buildID int, versions []string) error {
+				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
+					DefinitionID:    1023,
+					Versions:        versions,
+					VersionResolver: versionResolver,
+					PollInterval:    5 * time.Second,
+				}, nil)
+				if err != nil {
+					return err
+				}
+				return service.MonitorRun(ctx, buildID)
 			},
 		}))
 	}
@@ -180,8 +205,8 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 
 	fmt.Printf("Release UI listening at %s\n", launchURL)
-	if *enableSmoke {
-		fmt.Println("One-time pipeline 1151 smoke execution is enabled with every release action forced off.")
+	if *enableAzureReadOnly {
+		fmt.Println("Read-only discovery of pipeline 1023 is enabled. Queueing is not implemented.")
 	} else {
 		fmt.Println("Go-images pipeline execution is disabled; this UI can only plan and simulate it.")
 	}
@@ -212,16 +237,15 @@ func handleServe(parse subcmd.ParseFunc) error {
 
 func convertRunCandidate(candidate goimagesrelease.Candidate) releaseui.PipelineRunCandidate {
 	return releaseui.PipelineRunCandidate{
-		BuildID:         candidate.BuildID,
-		Status:          candidate.Status,
-		Result:          candidate.Result,
-		State:           string(candidate.State),
-		URL:             candidate.URL,
-		QueueTime:       candidate.QueueTime,
-		SessionID:       candidate.SessionID,
-		VersionSet:      candidate.VersionSet,
-		ExecutionDigest: candidate.ExecutionDigest,
-		CreatedByUI:     candidate.CreatedByUI,
-		Parameters:      candidate.Parameters,
+		BuildID:       candidate.BuildID,
+		Status:        candidate.Status,
+		Result:        candidate.Result,
+		State:         string(candidate.State),
+		URL:           candidate.URL,
+		QueueTime:     candidate.QueueTime,
+		SourceBranch:  candidate.SourceBranch,
+		SourceVersion: candidate.SourceVersion,
+		VersionSet:    candidate.VersionSet,
+		Parameters:    candidate.Parameters,
 	}
 }

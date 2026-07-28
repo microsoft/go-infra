@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 // AzureDevOpsResourceID is the Microsoft Entra resource used by Azure DevOps.
@@ -56,3 +58,38 @@ func (p AzureCLITokenProvider) Token(ctx context.Context) (string, error) {
 }
 
 var _ TokenProvider = AzureCLITokenProvider{}
+
+// CachingTokenProvider reuses a token for a short interval. This avoids running Azure CLI for
+// every read while still refreshing well before a normal Azure DevOps access token expires.
+type CachingTokenProvider struct {
+	Provider TokenProvider
+	TTL      time.Duration
+
+	mu       sync.Mutex
+	token    string
+	acquired time.Time
+}
+
+// Token implements TokenProvider.
+func (p *CachingTokenProvider) Token(ctx context.Context) (string, error) {
+	if p == nil || p.Provider == nil {
+		return "", errors.New("cached token provider is nil")
+	}
+	if p.TTL <= 0 {
+		return "", errors.New("cached token TTL must be positive")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.token != "" && time.Since(p.acquired) < p.TTL {
+		return p.token, nil
+	}
+	token, err := p.Provider.Token(ctx)
+	if err != nil {
+		return "", err
+	}
+	p.token = token
+	p.acquired = time.Now()
+	return token, nil
+}
+
+var _ TokenProvider = (*CachingTokenProvider)(nil)

@@ -26,14 +26,14 @@
     <section class="hero">
       <div>
         <p class="eyebrow">Go-images release workspace</p>
-        <h1>Prepare the image release pipeline.</h1>
-        <p class="hero-copy">Validate and persist the exact request for the existing go-images release pipeline, then inspect its focused queue-and-monitor workflow.</p>
+        <h1>Inspect the image build pipeline.</h1>
+        <p class="hero-copy">Find and import direct go-images pipeline runs by the versions present in their source commit.</p>
       </div>
       <div class="safety-card">
         <span class="safety-icon" aria-hidden="true">✓</span>
         <div>
           <strong id="safety-title">External execution disabled</strong>
-          <p id="safety-copy">The UI can prepare and simulate pipeline 1151, but it cannot queue it or contact Azure DevOps.</p>
+          <p id="safety-copy">The UI can prepare and simulate pipeline 1023. Azure access is disabled by default.</p>
           <ul id="preflight-list" class="preflight-list" aria-label="Local readiness checks"></ul>
         </div>
       </div>
@@ -45,37 +45,14 @@
           <span class="step-number">01</span>
           <div>
             <h2>Go-images inputs</h2>
-            <p>These become parameters for pipeline 1151.</p>
+            <p>Versions are used only to match source commits for pipeline 1023.</p>
           </div>
         </div>
 
         <form id="plan-form">
           <label for="versions">Versions</label>
           <textarea id="versions" name="versions" rows="4" placeholder="1.26.1-1&#10;1.25.6-1" required spellcheck="false"></textarea>
-          <p class="field-help">One Microsoft release version per line, including its revision suffix.</p>
-
-          <label for="runner">Release runner</label>
-          <div class="input-prefix">
-            <span aria-hidden="true">@</span>
-            <input id="runner" name="runner" value="ghost" autocomplete="off" required>
-          </div>
-          <p class="field-help">GitHub username used for notifications. Use <strong>ghost</strong> for nobody.</p>
-
-          <label for="variable-group">Release configuration variable group</label>
-          <input id="variable-group" name="variable-group" placeholder="go-release-config" autocomplete="off" required>
-          <p class="field-help">Required by the pipeline. It is previewed and persisted, but not used while execution is disabled.</p>
-
-          <label for="release-issue">Existing release issue <span class="optional">optional</span></label>
-          <input id="release-issue" name="release-issue" type="number" min="1" step="1" placeholder="e.g. 1234">
-          <p class="field-help">The microsoft/go issue to update, or leave blank to pass <strong>nil</strong>.</p>
-
-          <label class="check-row" for="security">
-            <input id="security" name="security" type="checkbox">
-            <span>
-              <strong>Security release</strong>
-              <small>Passed through to the go-images release pipeline.</small>
-            </span>
-          </label>
+          <p class="field-help">One Microsoft release version per line, including its revision suffix. Versions are not pipeline 1023 parameters.</p>
 
           <button id="find-runs-button" class="button button-secondary find-runs-button" type="button" hidden>
             Find existing runs for versions
@@ -129,31 +106,14 @@
           <section class="request-preview" aria-labelledby="request-preview-title">
             <div class="request-preview-heading">
               <div>
-                <p class="eyebrow">Azure DevOps request</p>
+                <p class="eyebrow">Azure DevOps request preview · not sent</p>
                 <h3 id="request-preview-title">Pipeline <span id="pipeline-id"></span></h3>
               </div>
               <span id="pipeline-target" class="pipeline-target"></span>
             </div>
             <dl id="pipeline-parameters" class="pipeline-parameters"></dl>
           </section>
-          <section id="smoke-controls" class="smoke-controls" hidden>
-            <p class="eyebrow">One-time authorized smoke test</p>
-            <h3>Queue pipeline 1151 with all release actions disabled</h3>
-            <p>
-              This queues a real orchestration run, but forces image build, announcement, DL
-              update, MAR verification, issue reporting, and approval off.
-            </p>
-            <div class="digest-row">
-              <span>Confirmed plan digest</span>
-              <code id="plan-digest"></code>
-            </div>
-            <label for="smoke-confirmation">Type <strong>QUEUE PIPELINE 1151 SMOKE TEST</strong></label>
-            <input id="smoke-confirmation" autocomplete="off" spellcheck="false">
-            <button id="smoke-button" class="button button-danger" type="button" disabled>
-              Queue one-time smoke test
-            </button>
-            <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
-          </section>
+          <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
           <ol id="step-list" class="step-list"></ol>
         </div>
       </section>

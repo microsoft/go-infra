@@ -53,18 +53,8 @@ func TestReleaseUIIntegrationPipelineIsSafeNoOp(t *testing.T) {
 		names = append(names, name)
 	}
 	wantNames := []string{
-		"releaseVersions",
-		"releaseIssue",
-		"isSecurityRelease",
-		"approveAheadOfTime",
-		"runGoImagesBuild",
-		"runPublishAnnouncement",
-		"runUpdateDL",
-		"runGoImageVersionCheck",
-		"poll1MicrosoftGoImagesCommitHash",
-		"poll2MicrosoftGoImagesBuildID",
-		"notify",
-		"goReleaseConfigVariableGroup",
+		"sourceBuildPipelineRunId",
+		"publishRepoPrefix",
 	}
 	if !reflect.DeepEqual(names, wantNames) {
 		t.Fatalf("parameter names = %#v, want %#v", names, wantNames)

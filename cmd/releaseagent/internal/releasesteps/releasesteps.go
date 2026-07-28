@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -50,13 +49,11 @@ type Input struct {
 	TargetGoImagesRepo     string
 	TargetAzDOGoImagesRepo string
 
-	MicrosoftGoPipeline              int
-	MicrosoftGoInnerloopPipeline     int
-	MicrosoftGoImagesPipeline        int
-	MicrosoftGoImagesReleasePipeline int
-	GoImagesReleaseSmokeTest         bool
-	MicrosoftGoAkaMSPipeline         int
-	AzureLinuxCreatePRPipeline       int
+	MicrosoftGoPipeline          int
+	MicrosoftGoInnerloopPipeline int
+	MicrosoftGoImagesPipeline    int
+	MicrosoftGoAkaMSPipeline     int
+	AzureLinuxCreatePRPipeline   int
 }
 
 func (i *Input) checksum() (uint32, error) {
@@ -101,6 +98,7 @@ type DayState struct {
 	ReleaseIssue int
 
 	GoImagesCommit            string
+	GoImagesSourceBranch      string
 	GoImagesOfficialBuildID   string
 	GoImagesReleaseBuildID    string
 	GoImagesReleaseComplete   bool
@@ -237,77 +235,40 @@ const (
 
 	microsoftGoImagesPRCITimeout       = 2 * time.Hour
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
-	goImagesReleasePipelineTimeout     = 26 * time.Hour
 )
 
-// GoImagesReleasePipelineParameters returns the complete parameter set for the existing
-// microsoft-go-infra-release-go-images pipeline. This first integration is intentionally limited
-// to image build/publish and image version verification; announcement and DL updates are disabled.
-func GoImagesReleasePipelineParameters(ri *Input, releaseIssue int) (map[string]string, error) {
-	if ri == nil || len(ri.Versions) == 0 {
-		return nil, fmt.Errorf("no versions to release")
+// GoImagesPipelineParameters returns the two runtime parameters accepted by the direct
+// microsoft-go-images pipeline. These are production defaults: a newly queued run builds from its
+// own artifacts and publishes to public/. The release UI does not currently queue this pipeline.
+func GoImagesPipelineParameters() map[string]string {
+	return map[string]string{
+		"sourceBuildPipelineRunId": "$(Build.BuildId)",
+		"publishRepoPrefix":        "public/",
 	}
-	if ri.ReleaseConfigVariableGroup == "" {
-		return nil, fmt.Errorf("no release configuration variable group specified")
-	}
-	if ri.RunnerGitHubUser == "" {
-		return nil, fmt.Errorf("no release runner specified")
-	}
-	versions, err := json.Marshal(ri.Versions)
-	if err != nil {
-		return nil, fmt.Errorf("marshal go-images release versions: %w", err)
-	}
-	releaseIssueValue := "nil"
-	if releaseIssue != 0 {
-		releaseIssueValue = strconv.Itoa(releaseIssue)
-	}
-	parameters := map[string]string{
-		"releaseVersions":                  string(versions),
-		"releaseIssue":                     releaseIssueValue,
-		"isSecurityRelease":                strconv.FormatBool(ri.Security),
-		"approveAheadOfTime":               "false",
-		"runGoImagesBuild":                 "true",
-		"runPublishAnnouncement":           "false",
-		"runUpdateDL":                      "false",
-		"runGoImageVersionCheck":           "true",
-		"poll1MicrosoftGoImagesCommitHash": "nil",
-		"poll2MicrosoftGoImagesBuildID":    "nil",
-		"notify":                           ri.RunnerGitHubUser,
-		"goReleaseConfigVariableGroup":     ri.ReleaseConfigVariableGroup,
-	}
-	if ri.GoImagesReleaseSmokeTest {
-		parameters["releaseIssue"] = "nil"
-		parameters["approveAheadOfTime"] = "true"
-		parameters["runGoImagesBuild"] = "false"
-		parameters["runPublishAnnouncement"] = "false"
-		parameters["runUpdateDL"] = "false"
-		parameters["runGoImageVersionCheck"] = "false"
-	}
-	return parameters, nil
 }
 
-// CreateGoImagesReleasePipelineGraph creates the initial focused workflow that queues and monitors
-// the existing microsoft-go-infra-release-go-images pipeline as one coarse-grained operation.
-func CreateGoImagesReleasePipelineGraph(
+// CreateGoImagesPipelineGraph creates the initial focused workflow that queues and monitors
+// the direct microsoft-go-images pipeline as one coarse-grained operation.
+func CreateGoImagesPipelineGraph(
 	ri *Input,
 	secret *Secret,
 	rs *State,
 	sb GoImagesReleaseService,
 ) ([]*coordinator.Step, *State, error) {
-	return CreateGoImagesReleasePipelineGraphWithCheckpoint(ri, secret, rs, sb, nil)
+	return CreateGoImagesPipelineGraphWithCheckpoint(ri, secret, rs, sb, nil)
 }
 
-// CreateGoImagesReleasePipelineGraphWithCheckpoint is like CreateGoImagesReleasePipelineGraph and
+// CreateGoImagesPipelineGraphWithCheckpoint is like CreateGoImagesPipelineGraph and
 // durably records the queued pipeline ID and successful completion.
-func CreateGoImagesReleasePipelineGraphWithCheckpoint(
+func CreateGoImagesPipelineGraphWithCheckpoint(
 	ri *Input,
 	secret *Secret,
 	rs *State,
 	sb GoImagesReleaseService,
 	checkpoint StateCheckpoint,
 ) ([]*coordinator.Step, *State, error) {
-	if ri == nil || ri.MicrosoftGoImagesReleasePipeline == 0 {
-		return nil, nil, fmt.Errorf("no go-images release pipeline specified")
+	if ri == nil || ri.MicrosoftGoImagesPipeline == 0 {
+		return nil, nil, fmt.Errorf("no go-images pipeline specified")
 	}
 	var err error
 	rs, err = initializeState(ri, rs)
@@ -318,15 +279,11 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 		rs.Day.ReleaseIssue = ri.ReleaseIssue
 	}
 	state := &stateAccess{state: rs, checkpoint: checkpoint}
-	releaseIssue := stateValue(state, func(s *State) int { return s.Day.ReleaseIssue })
-	parameters, err := GoImagesReleasePipelineParameters(ri, releaseIssue)
-	if err != nil {
-		return nil, nil, err
-	}
+	parameters := GoImagesPipelineParameters()
 
 	queue := coordinator.NewRootStep(
-		"go-images.release-pipeline.queue",
-		"🚀 Queue go-images release pipeline",
+		"go-images.pipeline.queue",
+		"🚀 Queue go-images pipeline",
 		shortTimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
@@ -334,7 +291,7 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 			}
 			buildID, err := sb.TriggerBuildPipeline(
 				ctx,
-				ri.MicrosoftGoImagesReleasePipeline,
+				ri.MicrosoftGoImagesPipeline,
 				parameters,
 				nil,
 				secret,
@@ -350,9 +307,9 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 		},
 	)
 	wait := queue.Then(
-		"go-images.release-pipeline.wait",
-		"⌚ Wait for go-images release pipeline",
-		goImagesReleasePipelineTimeout,
+		"go-images.pipeline.wait",
+		"⌚ Wait for go-images pipeline",
+		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseComplete }) {
 				return nil
@@ -367,8 +324,8 @@ func CreateGoImagesReleasePipelineGraphWithCheckpoint(
 		},
 	)
 	complete := coordinator.NewIndicatorStep(
-		"go-images.release-pipeline.complete",
-		"✅ Go-images release pipeline complete",
+		"go-images.pipeline.complete",
+		"✅ Go-images pipeline complete",
 		wait,
 	)
 	steps, err := complete.TransitiveDependencies()

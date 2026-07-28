@@ -33,17 +33,13 @@ import (
 
 const sessionCookieName = "releaseui_session"
 
-const (
-	goImagesReleasePipelineID = 1151
-	smokeConfirmationPhrase   = "QUEUE PIPELINE 1151 SMOKE TEST"
-)
+const goImagesPipelineID = 1023
 
 var (
 	//go:embed web/*
 	webFiles embed.FS
 
 	versionPattern = regexp.MustCompile(`^1\.[0-9]+(?:(?:\.[0-9]+)?(?:beta|rc)[1-9][0-9]*|\.[0-9]+)-[1-9][0-9]*(?:-[a-z][a-z0-9-]*)?$`)
-	runnerPattern  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
 )
 
 // Server hosts a single local release-planning session.
@@ -54,7 +50,7 @@ type Server struct {
 	lookPath  executableLookup
 
 	sessionStore session.Store
-	smoke        *GoImagesSmokeExecution
+	readOnly     *GoImagesReadOnlyIntegration
 
 	mu               sync.Mutex
 	steps            []*coordinator.Step
@@ -64,41 +60,32 @@ type Server struct {
 	document         *session.Document
 	runner           *coordinator.StepRunner
 	demoRunning      bool
-	externalRunning  bool
+	monitorRunning   bool
 	restoredFromDisk bool
 }
 
-// GoImagesSmokeExecution is the explicitly enabled, server-controlled real execution boundary.
-// Browser input cannot change the definition ID, variable-group allowlist, or service factory.
-type GoImagesSmokeExecution struct {
-	DefinitionID  int
-	VariableGroup string
-	Preflight     func(context.Context) (string, error)
-	NewService    func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error)
-	FindRuns      func(context.Context, []string) ([]PipelineRunCandidate, error)
-	ValidateRun   func(context.Context, int, []string) (PipelineRunCandidate, error)
-}
-
-// GoImagesServiceRequest binds queued-run metadata to immutable confirmed input.
-type GoImagesServiceRequest struct {
-	SessionID       string
-	Versions        []string
-	ExecutionDigest string
+// GoImagesReadOnlyIntegration is the explicitly enabled, server-controlled Azure read boundary.
+// It cannot queue, cancel, approve, or otherwise mutate a pipeline run.
+type GoImagesReadOnlyIntegration struct {
+	DefinitionID int
+	Preflight    func(context.Context) (string, error)
+	FindRuns     func(context.Context, []string) ([]PipelineRunCandidate, error)
+	ValidateRun  func(context.Context, int, []string) (PipelineRunCandidate, error)
+	MonitorRun   func(context.Context, int, []string) error
 }
 
 // PipelineRunCandidate is a recent run matching a canonical version set.
 type PipelineRunCandidate struct {
-	BuildID         int               `json:"buildId"`
-	Status          string            `json:"status"`
-	Result          string            `json:"result,omitempty"`
-	State           string            `json:"state"`
-	URL             string            `json:"url,omitempty"`
-	QueueTime       time.Time         `json:"queueTime,omitempty"`
-	SessionID       string            `json:"sessionId,omitempty"`
-	VersionSet      string            `json:"versionSet"`
-	ExecutionDigest string            `json:"executionDigest,omitempty"`
-	CreatedByUI     bool              `json:"createdByUI"`
-	Parameters      map[string]string `json:"parameters,omitempty"`
+	BuildID       int               `json:"buildId"`
+	Status        string            `json:"status"`
+	Result        string            `json:"result,omitempty"`
+	State         string            `json:"state"`
+	URL           string            `json:"url,omitempty"`
+	QueueTime     time.Time         `json:"queueTime,omitempty"`
+	SourceBranch  string            `json:"sourceBranch,omitempty"`
+	SourceVersion string            `json:"sourceVersion,omitempty"`
+	VersionSet    string            `json:"versionSet"`
+	Parameters    map[string]string `json:"parameters,omitempty"`
 }
 
 // Option customizes a Server.
@@ -125,10 +112,10 @@ func WithExecutableLookup(lookup func(string) (string, error)) Option {
 	}
 }
 
-// WithGoImagesSmokeExecution enables the confirmation-protected one-time smoke-test path.
-func WithGoImagesSmokeExecution(execution GoImagesSmokeExecution) Option {
+// WithGoImagesReadOnlyIntegration enables authenticated read-only run discovery and import.
+func WithGoImagesReadOnlyIntegration(integration GoImagesReadOnlyIntegration) Option {
 	return func(server *Server) {
-		server.smoke = &execution
+		server.readOnly = &integration
 	}
 }
 
@@ -159,20 +146,17 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if server.lookPath == nil {
 		return nil, errors.New("executable lookup is nil")
 	}
-	if server.smoke != nil {
+	if server.readOnly != nil {
 		if server.sessionStore == nil {
-			return nil, errors.New("go-images smoke execution requires a durable session store")
+			return nil, errors.New("go-images run import requires a durable session store")
 		}
-		if server.smoke.DefinitionID != goImagesReleasePipelineID {
-			return nil, fmt.Errorf("go-images smoke definition %d is not allowlisted", server.smoke.DefinitionID)
+		if server.readOnly.DefinitionID != goImagesPipelineID {
+			return nil, fmt.Errorf("go-images definition %d is not allowlisted", server.readOnly.DefinitionID)
 		}
-		if server.smoke.VariableGroup == "" {
-			return nil, errors.New("go-images smoke variable-group allowlist is empty")
-		}
-		if server.smoke.Preflight == nil || server.smoke.NewService == nil ||
-			server.smoke.FindRuns == nil || server.smoke.ValidateRun == nil {
+		if server.readOnly.Preflight == nil || server.readOnly.FindRuns == nil ||
+			server.readOnly.ValidateRun == nil || server.readOnly.MonitorRun == nil {
 
-			return nil, errors.New("go-images smoke execution is missing preflight, service, or discovery behavior")
+			return nil, errors.New("go-images read-only integration is missing preflight or discovery behavior")
 		}
 	}
 	if err := server.restoreSession(); err != nil {
@@ -211,9 +195,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/plan", s.handlePlan)
 	mux.HandleFunc("GET /api/preflight", s.handlePreflight)
 	mux.HandleFunc("POST /api/demo/start", s.handleDemoStart)
-	mux.HandleFunc("POST /api/go-images/smoke/start", s.handleSmokeStart)
 	mux.HandleFunc("POST /api/go-images/runs/search", s.handleRunSearch)
 	mux.HandleFunc("POST /api/go-images/runs/import", s.handleRunImport)
+	mux.HandleFunc("POST /api/go-images/runs/monitor", s.handleRunMonitor)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withSecurityHeaders(s.authenticate(mux))
@@ -235,11 +219,7 @@ func (s *Server) handleIndex(response http.ResponseWriter, request *http.Request
 
 // PlanInput contains the immutable, non-secret inputs represented by this first UI iteration.
 type PlanInput struct {
-	Versions      []string `json:"versions"`
-	Security      bool     `json:"security"`
-	Runner        string   `json:"runner"`
-	VariableGroup string   `json:"variableGroup"`
-	ReleaseIssue  int      `json:"releaseIssue,omitempty"`
+	Versions []string `json:"versions"`
 }
 
 type planStep struct {
@@ -257,7 +237,6 @@ type planResponse struct {
 	SessionID  string          `json:"sessionId,omitempty"`
 	Restored   bool            `json:"restored"`
 	PlanDigest string          `json:"planDigest"`
-	SmokeTest  bool            `json:"smokeTest"`
 	Run        pipelineRun     `json:"run"`
 }
 
@@ -270,10 +249,12 @@ type pipelinePreview struct {
 }
 
 type pipelineRun struct {
-	BuildID  string `json:"buildId,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Complete bool   `json:"complete"`
-	Imported bool   `json:"imported"`
+	BuildID       string `json:"buildId,omitempty"`
+	URL           string `json:"url,omitempty"`
+	SourceBranch  string `json:"sourceBranch,omitempty"`
+	SourceVersion string `json:"sourceVersion,omitempty"`
+	Complete      bool   `json:"complete"`
+	Imported      bool   `json:"imported"`
 }
 
 func (s *Server) handleGetPlan(response http.ResponseWriter, _ *http.Request) {
@@ -304,24 +285,12 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	if s.smoke != nil {
-		normalized.ReleaseIssue = 0
-	}
-
 	releaseInput := &releasesteps.Input{
-		Versions:                         normalized.Versions,
-		Security:                         normalized.Security,
-		RunnerGitHubUser:                 normalized.Runner,
-		ReleaseIssue:                     normalized.ReleaseIssue,
-		ReleaseConfigVariableGroup:       normalized.VariableGroup,
-		MicrosoftGoImagesReleasePipeline: goImagesReleasePipelineID,
-		GoImagesReleaseSmokeTest:         s.smoke != nil,
+		Versions:                  normalized.Versions,
+		RunnerGitHubUser:          "ghost",
+		MicrosoftGoImagesPipeline: goImagesPipelineID,
 	}
-	if s.smoke != nil && normalized.VariableGroup != s.smoke.VariableGroup {
-		writeError(response, http.StatusBadRequest, "variable group is not allowlisted for the smoke test")
-		return
-	}
-	steps, releaseState, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
+	steps, releaseState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
 		releaseInput,
 		nil,
 		nil,
@@ -340,7 +309,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	}
 
 	s.mu.Lock()
-	if s.demoRunning || s.externalRunning {
+	if s.demoRunning || s.monitorRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot replace the plan while a workflow is running")
 		return
@@ -366,13 +335,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 }
 
 func (s *Server) planResponseLocked(restored bool) planResponse {
-	releaseIssue := 0
-	if s.document != nil {
-		releaseIssue = s.document.State.Day.ReleaseIssue
-	} else if s.releaseState != nil {
-		releaseIssue = s.releaseState.Day.ReleaseIssue
-	}
-	parameters, _ := releasesteps.GoImagesReleasePipelineParameters(s.releaseInput, releaseIssue)
+	parameters := releasesteps.GoImagesPipelineParameters()
 	if s.document != nil && len(s.document.State.Day.GoImagesReleaseParameters) != 0 {
 		parameters = clonePipelineParameters(s.document.State.Day.GoImagesReleaseParameters)
 	}
@@ -380,15 +343,14 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 		Input: s.input,
 		Steps: describeSteps(s.steps),
 		Pipeline: pipelinePreview{
-			DefinitionID: goImagesReleasePipelineID,
+			DefinitionID: goImagesPipelineID,
 			Organization: "dnceng",
 			Project:      "internal",
-			Name:         "microsoft-go-infra-release-go-images",
+			Name:         "microsoft-go-images (official)",
 			Parameters:   parameters,
 		},
-		DemoOnly:  true,
-		Restored:  restored,
-		SmokeTest: s.releaseInput != nil && s.releaseInput.GoImagesReleaseSmokeTest,
+		DemoOnly: true,
+		Restored: restored,
 	}
 	if s.document != nil {
 		result.SessionID = s.document.ID
@@ -396,10 +358,14 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 	}
 	if s.document != nil {
 		result.Run.BuildID = s.document.State.Day.GoImagesReleaseBuildID
+		result.Run.SourceBranch = s.document.State.Day.GoImagesSourceBranch
+		result.Run.SourceVersion = s.document.State.Day.GoImagesCommit
 		result.Run.Complete = s.document.State.Day.GoImagesReleaseComplete
 		result.Run.Imported = s.document.State.Day.GoImagesReleaseImported
 	} else if s.releaseState != nil {
 		result.Run.BuildID = s.releaseState.Day.GoImagesReleaseBuildID
+		result.Run.SourceBranch = s.releaseState.Day.GoImagesSourceBranch
+		result.Run.SourceVersion = s.releaseState.Day.GoImagesCommit
 		result.Run.Complete = s.releaseState.Day.GoImagesReleaseComplete
 	}
 	if result.Run.BuildID != "" {
@@ -421,7 +387,7 @@ func (s *Server) restoreSession() error {
 	}
 	input := document.Input
 	state := document.State
-	steps, restoredState, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
+	steps, restoredState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
 		&input,
 		nil,
 		&state,
@@ -439,13 +405,7 @@ func (s *Server) restoreSession() error {
 		return fmt.Errorf("restore release session: %w", err)
 	}
 	s.steps = steps
-	s.input = PlanInput{
-		Versions:      append([]string(nil), input.Versions...),
-		Security:      input.Security,
-		Runner:        input.RunnerGitHubUser,
-		VariableGroup: input.ReleaseConfigVariableGroup,
-		ReleaseIssue:  restoredState.Day.ReleaseIssue,
-	}
+	s.input = PlanInput{Versions: append([]string(nil), input.Versions...)}
 	s.releaseInput = &input
 	s.releaseState = restoredState
 	s.document = document
@@ -478,121 +438,6 @@ func (s *Server) handlePreflight(response http.ResponseWriter, request *http.Req
 	writeJSON(response, http.StatusOK, s.preflightReport(request.Context()))
 }
 
-type smokeStartRequest struct {
-	PlanDigest   string `json:"planDigest"`
-	Confirmation string `json:"confirmation"`
-}
-
-func (s *Server) handleSmokeStart(response http.ResponseWriter, request *http.Request) {
-	if !sameOrigin(request) {
-		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
-		return
-	}
-	var start smokeStartRequest
-	if err := decodeJSON(response, request, &start); err != nil {
-		writeError(response, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	s.mu.Lock()
-	if s.smoke == nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusForbidden, "go-images smoke execution is not enabled")
-		return
-	}
-	if s.document == nil || s.releaseInput == nil || s.releaseState == nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "create and persist a smoke-test plan first")
-		return
-	}
-	if start.PlanDigest != s.document.ExecutionDigest {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "confirmation does not match the current plan digest")
-		return
-	}
-	if start.Confirmation != smokeConfirmationPhrase {
-		s.mu.Unlock()
-		writeError(response, http.StatusBadRequest, "confirmation phrase is incorrect")
-		return
-	}
-	if !s.releaseInput.GoImagesReleaseSmokeTest || s.releaseInput.ReleaseConfigVariableGroup != s.smoke.VariableGroup {
-		s.mu.Unlock()
-		writeError(response, http.StatusForbidden, "persisted plan is not an allowlisted smoke test")
-		return
-	}
-	if s.demoRunning || s.externalRunning {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "a workflow is already running")
-		return
-	}
-	if s.releaseState.Day.GoImagesReleaseComplete {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "the one-time smoke test is already complete")
-		return
-	}
-	preflight := s.smoke.Preflight
-	newService := s.smoke.NewService
-	sessionID := s.document.ID
-	document := s.document
-	input := *s.releaseInput
-	state := s.releaseState
-	s.externalRunning = true
-	s.mu.Unlock()
-
-	if _, err := preflight(request.Context()); err != nil {
-		s.finishExternalRun()
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
-		return
-	}
-	service, err := newService(GoImagesServiceRequest{
-		SessionID:       sessionID,
-		Versions:        append([]string(nil), input.Versions...),
-		ExecutionDigest: document.ExecutionDigest,
-	})
-	if err != nil {
-		s.finishExternalRun()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create Azure pipeline service: %v", err))
-		return
-	}
-	steps, state, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
-		&input,
-		nil,
-		state,
-		service,
-		s.checkpointReleaseState,
-	)
-	if err != nil {
-		s.finishExternalRun()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create smoke-test graph: %v", err))
-		return
-	}
-	plan, err := session.NewPlan(steps)
-	if err != nil || document.MatchesPlan(plan) != nil {
-		s.finishExternalRun()
-		writeError(response, http.StatusConflict, "smoke-test graph no longer matches the confirmed plan")
-		return
-	}
-
-	s.mu.Lock()
-	s.steps = steps
-	s.releaseState = state
-	s.externalRunning = true
-	runner := s.runner
-	s.mu.Unlock()
-
-	go func() {
-		_ = runner.Execute(s.ctx, steps)
-		s.finishExternalRun()
-	}()
-	writeJSON(response, http.StatusAccepted, map[string]string{"status": "go-images smoke test started"})
-}
-
-func (s *Server) finishExternalRun() {
-	s.mu.Lock()
-	s.externalRunning = false
-	s.mu.Unlock()
-}
-
 type runSearchRequest struct {
 	Versions []string `json:"versions"`
 }
@@ -613,13 +458,13 @@ func (s *Server) handleRunSearch(response http.ResponseWriter, request *http.Req
 		return
 	}
 	s.mu.Lock()
-	if s.smoke == nil {
+	if s.readOnly == nil {
 		s.mu.Unlock()
 		writeError(response, http.StatusForbidden, "go-images run discovery is not enabled")
 		return
 	}
-	preflight := s.smoke.Preflight
-	findRuns := s.smoke.FindRuns
+	preflight := s.readOnly.Preflight
+	findRuns := s.readOnly.FindRuns
 	s.mu.Unlock()
 	if _, err := preflight(request.Context()); err != nil {
 		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
@@ -637,12 +482,8 @@ func (s *Server) handleRunSearch(response http.ResponseWriter, request *http.Req
 }
 
 type runImportRequest struct {
-	BuildID       int      `json:"buildId"`
-	Versions      []string `json:"versions"`
-	Runner        string   `json:"runner"`
-	Security      bool     `json:"security"`
-	VariableGroup string   `json:"variableGroup"`
-	ReleaseIssue  int      `json:"releaseIssue,omitempty"`
+	BuildID  int      `json:"buildId"`
+	Versions []string `json:"versions"`
 }
 
 func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Request) {
@@ -659,37 +500,24 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusBadRequest, "build ID must be positive")
 		return
 	}
-	normalized, err := normalizeInput(PlanInput{
-		Versions:      importRequest.Versions,
-		Runner:        importRequest.Runner,
-		Security:      importRequest.Security,
-		VariableGroup: importRequest.VariableGroup,
-		ReleaseIssue:  importRequest.ReleaseIssue,
-	})
+	normalized, err := normalizeInput(PlanInput{Versions: importRequest.Versions})
 	if err != nil {
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	normalized.ReleaseIssue = 0
-
 	s.mu.Lock()
-	if s.smoke == nil {
+	if s.readOnly == nil {
 		s.mu.Unlock()
 		writeError(response, http.StatusForbidden, "go-images run import is not enabled")
 		return
 	}
-	if normalized.VariableGroup != s.smoke.VariableGroup {
-		s.mu.Unlock()
-		writeError(response, http.StatusBadRequest, "variable group is not allowlisted for run import")
-		return
-	}
-	if s.demoRunning || s.externalRunning {
+	if s.demoRunning || s.monitorRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot import while a workflow is running")
 		return
 	}
-	preflight := s.smoke.Preflight
-	validateRun := s.smoke.ValidateRun
+	preflight := s.readOnly.Preflight
+	validateRun := s.readOnly.ValidateRun
 	s.mu.Unlock()
 	if _, err := preflight(request.Context()); err != nil {
 		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
@@ -702,14 +530,11 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 	}
 
 	releaseInput := &releasesteps.Input{
-		Versions:                         normalized.Versions,
-		Security:                         normalized.Security,
-		RunnerGitHubUser:                 normalized.Runner,
-		ReleaseConfigVariableGroup:       normalized.VariableGroup,
-		MicrosoftGoImagesReleasePipeline: goImagesReleasePipelineID,
-		GoImagesReleaseSmokeTest:         true,
+		Versions:                  normalized.Versions,
+		RunnerGitHubUser:          "ghost",
+		MicrosoftGoImagesPipeline: goImagesPipelineID,
 	}
-	steps, releaseState, err := releasesteps.CreateGoImagesReleasePipelineGraphWithCheckpoint(
+	steps, releaseState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
 		releaseInput,
 		nil,
 		nil,
@@ -721,16 +546,14 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 		return
 	}
 	releaseState.Day.GoImagesReleaseBuildID = strconv.Itoa(candidate.BuildID)
+	releaseState.Day.GoImagesSourceBranch = candidate.SourceBranch
+	releaseState.Day.GoImagesCommit = candidate.SourceVersion
 	releaseState.Day.GoImagesReleaseComplete = candidate.State == "succeeded"
 	releaseState.Day.GoImagesReleaseImported = true
 	releaseState.Day.GoImagesReleaseParameters = clonePipelineParameters(candidate.Parameters)
 	document, err := session.NewDocument(releaseInput, releaseState, steps, time.Now())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create imported run session: %v", err))
-		return
-	}
-	if candidate.CreatedByUI && candidate.ExecutionDigest != "" && candidate.ExecutionDigest != document.ExecutionDigest {
-		writeError(response, http.StatusConflict, "selected UI run does not match the reconstructed execution digest")
 		return
 	}
 	if err := s.sessionStore.Save(request.Context(), document); err != nil {
@@ -751,6 +574,100 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 	writeJSON(response, http.StatusOK, result)
 }
 
+func (s *Server) handleRunMonitor(response http.ResponseWriter, request *http.Request) {
+	if !sameOrigin(request) {
+		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
+		return
+	}
+
+	s.mu.Lock()
+	if s.readOnly == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "go-images run monitoring is not enabled")
+		return
+	}
+	if s.document == nil || s.releaseInput == nil || s.releaseState == nil {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "import a go-images run before monitoring")
+		return
+	}
+	if !s.document.State.Day.GoImagesReleaseImported {
+		s.mu.Unlock()
+		writeError(response, http.StatusForbidden, "only an explicitly imported run can be monitored")
+		return
+	}
+	if s.document.State.Day.GoImagesReleaseComplete {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "the imported run is already complete")
+		return
+	}
+	buildID, err := strconv.Atoi(s.document.State.Day.GoImagesReleaseBuildID)
+	if err != nil || buildID <= 0 {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "the imported run has an invalid build ID")
+		return
+	}
+	if s.demoRunning || s.monitorRunning {
+		s.mu.Unlock()
+		writeError(response, http.StatusConflict, "a workflow is already running")
+		return
+	}
+	preflight := s.readOnly.Preflight
+	monitor := s.readOnly.MonitorRun
+	input := *s.releaseInput
+	state := s.releaseState
+	document := s.document
+	s.monitorRunning = true
+	s.mu.Unlock()
+
+	if _, err := preflight(request.Context()); err != nil {
+		s.finishMonitor()
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
+		return
+	}
+	steps, state, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
+		&input,
+		nil,
+		state,
+		importedRunMonitor{
+			buildID: buildID,
+			monitor: func(ctx context.Context, id int) error {
+				return monitor(ctx, id, append([]string(nil), input.Versions...))
+			},
+		},
+		s.checkpointReleaseState,
+	)
+	if err != nil {
+		s.finishMonitor()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create imported-run monitor: %v", err))
+		return
+	}
+	plan, err := session.NewPlan(steps)
+	if err != nil || document.MatchesPlan(plan) != nil {
+		s.finishMonitor()
+		writeError(response, http.StatusConflict, "monitor graph no longer matches the imported plan")
+		return
+	}
+
+	s.mu.Lock()
+	s.steps = steps
+	s.releaseState = state
+	s.runner = &coordinator.StepRunner{}
+	runner := s.runner
+	s.mu.Unlock()
+	go func() {
+		_ = runner.Execute(s.ctx, steps)
+		s.finishMonitor()
+	}()
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "imported go-images run monitoring started"})
+}
+
+func (s *Server) finishMonitor() {
+	s.mu.Lock()
+	s.monitorRunning = false
+	s.mu.Unlock()
+}
+
 func normalizeInput(input PlanInput) (PlanInput, error) {
 	if len(input.Versions) == 0 {
 		return PlanInput{}, errors.New("at least one release version is required")
@@ -759,31 +676,11 @@ func normalizeInput(input PlanInput) (PlanInput, error) {
 		return PlanInput{}, errors.New("at most eight release versions can be planned at once")
 	}
 
-	normalized := PlanInput{
-		Security:      input.Security,
-		Runner:        strings.TrimSpace(input.Runner),
-		VariableGroup: strings.TrimSpace(input.VariableGroup),
-		ReleaseIssue:  input.ReleaseIssue,
-	}
-	if normalized.Runner == "" {
-		normalized.Runner = "ghost"
-	}
-	if !runnerPattern.MatchString(normalized.Runner) {
-		return PlanInput{}, fmt.Errorf("GitHub runner name %q is invalid", normalized.Runner)
-	}
-	if normalized.VariableGroup == "" {
-		return PlanInput{}, errors.New("release configuration variable group is required")
-	}
-	if normalized.ReleaseIssue < 0 {
-		return PlanInput{}, errors.New("release issue cannot be negative")
-	}
-
 	normalizedVersions, err := normalizeVersions(input.Versions)
 	if err != nil {
 		return PlanInput{}, err
 	}
-	normalized.Versions = normalizedVersions
-	return normalized, nil
+	return PlanInput{Versions: normalizedVersions}, nil
 }
 
 func normalizeVersions(versions []string) ([]string, error) {
@@ -850,7 +747,7 @@ func (s *Server) handleDemoStart(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusConflict, "create a release plan before starting the demo")
 		return
 	}
-	if s.demoRunning {
+	if s.demoRunning || s.monitorRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "a demo run is already active")
 		return

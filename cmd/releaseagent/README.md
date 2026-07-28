@@ -14,20 +14,20 @@ Run the UI from the repository root:
 go run ./cmd/releaseagent serve
 ```
 
-The first integration is intentionally focused on the existing
-`microsoft-go-infra-release-go-images` pipeline (definition `1151`). It can:
+The first integration is intentionally focused on the direct `microsoft-go-images (official)`
+pipeline (definition `1023`). It can:
 
-* Validate versions, runner, optional tracking issue, and release variable group.
-* Display a three-step queue, monitor, and complete graph for pipeline `1151`.
-* Preview the exact pipeline parameters. Image build/publish and MAR verification are enabled;
-	announcement publishing and DL updates are explicitly disabled.
+* Validate Microsoft release versions used to find matching source commits.
+* Display a three-step queue, monitor, and complete graph for pipeline `1023`.
+* Preview the pipeline's two runtime defaults: `sourceBuildPipelineRunId=$(Build.BuildId)` and
+	`publishRepoPrefix=public/`.
 * Run that focused graph as an in-memory simulation and stream status changes to the browser.
 * Optionally persist and restore the non-secret release plan using `-session-file <path>`.
 * Report local readiness, including whether `gh` and `az` executables are present, without running
 	them or checking authentication.
 
-It cannot contact GitHub, Azure DevOps, or any publishing service. Authentication, confirmation,
-the real pipeline queue/monitor client, and reconciliation remain later iterations.
+By default it cannot contact GitHub, Azure DevOps, or any publishing service. Queueing remains
+hard-disabled in every mode.
 
 For example, this preserves the plan across process restarts:
 
@@ -40,56 +40,48 @@ replacement, and protected from concurrent cooperative processes by a lease file
 credentials. If the process terminates without cleaning up the lease, verify no release UI process
 is using the session and remove the adjacent `.lock` file manually.
 
-The focused graph checkpoints the release-pipeline build ID and successful completion immediately
+The focused graph checkpoints the pipeline build ID and successful completion immediately
 after they are recorded. A failed checkpoint stops subsequent work until the pending state can be
-saved. This does not by itself provide exactly-once queueing: the future production client must
-still reconcile a build that may have been queued immediately before a process crash.
+saved.
 
-External execution remains hard-disabled. Discovering `gh` or `az` in `PATH` does not invoke those
-commands and does not enable GitHub, Azure DevOps, or publishing operations.
+External execution remains hard-disabled. Default startup only discovers `gh` and `az` in `PATH`;
+it does not invoke either command. Explicit read-only mode invokes `az` only to authenticate Azure
+DevOps GET requests.
 
 ## Pre-production testing
 
 The focused workflow has hermetic tests for:
 
-* Exact pipeline `1151` parameter generation.
+* Exact pipeline `1023` parameter generation.
 * Queue, monitor, checkpoint, and restart/resume behavior using mocks.
 * Azure CLI token command construction using a fake command runner.
 * Azure DevOps HTTP request serialization using a loopback `httptest` server.
 * Status/result normalization, authentication errors, cancellation, and token redaction.
-* Correlation-based reconciliation that reuses an existing build rather than queueing twice.
-* An end-to-end focused DAG run against a loopback fake Azure DevOps server.
+* Read-only candidate discovery, selected-build revalidation, import, and monitoring.
 
-The real Azure client and token provider are wired only behind an explicit, default-off smoke-test
-flag, a fixed definition allowlist, a variable-group allowlist, durable state, and digest-bound
-confirmation. Normal UI startup still cannot perform external operations.
+The Azure client and token provider are wired only behind an explicit, default-off read-only flag,
+an exact definition/repository/YAML allowlist, and durable state. The server receives search,
+validation, and monitor callbacks—not a queue-capable service.
 
-### One-time pipeline 1151 smoke mode
+### Read-only pipeline 1023 discovery
 
-An explicitly enabled mode is available for an authorized queue/monitor smoke test against
-production definition `1151`. It requires a durable session and a server-allowlisted variable
-group. The server forces `approveAheadOfTime=true`, `releaseIssue=nil`, and every release action
-switch to `false`, so the orchestration run does not build/publish images, publish announcements,
-update DL, query MAR, or report to a release issue.
+Authenticated read-only discovery and monitoring can be enabled for production definition `1023`:
 
 ```console
 go run ./cmd/releaseagent serve \
 	-session-file "$HOME/.config/microsoft-go/release-session.json" \
-	-enable-go-images-smoke-test \
-	-go-images-smoke-variable-group '<approved-variable-group>'
+	-enable-go-images-azure-read-only
 ```
 
-Starting in this mode performs authenticated read-only preflight but does not queue a run. Queueing
-requires a persisted smoke plan, an exact plan-digest match, and typing
-`QUEUE PIPELINE 1151 SMOKE TEST` in the browser. The session correlation ID is attached to the
-Azure run so restart/retry reconciliation reuses an existing build instead of queueing another.
+Pipeline `1023` does not accept release versions directly. Discovery lists recent runs, reads
+`src/microsoft/versions.json` at each run's exact `sourceVersion` from the internal
+`microsoft-go-images` repository, and keeps runs whose source contains every requested version.
+Selecting a candidate re-fetches and revalidates its definition, source commit, and versions before
+creating a local session. A running imported build can be monitored by ID using read-only GETs.
 
-The same mode can discover recent pipeline `1151` runs by canonical version set. The UI shows each
-candidate's build ID, status/result, queue time, origin, Azure link, and actual release-action
-switches. Selecting a candidate triggers a fresh server-side definition/version validation before
-creating a local session. Imported runs are monitored by build ID and are never re-queued. Future
-UI-created runs stamp workflow, canonical version set, session ID, and execution digest variables;
-legacy runs are discovered from their `releaseVersions` template parameter when Azure exposes it.
+There is deliberately no real queue endpoint. Pipeline `1023` builds, signs, and publishes images,
+and its official default is `publishRepoPrefix=public/`; unlike the former wrapper-pipeline smoke
+path, it has no switch that disables all release effects.
 
 The server only binds to a loopback address. A random one-time launch token establishes an
 HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.

@@ -28,6 +28,7 @@ type PreflightCheck struct {
 // PreflightReport describes local readiness without authenticating or contacting any service.
 type PreflightReport struct {
 	ExternalExecutionEnabled bool             `json:"externalExecutionEnabled"`
+	AzureReadOnlyEnabled     bool             `json:"azureReadOnlyEnabled"`
 	Checks                   []PreflightCheck `json:"checks"`
 }
 
@@ -85,31 +86,34 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 			Details: "Found at " + path + ". Authentication was not attempted.",
 		})
 	}
-	if s.smoke == nil {
+	if s.readOnly == nil {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID:      "external-execution",
-			Name:    "External release execution",
+			ID:      "azure-read-only",
+			Name:    "Pipeline 1023 read-only access",
 			Status:  CheckStatusUnavailable,
-			Details: "Disabled. No GitHub, Azure DevOps, or publishing operation can be started.",
+			Details: "Disabled. No Azure DevOps request will be made.",
 		})
-		return report
-	}
-	details, err := s.smoke.Preflight(ctx)
-	if err != nil {
+	} else if details, err := s.readOnly.Preflight(ctx); err != nil {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID:      "external-execution",
-			Name:    "Pipeline 1151 smoke execution",
+			ID:      "azure-read-only",
+			Name:    "Pipeline 1023 read-only access",
 			Status:  CheckStatusWarning,
 			Details: err.Error(),
 		})
-		return report
+	} else {
+		report.AzureReadOnlyEnabled = true
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID:      "azure-read-only",
+			Name:    "Pipeline 1023 read-only access",
+			Status:  CheckStatusPassed,
+			Details: details,
+		})
 	}
-	report.ExternalExecutionEnabled = true
 	report.Checks = append(report.Checks, PreflightCheck{
 		ID:      "external-execution",
-		Name:    "Pipeline 1151 smoke execution",
-		Status:  CheckStatusPassed,
-		Details: details,
+		Name:    "External release execution",
+		Status:  CheckStatusUnavailable,
+		Details: "Disabled. Pipeline 1023 can build, sign, and publish images, so this iteration exposes no queue endpoint.",
 	})
 	return report
 }

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,7 +18,6 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
@@ -140,124 +138,36 @@ func TestPreflightIsLocalAndExternalExecutionDisabled(t *testing.T) {
 	}
 }
 
-type fakeSmokeService struct {
-	queued int
-	polled int
-}
-
-func (s *fakeSmokeService) TriggerBuildPipeline(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *releasesteps.Secret) (string, error) {
-	s.queued++
-	if pipelineID != goImagesReleasePipelineID {
-		return "", fmt.Errorf("unexpected pipeline %d", pipelineID)
-	}
-	if parameters["approveAheadOfTime"] != "true" ||
-		parameters["runGoImagesBuild"] != "false" ||
-		parameters["runPublishAnnouncement"] != "false" ||
-		parameters["runUpdateDL"] != "false" ||
-		parameters["runGoImageVersionCheck"] != "false" ||
-		parameters["releaseIssue"] != "nil" {
-
-		return "", fmt.Errorf("unsafe smoke parameters: %#v", parameters)
-	}
-	if len(optionalParameters) != 0 {
-		return "", fmt.Errorf("unexpected optional parameters: %#v", optionalParameters)
-	}
-	return "321", nil
-}
-
-func (s *fakeSmokeService) PollPipelineComplete(_ context.Context, buildID string, _ *releasesteps.Secret) error {
-	s.polled++
-	if buildID != "321" {
-		return fmt.Errorf("unexpected build ID %q", buildID)
-	}
-	return nil
-}
-
-func TestSmokeExecutionRequiresConfirmedSafePlan(t *testing.T) {
+func TestReadOnlyIntegrationDoesNotExposeQueueEndpoint(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &fakeSmokeService{}
 	ui := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
-			DefinitionID:  goImagesReleasePipelineID,
-			VariableGroup: "test-release-config",
-			Preflight: func(context.Context) (string, error) {
-				return "fake preflight passed", nil
-			},
-			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
-				return service, nil
-			},
-			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
-				return nil, nil
-			},
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "verified", nil },
+			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
 			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
-				return PipelineRunCandidate{}, errors.New("no candidate configured")
+				return PipelineRunCandidate{}, errors.New("not configured")
 			},
+			MonitorRun: func(context.Context, int, []string) error { return nil },
 		}),
 	)
-	plan := createTestPlan(t, ui)
-	if !plan.SmokeTest {
-		t.Fatal("plan is not marked as a smoke test")
-	}
-	for _, name := range []string{
-		"runGoImagesBuild",
-		"runPublishAnnouncement",
-		"runUpdateDL",
-		"runGoImageVersionCheck",
-	} {
-		if plan.Pipeline.Parameters[name] != "false" {
-			t.Fatalf("%s = %q, want false", name, plan.Pipeline.Parameters[name])
-		}
-	}
-	if plan.Pipeline.Parameters["approveAheadOfTime"] != "true" || plan.Pipeline.Parameters["releaseIssue"] != "nil" {
-		t.Fatalf("unsafe smoke parameters: %#v", plan.Pipeline.Parameters)
-	}
-
-	response := postJSON(t, ui, "/api/go-images/smoke/start", `{"planDigest":"wrong","confirmation":"QUEUE PIPELINE 1151 SMOKE TEST"}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusConflict || service.queued != 0 {
-		t.Fatalf("wrong-digest status = %d, queued = %d", response.StatusCode, service.queued)
-	}
-
-	body, err := json.Marshal(smokeStartRequest{
-		PlanDigest:   plan.PlanDigest,
-		Confirmation: smokeConfirmationPhrase,
-	})
+	response, err := ui.client.Get(ui.http.URL + "/api/preflight")
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = postJSON(t, ui, "/api/go-images/smoke/start", string(body))
+	var report PreflightReport
+	decodeResponse(t, response, &report)
+	if !report.AzureReadOnlyEnabled || report.ExternalExecutionEnabled {
+		t.Fatalf("preflight report = %#v", report)
+	}
+	response = postJSON(t, ui, "/api/go-images/smoke/start", `{}`)
 	response.Body.Close()
-	if response.StatusCode != http.StatusAccepted {
-		t.Fatalf("smoke start status = %d, want %d", response.StatusCode, http.StatusAccepted)
-	}
-
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for {
-		ui.server.mu.Lock()
-		complete := ui.server.document.State.Day.GoImagesReleaseComplete
-		active := ui.server.externalRunning
-		ui.server.mu.Unlock()
-		if complete && !active {
-			break
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("timed out waiting for fake smoke execution")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if service.queued != 1 || service.polled != 1 {
-		t.Fatalf("queued = %d, polled = %d; want 1 each", service.queued, service.polled)
-	}
-	response = postJSON(t, ui, "/api/go-images/smoke/start", string(body))
-	response.Body.Close()
-	if response.StatusCode != http.StatusConflict || service.queued != 1 {
-		t.Fatalf("second-run status = %d, queued = %d", response.StatusCode, service.queued)
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("removed queue endpoint status = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
 
@@ -267,31 +177,27 @@ func TestFindAndImportExistingRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := PipelineRunCandidate{
-		BuildID:     777,
-		Status:      "inProgress",
-		State:       "running",
-		URL:         "https://example/build/777",
-		QueueTime:   time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
-		VersionSet:  `["1.25.6-1","1.26.1-1"]`,
-		CreatedByUI: false,
+		BuildID:       777,
+		Status:        "inProgress",
+		State:         "running",
+		URL:           "https://example/build/777",
+		QueueTime:     time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		SourceBranch:  "refs/heads/microsoft/main",
+		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+		VersionSet:    `["1.25.6-1","1.26.1-1"]`,
 		Parameters: map[string]string{
-			"runGoImagesBuild":       "true",
-			"runPublishAnnouncement": "true",
-			"runUpdateDL":            "false",
-			"runGoImageVersionCheck": "true",
+			"sourceBuildPipelineRunId": "$(Build.BuildId)",
+			"publishRepoPrefix":        "public/",
 		},
 	}
 	validated := false
+	monitored := false
 	ui := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
-			DefinitionID:  goImagesReleasePipelineID,
-			VariableGroup: "test-release-config",
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
 			Preflight: func(context.Context) (string, error) {
 				return "fake preflight passed", nil
-			},
-			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
-				return &fakeSmokeService{}, nil
 			},
 			FindRuns: func(_ context.Context, versions []string) ([]PipelineRunCandidate, error) {
 				if strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
@@ -305,6 +211,13 @@ func TestFindAndImportExistingRun(t *testing.T) {
 					t.Fatalf("build ID = %d, versions = %#v", buildID, versions)
 				}
 				return candidate, nil
+			},
+			MonitorRun: func(_ context.Context, buildID int, versions []string) error {
+				monitored = true
+				if buildID != 777 || strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
+					t.Fatalf("monitor build ID = %d, versions = %#v", buildID, versions)
+				}
+				return nil
 			},
 		}),
 	)
@@ -321,10 +234,7 @@ func TestFindAndImportExistingRun(t *testing.T) {
 
 	response = postJSON(t, ui, "/api/go-images/runs/import", `{
 		"buildId":777,
-		"versions":["1.26.1-1","1.25.6-1"],
-		"runner":"ghost",
-		"security":false,
-		"variableGroup":"test-release-config"
+		"versions":["1.26.1-1","1.25.6-1"]
 	}`)
 	var imported planResponse
 	decodeResponse(t, response, &imported)
@@ -334,31 +244,55 @@ func TestFindAndImportExistingRun(t *testing.T) {
 	if imported.Run.BuildID != "777" || imported.Run.Complete || !imported.Run.Imported {
 		t.Fatalf("imported run = %#v", imported.Run)
 	}
-	if imported.Pipeline.Parameters["runGoImagesBuild"] != "true" ||
-		imported.Pipeline.Parameters["runPublishAnnouncement"] != "true" {
+	if imported.Pipeline.Parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" ||
+		imported.Pipeline.Parameters["publishRepoPrefix"] != "public/" {
 
 		t.Fatalf("imported parameters = %#v", imported.Pipeline.Parameters)
+	}
+	response = postJSON(t, ui, "/api/go-images/runs/monitor", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("monitor status = %d, want %d", response.StatusCode, http.StatusAccepted)
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		ui.server.mu.Lock()
+		complete := ui.server.document.State.Day.GoImagesReleaseComplete
+		active := ui.server.monitorRunning
+		ui.server.mu.Unlock()
+		if complete && !active {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for imported-run monitor")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if !monitored {
+		t.Fatal("imported run was not monitored")
 	}
 	persisted, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.State.Day.GoImagesReleaseBuildID != "777" {
-		t.Fatalf("persisted build ID = %q", persisted.State.Day.GoImagesReleaseBuildID)
+	if persisted.State.Day.GoImagesReleaseBuildID != "777" ||
+		persisted.State.Day.GoImagesCommit != candidate.SourceVersion ||
+		persisted.State.Day.GoImagesSourceBranch != candidate.SourceBranch {
+
+		t.Fatalf("persisted go-images state = %#v", persisted.State.Day)
 	}
 	restoredUI := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
-			DefinitionID:  goImagesReleasePipelineID,
-			VariableGroup: "test-release-config",
-			Preflight:     func(context.Context) (string, error) { return "ok", nil },
-			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
-				return &fakeSmokeService{}, nil
-			},
-			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
 			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
 				return candidate, nil
 			},
+			MonitorRun: func(context.Context, int, []string) error { return nil },
 		}),
 	)
 	response, err = restoredUI.client.Get(restoredUI.http.URL + "/api/plan")
@@ -367,54 +301,8 @@ func TestFindAndImportExistingRun(t *testing.T) {
 	}
 	var restored planResponse
 	decodeResponse(t, response, &restored)
-	if restored.Run.BuildID != "777" || !restored.Run.Imported {
+	if restored.Run.BuildID != "777" || !restored.Run.Imported || restored.Run.SourceVersion != candidate.SourceVersion {
 		t.Fatalf("restored imported run = %#v", restored.Run)
-	}
-}
-
-func TestImportRejectsConflictingExecutionDigest(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate := PipelineRunCandidate{
-		BuildID:         778,
-		Status:          "inProgress",
-		State:           "running",
-		VersionSet:      `["1.26.1-1"]`,
-		ExecutionDigest: "different-execution",
-		CreatedByUI:     true,
-	}
-	ui := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesSmokeExecution(GoImagesSmokeExecution{
-			DefinitionID:  goImagesReleasePipelineID,
-			VariableGroup: "test-release-config",
-			Preflight:     func(context.Context) (string, error) { return "ok", nil },
-			NewService: func(GoImagesServiceRequest) (releasesteps.GoImagesReleaseService, error) {
-				return &fakeSmokeService{}, nil
-			},
-			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
-				return []PipelineRunCandidate{candidate}, nil
-			},
-			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
-				return candidate, nil
-			},
-		}),
-	)
-	response := postJSON(t, ui, "/api/go-images/runs/import", `{
-		"buildId":778,
-		"versions":["1.26.1-1"],
-		"runner":"ghost",
-		"security":false,
-		"variableGroup":"test-release-config"
-	}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusConflict {
-		t.Fatalf("import status = %d, want %d", response.StatusCode, http.StatusConflict)
-	}
-	if _, err := store.Load(context.Background()); !errors.Is(err, session.ErrNotFound) {
-		t.Fatalf("conflicting import unexpectedly persisted a session: %v", err)
 	}
 }
 
@@ -429,6 +317,16 @@ func TestRetainedPlanCannotPerformExternalOperations(t *testing.T) {
 	err := runner.Execute(context.Background(), steps)
 	if !errors.Is(err, ErrExternalExecutionDisabled) {
 		t.Fatalf("original graph execution error = %v, want ErrExternalExecutionDisabled", err)
+	}
+}
+
+func TestImportedRunMonitorCannotQueue(t *testing.T) {
+	monitor := importedRunMonitor{
+		buildID: 777,
+		monitor: func(context.Context, int) error { return nil },
+	}
+	if _, err := monitor.TriggerBuildPipeline(context.Background(), goImagesPipelineID, nil, nil, nil); err == nil {
+		t.Fatal("imported-run monitor accepted a queue request")
 	}
 }
 
@@ -475,12 +373,11 @@ func TestCreatePlanAndRunDemo(t *testing.T) {
 	if len(plan.Steps) != 3 {
 		t.Fatalf("plan has %d steps, want focused three-step go-images graph", len(plan.Steps))
 	}
-	if plan.Pipeline.DefinitionID != goImagesReleasePipelineID {
-		t.Fatalf("pipeline ID = %d, want %d", plan.Pipeline.DefinitionID, goImagesReleasePipelineID)
+	if plan.Pipeline.DefinitionID != goImagesPipelineID {
+		t.Fatalf("pipeline ID = %d, want %d", plan.Pipeline.DefinitionID, goImagesPipelineID)
 	}
-	if plan.Pipeline.Parameters["runGoImagesBuild"] != "true" ||
-		plan.Pipeline.Parameters["runPublishAnnouncement"] != "false" ||
-		plan.Pipeline.Parameters["runUpdateDL"] != "false" {
+	if plan.Pipeline.Parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" ||
+		plan.Pipeline.Parameters["publishRepoPrefix"] != "public/" {
 
 		t.Fatalf("unexpected focused pipeline parameters: %#v", plan.Pipeline.Parameters)
 	}
@@ -580,7 +477,7 @@ func TestPlanRejectsCrossOriginAndInvalidInput(t *testing.T) {
 		t.Fatalf("cross-origin status = %d, want %d", response.StatusCode, http.StatusForbidden)
 	}
 
-	response = postJSON(t, ui, "/api/plan", `{"versions":["not-a-version"],"runner":"ghost","variableGroup":"test-group"}`)
+	response = postJSON(t, ui, "/api/plan", `{"versions":["not-a-version"]}`)
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid input status = %d, want %d", response.StatusCode, http.StatusBadRequest)
@@ -589,7 +486,7 @@ func TestPlanRejectsCrossOriginAndInvalidInput(t *testing.T) {
 
 func createTestPlan(t *testing.T, ui *testUI) planResponse {
 	t.Helper()
-	response := postJSON(t, ui, "/api/plan", `{"versions":["1.26.1-1","1.27rc1-1"],"runner":"ghost","security":false,"variableGroup":"test-release-config"}`)
+	response := postJSON(t, ui, "/api/plan", `{"versions":["1.26.1-1","1.27rc1-1"]}`)
 	var plan planResponse
 	decodeResponse(t, response, &plan)
 	if response.StatusCode != http.StatusOK {

@@ -6,6 +6,8 @@ package releaseui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 )
@@ -82,3 +84,22 @@ func (disabledServices) CreateAnnouncementBlogFile(context.Context, []string, st
 }
 
 var _ releasesteps.ServiceBundle = disabledServices{}
+
+type importedRunMonitor struct {
+	buildID int
+	monitor func(context.Context, int) error
+}
+
+func (m importedRunMonitor) TriggerBuildPipeline(context.Context, int, map[string]string, map[string]string, *releasesteps.Secret) (string, error) {
+	return "", errors.New("an imported-run monitor cannot queue a pipeline")
+}
+
+func (m importedRunMonitor) PollPipelineComplete(ctx context.Context, buildID string, _ *releasesteps.Secret) error {
+	id, err := strconv.Atoi(buildID)
+	if err != nil || id != m.buildID {
+		return fmt.Errorf("monitor build ID %q does not match imported build %d", buildID, m.buildID)
+	}
+	return m.monitor(ctx, id)
+}
+
+var _ releasesteps.GoImagesReleaseService = importedRunMonitor{}

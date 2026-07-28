@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimagesrelease adapts the generic Azure DevOps client to the focused go-images release
+// Package goimagesrelease adapts read-only Azure DevOps data to the focused direct go-images
 // pipeline workflow.
 package goimagesrelease
 
@@ -16,48 +16,43 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
-)
-
-const (
-	// CorrelationVariable is attached so a restart can find an already-created run.
-	CorrelationVariable = "ReleaseUISessionID"
-	// WorkflowVariable identifies the release UI workflow that created a run.
-	WorkflowVariable = "ReleaseUIWorkflow"
-	// VersionsVariable stores the canonical version set for discovery.
-	VersionsVariable = "ReleaseUIVersions"
-	// ExecutionDigestVariable identifies the immutable confirmed request.
-	ExecutionDigestVariable = "ReleaseUIExecutionDigest"
-	// WorkflowID identifies this workflow in Azure run metadata.
-	WorkflowID = "microsoft-go-images"
 )
 
 // PipelineClient is the Azure DevOps behavior needed by Service.
 type PipelineClient interface {
-	Queue(context.Context, azdopipeline.QueueRequest) (*azdopipeline.Build, error)
 	Get(context.Context, int) (*azdopipeline.Build, error)
-	FindLatestByVariable(context.Context, int, string, string) (*azdopipeline.Build, error)
 	ListRecent(context.Context, int) ([]*azdopipeline.Build, error)
+}
+
+// VersionResolver returns the canonical Microsoft Go versions present in go-images at a commit.
+type VersionResolver interface {
+	VersionsAtCommit(context.Context, string) ([]string, error)
+}
+
+// VersionResolverFunc adapts a function to VersionResolver.
+type VersionResolverFunc func(context.Context, string) ([]string, error)
+
+// VersionsAtCommit calls f.
+func (f VersionResolverFunc) VersionsAtCommit(ctx context.Context, commit string) ([]string, error) {
+	return f(ctx, commit)
 }
 
 // Sleeper waits between status checks and is replaceable in tests.
 type Sleeper func(context.Context, time.Duration) error
 
-// Config fixes the target and correlation identity outside browser-controlled input.
+// Config fixes the read-only target and requested versions outside browser-controlled input.
 type Config struct {
 	DefinitionID    int
-	SessionID       string
 	Versions        []string
-	ExecutionDigest string
-	SourceBranch    string
-	SourceVersion   string
+	VersionResolver VersionResolver
 	PollInterval    time.Duration
 }
 
-// Service implements the two-method go-images workflow boundary.
+// Service discovers, validates, and monitors direct go-images pipeline runs. It has no queue API.
 type Service struct {
 	client     PipelineClient
 	config     Config
+	versions   []string
 	versionSet string
 	sleep      Sleeper
 }
@@ -70,15 +65,16 @@ func New(client PipelineClient, config Config, sleeper Sleeper) (*Service, error
 	if config.DefinitionID <= 0 {
 		return nil, errors.New("go-images pipeline definition ID must be positive")
 	}
-	if config.SessionID == "" {
-		return nil, errors.New("release UI session ID is required")
-	}
 	versionSet, err := CanonicalVersionSet(config.Versions)
 	if err != nil {
 		return nil, err
 	}
-	if config.ExecutionDigest == "" {
-		return nil, errors.New("release UI execution digest is required")
+	var versions []string
+	if err := json.Unmarshal([]byte(versionSet), &versions); err != nil {
+		return nil, fmt.Errorf("decode canonical version set: %w", err)
+	}
+	if config.VersionResolver == nil {
+		return nil, errors.New("go-images commit version resolver is required")
 	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 5 * time.Second
@@ -86,92 +82,38 @@ func New(client PipelineClient, config Config, sleeper Sleeper) (*Service, error
 	if sleeper == nil {
 		sleeper = sleepContext
 	}
-	return &Service{client: client, config: config, versionSet: versionSet, sleep: sleeper}, nil
-}
-
-// TriggerBuildPipeline reconciles an existing correlated run before queueing a new one.
-func (s *Service) TriggerBuildPipeline(
-	ctx context.Context,
-	pipelineID int,
-	parameters,
-	optionalParameters map[string]string,
-	_ *releasesteps.Secret,
-) (string, error) {
-	if pipelineID != s.config.DefinitionID {
-		return "", fmt.Errorf("pipeline %d is not allowlisted; expected %d", pipelineID, s.config.DefinitionID)
-	}
-	if len(optionalParameters) != 0 {
-		return "", errors.New("go-images release pipeline does not accept optional parameters")
-	}
-	existing, err := s.client.FindLatestByVariable(
-		ctx,
-		s.config.DefinitionID,
-		CorrelationVariable,
-		s.config.SessionID,
-	)
-	if err != nil {
-		return "", fmt.Errorf("reconcile existing go-images pipeline run: %w", err)
-	}
-	if existing != nil {
-		for name, want := range map[string]string{
-			WorkflowVariable:        WorkflowID,
-			VersionsVariable:        s.versionSet,
-			ExecutionDigestVariable: s.config.ExecutionDigest,
-		} {
-			if got := existing.Parameters[name]; got != "" && got != want {
-				return "", fmt.Errorf("correlated build %d has conflicting %s %q, expected %q", existing.ID, name, got, want)
-			}
-		}
-		return strconv.Itoa(existing.ID), nil
-	}
-	run, err := s.client.Queue(ctx, azdopipeline.QueueRequest{
-		DefinitionID:  s.config.DefinitionID,
-		SourceBranch:  s.config.SourceBranch,
-		SourceVersion: s.config.SourceVersion,
-		Parameters:    parameters,
-		Variables: map[string]string{
-			CorrelationVariable:     s.config.SessionID,
-			WorkflowVariable:        WorkflowID,
-			VersionsVariable:        s.versionSet,
-			ExecutionDigestVariable: s.config.ExecutionDigest,
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("queue go-images release pipeline: %w", err)
-	}
-	return strconv.Itoa(run.ID), nil
+	return &Service{client: client, config: config, versions: versions, versionSet: versionSet, sleep: sleeper}, nil
 }
 
 // Candidate is a recent run matching a canonical version set.
 type Candidate struct {
-	BuildID         int
-	Status          string
-	Result          string
-	State           azdopipeline.RunState
-	URL             string
-	QueueTime       time.Time
-	SessionID       string
-	VersionSet      string
-	ExecutionDigest string
-	CreatedByUI     bool
-	Parameters      map[string]string
+	BuildID       int
+	Status        string
+	Result        string
+	State         azdopipeline.RunState
+	URL           string
+	QueueTime     time.Time
+	SourceBranch  string
+	SourceVersion string
+	VersionSet    string
+	Parameters    map[string]string
 }
 
-// FindCandidates finds recent runs matching the service's canonical version set. Runs created by
-// older tooling are included when Azure exposes their releaseVersions template parameter.
+// FindCandidates finds recent direct go-images runs whose source commit contains every requested
+// version.
 func (s *Service) FindCandidates(ctx context.Context) ([]Candidate, error) {
 	builds, err := s.client.ListRecent(ctx, s.config.DefinitionID)
 	if err != nil {
 		return nil, fmt.Errorf("list recent go-images pipeline runs: %w", err)
 	}
-	want := s.versionSet
+	versionCache := make(map[string][]string)
 	var candidates []Candidate
 	for _, build := range builds {
-		versionSet, createdByUI, ok := buildVersionSet(build)
-		if !ok || versionSet != want {
-			continue
+		matches, err := s.matchesBuild(ctx, build, versionCache)
+		if err != nil {
+			return nil, fmt.Errorf("resolve candidate build %d versions: %w", build.ID, err)
 		}
-		if workflow := build.Parameters[WorkflowVariable]; workflow != "" && workflow != WorkflowID {
+		if !matches {
 			continue
 		}
 		state, err := build.State()
@@ -179,17 +121,16 @@ func (s *Service) FindCandidates(ctx context.Context) ([]Candidate, error) {
 			return nil, fmt.Errorf("interpret candidate build %d: %w", build.ID, err)
 		}
 		candidates = append(candidates, Candidate{
-			BuildID:         build.ID,
-			Status:          build.Status,
-			Result:          build.Result,
-			State:           state,
-			URL:             build.WebURL,
-			QueueTime:       build.QueueTime,
-			SessionID:       build.Parameters[CorrelationVariable],
-			VersionSet:      versionSet,
-			ExecutionDigest: build.Parameters[ExecutionDigestVariable],
-			CreatedByUI:     createdByUI,
-			Parameters:      stringifyTemplateParameters(build.TemplateParameters),
+			BuildID:       build.ID,
+			Status:        build.Status,
+			Result:        build.Result,
+			State:         state,
+			URL:           build.WebURL,
+			QueueTime:     build.QueueTime,
+			SourceBranch:  build.SourceBranch,
+			SourceVersion: build.SourceVersion,
+			VersionSet:    s.versionSet,
+			Parameters:    stringifyTemplateParameters(build.TemplateParameters),
 		})
 	}
 	return candidates, nil
@@ -204,29 +145,28 @@ func (s *Service) ValidateCandidate(ctx context.Context, buildID int) (Candidate
 	if build.DefinitionID != s.config.DefinitionID {
 		return Candidate{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, s.config.DefinitionID)
 	}
-	versionSet, createdByUI, ok := buildVersionSet(build)
-	if !ok || versionSet != s.versionSet {
-		return Candidate{}, fmt.Errorf("build %d does not match version set %s", buildID, s.versionSet)
+	matches, err := s.matchesBuild(ctx, build, make(map[string][]string))
+	if err != nil {
+		return Candidate{}, fmt.Errorf("resolve build %d versions: %w", buildID, err)
 	}
-	if workflow := build.Parameters[WorkflowVariable]; workflow != "" && workflow != WorkflowID {
-		return Candidate{}, fmt.Errorf("build %d belongs to workflow %q", buildID, workflow)
+	if !matches {
+		return Candidate{}, fmt.Errorf("build %d does not match version set %s", buildID, s.versionSet)
 	}
 	state, err := build.State()
 	if err != nil {
 		return Candidate{}, err
 	}
 	return Candidate{
-		BuildID:         build.ID,
-		Status:          build.Status,
-		Result:          build.Result,
-		State:           state,
-		URL:             build.WebURL,
-		QueueTime:       build.QueueTime,
-		SessionID:       build.Parameters[CorrelationVariable],
-		VersionSet:      versionSet,
-		ExecutionDigest: build.Parameters[ExecutionDigestVariable],
-		CreatedByUI:     createdByUI,
-		Parameters:      stringifyTemplateParameters(build.TemplateParameters),
+		BuildID:       build.ID,
+		Status:        build.Status,
+		Result:        build.Result,
+		State:         state,
+		URL:           build.WebURL,
+		QueueTime:     build.QueueTime,
+		SourceBranch:  build.SourceBranch,
+		SourceVersion: build.SourceVersion,
+		VersionSet:    s.versionSet,
+		Parameters:    stringifyTemplateParameters(build.TemplateParameters),
 	}, nil
 }
 
@@ -256,38 +196,33 @@ func CanonicalVersionSet(versions []string) (string, error) {
 	return string(data), nil
 }
 
-func buildVersionSet(build *azdopipeline.Build) (string, bool, bool) {
-	if versionSet := build.Parameters[VersionsVariable]; versionSet != "" {
-		return versionSet, true, true
+func (s *Service) matchesBuild(
+	ctx context.Context,
+	build *azdopipeline.Build,
+	cache map[string][]string,
+) (bool, error) {
+	if build.SourceVersion == "" {
+		return false, nil
 	}
-	value, ok := build.TemplateParameters["releaseVersions"]
+	available, ok := cache[build.SourceVersion]
 	if !ok {
-		return "", false, false
-	}
-	var versions []string
-	switch typed := value.(type) {
-	case []any:
-		for _, raw := range typed {
-			version, ok := raw.(string)
-			if !ok {
-				return "", false, false
-			}
-			versions = append(versions, version)
+		resolved, err := s.config.VersionResolver.VersionsAtCommit(ctx, build.SourceVersion)
+		if err != nil {
+			return false, err
 		}
-	case []string:
-		versions = typed
-	case string:
-		if err := json.Unmarshal([]byte(typed), &versions); err != nil {
-			return "", false, false
+		available = resolved
+		cache[build.SourceVersion] = available
+	}
+	availableSet := make(map[string]struct{}, len(available))
+	for _, version := range available {
+		availableSet[strings.TrimSpace(version)] = struct{}{}
+	}
+	for _, version := range s.versions {
+		if _, ok := availableSet[version]; !ok {
+			return false, nil
 		}
-	default:
-		return "", false, false
 	}
-	versionSet, err := CanonicalVersionSet(versions)
-	if err != nil {
-		return "", false, false
-	}
-	return versionSet, false, true
+	return true, nil
 }
 
 func stringifyTemplateParameters(values map[string]any) map[string]string {
@@ -310,11 +245,10 @@ func stringifyTemplateParameters(values map[string]any) map[string]string {
 	return result
 }
 
-// PollPipelineComplete waits until the run succeeds or reaches a terminal failure state.
-func (s *Service) PollPipelineComplete(ctx context.Context, buildID string, _ *releasesteps.Secret) error {
-	id, err := strconv.Atoi(buildID)
-	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid Azure DevOps build ID %q", buildID)
+// MonitorRun reads one run until it succeeds or reaches a terminal failure state.
+func (s *Service) MonitorRun(ctx context.Context, id int) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid Azure DevOps build ID %d", id)
 	}
 	for {
 		run, err := s.client.Get(ctx, id)
@@ -350,5 +284,3 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 		return nil
 	}
 }
-
-var _ releasesteps.GoImagesReleaseService = (*Service)(nil)
