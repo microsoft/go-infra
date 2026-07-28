@@ -1,0 +1,173 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# This manually triggered pipeline safely exercises release UI queueing and monitoring.
+#
+# It intentionally accepts the same template parameters as release-go-images-pipeline.yml, but it
+# does not import the requested variable group or perform any release work. The ReleaseUISessionID
+# pipeline variable is required and is used to reconcile a queued run after a client restart.
+#
+# internal (unofficial): pipeline definition must be created after this file is merged.
+
+parameters:
+  - name: releaseVersions
+    displayName: Release versions supplied by the release UI.
+    type: object
+
+  - name: releaseIssue
+    displayName: Existing release issue number, or nil.
+    type: string
+    default: nil
+
+  - name: isSecurityRelease
+    displayName: Whether this represents a security release.
+    type: boolean
+    default: false
+
+  - name: approveAheadOfTime
+    displayName: Skip the safe manual approval stage.
+    type: boolean
+    default: false
+
+  - name: runGoImagesBuild
+    displayName: Production-compatible image build switch. No image is built by this test pipeline.
+    type: boolean
+    default: true
+
+  - name: runPublishAnnouncement
+    displayName: Production-compatible announcement switch. No announcement is published.
+    type: boolean
+    default: false
+
+  - name: runUpdateDL
+    displayName: Production-compatible DL update switch. No repository is updated.
+    type: boolean
+    default: false
+
+  - name: runGoImageVersionCheck
+    displayName: Production-compatible version check switch. No registry is queried.
+    type: boolean
+    default: true
+
+  - name: poll1MicrosoftGoImagesCommitHash
+    displayName: Production-compatible commit retry input. It is only printed.
+    type: string
+    default: nil
+
+  - name: poll2MicrosoftGoImagesBuildID
+    displayName: Production-compatible build retry input. It is only printed.
+    type: string
+    default: nil
+
+  - name: notify
+    displayName: Production-compatible runner name. No notification is sent.
+    type: string
+
+  - name: goReleaseConfigVariableGroup
+    displayName: Production-compatible variable group name. The group is not imported.
+    type: string
+
+trigger: none
+pr: none
+
+resources:
+  repositories:
+    - repository: 1ESPipelineTemplates
+      type: git
+      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      ref: refs/tags/release
+
+extends:
+  template: v1/1ES.Unofficial.PipelineTemplate.yml@1ESPipelineTemplates
+  parameters:
+    pool:
+      name: NetCore1ESPool-Internal
+      image: 1es-ubuntu-2204
+      os: linux
+    sdl:
+      sourceAnalysisPool:
+        name: NetCore1ESPool-Svc-Internal
+        image: 1es-windows-2022
+        os: windows
+      suppression:
+        suppressionFile: $(Build.SourcesDirectory)/.config/guardian/.gdnsuppress
+      tsa:
+        enabled: false
+
+    stages:
+      - ${{ if eq(parameters.approveAheadOfTime, false) }}:
+        - stage: WaitForApproval
+          displayName: Safe manual approval test
+          jobs:
+            - job: Approve
+              pool: server
+              timeoutInMinutes: 60
+              steps:
+                - task: ManualValidation@0
+                  timeoutInMinutes: 60
+                  inputs:
+                    instructions: >
+                      Approve to let the no-op release UI integration test continue. This pipeline
+                      does not build, publish, or modify any external resource.
+                    onTimeout: reject
+
+      - stage: Test
+        displayName: Release UI integration test
+        ${{ if eq(parameters.approveAheadOfTime, false) }}:
+          dependsOn: WaitForApproval
+        ${{ else }}:
+          dependsOn: []
+        jobs:
+          - job: NoOp
+            displayName: Validate request and report success
+            workspace:
+              clean: all
+            steps:
+              - checkout: none
+
+              - bash: |
+                  set -euo pipefail
+
+                  if [[ ! "$RELEASE_UI_SESSION_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+                    echo "##vso[task.logissue type=error]ReleaseUISessionID is missing or invalid."
+                    exit 1
+                  fi
+
+                  echo "Release UI integration test"
+                  echo "Correlation ID: $RELEASE_UI_SESSION_ID"
+                  echo "Build ID: $BUILD_ID"
+                  echo "Pipeline: $PIPELINE_NAME"
+                  echo "Versions: $RELEASE_VERSIONS"
+                  echo "Release issue: $RELEASE_ISSUE"
+                  echo "Security release: $IS_SECURITY_RELEASE"
+                  echo "Runner: $NOTIFY"
+                  echo "Variable group name (not imported): $VARIABLE_GROUP"
+                  echo "Image build switch (no-op): $RUN_GO_IMAGES_BUILD"
+                  echo "Announcement switch (no-op): $RUN_PUBLISH_ANNOUNCEMENT"
+                  echo "DL update switch (no-op): $RUN_UPDATE_DL"
+                  echo "Image version check switch (no-op): $RUN_VERSION_CHECK"
+                  echo "Commit retry input (no-op): $POLL_COMMIT"
+                  echo "Build retry input (no-op): $POLL_BUILD"
+                displayName: Validate production-compatible request
+                env:
+                  RELEASE_UI_SESSION_ID: $(ReleaseUISessionID)
+                  BUILD_ID: $(Build.BuildId)
+                  PIPELINE_NAME: $(Build.DefinitionName)
+                  RELEASE_VERSIONS: ${{ convertToJson(parameters.releaseVersions) }}
+                  RELEASE_ISSUE: ${{ parameters.releaseIssue }}
+                  IS_SECURITY_RELEASE: ${{ parameters.isSecurityRelease }}
+                  NOTIFY: ${{ parameters.notify }}
+                  VARIABLE_GROUP: ${{ parameters.goReleaseConfigVariableGroup }}
+                  RUN_GO_IMAGES_BUILD: ${{ parameters.runGoImagesBuild }}
+                  RUN_PUBLISH_ANNOUNCEMENT: ${{ parameters.runPublishAnnouncement }}
+                  RUN_UPDATE_DL: ${{ parameters.runUpdateDL }}
+                  RUN_VERSION_CHECK: ${{ parameters.runGoImageVersionCheck }}
+                  POLL_COMMIT: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}
+                  POLL_BUILD: ${{ parameters.poll2MicrosoftGoImagesBuildID }}
+
+              - bash: |
+                  set -euo pipefail
+                  echo "No-op run is active so the release UI can observe an in-progress build."
+                  sleep 10
+                  echo "Release UI integration test completed successfully."
+                displayName: Emit observable no-op activity
