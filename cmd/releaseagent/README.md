@@ -19,8 +19,8 @@ pipeline (definition `1023`). It can:
 
 * Validate Microsoft release versions used to find matching source commits.
 * Display a three-step queue, monitor, and complete graph for pipeline `1023`.
-* Preview the pipeline's two runtime defaults: `sourceBuildPipelineRunId=$(Build.BuildId)` and
-	`publishRepoPrefix=public/`.
+* Preview all three runtime defaults: fixed informational `_info`,
+	`sourceBuildPipelineRunId=$(Build.BuildId)`, and `publishRepoPrefix=public/`.
 * Run that focused graph as an in-memory simulation and stream status changes to the browser.
 * Optionally persist and restore the non-secret release plan using `-session-file <path>`.
 * Report local readiness, including whether `gh` and `az` executables are present, without running
@@ -60,8 +60,9 @@ The focused workflow has hermetic tests for:
 * Read-only candidate discovery, selected-build revalidation, import, and monitoring.
 
 The Azure client and token provider are wired only behind an explicit, default-off read-only flag,
-an exact definition/repository/YAML allowlist, and durable state. The server receives search,
-validation, and monitor callbacks—not a queue-capable service.
+an exact definition/repository/YAML allowlist, live validation of all parameter names, types,
+defaults, and allowed values, and durable state. The server receives search, validation, and
+monitor callbacks—not a queue-capable service.
 
 ### Read-only pipeline 1023 discovery
 

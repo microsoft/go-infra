@@ -11,6 +11,13 @@
 # internal (unofficial): pipeline definition must be created after this file is merged.
 
 parameters:
+  - name: _info
+    displayName: ℹ️ This pipeline is a no-op release UI integration test.
+    type: string
+    values:
+      - "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵"
+    default: "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵"
+
   - name: sourceBuildPipelineRunId
     displayName: Build ID whose artifacts would be published by the real pipeline. It is only printed.
     type: string
@@ -71,6 +78,7 @@ extends:
                   echo "Correlation ID: $RELEASE_UI_SESSION_ID"
                   echo "Build ID: $BUILD_ID"
                   echo "Pipeline: $PIPELINE_NAME"
+                  echo "Pipeline info: $PIPELINE_INFO"
                   echo "Artifact source build (no-op): $SOURCE_BUILD_PIPELINE_RUN_ID"
                   echo "Publish prefix (no-op): $PUBLISH_REPO_PREFIX"
                 displayName: Validate pipeline-1023-compatible request
@@ -78,6 +86,7 @@ extends:
                   RELEASE_UI_SESSION_ID: $(ReleaseUISessionID)
                   BUILD_ID: $(Build.BuildId)
                   PIPELINE_NAME: $(Build.DefinitionName)
+                  PIPELINE_INFO: ${{ parameters._info }}
                   SOURCE_BUILD_PIPELINE_RUN_ID: ${{ parameters.sourceBuildPipelineRunId }}
                   PUBLISH_REPO_PREFIX: ${{ parameters.publishRepoPrefix }}
 

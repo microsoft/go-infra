@@ -53,6 +53,34 @@ func TestGetJSONFileAtCommit(t *testing.T) {
 	}
 }
 
+func TestGetFileAtBranch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("path") != "/eng/pipeline/go-docker-rolling-internal-pipeline.yml" ||
+			request.URL.Query().Get("versionDescriptor.version") != "microsoft/main" ||
+			request.URL.Query().Get("versionDescriptor.versionType") != "branch" {
+
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		_ = json.NewEncoder(response).Encode(map[string]string{"content": "parameters:\n"})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", "microsoft-go-images", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := client.GetFileAtBranch(
+		context.Background(),
+		"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
+		"refs/heads/microsoft/main",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "parameters:\n" {
+		t.Fatalf("content = %q", data)
+	}
+}
+
 func TestGetJSONFileAtCommitRedactsToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusForbidden)

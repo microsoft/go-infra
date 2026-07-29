@@ -237,11 +237,13 @@ const (
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
 )
 
-// GoImagesPipelineParameters returns the two runtime parameters accepted by the direct
-// microsoft-go-images pipeline. These are production defaults: a newly queued run builds from its
-// own artifacts and publishes to public/. The release UI does not currently queue this pipeline.
+// GoImagesPipelineParameters returns the runtime parameters accepted by the direct
+// microsoft-go-images pipeline. The _info parameter is fixed and informational. The operational
+// production defaults build from the new run's own artifacts and publish to public/. The release
+// UI does not currently queue this pipeline.
 func GoImagesPipelineParameters() map[string]string {
 	return map[string]string{
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
 		"sourceBuildPipelineRunId": "$(Build.BuildId)",
 		"publishRepoPrefix":        "public/",
 	}

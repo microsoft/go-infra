@@ -61,21 +61,46 @@ func NewClient(baseURL, project, repository string, httpClient HTTPDoer, tokens 
 	}, nil
 }
 
+// GetFileAtCommit returns a file from an exact repository commit.
+func (c *Client) GetFileAtCommit(ctx context.Context, path, commit string) ([]byte, error) {
+	if !commitPattern.MatchString(commit) {
+		return nil, fmt.Errorf("invalid repository commit %q", commit)
+	}
+	return c.getFile(ctx, path, commit, "commit")
+}
+
+// GetFileAtBranch returns a file from the current tip of a repository branch.
+func (c *Client) GetFileAtBranch(ctx context.Context, path, branch string) ([]byte, error) {
+	branch = strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
+	if branch == "" || strings.ContainsAny(branch, "\x00\r\n") {
+		return nil, fmt.Errorf("invalid repository branch %q", branch)
+	}
+	return c.getFile(ctx, path, branch, "branch")
+}
+
 // GetJSONFileAtCommit decodes a JSON file from an exact repository commit into target.
 func (c *Client) GetJSONFileAtCommit(ctx context.Context, path, commit string, target any) error {
-	if path == "" || path[0] != '/' {
-		return errors.New("repository file path must be absolute")
-	}
-	if !commitPattern.MatchString(commit) {
-		return fmt.Errorf("invalid repository commit %q", commit)
+	data, err := c.GetFileAtCommit(ctx, path, commit)
+	if err != nil {
+		return err
 	}
 	if target == nil {
 		return errors.New("repository file target must not be nil")
 	}
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("decode Azure Repos file %s at %s: %w", path, commit, err)
+	}
+	return nil
+}
+
+func (c *Client) getFile(ctx context.Context, path, version, versionType string) ([]byte, error) {
+	if path == "" || path[0] != '/' {
+		return nil, errors.New("repository file path must be absolute")
+	}
 	query := url.Values{
 		"path":                             {path},
-		"versionDescriptor.version":        {commit},
-		"versionDescriptor.versionType":    {"commit"},
+		"versionDescriptor.version":        {version},
+		"versionDescriptor.versionType":    {versionType},
 		"versionDescriptor.versionOptions": {"none"},
 		"includeContent":                   {"true"},
 		"api-version":                      {"7.1"},
@@ -84,44 +109,41 @@ func (c *Client) GetJSONFileAtCommit(ctx context.Context, path, commit string, t
 		url.PathEscape(c.repository) + "/items?" + query.Encode()
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire Azure DevOps token: %w", err)
+		return nil, fmt.Errorf("acquire Azure DevOps token: %w", err)
 	}
 	if token == "" {
-		return errors.New("azure DevOps token provider returned an empty token")
+		return nil, errors.New("azure DevOps token provider returned an empty token")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("create Azure Repos request: %w", err)
+		return nil, fmt.Errorf("create Azure Repos request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(request)
 	if err != nil {
-		return fmt.Errorf("send Azure Repos request: %w", err)
+		return nil, fmt.Errorf("send Azure Repos request: %w", err)
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
-		return fmt.Errorf("read Azure Repos response: %w", err)
+		return nil, fmt.Errorf("read Azure Repos response: %w", err)
 	}
 	if len(data) > maxResponseSize {
-		return fmt.Errorf("azure Repos response exceeds %d bytes", maxResponseSize)
+		return nil, fmt.Errorf("azure Repos response exceeds %d bytes", maxResponseSize)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body := strings.ReplaceAll(strings.TrimSpace(string(data)), token, "[REDACTED]")
-		return fmt.Errorf("azure Repos request returned %d: %s", response.StatusCode, body)
+		return nil, fmt.Errorf("azure Repos request returned %d: %s", response.StatusCode, body)
 	}
 	var item struct {
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
-		return fmt.Errorf("decode Azure Repos item metadata for %s at %s: %w", path, commit, err)
+		return nil, fmt.Errorf("decode Azure Repos item metadata for %s at %s %s: %w", path, versionType, version, err)
 	}
 	if item.Content == "" {
-		return fmt.Errorf("azure Repos returned empty file content for %s at %s", path, commit)
+		return nil, fmt.Errorf("azure Repos returned empty file content for %s at %s %s", path, versionType, version)
 	}
-	if err := json.Unmarshal([]byte(item.Content), target); err != nil {
-		return fmt.Errorf("decode Azure Repos file %s at %s: %w", path, commit, err)
-	}
-	return nil
+	return []byte(item.Content), nil
 }

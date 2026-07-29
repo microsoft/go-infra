@@ -119,7 +119,18 @@ func handleServe(parse subcmd.ParseFunc) error {
 
 					return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
 				}
-				return "Authenticated and verified direct go-images pipeline 1023. Access is read-only.", nil
+				pipelineYAML, err := repoClient.GetFileAtBranch(
+					ctx,
+					"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
+					"refs/heads/microsoft/main",
+				)
+				if err != nil {
+					return "", fmt.Errorf("read pipeline 1023 YAML: %w", err)
+				}
+				if err := goimagesrelease.ValidatePipelineParameterContract(pipelineYAML); err != nil {
+					return "", fmt.Errorf("verify pipeline 1023 parameters: %w", err)
+				}
+				return "Authenticated and verified direct go-images pipeline 1023 and its runtime parameter contract. Access is read-only.", nil
 			},
 			FindRuns: func(ctx context.Context, versions []string) ([]releaseui.PipelineRunCandidate, error) {
 				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{

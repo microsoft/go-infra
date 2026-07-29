@@ -53,6 +53,7 @@ func TestReleaseUIIntegrationPipelineIsSafeNoOp(t *testing.T) {
 		names = append(names, name)
 	}
 	wantNames := []string{
+		"_info",
 		"sourceBuildPipelineRunId",
 		"publishRepoPrefix",
 	}

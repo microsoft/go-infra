@@ -35,6 +35,7 @@ var exampleInput = &Input{
 func TestGoImagesPipelineParameters(t *testing.T) {
 	parameters := GoImagesPipelineParameters()
 	want := map[string]string{
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
 		"sourceBuildPipelineRunId": "$(Build.BuildId)",
 		"publishRepoPrefix":        "public/",
 	}
