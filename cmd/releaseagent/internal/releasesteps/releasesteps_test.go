@@ -146,6 +146,95 @@ func TestGoImagesReleasePipelineResume(t *testing.T) {
 	}
 }
 
+func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
+	input := *exampleInput
+	state, err := initializeState(&input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Day.GoImagesReleaseImported = true
+	state.Day.GoImagesReleaseComplete = true
+	state.Day.GoImagesReleaseResult = "succeeded"
+	state.Day.GoImagesDemoSourceValidated = true
+	state.Day.GoImagesReleaseBuildID = "3019035"
+	state.Day.GoImagesSourceBranch = "refs/heads/microsoft/main"
+	state.Day.GoImagesCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	queued := 0
+	polled := 0
+	service := &ServiceBundleMock{
+		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
+			queued++
+			if pipelineID != 1492 {
+				t.Fatalf("pipeline ID = %d, want 1492", pipelineID)
+			}
+			if parameters["publishRepoPrefix"] != "dev/" || parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" {
+				t.Fatalf("parameters = %#v", parameters)
+			}
+			if len(optionalParameters) != 0 {
+				t.Fatalf("optional parameters = %#v", optionalParameters)
+			}
+			return "demo-321", nil
+		},
+		PollPipelineCompleteFunc: func(_ context.Context, buildID string, _ *Secret) error {
+			polled++
+			if buildID != "demo-321" {
+				t.Fatalf("build ID = %q", buildID)
+			}
+			return nil
+		},
+	}
+	checkpoints := 0
+	steps, finalState, err := CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+		&input,
+		exampleSecret,
+		state,
+		1492,
+		service,
+		func(context.Context, *State) error { checkpoints++; return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 || polled != 1 || checkpoints != 3 {
+		t.Fatalf("queued = %d, polled = %d, checkpoints = %d", queued, polled, checkpoints)
+	}
+	if finalState.Day.GoImagesDemoBuildID != "demo-321" || !finalState.Day.GoImagesDemoComplete ||
+		finalState.Day.GoImagesDemoParameters["publishRepoPrefix"] != "dev/" {
+
+		t.Fatalf("demo state = %#v", finalState.Day)
+	}
+
+	queued = 0
+	polled = 0
+	steps, _, err = CreateGoImagesUnofficialDemoGraphWithCheckpoint(&input, exampleSecret, finalState, 1492, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 0 || polled != 0 {
+		t.Fatalf("completed demo was repeated: queued = %d, polled = %d", queued, polled)
+	}
+}
+
+func TestGoImagesUnofficialDemoRequiresImportedMainRun(t *testing.T) {
+	input := *exampleInput
+	state, err := initializeState(&input, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+		&input, exampleSecret, state, 1492, &ServiceBundleMock{}, nil,
+	); err == nil {
+		t.Fatal("demo graph accepted state without an imported completed run")
+	}
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	data, err := json.Marshal(value)

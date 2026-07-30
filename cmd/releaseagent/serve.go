@@ -19,7 +19,9 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesdemo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 	"github.com/microsoft/go-infra/subcmd"
@@ -40,11 +42,15 @@ func handleServe(parse subcmd.ParseFunc) error {
 	demoDelay := flag.Duration("demo-step-delay", 250*time.Millisecond, "Duration of each step in the safe simulation")
 	sessionFile := flag.String("session-file", "", "Optional JSON file used to persist and restore the non-secret release plan")
 	enableAzureReadOnly := flag.Bool("enable-go-images-azure-read-only", false, "Enable authenticated read-only discovery of pipeline 1023 runs")
+	enableUnofficialDemo := flag.Bool("enable-go-images-unofficial-demo", false, "Enable confirmation-protected real execution of unofficial pipeline 1492 with dev/ publishing")
 	if err := parse(); err != nil {
 		return err
 	}
 	if *enableAzureReadOnly && *sessionFile == "" {
 		return errors.New("-enable-go-images-azure-read-only requires -session-file")
+	}
+	if *enableUnofficialDemo && !*enableAzureReadOnly {
+		return errors.New("-enable-go-images-unofficial-demo requires -enable-go-images-azure-read-only")
 	}
 
 	var options []releaseui.Option
@@ -179,6 +185,73 @@ func handleServe(parse subcmd.ParseFunc) error {
 				return service.MonitorRun(ctx, buildID)
 			},
 		}))
+		if *enableUnofficialDemo {
+			queueClient, err := goimagesdemo.NewHTTPQueueClient(
+				"https://dev.azure.com/dnceng",
+				"internal",
+				azureHTTPClient,
+				tokenProvider,
+			)
+			if err != nil {
+				return err
+			}
+			validateUnofficialSource := func(ctx context.Context, commit string) error {
+				pipelineYAML, err := repoClient.GetFileAtCommit(
+					ctx,
+					"/eng/pipeline/go-docker-rolling-internal-pipeline-unofficial.yml",
+					commit,
+				)
+				if err != nil {
+					return fmt.Errorf("read unofficial pipeline YAML at %s: %w", commit, err)
+				}
+				return goimagesrelease.ValidateUnofficialPipelineParameterContract(pipelineYAML)
+			}
+			options = append(options, releaseui.WithGoImagesUnofficialDemoIntegration(
+				releaseui.GoImagesUnofficialDemoIntegration{
+					DefinitionID: goimagesdemo.DefinitionID,
+					Preflight: func(ctx context.Context) (string, error) {
+						definition, err := azureClient.GetDefinition(ctx, goimagesdemo.DefinitionID)
+						if err != nil {
+							return "", err
+						}
+						if definition.Name != "microsoft-go-images (unofficial)" ||
+							definition.QueueStatus != "enabled" ||
+							definition.DefaultBranch != "refs/heads/microsoft/main" ||
+							definition.Repository != "microsoft-go-images" ||
+							definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline-unofficial.yml" {
+
+							return "", fmt.Errorf("pipeline 1492 does not match the unofficial-demo allowlist: %#v", definition)
+						}
+						pipelineYAML, err := repoClient.GetFileAtBranch(
+							ctx,
+							"/eng/pipeline/go-docker-rolling-internal-pipeline-unofficial.yml",
+							"refs/heads/microsoft/main",
+						)
+						if err != nil {
+							return "", fmt.Errorf("read pipeline 1492 YAML: %w", err)
+						}
+						if err := goimagesrelease.ValidateUnofficialPipelineParameterContract(pipelineYAML); err != nil {
+							return "", fmt.Errorf("verify pipeline 1492 parameters: %w", err)
+						}
+						return "Verified pipeline 1492. It performs a real build, test signing, and test-ACR publication under dev/.", nil
+					},
+					ValidateSource: validateUnofficialSource,
+					NewService: func(request releaseui.GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+						return goimagesdemo.New(azureClient, queueClient, goimagesdemo.Config{
+							SessionID:            request.SessionID,
+							ExecutionDigest:      request.ExecutionDigest,
+							Versions:             request.Versions,
+							SourceBuildID:        request.SourceBuildID,
+							SourceVersion:        request.SourceVersion,
+							PollInterval:         5 * time.Second,
+							PreviousQueueAttempt: request.PreviousQueueAttempt,
+							ReconcileAttempts:    6,
+							ReconcileInterval:    5 * time.Second,
+						}, nil)
+					},
+				},
+			))
+		}
 	}
 
 	listener, err := net.Listen("tcp", *listenAddress)
@@ -216,7 +289,9 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 
 	fmt.Printf("Release UI listening at %s\n", launchURL)
-	if *enableAzureReadOnly {
+	if *enableUnofficialDemo {
+		fmt.Println("Real unofficial pipeline 1492 demo is enabled with test-ACR dev/ publishing.")
+	} else if *enableAzureReadOnly {
 		fmt.Println("Read-only discovery of pipeline 1023 is enabled. Queueing is not implemented.")
 	} else {
 		fmt.Println("Go-images pipeline execution is disabled; this UI can only plan and simulate it.")
@@ -249,6 +324,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 func convertRunCandidate(candidate goimagesrelease.Candidate) releaseui.PipelineRunCandidate {
 	return releaseui.PipelineRunCandidate{
 		BuildID:       candidate.BuildID,
+		DefinitionID:  candidate.DefinitionID,
 		Status:        candidate.Status,
 		Result:        candidate.Result,
 		State:         string(candidate.State),

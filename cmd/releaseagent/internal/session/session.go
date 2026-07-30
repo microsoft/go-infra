@@ -20,7 +20,7 @@ import (
 
 const (
 	// CurrentSchemaVersion is the only session document schema understood by this version.
-	CurrentSchemaVersion = 3
+	CurrentSchemaVersion = 4
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
 	// even if step IDs and dependencies have not changed.
 	CurrentWorkflowRevision = 4

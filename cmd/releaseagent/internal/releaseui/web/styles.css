@@ -235,6 +235,23 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .pipeline-parameters dd { color: var(--text); background: rgb(6 17 30 / 65%); }
 .pipeline-parameters > :nth-last-child(-n+2) { border-bottom: 0; }
 .pipeline-run-link { display: block; margin-top: 12px; color: var(--cyan); font-size: 11px; text-align: center; }
+.demo-unavailable { margin: 14px 0; padding: 11px 13px; border: 1px solid rgb(255 197 92 / 34%); border-radius: 10px; background: rgb(255 197 92 / 8%); color: var(--yellow); font-size: 10px; line-height: 1.5; }
+.real-demo-controls { margin: 18px 0; padding: 18px; border: 1px solid rgb(255 123 135 / 42%); border-radius: 14px; background: linear-gradient(145deg, rgb(255 123 135 / 10%), rgb(7 19 33 / 82%)); }
+.real-demo-controls h3 { margin: 0; font-size: 15px; }
+.real-demo-warning { margin: 8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.real-demo-warning strong { color: var(--red); }
+.demo-intent { display: grid; grid-template-columns: 92px minmax(0, 1fr); margin: 0 0 14px; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; }
+.demo-intent dt, .demo-intent dd { min-width: 0; margin: 0; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 9px; overflow-wrap: anywhere; }
+.demo-intent dt { color: #8cabc5; background: rgb(18 42 64 / 72%); }
+.demo-intent dd { color: var(--text); background: rgb(6 17 30 / 65%); }
+.demo-intent > :nth-last-child(-n+2) { border-bottom: 0; }
+.demo-intent code, #unofficial-demo-phrase { color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.real-demo-controls label { margin-top: 4px; }
+.real-demo-controls .button-danger { width: 100%; margin-top: 12px; }
+.demo-progress { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.demo-progress > div:first-child { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; }
+.demo-progress strong { color: var(--text); }
+.demo-step-list { max-height: 360px; margin-top: 12px; }
 
 .step-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 10px; max-height: 760px; margin: 0; padding: 1px; overflow: auto; list-style: none; }
 .step-card { position: relative; min-height: 112px; padding: 15px 15px 13px 18px; border: 1px solid var(--border); border-radius: 13px; background: rgb(11 27 45 / 72%); overflow: hidden; transition: border-color .18s, background .18s, transform .18s; }

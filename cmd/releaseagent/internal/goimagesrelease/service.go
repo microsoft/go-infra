@@ -88,6 +88,7 @@ func New(client PipelineClient, config Config, sleeper Sleeper) (*Service, error
 // Candidate is a recent run matching a canonical version set.
 type Candidate struct {
 	BuildID       int
+	DefinitionID  int
 	Status        string
 	Result        string
 	State         azdopipeline.RunState
@@ -122,6 +123,7 @@ func (s *Service) FindCandidates(ctx context.Context) ([]Candidate, error) {
 		}
 		candidates = append(candidates, Candidate{
 			BuildID:       build.ID,
+			DefinitionID:  build.DefinitionID,
 			Status:        build.Status,
 			Result:        build.Result,
 			State:         state,
@@ -158,6 +160,7 @@ func (s *Service) ValidateCandidate(ctx context.Context, buildID int) (Candidate
 	}
 	return Candidate{
 		BuildID:       build.ID,
+		DefinitionID:  build.DefinitionID,
 		Status:        build.Status,
 		Result:        build.Result,
 		State:         state,

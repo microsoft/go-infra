@@ -114,6 +114,42 @@
             <dl id="pipeline-parameters" class="pipeline-parameters"></dl>
           </section>
           <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
+          <p id="unofficial-demo-unavailable" class="demo-unavailable" hidden></p>
+          <section id="unofficial-demo-controls" class="real-demo-controls" hidden>
+            <p class="eyebrow">Real nonproduction execution</p>
+            <h3>Queue unofficial pipeline 1492</h3>
+            <p class="real-demo-warning">
+              This is not a simulation. It builds images, performs test signing, and publishes to
+              the test ACR under <strong>dev/</strong>. It cannot target pipeline 1023 or public/.
+            </p>
+            <dl class="demo-intent">
+              <dt>Source</dt>
+              <dd id="unofficial-demo-source"></dd>
+              <dt>Parameters</dt>
+              <dd id="unofficial-demo-parameters"></dd>
+              <dt>Confirmed digest</dt>
+              <dd><code id="unofficial-demo-digest"></code></dd>
+            </dl>
+            <label for="unofficial-demo-confirmation">
+              Type <strong id="unofficial-demo-phrase"></strong>
+            </label>
+            <input id="unofficial-demo-confirmation" autocomplete="off" spellcheck="false">
+            <button id="unofficial-demo-button" class="button button-danger" type="button" disabled>
+              Queue real unofficial demo
+            </button>
+            <a id="unofficial-demo-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
+            <div class="demo-progress" aria-live="polite">
+              <div>
+                <span id="unofficial-demo-progress-label">Ready for confirmation</span>
+                <strong id="unofficial-demo-progress-count">0 / 3 complete</strong>
+              </div>
+              <div class="progress-track" aria-hidden="true">
+                <span id="unofficial-demo-progress-bar"></span>
+              </div>
+              <div id="unofficial-demo-status-counts" class="status-counts"></div>
+            </div>
+            <ol id="unofficial-demo-step-list" class="step-list demo-step-list"></ol>
+          </section>
           <ol id="step-list" class="step-list"></ol>
         </div>
       </section>

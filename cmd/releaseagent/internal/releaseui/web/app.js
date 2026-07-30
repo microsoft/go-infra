@@ -25,12 +25,28 @@ const findRunsButton = document.querySelector("#find-runs-button");
 const runCandidates = document.querySelector("#run-candidates");
 const candidateCount = document.querySelector("#candidate-count");
 const candidateList = document.querySelector("#candidate-list");
+const unofficialDemoControls = document.querySelector("#unofficial-demo-controls");
+const unofficialDemoUnavailable = document.querySelector("#unofficial-demo-unavailable");
+const unofficialDemoSource = document.querySelector("#unofficial-demo-source");
+const unofficialDemoParameters = document.querySelector("#unofficial-demo-parameters");
+const unofficialDemoDigest = document.querySelector("#unofficial-demo-digest");
+const unofficialDemoPhrase = document.querySelector("#unofficial-demo-phrase");
+const unofficialDemoConfirmation = document.querySelector("#unofficial-demo-confirmation");
+const unofficialDemoButton = document.querySelector("#unofficial-demo-button");
+const unofficialDemoRunLink = document.querySelector("#unofficial-demo-run-link");
+const unofficialDemoProgressLabel = document.querySelector("#unofficial-demo-progress-label");
+const unofficialDemoProgressCount = document.querySelector("#unofficial-demo-progress-count");
+const unofficialDemoProgressBar = document.querySelector("#unofficial-demo-progress-bar");
+const unofficialDemoStatusCounts = document.querySelector("#unofficial-demo-status-counts");
+const unofficialDemoStepList = document.querySelector("#unofficial-demo-step-list");
 
 let plan = null;
 let eventSource = null;
+let unofficialDemoEventSource = null;
 let toastTimer = null;
 let preflight = null;
 let executionActive = false;
+let unofficialDemoActive = false;
 
 loadExistingPlan();
 loadPreflight();
@@ -79,13 +95,33 @@ demoButton.addEventListener("click", async () => {
   }
 });
 
+unofficialDemoConfirmation.addEventListener("input", updateUnofficialDemoButton);
+
+unofficialDemoButton.addEventListener("click", async () => {
+  setBusy(unofficialDemoButton, true, plan?.unofficialDemo?.run?.buildId ? "Resuming monitoring…" : "Queueing real demo…");
+  try {
+    await requestJSON("/api/go-images/unofficial-demo/start", {
+      method: "POST",
+      body: JSON.stringify({
+        planDigest: plan.unofficialDemo.planDigest,
+        confirmation: unofficialDemoConfirmation.value,
+      }),
+    });
+    connectUnofficialDemoEvents();
+    await refreshPlanMetadata();
+  } catch (error) {
+    showError(error.message);
+    updateUnofficialDemoButton();
+  }
+});
+
 function renderPlan(nextPlan) {
   document.querySelector("#versions").value = nextPlan.input.versions.join("\n");
   emptyState.hidden = true;
   planContent.hidden = false;
   const restored = nextPlan.restored ? " · restored from disk" : "";
   const imported = nextPlan.run?.imported ? " · imported existing run" : "";
-  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · direct pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · queueing disabled${restored}${imported}`;
+  planSubtitle.textContent = `${nextPlan.input.versions.join(", ")} · direct pipeline ${nextPlan.pipeline.definitionId} · ${nextPlan.steps.length} steps · production queueing disabled${restored}${imported}`;
   renderPipeline(nextPlan.pipeline);
   renderPipelineRun(nextPlan.run);
   stepList.replaceChildren(...nextPlan.steps.map(createStepCard));
@@ -94,6 +130,7 @@ function renderPlan(nextPlan) {
   const snapshot = initialPlanSnapshot(nextPlan);
   updateSteps(snapshot);
   updateProgress(snapshot);
+  renderUnofficialDemo(nextPlan.unofficialDemo);
 }
 
 function initialPlanSnapshot(nextPlan) {
@@ -148,10 +185,13 @@ async function loadPreflight() {
       return item;
     }));
     if (preflight.azureReadOnlyEnabled) {
-      safetyTitle.textContent = "Read-only Azure discovery ready";
-      safetyCopy.textContent = "Authenticated pipeline 1023 lookup is enabled. No endpoint can queue, cancel, or approve a run.";
+      safetyTitle.textContent = preflight.unofficialDemoEnabled ? "Real unofficial demo enabled" : "Read-only Azure discovery ready";
+      safetyCopy.textContent = preflight.unofficialDemoEnabled
+        ? "Pipeline 1492 can be queued only after importing a completed pipeline 1023 source run and typing an exact confirmation. It publishes dev/ images to the test ACR."
+        : "Authenticated pipeline 1023 lookup is enabled. No endpoint can queue, cancel, or approve a run.";
       findRunsButton.hidden = false;
     }
+    renderUnofficialDemo(plan?.unofficialDemo);
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
@@ -261,13 +301,95 @@ function renderPipelineRun(run) {
   pipelineRunLink.hidden = false;
 }
 
+function renderUnofficialDemo(demo) {
+  const visible = Boolean(demo?.eligible && preflight?.unofficialDemoEnabled);
+  const unavailable = Boolean(demo?.enabled && demo?.unavailableReason && preflight?.unofficialDemoEnabled);
+  unofficialDemoUnavailable.hidden = !unavailable;
+  unofficialDemoUnavailable.textContent = unavailable ? `Real unofficial demo unavailable: ${demo.unavailableReason}` : "";
+  unofficialDemoControls.hidden = !visible;
+  if (!visible) {
+    if (unofficialDemoEventSource) {
+      unofficialDemoEventSource.close();
+      unofficialDemoEventSource = null;
+    }
+    return;
+  }
+
+  unofficialDemoSource.textContent = `pipeline 1023 build ${demo.sourceBuildId} · ${demo.sourceBranch} @ ${demo.sourceVersion}`;
+  unofficialDemoParameters.textContent = Object.entries(demo.parameters)
+    .filter(([name]) => name !== "_info")
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => `${name}=${value}`)
+    .join(" · ");
+  unofficialDemoDigest.textContent = demo.planDigest;
+  unofficialDemoPhrase.textContent = demo.confirmation;
+  if (unofficialDemoConfirmation.dataset.phrase !== demo.confirmation) {
+    unofficialDemoConfirmation.value = "";
+    unofficialDemoConfirmation.dataset.phrase = demo.confirmation;
+  }
+  unofficialDemoStepList.replaceChildren(...demo.steps.map(createStepCard));
+  const snapshot = initialUnofficialDemoSnapshot(demo);
+  updateStepsInList(snapshot, unofficialDemoStepList);
+  updateProgressElements(snapshot, {
+    label: unofficialDemoProgressLabel,
+    count: unofficialDemoProgressCount,
+    bar: unofficialDemoProgressBar,
+    counts: unofficialDemoStatusCounts,
+  }, "Real demo");
+  renderUnofficialDemoRun(demo.run);
+  updateUnofficialDemoButton();
+  connectUnofficialDemoEvents();
+}
+
+function initialUnofficialDemoSnapshot(demo) {
+  const steps = demo.steps.map((step) => ({ ...step, status: "waiting" }));
+  if (demo.run?.buildId) {
+    const queue = steps.find((step) => step.id === "go-images.unofficial-demo.queue");
+    if (queue) queue.status = "succeeded";
+  }
+  if (demo.run?.complete) {
+    for (const step of steps) step.status = "succeeded";
+  }
+  return { active: false, steps };
+}
+
+function renderUnofficialDemoRun(run) {
+  if (!run?.buildId) {
+    unofficialDemoRunLink.hidden = true;
+    unofficialDemoRunLink.removeAttribute("href");
+    unofficialDemoRunLink.textContent = "";
+    return;
+  }
+  unofficialDemoRunLink.href = run.url;
+  unofficialDemoRunLink.textContent = `Open unofficial Azure run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}`;
+  unofficialDemoRunLink.hidden = false;
+}
+
+function updateUnofficialDemoButton() {
+  const demo = plan?.unofficialDemo;
+  const enabled = Boolean(demo?.eligible && preflight?.unofficialDemoEnabled);
+  const complete = Boolean(demo?.run?.complete);
+  unofficialDemoButton.disabled = !enabled || complete || executionActive || unofficialDemoActive ||
+    unofficialDemoConfirmation.value !== demo?.confirmation;
+  if (complete) {
+    unofficialDemoButton.textContent = "Unofficial demo completed";
+  } else if (demo?.run?.buildId) {
+    unofficialDemoButton.textContent = "Resume real demo monitoring";
+  } else {
+    unofficialDemoButton.textContent = "Queue real unofficial demo";
+  }
+}
+
 async function refreshPlanMetadata() {
   const response = await fetch("/api/plan");
   if (!response.ok) return;
   const latest = await response.json();
   if (!plan || latest.sessionId !== plan.sessionId) return;
   plan.run = latest.run;
+  plan.unofficialDemo = latest.unofficialDemo;
   renderPipelineRun(plan.run);
+  renderUnofficialDemoRun(plan.unofficialDemo.run);
+  updateUnofficialDemoButton();
 }
 
 function createStepCard(step) {
@@ -323,6 +445,7 @@ function connectEvents() {
     demoButton.textContent = plan?.run?.imported
       ? snapshot.active ? "Monitoring imported run…" : "Imported run loaded"
       : snapshot.active ? "Simulation running…" : "Simulate queue and monitor";
+    updateUnofficialDemoButton();
     if (!snapshot.active && snapshot.error) {
       showError(snapshot.error);
     }
@@ -332,9 +455,41 @@ function connectEvents() {
   });
 }
 
+function connectUnofficialDemoEvents() {
+  if (!plan?.unofficialDemo?.eligible) return;
+  if (unofficialDemoEventSource) {
+    unofficialDemoEventSource.close();
+  }
+  unofficialDemoEventSource = new EventSource("/api/go-images/unofficial-demo/events");
+  unofficialDemoEventSource.addEventListener("state", (event) => {
+    const snapshot = JSON.parse(event.data);
+    unofficialDemoActive = snapshot.active;
+    if (snapshot.steps.length) {
+      updateStepsInList(snapshot, unofficialDemoStepList);
+      updateProgressElements(snapshot, {
+        label: unofficialDemoProgressLabel,
+        count: unofficialDemoProgressCount,
+        bar: unofficialDemoProgressBar,
+        counts: unofficialDemoStatusCounts,
+      }, "Real demo");
+    }
+    updateUnofficialDemoButton();
+    if (!snapshot.active && snapshot.error) {
+      showError(snapshot.error);
+    }
+    if (snapshot.steps.some((step) => step.id === "go-images.unofficial-demo.queue" && step.status === "succeeded") || !snapshot.active) {
+      refreshPlanMetadata().catch((error) => showError(error.message));
+    }
+  });
+}
+
 function updateSteps(snapshot) {
+  updateStepsInList(snapshot, stepList);
+}
+
+function updateStepsInList(snapshot, list) {
   for (const step of snapshot.steps) {
-    const card = Array.from(stepList.children).find((candidate) => candidate.dataset.stepId === step.id);
+    const card = Array.from(list.children).find((candidate) => candidate.dataset.stepId === step.id);
     if (!card) continue;
     card.dataset.status = step.status;
     card.querySelector(".status-badge").textContent = step.status;
@@ -346,12 +501,36 @@ function updateSteps(snapshot) {
       card.append(error);
     }
     if (step.status === "running") {
-      stepList.scrollTo({
-        top: Math.max(0, card.offsetTop - stepList.offsetTop - 12),
+      list.scrollTo({
+        top: Math.max(0, card.offsetTop - list.offsetTop - 12),
         behavior: "smooth",
       });
     }
   }
+}
+
+function updateProgressElements(snapshot, elements, name) {
+  const steps = snapshot.steps || [];
+  const terminal = new Set(["succeeded", "failed", "blocked", "canceled"]);
+  const complete = steps.filter((step) => terminal.has(step.status)).length;
+  const succeeded = steps.filter((step) => step.status === "succeeded").length;
+  const percent = steps.length ? Math.round((complete / steps.length) * 100) : 0;
+  elements.count.textContent = `${complete} / ${steps.length} complete`;
+  elements.bar.style.width = `${percent}%`;
+  if (snapshot.active) {
+    elements.label.textContent = `${name} in progress`;
+  } else if (complete === steps.length && steps.length) {
+    elements.label.textContent = succeeded === steps.length ? `${name} completed successfully` : `${name} stopped`;
+  } else {
+    elements.label.textContent = "Ready for confirmation";
+  }
+  const counts = new Map();
+  for (const step of steps) counts.set(step.status, (counts.get(step.status) || 0) + 1);
+  elements.counts.replaceChildren(...Array.from(counts.entries()).map(([status, count]) => {
+    const label = document.createElement("span");
+    label.textContent = `${status} ${count}`;
+    return label;
+  }));
 }
 
 function updateProgress(snapshot) {

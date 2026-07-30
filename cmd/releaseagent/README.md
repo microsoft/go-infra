@@ -80,9 +80,32 @@ Pipeline `1023` does not accept release versions directly. Discovery lists recen
 Selecting a candidate re-fetches and revalidates its definition, source commit, and versions before
 creating a local session. A running imported build can be monitored by ID using read-only GETs.
 
-There is deliberately no real queue endpoint. Pipeline `1023` builds, signs, and publishes images,
-and its official default is `publishRepoPrefix=public/`; unlike the former wrapper-pipeline smoke
-path, it has no switch that disables all release effects.
+There is deliberately no endpoint that can queue production pipeline `1023`. It builds, signs, and
+publishes images with `publishRepoPrefix=public/`, and it has no switch that disables all release
+effects. Real execution is isolated to the separately enabled unofficial pipeline below.
+
+### Real unofficial pipeline demo
+
+A separate explicit mode can queue `microsoft-go-images (unofficial)` definition `1492`. This is a
+real nonproduction run: it builds images, performs test signing, consumes Azure agents, and writes
+images to the test ACR under `dev/`. The queue client hardcodes definition `1492`, branch
+`refs/heads/microsoft/main`, `sourceBuildPipelineRunId=$(Build.BuildId)`, and
+`publishRepoPrefix=dev/`; it cannot target definition `1023` or `public/`.
+
+```console
+go run ./cmd/releaseagent serve \
+	-session-file "$HOME/.config/microsoft-go/release-session.json" \
+	-enable-go-images-azure-read-only \
+	-enable-go-images-unofficial-demo
+```
+
+To enable the queue button, first search by version and explicitly import a **completed successful**
+pipeline `1023` run from `microsoft/main`. The imported build pins the exact source commit. The UI
+also reads the unofficial pipeline YAML at that exact commit and requires its full contract to
+match the allowlisted `dev/` payload. It then previews the fixed `1492` request and requires both a digest match and a dynamic phrase of the
+form `QUEUE UNOFFICIAL PIPELINE 1492 DEMO FROM 1023 BUILD <id>`. Correlation metadata prevents a
+restart immediately after queueing from creating a duplicate run. A durable pre-queue marker makes
+restart recovery wait and retry Azure run discovery for up to 30 seconds before issuing a new POST.
 
 The server only binds to a loopback address. A random one-time launch token establishes an
 HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.

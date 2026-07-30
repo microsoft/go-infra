@@ -97,13 +97,20 @@ type DayState struct {
 	// ReleaseIssue is the ID of the release issue to supply with updates.
 	ReleaseIssue int
 
-	GoImagesCommit            string
-	GoImagesSourceBranch      string
-	GoImagesOfficialBuildID   string
-	GoImagesReleaseBuildID    string
-	GoImagesReleaseComplete   bool
-	GoImagesReleaseImported   bool
-	GoImagesReleaseParameters map[string]string
+	GoImagesCommit                    string
+	GoImagesSourceBranch              string
+	GoImagesOfficialBuildID           string
+	GoImagesReleaseBuildID            string
+	GoImagesReleaseResult             string
+	GoImagesReleaseComplete           bool
+	GoImagesReleaseImported           bool
+	GoImagesReleaseParameters         map[string]string
+	GoImagesDemoBuildID               string
+	GoImagesDemoSourceValidated       bool
+	GoImagesDemoSourceValidationError string
+	GoImagesDemoQueueAttempted        bool
+	GoImagesDemoComplete              bool
+	GoImagesDemoParameters            map[string]string
 
 	AnnouncementWritten bool
 	MARVersionChecked   bool
@@ -249,6 +256,17 @@ func GoImagesPipelineParameters() map[string]string {
 	}
 }
 
+// GoImagesUnofficialDemoPipelineParameters returns the only parameter set the release UI may send
+// to the real demo pipeline. It builds new images and publishes them under dev/ using nonproduction
+// registries and test signing configured by the unofficial pipeline definition.
+func GoImagesUnofficialDemoPipelineParameters() map[string]string {
+	return map[string]string{
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵",
+		"sourceBuildPipelineRunId": "$(Build.BuildId)",
+		"publishRepoPrefix":        "dev/",
+	}
+}
+
 // CreateGoImagesPipelineGraph creates the initial focused workflow that queues and monitors
 // the direct microsoft-go-images pipeline as one coarse-grained operation.
 func CreateGoImagesPipelineGraph(
@@ -328,6 +346,90 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	complete := coordinator.NewIndicatorStep(
 		"go-images.pipeline.complete",
 		"✅ Go-images pipeline complete",
+		wait,
+	)
+	steps, err := complete.TransitiveDependencies()
+	if err != nil {
+		return nil, nil, err
+	}
+	wrapStepsWithStateFlush(steps, state, checkpoint)
+	return steps, rs, nil
+}
+
+// CreateGoImagesUnofficialDemoGraphWithCheckpoint queues and monitors an allowlisted unofficial
+// go-images build. The selected completed official run supplies the exact source commit. The
+// service implementation must independently enforce the pipeline, branch, commit, and parameters.
+func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+	ri *Input,
+	secret *Secret,
+	rs *State,
+	pipelineID int,
+	sb GoImagesReleaseService,
+	checkpoint StateCheckpoint,
+) ([]*coordinator.Step, *State, error) {
+	if ri == nil || pipelineID <= 0 {
+		return nil, nil, fmt.Errorf("no unofficial go-images demo pipeline specified")
+	}
+	var err error
+	rs, err = initializeState(ri, rs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !rs.Day.GoImagesReleaseImported || !rs.Day.GoImagesReleaseComplete || rs.Day.GoImagesReleaseResult != "succeeded" ||
+		!rs.Day.GoImagesDemoSourceValidated ||
+		rs.Day.GoImagesReleaseBuildID == "" || rs.Day.GoImagesCommit == "" ||
+		rs.Day.GoImagesSourceBranch != "refs/heads/microsoft/main" {
+
+		return nil, nil, fmt.Errorf("a pipeline 1023 run with result succeeded from microsoft/main must be imported first")
+	}
+	state := &stateAccess{state: rs, checkpoint: checkpoint}
+	parameters := GoImagesUnofficialDemoPipelineParameters()
+
+	queue := coordinator.NewRootStep(
+		"go-images.unofficial-demo.queue",
+		"🚀 Queue unofficial go-images demo",
+		shortTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesDemoBuildID }) != "" {
+				return nil
+			}
+			if !stateValue(state, func(s *State) bool { return s.Day.GoImagesDemoQueueAttempted }) {
+				if err := state.update(ctx, func(s *State) {
+					s.Day.GoImagesDemoQueueAttempted = true
+				}); err != nil {
+					return err
+				}
+			}
+			buildID, err := sb.TriggerBuildPipeline(ctx, pipelineID, parameters, nil, secret)
+			if err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesDemoBuildID = buildID
+				s.Day.GoImagesDemoParameters = cloneStringMap(parameters)
+			})
+		},
+	)
+	wait := queue.Then(
+		"go-images.unofficial-demo.wait",
+		"⌚ Wait for unofficial go-images demo",
+		microsoftGoImagesOfficialCITimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) bool { return s.Day.GoImagesDemoComplete }) {
+				return nil
+			}
+			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesDemoBuildID })
+			if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesDemoComplete = true
+			})
+		},
+	)
+	complete := coordinator.NewIndicatorStep(
+		"go-images.unofficial-demo.complete",
+		"✅ Unofficial go-images demo complete",
 		wait,
 	)
 	steps, err := complete.TransitiveDependencies()

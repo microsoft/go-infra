@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
@@ -138,6 +139,24 @@ func TestPreflightIsLocalAndExternalExecutionDisabled(t *testing.T) {
 	}
 }
 
+func TestUnofficialDemoOptionRequiresSafetyBoundaries(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	demo := GoImagesUnofficialDemoIntegration{
+		DefinitionID:   goImagesUnofficialDemoID,
+		Preflight:      func(context.Context) (string, error) { return "ok", nil },
+		ValidateSource: func(context.Context, string) error { return nil },
+		NewService: func(GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+			return &fakeUnofficialDemoService{}, nil
+		},
+	}
+	if _, err := New(context.Background(), WithSessionStore(store), WithGoImagesUnofficialDemoIntegration(demo)); err == nil {
+		t.Fatal("unofficial demo was enabled without read-only source selection")
+	}
+}
+
 func TestReadOnlyIntegrationDoesNotExposeQueueEndpoint(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
@@ -169,6 +188,11 @@ func TestReadOnlyIntegrationDoesNotExposeQueueEndpoint(t *testing.T) {
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("removed queue endpoint status = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
 	}
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("disabled unofficial demo status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	}
 }
 
 func TestFindAndImportExistingRun(t *testing.T) {
@@ -178,6 +202,7 @@ func TestFindAndImportExistingRun(t *testing.T) {
 	}
 	candidate := PipelineRunCandidate{
 		BuildID:       777,
+		DefinitionID:  goImagesPipelineID,
 		Status:        "inProgress",
 		State:         "running",
 		URL:           "https://example/build/777",
@@ -303,6 +328,305 @@ func TestFindAndImportExistingRun(t *testing.T) {
 	decodeResponse(t, response, &restored)
 	if restored.Run.BuildID != "777" || !restored.Run.Imported || restored.Run.SourceVersion != candidate.SourceVersion {
 		t.Fatalf("restored imported run = %#v", restored.Run)
+	}
+}
+
+func TestImportRejectsCandidateFromWrongDefinition(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := PipelineRunCandidate{
+		BuildID:       777,
+		DefinitionID:  goImagesUnofficialDemoID,
+		State:         "succeeded",
+		SourceBranch:  goImagesDemoSourceBranch,
+		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+	}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
+			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
+			MonitorRun:   func(context.Context, int, []string) error { return nil },
+		}),
+	)
+	response := postJSON(t, ui, "/api/go-images/runs/import", `{
+		"buildId":777,
+		"versions":["1.26.5-2"]
+	}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("wrong-definition import status = %d, want %d", response.StatusCode, http.StatusConflict)
+	}
+	if _, err := store.Load(context.Background()); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("wrong-definition candidate unexpectedly persisted: %v", err)
+	}
+}
+
+func TestImportWithIncompatibleSourceCannotEnableDemo(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := PipelineRunCandidate{
+		BuildID:       777,
+		DefinitionID:  goImagesPipelineID,
+		Status:        "completed",
+		Result:        "succeeded",
+		State:         "succeeded",
+		SourceBranch:  goImagesDemoSourceBranch,
+		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+	}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
+			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
+			MonitorRun:   func(context.Context, int, []string) error { return nil },
+		}),
+		WithGoImagesUnofficialDemoIntegration(GoImagesUnofficialDemoIntegration{
+			DefinitionID: goImagesUnofficialDemoID,
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			ValidateSource: func(context.Context, string) error {
+				return errors.New("historical parameter contract mismatch")
+			},
+			NewService: func(GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+				t.Fatal("incompatible source created a demo service")
+				return nil, nil
+			},
+		}),
+	)
+	response := postJSON(t, ui, "/api/go-images/runs/import", `{
+		"buildId":777,
+		"versions":["1.26.5-2"]
+	}`)
+	var imported planResponse
+	decodeResponse(t, response, &imported)
+	if response.StatusCode != http.StatusOK || imported.UnofficialDemo.Eligible ||
+		!strings.Contains(imported.UnofficialDemo.UnavailableReason, "historical parameter contract mismatch") {
+
+		t.Fatalf("incompatible source response = %#v", imported.UnofficialDemo)
+	}
+}
+
+type fakeUnofficialDemoService struct {
+	queued int
+	polled int
+}
+
+func (s *fakeUnofficialDemoService) TriggerBuildPipeline(
+	_ context.Context,
+	pipelineID int,
+	parameters,
+	optionalParameters map[string]string,
+	_ *releasesteps.Secret,
+) (string, error) {
+	s.queued++
+	if pipelineID != goImagesUnofficialDemoID || parameters["publishRepoPrefix"] != "dev/" ||
+		parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" || len(optionalParameters) != 0 {
+
+		return "", errors.New("unsafe unofficial demo request")
+	}
+	return "888", nil
+}
+
+func (s *fakeUnofficialDemoService) PollPipelineComplete(
+	_ context.Context,
+	buildID string,
+	_ *releasesteps.Secret,
+) error {
+	s.polled++
+	if buildID != "888" {
+		return errors.New("unexpected unofficial demo build ID")
+	}
+	return nil
+}
+
+func TestRealUnofficialDemoRequiresExactImportedIntent(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := PipelineRunCandidate{
+		BuildID:       3019035,
+		DefinitionID:  goImagesPipelineID,
+		Status:        "completed",
+		Result:        "succeeded",
+		State:         "succeeded",
+		SourceBranch:  goImagesDemoSourceBranch,
+		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+		VersionSet:    `["1.26.5-2"]`,
+		Parameters: map[string]string{
+			"sourceBuildPipelineRunId": "$(Build.BuildId)",
+			"publishRepoPrefix":        "public/",
+		},
+	}
+	service := &fakeUnofficialDemoService{}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "official verified", nil },
+			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
+				return []PipelineRunCandidate{candidate}, nil
+			},
+			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
+			MonitorRun:  func(context.Context, int, []string) error { return nil },
+		}),
+		WithGoImagesUnofficialDemoIntegration(GoImagesUnofficialDemoIntegration{
+			DefinitionID: goImagesUnofficialDemoID,
+			Preflight:    func(context.Context) (string, error) { return "unofficial verified", nil },
+			ValidateSource: func(_ context.Context, commit string) error {
+				if commit != candidate.SourceVersion {
+					t.Fatalf("validated source commit = %q", commit)
+				}
+				return nil
+			},
+			NewService: func(request GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+				if request.SourceBuildID != "3019035" || request.SourceVersion != candidate.SourceVersion ||
+					strings.Join(request.Versions, ",") != "1.26.5-2" || len(request.ExecutionDigest) != 64 {
+
+					t.Fatalf("unofficial demo request = %#v", request)
+				}
+				return service, nil
+			},
+		}),
+	)
+
+	response, err := ui.client.Get(ui.http.URL + "/api/preflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report PreflightReport
+	decodeResponse(t, response, &report)
+	if !report.ExternalExecutionEnabled || !report.UnofficialDemoEnabled {
+		t.Fatalf("preflight = %#v", report)
+	}
+
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || service.queued != 0 {
+		t.Fatalf("pre-import status = %d, queued = %d", response.StatusCode, service.queued)
+	}
+
+	response = postJSON(t, ui, "/api/go-images/runs/import", `{
+		"buildId":3019035,
+		"versions":["1.26.5-2"]
+	}`)
+	var imported planResponse
+	decodeResponse(t, response, &imported)
+	if response.StatusCode != http.StatusOK || !imported.UnofficialDemo.Eligible ||
+		len(imported.UnofficialDemo.PlanDigest) != 64 ||
+		imported.UnofficialDemo.Parameters["publishRepoPrefix"] != "dev/" ||
+		!strings.Contains(imported.UnofficialDemo.Confirmation, "3019035") {
+
+		t.Fatalf("imported demo intent = %#v", imported.UnofficialDemo)
+	}
+
+	wrongDigest, err := json.Marshal(unofficialDemoStartRequest{
+		PlanDigest:   strings.Repeat("0", 64),
+		Confirmation: imported.UnofficialDemo.Confirmation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", string(wrongDigest))
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || service.queued != 0 {
+		t.Fatalf("wrong-digest status = %d, queued = %d", response.StatusCode, service.queued)
+	}
+	wrongPhrase, err := json.Marshal(unofficialDemoStartRequest{
+		PlanDigest:   imported.UnofficialDemo.PlanDigest,
+		Confirmation: "QUEUE SOMETHING ELSE",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", string(wrongPhrase))
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest || service.queued != 0 {
+		t.Fatalf("wrong-phrase status = %d, queued = %d", response.StatusCode, service.queued)
+	}
+
+	startBody, err := json.Marshal(unofficialDemoStartRequest{
+		PlanDigest:   imported.UnofficialDemo.PlanDigest,
+		Confirmation: imported.UnofficialDemo.Confirmation,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", string(startBody))
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("start status = %d, want %d", response.StatusCode, http.StatusAccepted)
+	}
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		ui.server.mu.Lock()
+		complete := ui.server.document.State.Day.GoImagesDemoComplete
+		active := ui.server.unofficialDemoRunning
+		ui.server.mu.Unlock()
+		if complete && !active {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for fake unofficial demo")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if service.queued != 1 || service.polled != 1 {
+		t.Fatalf("queued = %d, polled = %d", service.queued, service.polled)
+	}
+	persisted, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.State.Day.GoImagesDemoBuildID != "888" || !persisted.State.Day.GoImagesDemoComplete ||
+		persisted.State.Day.GoImagesDemoParameters["publishRepoPrefix"] != "dev/" {
+
+		t.Fatalf("persisted demo state = %#v", persisted.State.Day)
+	}
+	restoredUI := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "official verified", nil },
+			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
+			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
+			MonitorRun:   func(context.Context, int, []string) error { return nil },
+		}),
+		WithGoImagesUnofficialDemoIntegration(GoImagesUnofficialDemoIntegration{
+			DefinitionID:   goImagesUnofficialDemoID,
+			Preflight:      func(context.Context) (string, error) { return "unofficial verified", nil },
+			ValidateSource: func(context.Context, string) error { return nil },
+			NewService: func(GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+				return service, nil
+			},
+		}),
+	)
+	response, err = restoredUI.client.Get(restoredUI.http.URL + "/api/plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored planResponse
+	decodeResponse(t, response, &restored)
+	if !restored.Restored || restored.UnofficialDemo.Run.BuildID != "888" ||
+		!restored.UnofficialDemo.Run.Complete || !restored.UnofficialDemo.Eligible {
+
+		t.Fatalf("restored unofficial demo = %#v", restored.UnofficialDemo)
+	}
+	response = postJSON(t, ui, "/api/go-images/unofficial-demo/start", string(startBody))
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict || service.queued != 1 {
+		t.Fatalf("repeat status = %d, queued = %d", response.StatusCode, service.queued)
 	}
 }
 
