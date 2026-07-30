@@ -17,9 +17,9 @@ type staticToken string
 
 func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
 
-func TestHTTPQueueClientSendsOnlyUnofficialPayload(t *testing.T) {
+func TestHTTPQueueClientSendsOnlyProductionPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Query().Get("definitionId") != "1492" {
+		if request.Method != http.MethodPost || request.URL.Query().Get("definitionId") != "1023" {
 			t.Fatalf("request = %s %s", request.Method, request.URL)
 		}
 		if request.Header.Get("Authorization") != "Bearer test-token" {
@@ -40,7 +40,7 @@ func TestHTTPQueueClientSendsOnlyUnofficialPayload(t *testing.T) {
 		if body.Definition.ID != DefinitionID || body.SourceBranch != SourceBranch || body.SourceVersion != testCommit {
 			t.Fatalf("body target = %#v", body)
 		}
-		if body.TemplateParameters["publishRepoPrefix"] != "dev/" ||
+		if body.TemplateParameters["publishRepoPrefix"] != "public/" ||
 			body.TemplateParameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" {
 
 			t.Fatalf("template parameters = %#v", body.TemplateParameters)
@@ -61,7 +61,7 @@ func TestHTTPQueueClientSendsOnlyUnofficialPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildID, err := client.QueueUnofficialDemo(context.Background(), QueueRequest{
+	buildID, err := client.QueueProductionDemo(context.Background(), QueueRequest{
 		SourceVersion:   testCommit,
 		SessionID:       "session-1",
 		ExecutionDigest: testDigest,
@@ -86,7 +86,7 @@ func TestHTTPQueueClientRedactsToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.QueueUnofficialDemo(context.Background(), QueueRequest{
+	_, err = client.QueueProductionDemo(context.Background(), QueueRequest{
 		SourceVersion:   testCommit,
 		SessionID:       "session-1",
 		ExecutionDigest: testDigest,
@@ -106,7 +106,7 @@ func TestHTTPQueueClientRejectsInvalidRequestBeforeHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.QueueUnofficialDemo(context.Background(), QueueRequest{}); err == nil {
+	if _, err := client.QueueProductionDemo(context.Background(), QueueRequest{}); err == nil {
 		t.Fatal("invalid request was accepted")
 	}
 	if calls != 0 {

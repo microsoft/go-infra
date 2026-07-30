@@ -29,7 +29,7 @@ type PreflightCheck struct {
 type PreflightReport struct {
 	ExternalExecutionEnabled bool             `json:"externalExecutionEnabled"`
 	AzureReadOnlyEnabled     bool             `json:"azureReadOnlyEnabled"`
-	UnofficialDemoEnabled    bool             `json:"unofficialDemoEnabled"`
+	ProductionDemoEnabled    bool             `json:"productionDemoEnabled"`
 	Checks                   []PreflightCheck `json:"checks"`
 }
 
@@ -110,33 +110,33 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 			Details: details,
 		})
 	}
-	if s.unofficialDemo == nil {
+	if s.productionDemo == nil {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real unofficial pipeline demo",
+			Name:    "Real production pipeline demo",
 			Status:  CheckStatusUnavailable,
 			Details: "Disabled. No Azure pipeline can be queued.",
 		})
 	} else if !report.AzureReadOnlyEnabled {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real unofficial pipeline demo",
+			Name:    "Real production pipeline demo",
 			Status:  CheckStatusWarning,
 			Details: "Unavailable until pipeline 1023 source selection passes preflight.",
 		})
-	} else if details, err := s.unofficialDemo.Preflight(ctx); err != nil {
+	} else if details, err := s.productionDemo.Preflight(ctx); err != nil {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real unofficial pipeline demo",
+			Name:    "Real production pipeline demo",
 			Status:  CheckStatusWarning,
 			Details: err.Error(),
 		})
 	} else {
 		report.ExternalExecutionEnabled = true
-		report.UnofficialDemoEnabled = true
+		report.ProductionDemoEnabled = true
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real unofficial pipeline 1492 demo",
+			Name:    "Real production pipeline 1023 demo",
 			Status:  CheckStatusPassed,
 			Details: details,
 		})

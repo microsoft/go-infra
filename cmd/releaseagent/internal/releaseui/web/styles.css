@@ -245,7 +245,7 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .demo-intent dt { color: #8cabc5; background: rgb(18 42 64 / 72%); }
 .demo-intent dd { color: var(--text); background: rgb(6 17 30 / 65%); }
 .demo-intent > :nth-last-child(-n+2) { border-bottom: 0; }
-.demo-intent code, #unofficial-demo-phrase { color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.demo-intent code, #production-demo-phrase { color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .real-demo-controls label { margin-top: 4px; }
 .real-demo-controls .button-danger { width: 100%; margin-top: 12px; }
 .demo-progress { display: grid; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }

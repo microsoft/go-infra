@@ -10,10 +10,7 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-const (
-	pipelineInfoValue           = "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵"
-	unofficialPipelineInfoValue = "🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵"
-)
+const pipelineInfoValue = "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵"
 
 type expectedParameter struct {
 	defaultValue string
@@ -29,25 +26,10 @@ var expectedPipelineParameters = map[string]expectedParameter{
 	"publishRepoPrefix":        {defaultValue: "public/"},
 }
 
-var expectedUnofficialPipelineParameters = map[string]expectedParameter{
-	"_info": {
-		defaultValue: unofficialPipelineInfoValue,
-		values:       []string{unofficialPipelineInfoValue},
-	},
-	"sourceBuildPipelineRunId": {defaultValue: "$(Build.BuildId)"},
-	"publishRepoPrefix":        {defaultValue: "dev/"},
-}
-
 // ValidatePipelineParameterContract verifies the direct official go-images pipeline's complete
 // runtime parameter surface and defaults. Any drift must be reviewed before the UI can use Azure.
 func ValidatePipelineParameterContract(data []byte) error {
 	return validatePipelineParameterContract(data, expectedPipelineParameters)
-}
-
-// ValidateUnofficialPipelineParameterContract verifies the complete nonproduction parameter
-// surface used for a real demo. In particular, publishing must default to dev/.
-func ValidateUnofficialPipelineParameterContract(data []byte) error {
-	return validatePipelineParameterContract(data, expectedUnofficialPipelineParameters)
 }
 
 func validatePipelineParameterContract(data []byte, expected map[string]expectedParameter) error {

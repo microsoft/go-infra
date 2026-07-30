@@ -25,28 +25,28 @@ const findRunsButton = document.querySelector("#find-runs-button");
 const runCandidates = document.querySelector("#run-candidates");
 const candidateCount = document.querySelector("#candidate-count");
 const candidateList = document.querySelector("#candidate-list");
-const unofficialDemoControls = document.querySelector("#unofficial-demo-controls");
-const unofficialDemoUnavailable = document.querySelector("#unofficial-demo-unavailable");
-const unofficialDemoSource = document.querySelector("#unofficial-demo-source");
-const unofficialDemoParameters = document.querySelector("#unofficial-demo-parameters");
-const unofficialDemoDigest = document.querySelector("#unofficial-demo-digest");
-const unofficialDemoPhrase = document.querySelector("#unofficial-demo-phrase");
-const unofficialDemoConfirmation = document.querySelector("#unofficial-demo-confirmation");
-const unofficialDemoButton = document.querySelector("#unofficial-demo-button");
-const unofficialDemoRunLink = document.querySelector("#unofficial-demo-run-link");
-const unofficialDemoProgressLabel = document.querySelector("#unofficial-demo-progress-label");
-const unofficialDemoProgressCount = document.querySelector("#unofficial-demo-progress-count");
-const unofficialDemoProgressBar = document.querySelector("#unofficial-demo-progress-bar");
-const unofficialDemoStatusCounts = document.querySelector("#unofficial-demo-status-counts");
-const unofficialDemoStepList = document.querySelector("#unofficial-demo-step-list");
+const productionDemoControls = document.querySelector("#production-demo-controls");
+const productionDemoUnavailable = document.querySelector("#production-demo-unavailable");
+const productionDemoSource = document.querySelector("#production-demo-source");
+const productionDemoParameters = document.querySelector("#production-demo-parameters");
+const productionDemoDigest = document.querySelector("#production-demo-digest");
+const productionDemoPhrase = document.querySelector("#production-demo-phrase");
+const productionDemoConfirmation = document.querySelector("#production-demo-confirmation");
+const productionDemoButton = document.querySelector("#production-demo-button");
+const productionDemoRunLink = document.querySelector("#production-demo-run-link");
+const productionDemoProgressLabel = document.querySelector("#production-demo-progress-label");
+const productionDemoProgressCount = document.querySelector("#production-demo-progress-count");
+const productionDemoProgressBar = document.querySelector("#production-demo-progress-bar");
+const productionDemoStatusCounts = document.querySelector("#production-demo-status-counts");
+const productionDemoStepList = document.querySelector("#production-demo-step-list");
 
 let plan = null;
 let eventSource = null;
-let unofficialDemoEventSource = null;
+let productionDemoEventSource = null;
 let toastTimer = null;
 let preflight = null;
 let executionActive = false;
-let unofficialDemoActive = false;
+let productionDemoActive = false;
 
 loadExistingPlan();
 loadPreflight();
@@ -95,23 +95,23 @@ demoButton.addEventListener("click", async () => {
   }
 });
 
-unofficialDemoConfirmation.addEventListener("input", updateUnofficialDemoButton);
+productionDemoConfirmation.addEventListener("input", updateProductionDemoButton);
 
-unofficialDemoButton.addEventListener("click", async () => {
-  setBusy(unofficialDemoButton, true, plan?.unofficialDemo?.run?.buildId ? "Resuming monitoring…" : "Queueing real demo…");
+productionDemoButton.addEventListener("click", async () => {
+  setBusy(productionDemoButton, true, plan?.productionDemo?.run?.buildId ? "Resuming monitoring…" : "Queueing real demo…");
   try {
-    await requestJSON("/api/go-images/unofficial-demo/start", {
+    await requestJSON("/api/go-images/production-demo/start", {
       method: "POST",
       body: JSON.stringify({
-        planDigest: plan.unofficialDemo.planDigest,
-        confirmation: unofficialDemoConfirmation.value,
+        planDigest: plan.productionDemo.planDigest,
+        confirmation: productionDemoConfirmation.value,
       }),
     });
-    connectUnofficialDemoEvents();
+    connectProductionDemoEvents();
     await refreshPlanMetadata();
   } catch (error) {
     showError(error.message);
-    updateUnofficialDemoButton();
+    updateProductionDemoButton();
   }
 });
 
@@ -130,7 +130,7 @@ function renderPlan(nextPlan) {
   const snapshot = initialPlanSnapshot(nextPlan);
   updateSteps(snapshot);
   updateProgress(snapshot);
-  renderUnofficialDemo(nextPlan.unofficialDemo);
+  renderProductionDemo(nextPlan.productionDemo);
 }
 
 function initialPlanSnapshot(nextPlan) {
@@ -185,13 +185,13 @@ async function loadPreflight() {
       return item;
     }));
     if (preflight.azureReadOnlyEnabled) {
-      safetyTitle.textContent = preflight.unofficialDemoEnabled ? "Real unofficial demo enabled" : "Read-only Azure discovery ready";
-      safetyCopy.textContent = preflight.unofficialDemoEnabled
-        ? "Pipeline 1492 can be queued only after importing a completed pipeline 1023 source run and typing an exact confirmation. It publishes dev/ images to the test ACR."
+      safetyTitle.textContent = preflight.productionDemoEnabled ? "Real production demo enabled" : "Read-only Azure discovery ready";
+      safetyCopy.textContent = preflight.productionDemoEnabled
+        ? "Production pipeline 1023 can be queued only after importing a completed source run and typing an exact confirmation. It signs and publishes public/ production images."
         : "Authenticated pipeline 1023 lookup is enabled. No endpoint can queue, cancel, or approve a run.";
       findRunsButton.hidden = false;
     }
-    renderUnofficialDemo(plan?.unofficialDemo);
+    renderProductionDemo(plan?.productionDemo);
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
@@ -301,50 +301,50 @@ function renderPipelineRun(run) {
   pipelineRunLink.hidden = false;
 }
 
-function renderUnofficialDemo(demo) {
-  const visible = Boolean(demo?.eligible && preflight?.unofficialDemoEnabled);
-  const unavailable = Boolean(demo?.enabled && demo?.unavailableReason && preflight?.unofficialDemoEnabled);
-  unofficialDemoUnavailable.hidden = !unavailable;
-  unofficialDemoUnavailable.textContent = unavailable ? `Real unofficial demo unavailable: ${demo.unavailableReason}` : "";
-  unofficialDemoControls.hidden = !visible;
+function renderProductionDemo(demo) {
+  const visible = Boolean(demo?.eligible && preflight?.productionDemoEnabled);
+  const unavailable = Boolean(demo?.enabled && demo?.unavailableReason && preflight?.productionDemoEnabled);
+  productionDemoUnavailable.hidden = !unavailable;
+  productionDemoUnavailable.textContent = unavailable ? `Real production demo unavailable: ${demo.unavailableReason}` : "";
+  productionDemoControls.hidden = !visible;
   if (!visible) {
-    if (unofficialDemoEventSource) {
-      unofficialDemoEventSource.close();
-      unofficialDemoEventSource = null;
+    if (productionDemoEventSource) {
+      productionDemoEventSource.close();
+      productionDemoEventSource = null;
     }
     return;
   }
 
-  unofficialDemoSource.textContent = `pipeline 1023 build ${demo.sourceBuildId} · ${demo.sourceBranch} @ ${demo.sourceVersion}`;
-  unofficialDemoParameters.textContent = Object.entries(demo.parameters)
+  productionDemoSource.textContent = `pipeline 1023 build ${demo.sourceBuildId} · ${demo.sourceBranch} @ ${demo.sourceVersion}`;
+  productionDemoParameters.textContent = Object.entries(demo.parameters)
     .filter(([name]) => name !== "_info")
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, value]) => `${name}=${value}`)
     .join(" · ");
-  unofficialDemoDigest.textContent = demo.planDigest;
-  unofficialDemoPhrase.textContent = demo.confirmation;
-  if (unofficialDemoConfirmation.dataset.phrase !== demo.confirmation) {
-    unofficialDemoConfirmation.value = "";
-    unofficialDemoConfirmation.dataset.phrase = demo.confirmation;
+  productionDemoDigest.textContent = demo.planDigest;
+  productionDemoPhrase.textContent = demo.confirmation;
+  if (productionDemoConfirmation.dataset.phrase !== demo.confirmation) {
+    productionDemoConfirmation.value = "";
+    productionDemoConfirmation.dataset.phrase = demo.confirmation;
   }
-  unofficialDemoStepList.replaceChildren(...demo.steps.map(createStepCard));
-  const snapshot = initialUnofficialDemoSnapshot(demo);
-  updateStepsInList(snapshot, unofficialDemoStepList);
+  productionDemoStepList.replaceChildren(...demo.steps.map(createStepCard));
+  const snapshot = initialProductionDemoSnapshot(demo);
+  updateStepsInList(snapshot, productionDemoStepList);
   updateProgressElements(snapshot, {
-    label: unofficialDemoProgressLabel,
-    count: unofficialDemoProgressCount,
-    bar: unofficialDemoProgressBar,
-    counts: unofficialDemoStatusCounts,
+    label: productionDemoProgressLabel,
+    count: productionDemoProgressCount,
+    bar: productionDemoProgressBar,
+    counts: productionDemoStatusCounts,
   }, "Real demo");
-  renderUnofficialDemoRun(demo.run);
-  updateUnofficialDemoButton();
-  connectUnofficialDemoEvents();
+  renderProductionDemoRun(demo.run);
+  updateProductionDemoButton();
+  connectProductionDemoEvents();
 }
 
-function initialUnofficialDemoSnapshot(demo) {
+function initialProductionDemoSnapshot(demo) {
   const steps = demo.steps.map((step) => ({ ...step, status: "waiting" }));
   if (demo.run?.buildId) {
-    const queue = steps.find((step) => step.id === "go-images.unofficial-demo.queue");
+    const queue = steps.find((step) => step.id === "go-images.production-demo.queue");
     if (queue) queue.status = "succeeded";
   }
   if (demo.run?.complete) {
@@ -353,30 +353,30 @@ function initialUnofficialDemoSnapshot(demo) {
   return { active: false, steps };
 }
 
-function renderUnofficialDemoRun(run) {
+function renderProductionDemoRun(run) {
   if (!run?.buildId) {
-    unofficialDemoRunLink.hidden = true;
-    unofficialDemoRunLink.removeAttribute("href");
-    unofficialDemoRunLink.textContent = "";
+    productionDemoRunLink.hidden = true;
+    productionDemoRunLink.removeAttribute("href");
+    productionDemoRunLink.textContent = "";
     return;
   }
-  unofficialDemoRunLink.href = run.url;
-  unofficialDemoRunLink.textContent = `Open unofficial Azure run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}`;
-  unofficialDemoRunLink.hidden = false;
+  productionDemoRunLink.href = run.url;
+  productionDemoRunLink.textContent = `Open production Azure run ${run.buildId}${run.complete ? " · complete" : " · monitoring"}`;
+  productionDemoRunLink.hidden = false;
 }
 
-function updateUnofficialDemoButton() {
-  const demo = plan?.unofficialDemo;
-  const enabled = Boolean(demo?.eligible && preflight?.unofficialDemoEnabled);
+function updateProductionDemoButton() {
+  const demo = plan?.productionDemo;
+  const enabled = Boolean(demo?.eligible && preflight?.productionDemoEnabled);
   const complete = Boolean(demo?.run?.complete);
-  unofficialDemoButton.disabled = !enabled || complete || executionActive || unofficialDemoActive ||
-    unofficialDemoConfirmation.value !== demo?.confirmation;
+  productionDemoButton.disabled = !enabled || complete || executionActive || productionDemoActive ||
+    productionDemoConfirmation.value !== demo?.confirmation;
   if (complete) {
-    unofficialDemoButton.textContent = "Unofficial demo completed";
+    productionDemoButton.textContent = "Production demo completed";
   } else if (demo?.run?.buildId) {
-    unofficialDemoButton.textContent = "Resume real demo monitoring";
+    productionDemoButton.textContent = "Resume real demo monitoring";
   } else {
-    unofficialDemoButton.textContent = "Queue real unofficial demo";
+    productionDemoButton.textContent = "Queue real production demo";
   }
 }
 
@@ -386,10 +386,10 @@ async function refreshPlanMetadata() {
   const latest = await response.json();
   if (!plan || latest.sessionId !== plan.sessionId) return;
   plan.run = latest.run;
-  plan.unofficialDemo = latest.unofficialDemo;
+  plan.productionDemo = latest.productionDemo;
   renderPipelineRun(plan.run);
-  renderUnofficialDemoRun(plan.unofficialDemo.run);
-  updateUnofficialDemoButton();
+  renderProductionDemoRun(plan.productionDemo.run);
+  updateProductionDemoButton();
 }
 
 function createStepCard(step) {
@@ -445,7 +445,7 @@ function connectEvents() {
     demoButton.textContent = plan?.run?.imported
       ? snapshot.active ? "Monitoring imported run…" : "Imported run loaded"
       : snapshot.active ? "Simulation running…" : "Simulate queue and monitor";
-    updateUnofficialDemoButton();
+    updateProductionDemoButton();
     if (!snapshot.active && snapshot.error) {
       showError(snapshot.error);
     }
@@ -455,29 +455,29 @@ function connectEvents() {
   });
 }
 
-function connectUnofficialDemoEvents() {
-  if (!plan?.unofficialDemo?.eligible) return;
-  if (unofficialDemoEventSource) {
-    unofficialDemoEventSource.close();
+function connectProductionDemoEvents() {
+  if (!plan?.productionDemo?.eligible) return;
+  if (productionDemoEventSource) {
+    productionDemoEventSource.close();
   }
-  unofficialDemoEventSource = new EventSource("/api/go-images/unofficial-demo/events");
-  unofficialDemoEventSource.addEventListener("state", (event) => {
+  productionDemoEventSource = new EventSource("/api/go-images/production-demo/events");
+  productionDemoEventSource.addEventListener("state", (event) => {
     const snapshot = JSON.parse(event.data);
-    unofficialDemoActive = snapshot.active;
+    productionDemoActive = snapshot.active;
     if (snapshot.steps.length) {
-      updateStepsInList(snapshot, unofficialDemoStepList);
+      updateStepsInList(snapshot, productionDemoStepList);
       updateProgressElements(snapshot, {
-        label: unofficialDemoProgressLabel,
-        count: unofficialDemoProgressCount,
-        bar: unofficialDemoProgressBar,
-        counts: unofficialDemoStatusCounts,
+        label: productionDemoProgressLabel,
+        count: productionDemoProgressCount,
+        bar: productionDemoProgressBar,
+        counts: productionDemoStatusCounts,
       }, "Real demo");
     }
-    updateUnofficialDemoButton();
+    updateProductionDemoButton();
     if (!snapshot.active && snapshot.error) {
       showError(snapshot.error);
     }
-    if (snapshot.steps.some((step) => step.id === "go-images.unofficial-demo.queue" && step.status === "succeeded") || !snapshot.active) {
+    if (snapshot.steps.some((step) => step.id === "go-images.production-demo.queue" && step.status === "succeeded") || !snapshot.active) {
       refreshPlanMetadata().catch((error) => showError(error.message));
     }
   });

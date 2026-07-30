@@ -146,7 +146,7 @@ func TestGoImagesReleasePipelineResume(t *testing.T) {
 	}
 }
 
-func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
+func TestRunFakeGoImagesProductionDemo(t *testing.T) {
 	input := *exampleInput
 	state, err := initializeState(&input, nil)
 	if err != nil {
@@ -164,10 +164,10 @@ func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
 	service := &ServiceBundleMock{
 		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
 			queued++
-			if pipelineID != 1492 {
-				t.Fatalf("pipeline ID = %d, want 1492", pipelineID)
+			if pipelineID != 1023 {
+				t.Fatalf("pipeline ID = %d, want 1023", pipelineID)
 			}
-			if parameters["publishRepoPrefix"] != "dev/" || parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" {
+			if parameters["publishRepoPrefix"] != "public/" || parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" {
 				t.Fatalf("parameters = %#v", parameters)
 			}
 			if len(optionalParameters) != 0 {
@@ -184,11 +184,11 @@ func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
 		},
 	}
 	checkpoints := 0
-	steps, finalState, err := CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+	steps, finalState, err := CreateGoImagesProductionDemoGraphWithCheckpoint(
 		&input,
 		exampleSecret,
 		state,
-		1492,
+		1023,
 		service,
 		func(context.Context, *State) error { checkpoints++; return nil },
 	)
@@ -203,14 +203,14 @@ func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
 		t.Fatalf("queued = %d, polled = %d, checkpoints = %d", queued, polled, checkpoints)
 	}
 	if finalState.Day.GoImagesDemoBuildID != "demo-321" || !finalState.Day.GoImagesDemoComplete ||
-		finalState.Day.GoImagesDemoParameters["publishRepoPrefix"] != "dev/" {
+		finalState.Day.GoImagesDemoParameters["publishRepoPrefix"] != "public/" {
 
 		t.Fatalf("demo state = %#v", finalState.Day)
 	}
 
 	queued = 0
 	polled = 0
-	steps, _, err = CreateGoImagesUnofficialDemoGraphWithCheckpoint(&input, exampleSecret, finalState, 1492, service, nil)
+	steps, _, err = CreateGoImagesProductionDemoGraphWithCheckpoint(&input, exampleSecret, finalState, 1023, service, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,14 +222,14 @@ func TestRunFakeGoImagesUnofficialDemo(t *testing.T) {
 	}
 }
 
-func TestGoImagesUnofficialDemoRequiresImportedMainRun(t *testing.T) {
+func TestGoImagesProductionDemoRequiresImportedMainRun(t *testing.T) {
 	input := *exampleInput
 	state, err := initializeState(&input, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := CreateGoImagesUnofficialDemoGraphWithCheckpoint(
-		&input, exampleSecret, state, 1492, &ServiceBundleMock{}, nil,
+	if _, _, err := CreateGoImagesProductionDemoGraphWithCheckpoint(
+		&input, exampleSecret, state, 1023, &ServiceBundleMock{}, nil,
 	); err == nil {
 		t.Fatal("demo graph accepted state without an imported completed run")
 	}

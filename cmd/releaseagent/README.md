@@ -27,7 +27,7 @@ pipeline (definition `1023`). It can:
 	them or checking authentication.
 
 By default it cannot contact GitHub, Azure DevOps, or any publishing service. Queueing remains
-hard-disabled in every mode.
+hard-disabled unless the explicit production-demo flag is supplied.
 
 For example, this preserves the plan across process restarts:
 
@@ -44,9 +44,9 @@ The focused graph checkpoints the pipeline build ID and successful completion im
 after they are recorded. A failed checkpoint stops subsequent work until the pending state can be
 saved.
 
-External execution remains hard-disabled. Default startup only discovers `gh` and `az` in `PATH`;
-it does not invoke either command. Explicit read-only mode invokes `az` only to authenticate Azure
-DevOps GET requests.
+External execution remains hard-disabled in default and read-only modes. Default startup only
+discovers `gh` and `az` in `PATH`; it does not invoke either command. Explicit read-only mode
+invokes `az` only to authenticate Azure DevOps GET requests.
 
 ## Pre-production testing
 
@@ -59,10 +59,10 @@ The focused workflow has hermetic tests for:
 * Status/result normalization, authentication errors, cancellation, and token redaction.
 * Read-only candidate discovery, selected-build revalidation, import, and monitoring.
 
-The Azure client and token provider are wired only behind an explicit, default-off read-only flag,
-an exact definition/repository/YAML allowlist, live validation of all parameter names, types,
-defaults, and allowed values, and durable state. The server receives search, validation, and
-monitor callbacks—not a queue-capable service.
+The read-only Azure client and token provider are wired behind an explicit, default-off flag, exact
+definition/repository/YAML allowlists, live validation of all parameter names, types, defaults, and
+allowed values, and durable state. A separate queue client exists only in production-demo mode and
+can serialize only the hardcoded definition `1023`, `microsoft/main`, and `public/` payload.
 
 ### Read-only pipeline 1023 discovery
 
@@ -80,32 +80,36 @@ Pipeline `1023` does not accept release versions directly. Discovery lists recen
 Selecting a candidate re-fetches and revalidates its definition, source commit, and versions before
 creating a local session. A running imported build can be monitored by ID using read-only GETs.
 
-There is deliberately no endpoint that can queue production pipeline `1023`. It builds, signs, and
-publishes images with `publishRepoPrefix=public/`, and it has no switch that disables all release
-effects. Real execution is isolated to the separately enabled unofficial pipeline below.
+Normal and read-only startup deliberately expose no endpoint that can queue production pipeline
+`1023`. It builds, signs, and publishes images with `publishRepoPrefix=public/`, and it has no
+switch that disables all release effects. Real execution requires the separately enabled,
+confirmation-protected mode below.
 
-### Real unofficial pipeline demo
+### Authorized production pipeline demo
 
-A separate explicit mode can queue `microsoft-go-images (unofficial)` definition `1492`. This is a
-real nonproduction run: it builds images, performs test signing, consumes Azure agents, and writes
-images to the test ACR under `dev/`. The queue client hardcodes definition `1492`, branch
-`refs/heads/microsoft/main`, `sourceBuildPipelineRunId=$(Build.BuildId)`, and
-`publishRepoPrefix=dev/`; it cannot target definition `1023` or `public/`.
+A separate explicit mode can queue `microsoft-go-images (official)` definition `1023`. This is a
+real production run: it builds images, performs production signing, consumes Azure agents, and
+publishes production images under `public/`. Use it only with explicit authorization. The queue
+client hardcodes definition `1023`, branch `refs/heads/microsoft/main`,
+`sourceBuildPipelineRunId=$(Build.BuildId)`, and `publishRepoPrefix=public/`.
 
 ```console
 go run ./cmd/releaseagent serve \
 	-session-file "$HOME/.config/microsoft-go/release-session.json" \
 	-enable-go-images-azure-read-only \
-	-enable-go-images-unofficial-demo
+	-enable-go-images-production-demo
 ```
 
 To enable the queue button, first search by version and explicitly import a **completed successful**
 pipeline `1023` run from `microsoft/main`. The imported build pins the exact source commit. The UI
-also reads the unofficial pipeline YAML at that exact commit and requires its full contract to
-match the allowlisted `dev/` payload. It then previews the fixed `1492` request and requires both a digest match and a dynamic phrase of the
-form `QUEUE UNOFFICIAL PIPELINE 1492 DEMO FROM 1023 BUILD <id>`. Correlation metadata prevents a
+also reads the official pipeline YAML at that exact commit and requires its full contract to match
+the allowlisted `public/` payload. It then previews the fixed `1023` request and requires both a
+digest match and a dynamic phrase of the form
+`QUEUE PRODUCTION PIPELINE 1023 DEMO FROM 1023 BUILD <id>`. Correlation metadata prevents a
 restart immediately after queueing from creating a duplicate run. A durable pre-queue marker makes
 restart recovery wait and retry Azure run discovery for up to 30 seconds before issuing a new POST.
+Do not edit the session file: the source build, commit, execution digest, and confirmation phrase
+are derived from its application-owned state.
 
 The server only binds to a loopback address. A random one-time launch token establishes an
 HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.

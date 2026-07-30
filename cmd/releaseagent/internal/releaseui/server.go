@@ -36,7 +36,7 @@ const sessionCookieName = "releaseui_session"
 
 const (
 	goImagesPipelineID       = 1023
-	goImagesUnofficialDemoID = 1492
+	goImagesProductionDemoID = 1023
 	goImagesDemoSourceBranch = "refs/heads/microsoft/main"
 )
 
@@ -57,7 +57,7 @@ type Server struct {
 
 	sessionStore   session.Store
 	readOnly       *GoImagesReadOnlyIntegration
-	unofficialDemo *GoImagesUnofficialDemoIntegration
+	productionDemo *GoImagesProductionDemoIntegration
 
 	mu                    sync.Mutex
 	steps                 []*coordinator.Step
@@ -68,9 +68,9 @@ type Server struct {
 	runner                *coordinator.StepRunner
 	simulationRunning     bool
 	monitorRunning        bool
-	unofficialDemoSteps   []*coordinator.Step
-	unofficialDemoRunner  *coordinator.StepRunner
-	unofficialDemoRunning bool
+	productionDemoSteps   []*coordinator.Step
+	productionDemoRunner  *coordinator.StepRunner
+	productionDemoRunning bool
 	restoredFromDisk      bool
 }
 
@@ -84,17 +84,17 @@ type GoImagesReadOnlyIntegration struct {
 	MonitorRun   func(context.Context, int, []string) error
 }
 
-// GoImagesUnofficialDemoIntegration is the only real execution boundary. The implementation must
-// hardcode definition 1492, microsoft/main, the selected commit, and dev/ publishing.
-type GoImagesUnofficialDemoIntegration struct {
+// GoImagesProductionDemoIntegration is the only real execution boundary. The implementation must
+// hardcode definition 1023, microsoft/main, the selected commit, and public/ publishing.
+type GoImagesProductionDemoIntegration struct {
 	DefinitionID   int
 	Preflight      func(context.Context) (string, error)
 	ValidateSource func(context.Context, string) error
-	NewService     func(GoImagesUnofficialDemoRequest) (releasesteps.GoImagesReleaseService, error)
+	NewService     func(GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error)
 }
 
-// GoImagesUnofficialDemoRequest binds a real demo run to a durable imported source selection.
-type GoImagesUnofficialDemoRequest struct {
+// GoImagesProductionDemoRequest binds a real demo run to a durable imported source selection.
+type GoImagesProductionDemoRequest struct {
 	SessionID            string
 	ExecutionDigest      string
 	Versions             []string
@@ -149,16 +149,16 @@ func WithGoImagesReadOnlyIntegration(integration GoImagesReadOnlyIntegration) Op
 	}
 }
 
-// WithGoImagesUnofficialDemoIntegration enables a confirmation-protected real execution against
-// the hardcoded unofficial pipeline. It must be combined with read-only source-run selection.
-func WithGoImagesUnofficialDemoIntegration(integration GoImagesUnofficialDemoIntegration) Option {
+// WithGoImagesProductionDemoIntegration enables a confirmation-protected real execution against
+// the hardcoded production pipeline. It must be combined with read-only source-run selection.
+func WithGoImagesProductionDemoIntegration(integration GoImagesProductionDemoIntegration) Option {
 	return func(server *Server) {
-		server.unofficialDemo = &integration
+		server.productionDemo = &integration
 	}
 }
 
 // New creates a local release UI server. External execution exists only when the explicit
-// unofficial-demo option is supplied and its server-side allowlist validates.
+// production-demo option is supplied and its server-side allowlist validates.
 func New(ctx context.Context, options ...Option) (*Server, error) {
 	if ctx == nil {
 		return nil, errors.New("server context is nil")
@@ -175,7 +175,7 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		demoDelay:            250 * time.Millisecond,
 		lookPath:             defaultExecutableLookup,
 		runner:               &coordinator.StepRunner{},
-		unofficialDemoRunner: &coordinator.StepRunner{},
+		productionDemoRunner: &coordinator.StepRunner{},
 	}
 	for _, option := range options {
 		option(server)
@@ -199,17 +199,17 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 			return nil, errors.New("go-images read-only integration is missing preflight or discovery behavior")
 		}
 	}
-	if server.unofficialDemo != nil {
+	if server.productionDemo != nil {
 		if server.sessionStore == nil || server.readOnly == nil {
-			return nil, errors.New("unofficial go-images demo requires durable storage and read-only source selection")
+			return nil, errors.New("production go-images demo requires durable storage and read-only source selection")
 		}
-		if server.unofficialDemo.DefinitionID != goImagesUnofficialDemoID {
-			return nil, fmt.Errorf("unofficial demo definition %d is not allowlisted", server.unofficialDemo.DefinitionID)
+		if server.productionDemo.DefinitionID != goImagesProductionDemoID {
+			return nil, fmt.Errorf("production demo definition %d is not allowlisted", server.productionDemo.DefinitionID)
 		}
-		if server.unofficialDemo.Preflight == nil || server.unofficialDemo.ValidateSource == nil ||
-			server.unofficialDemo.NewService == nil {
+		if server.productionDemo.Preflight == nil || server.productionDemo.ValidateSource == nil ||
+			server.productionDemo.NewService == nil {
 
-			return nil, errors.New("unofficial go-images demo is missing preflight or service behavior")
+			return nil, errors.New("production go-images demo is missing preflight or service behavior")
 		}
 	}
 	if err := server.restoreSession(); err != nil {
@@ -251,8 +251,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/go-images/runs/search", s.handleRunSearch)
 	mux.HandleFunc("POST /api/go-images/runs/import", s.handleRunImport)
 	mux.HandleFunc("POST /api/go-images/runs/monitor", s.handleRunMonitor)
-	mux.HandleFunc("POST /api/go-images/unofficial-demo/start", s.handleUnofficialDemoStart)
-	mux.HandleFunc("GET /api/go-images/unofficial-demo/events", s.handleUnofficialDemoEvents)
+	mux.HandleFunc("POST /api/go-images/production-demo/start", s.handleProductionDemoStart)
+	mux.HandleFunc("GET /api/go-images/production-demo/events", s.handleProductionDemoEvents)
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withSecurityHeaders(s.authenticate(mux))
@@ -293,7 +293,7 @@ type planResponse struct {
 	Restored       bool                   `json:"restored"`
 	PlanDigest     string                 `json:"planDigest"`
 	Run            pipelineRun            `json:"run"`
-	UnofficialDemo unofficialDemoResponse `json:"unofficialDemo"`
+	ProductionDemo productionDemoResponse `json:"productionDemo"`
 }
 
 type pipelinePreview struct {
@@ -313,7 +313,7 @@ type pipelineRun struct {
 	Imported      bool   `json:"imported"`
 }
 
-type unofficialDemoResponse struct {
+type productionDemoResponse struct {
 	Enabled           bool              `json:"enabled"`
 	Eligible          bool              `json:"eligible"`
 	DefinitionID      int               `json:"definitionId"`
@@ -381,7 +381,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	}
 
 	s.mu.Lock()
-	if s.simulationRunning || s.monitorRunning || s.unofficialDemoRunning {
+	if s.simulationRunning || s.monitorRunning || s.productionDemoRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot replace the plan while a workflow is running")
 		return
@@ -399,8 +399,8 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	s.releaseState = releaseState
 	s.document = document
 	s.runner = &coordinator.StepRunner{}
-	s.unofficialDemoSteps = nil
-	s.unofficialDemoRunner = &coordinator.StepRunner{}
+	s.productionDemoSteps = nil
+	s.productionDemoRunner = &coordinator.StepRunner{}
 	s.restoredFromDisk = false
 	result := s.planResponseLocked(false)
 	s.mu.Unlock()
@@ -445,17 +445,17 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 	if result.Run.BuildID != "" {
 		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
 	}
-	result.UnofficialDemo = s.unofficialDemoResponseLocked()
+	result.ProductionDemo = s.productionDemoResponseLocked()
 	return result
 }
 
-func (s *Server) unofficialDemoResponseLocked() unofficialDemoResponse {
-	result := unofficialDemoResponse{
-		Enabled:      s.unofficialDemo != nil,
-		DefinitionID: goImagesUnofficialDemoID,
-		Name:         "microsoft-go-images (unofficial)",
-		Parameters:   releasesteps.GoImagesUnofficialDemoPipelineParameters(),
-		Steps:        describeSteps(s.unofficialDemoSteps),
+func (s *Server) productionDemoResponseLocked() productionDemoResponse {
+	result := productionDemoResponse{
+		Enabled:      s.productionDemo != nil,
+		DefinitionID: goImagesProductionDemoID,
+		Name:         "microsoft-go-images (official)",
+		Parameters:   releasesteps.GoImagesProductionDemoPipelineParameters(),
+		Steps:        describeSteps(s.productionDemoSteps),
 	}
 	if s.document == nil || s.releaseInput == nil {
 		return result
@@ -474,18 +474,18 @@ func (s *Server) unofficialDemoResponseLocked() unofficialDemoResponse {
 	} else if state.GoImagesReleaseImported && !state.GoImagesDemoSourceValidated {
 		result.UnavailableReason = state.GoImagesDemoSourceValidationError
 		if result.UnavailableReason == "" {
-			result.UnavailableReason = "The unofficial pipeline YAML at the selected source commit has not been validated."
+			result.UnavailableReason = "The official pipeline YAML at the selected source commit has not been validated."
 		}
 	}
 	result.Eligible = result.Enabled && state.GoImagesReleaseImported && state.GoImagesReleaseComplete &&
 		state.GoImagesReleaseBuildID != "" && state.GoImagesSourceBranch == goImagesDemoSourceBranch &&
 		state.GoImagesReleaseResult == "succeeded" && state.GoImagesDemoSourceValidated &&
 		commitPattern.MatchString(state.GoImagesCommit) &&
-		len(s.unofficialDemoSteps) != 0
+		len(s.productionDemoSteps) != 0
 	if !result.Eligible {
 		return result
 	}
-	plan, err := session.NewPlan(s.unofficialDemoSteps)
+	plan, err := session.NewPlan(s.productionDemoSteps)
 	if err != nil {
 		return result
 	}
@@ -507,8 +507,8 @@ func (s *Server) unofficialDemoResponseLocked() unofficialDemoResponse {
 		SourceBuildID:    state.GoImagesReleaseBuildID,
 		SourceBranch:     state.GoImagesSourceBranch,
 		SourceVersion:    state.GoImagesCommit,
-		DefinitionID:     goImagesUnofficialDemoID,
-		Parameters:       releasesteps.GoImagesUnofficialDemoPipelineParameters(),
+		DefinitionID:     goImagesProductionDemoID,
+		Parameters:       releasesteps.GoImagesProductionDemoPipelineParameters(),
 		WorkflowRevision: plan.WorkflowRevision,
 		WorkflowDigest:   plan.Digest,
 	}
@@ -519,21 +519,21 @@ func (s *Server) unofficialDemoResponseLocked() unofficialDemoResponse {
 	digest := sha256.Sum256(data)
 	result.PlanDigest = fmt.Sprintf("%x", digest)
 	result.Confirmation = fmt.Sprintf(
-		"QUEUE UNOFFICIAL PIPELINE 1492 DEMO FROM 1023 BUILD %s",
+		"QUEUE PRODUCTION PIPELINE 1023 DEMO FROM 1023 BUILD %s",
 		state.GoImagesReleaseBuildID,
 	)
 	return result
 }
 
-func buildUnofficialDemoSteps(
+func buildProductionDemoSteps(
 	input *releasesteps.Input,
 	state *releasesteps.State,
 ) ([]*coordinator.Step, error) {
-	steps, _, err := releasesteps.CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+	steps, _, err := releasesteps.CreateGoImagesProductionDemoGraphWithCheckpoint(
 		input,
 		nil,
 		state,
-		goImagesUnofficialDemoID,
+		goImagesProductionDemoID,
 		disabledServices{},
 		nil,
 	)
@@ -579,12 +579,12 @@ func (s *Server) restoreSession() error {
 	if restoredState.Day.GoImagesReleaseImported && restoredState.Day.GoImagesReleaseComplete &&
 		restoredState.Day.GoImagesReleaseResult == "succeeded" && restoredState.Day.GoImagesDemoSourceValidated {
 
-		s.unofficialDemoSteps, err = buildUnofficialDemoSteps(&input, restoredState)
+		s.productionDemoSteps, err = buildProductionDemoSteps(&input, restoredState)
 		if err != nil {
-			return fmt.Errorf("reconstruct unofficial demo plan: %w", err)
+			return fmt.Errorf("reconstruct production demo plan: %w", err)
 		}
 	}
-	s.unofficialDemoRunner = &coordinator.StepRunner{}
+	s.productionDemoRunner = &coordinator.StepRunner{}
 	s.restoredFromDisk = true
 	return nil
 }
@@ -686,7 +686,7 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusForbidden, "go-images run import is not enabled")
 		return
 	}
-	if s.simulationRunning || s.monitorRunning || s.unofficialDemoRunning {
+	if s.simulationRunning || s.monitorRunning || s.productionDemoRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot import while a workflow is running")
 		return
@@ -694,8 +694,8 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 	preflight := s.readOnly.Preflight
 	validateRun := s.readOnly.ValidateRun
 	var validateDemoSource func(context.Context, string) error
-	if s.unofficialDemo != nil {
-		validateDemoSource = s.unofficialDemo.ValidateSource
+	if s.productionDemo != nil {
+		validateDemoSource = s.productionDemo.ValidateSource
 	}
 	s.mu.Unlock()
 	if _, err := preflight(request.Context()); err != nil {
@@ -739,18 +739,18 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 		releaseState.Day.GoImagesReleaseResult == "succeeded" {
 
 		if err := validateDemoSource(request.Context(), candidate.SourceVersion); err != nil {
-			releaseState.Day.GoImagesDemoSourceValidationError = fmt.Sprintf("Selected source commit is not compatible with pipeline 1492: %v", err)
+			releaseState.Day.GoImagesDemoSourceValidationError = fmt.Sprintf("Selected source commit is not compatible with production pipeline 1023: %v", err)
 		} else {
 			releaseState.Day.GoImagesDemoSourceValidated = true
 		}
 	}
-	var unofficialDemoSteps []*coordinator.Step
+	var productionDemoSteps []*coordinator.Step
 	if releaseState.Day.GoImagesReleaseComplete && releaseState.Day.GoImagesReleaseResult == "succeeded" &&
 		releaseState.Day.GoImagesDemoSourceValidated {
 
-		unofficialDemoSteps, err = buildUnofficialDemoSteps(releaseInput, releaseState)
+		productionDemoSteps, err = buildProductionDemoSteps(releaseInput, releaseState)
 		if err != nil {
-			writeError(response, http.StatusInternalServerError, fmt.Sprintf("create unofficial demo plan: %v", err))
+			writeError(response, http.StatusInternalServerError, fmt.Sprintf("create production demo plan: %v", err))
 			return
 		}
 	}
@@ -771,8 +771,8 @@ func (s *Server) handleRunImport(response http.ResponseWriter, request *http.Req
 	s.releaseState = releaseState
 	s.document = document
 	s.runner = &coordinator.StepRunner{}
-	s.unofficialDemoSteps = unofficialDemoSteps
-	s.unofficialDemoRunner = &coordinator.StepRunner{}
+	s.productionDemoSteps = productionDemoSteps
+	s.productionDemoRunner = &coordinator.StepRunner{}
 	s.restoredFromDisk = false
 	result := s.planResponseLocked(false)
 	s.mu.Unlock()
@@ -812,7 +812,7 @@ func (s *Server) handleRunMonitor(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusConflict, "the imported run has an invalid build ID")
 		return
 	}
-	if s.simulationRunning || s.monitorRunning || s.unofficialDemoRunning {
+	if s.simulationRunning || s.monitorRunning || s.productionDemoRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "a workflow is already running")
 		return
@@ -869,39 +869,39 @@ func (s *Server) handleRunMonitor(response http.ResponseWriter, request *http.Re
 
 func (s *Server) finishMonitor() {
 	s.mu.Lock()
-	if len(s.unofficialDemoSteps) == 0 && s.releaseInput != nil && s.releaseState != nil &&
+	if len(s.productionDemoSteps) == 0 && s.releaseInput != nil && s.releaseState != nil &&
 		s.releaseState.Day.GoImagesReleaseImported && s.releaseState.Day.GoImagesReleaseComplete &&
 		s.releaseState.Day.GoImagesReleaseResult == "succeeded" && s.releaseState.Day.GoImagesDemoSourceValidated {
 
-		if steps, err := buildUnofficialDemoSteps(s.releaseInput, s.releaseState); err == nil {
-			s.unofficialDemoSteps = steps
-			s.unofficialDemoRunner = &coordinator.StepRunner{}
+		if steps, err := buildProductionDemoSteps(s.releaseInput, s.releaseState); err == nil {
+			s.productionDemoSteps = steps
+			s.productionDemoRunner = &coordinator.StepRunner{}
 		}
 	}
 	s.monitorRunning = false
 	s.mu.Unlock()
 }
 
-type unofficialDemoStartRequest struct {
+type productionDemoStartRequest struct {
 	PlanDigest   string `json:"planDigest"`
 	Confirmation string `json:"confirmation"`
 }
 
-func (s *Server) handleUnofficialDemoStart(response http.ResponseWriter, request *http.Request) {
+func (s *Server) handleProductionDemoStart(response http.ResponseWriter, request *http.Request) {
 	if !sameOrigin(request) {
 		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
 		return
 	}
-	var start unofficialDemoStartRequest
+	var start productionDemoStartRequest
 	if err := decodeJSON(response, request, &start); err != nil {
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	s.mu.Lock()
-	if s.unofficialDemo == nil {
+	if s.productionDemo == nil {
 		s.mu.Unlock()
-		writeError(response, http.StatusForbidden, "real unofficial go-images demo is not enabled")
+		writeError(response, http.StatusForbidden, "real production go-images demo is not enabled")
 		return
 	}
 	if s.document == nil || s.releaseInput == nil || s.releaseState == nil {
@@ -909,59 +909,59 @@ func (s *Server) handleUnofficialDemoStart(response http.ResponseWriter, request
 		writeError(response, http.StatusConflict, "import a completed pipeline 1023 run first")
 		return
 	}
-	intent := s.unofficialDemoResponseLocked()
+	intent := s.productionDemoResponseLocked()
 	if !intent.Eligible || intent.PlanDigest == "" || intent.Confirmation == "" {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "the imported run is not eligible for an unofficial demo")
+		writeError(response, http.StatusConflict, "the imported run is not eligible for a production demo")
 		return
 	}
 	if !secureEqual(start.PlanDigest, intent.PlanDigest) {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "confirmation does not match the current unofficial demo plan")
+		writeError(response, http.StatusConflict, "confirmation does not match the current production demo plan")
 		return
 	}
 	if !secureEqual(start.Confirmation, intent.Confirmation) {
 		s.mu.Unlock()
-		writeError(response, http.StatusBadRequest, "unofficial demo confirmation phrase is incorrect")
+		writeError(response, http.StatusBadRequest, "production demo confirmation phrase is incorrect")
 		return
 	}
 	if s.releaseState.Day.GoImagesDemoComplete {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "the unofficial demo is already complete")
+		writeError(response, http.StatusConflict, "the production demo is already complete")
 		return
 	}
-	if s.simulationRunning || s.monitorRunning || s.unofficialDemoRunning {
+	if s.simulationRunning || s.monitorRunning || s.productionDemoRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "a workflow is already running")
 		return
 	}
-	preflight := s.unofficialDemo.Preflight
-	validateSource := s.unofficialDemo.ValidateSource
-	newService := s.unofficialDemo.NewService
+	preflight := s.productionDemo.Preflight
+	validateSource := s.productionDemo.ValidateSource
+	newService := s.productionDemo.NewService
 	input := *s.releaseInput
 	state := s.releaseState
 	previousQueueAttempt := state.Day.GoImagesDemoQueueAttempted
 	sessionID := s.document.ID
-	expectedPlan, err := session.NewPlan(s.unofficialDemoSteps)
+	expectedPlan, err := session.NewPlan(s.productionDemoSteps)
 	if err != nil {
 		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("fingerprint unofficial demo plan: %v", err))
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("fingerprint production demo plan: %v", err))
 		return
 	}
-	s.unofficialDemoRunning = true
+	s.productionDemoRunning = true
 	s.mu.Unlock()
 
 	if err := validateSource(request.Context(), intent.SourceVersion); err != nil {
-		s.finishUnofficialDemo()
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("selected source commit is no longer valid for the unofficial demo: %v", err))
+		s.finishProductionDemo()
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("selected source commit is no longer valid for the production demo: %v", err))
 		return
 	}
 	if _, err := preflight(request.Context()); err != nil {
-		s.finishUnofficialDemo()
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("unofficial demo preflight failed: %v", err))
+		s.finishProductionDemo()
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("production demo preflight failed: %v", err))
 		return
 	}
-	service, err := newService(GoImagesUnofficialDemoRequest{
+	service, err := newService(GoImagesProductionDemoRequest{
 		SessionID:            sessionID,
 		ExecutionDigest:      intent.PlanDigest,
 		Versions:             append([]string(nil), input.Versions...),
@@ -970,46 +970,46 @@ func (s *Server) handleUnofficialDemoStart(response http.ResponseWriter, request
 		PreviousQueueAttempt: previousQueueAttempt,
 	})
 	if err != nil {
-		s.finishUnofficialDemo()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create unofficial demo service: %v", err))
+		s.finishProductionDemo()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create production demo service: %v", err))
 		return
 	}
-	steps, state, err := releasesteps.CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+	steps, state, err := releasesteps.CreateGoImagesProductionDemoGraphWithCheckpoint(
 		&input,
 		nil,
 		state,
-		goImagesUnofficialDemoID,
+		goImagesProductionDemoID,
 		service,
 		s.checkpointReleaseState,
 	)
 	if err != nil {
-		s.finishUnofficialDemo()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create unofficial demo graph: %v", err))
+		s.finishProductionDemo()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create production demo graph: %v", err))
 		return
 	}
 	actualPlan, err := session.NewPlan(steps)
 	if err != nil || actualPlan.Digest != expectedPlan.Digest || actualPlan.WorkflowRevision != expectedPlan.WorkflowRevision {
-		s.finishUnofficialDemo()
-		writeError(response, http.StatusConflict, "unofficial demo graph no longer matches the confirmed plan")
+		s.finishProductionDemo()
+		writeError(response, http.StatusConflict, "production demo graph no longer matches the confirmed plan")
 		return
 	}
 
 	s.mu.Lock()
-	s.unofficialDemoSteps = steps
+	s.productionDemoSteps = steps
 	s.releaseState = state
-	s.unofficialDemoRunner = &coordinator.StepRunner{}
-	runner := s.unofficialDemoRunner
+	s.productionDemoRunner = &coordinator.StepRunner{}
+	runner := s.productionDemoRunner
 	s.mu.Unlock()
 	go func() {
 		_ = runner.Execute(s.ctx, steps)
-		s.finishUnofficialDemo()
+		s.finishProductionDemo()
 	}()
-	writeJSON(response, http.StatusAccepted, map[string]string{"status": "real unofficial go-images demo started"})
+	writeJSON(response, http.StatusAccepted, map[string]string{"status": "real production go-images demo started"})
 }
 
-func (s *Server) finishUnofficialDemo() {
+func (s *Server) finishProductionDemo() {
 	s.mu.Lock()
-	s.unofficialDemoRunning = false
+	s.productionDemoRunning = false
 	s.mu.Unlock()
 }
 
@@ -1092,7 +1092,7 @@ func (s *Server) handleDemoStart(response http.ResponseWriter, request *http.Req
 		writeError(response, http.StatusConflict, "create a release plan before starting the demo")
 		return
 	}
-	if s.simulationRunning || s.monitorRunning || s.unofficialDemoRunning {
+	if s.simulationRunning || s.monitorRunning || s.productionDemoRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "a demo run is already active")
 		return
@@ -1161,14 +1161,14 @@ func (s *Server) handleEvents(response http.ResponseWriter, request *http.Reques
 	streamRunnerEvents(response, request, runner)
 }
 
-func (s *Server) handleUnofficialDemoEvents(response http.ResponseWriter, request *http.Request) {
+func (s *Server) handleProductionDemoEvents(response http.ResponseWriter, request *http.Request) {
 	s.mu.Lock()
-	if len(s.unofficialDemoSteps) == 0 {
+	if len(s.productionDemoSteps) == 0 {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "import a completed pipeline 1023 run before subscribing")
 		return
 	}
-	runner := s.unofficialDemoRunner
+	runner := s.productionDemoRunner
 	s.mu.Unlock()
 	streamRunnerEvents(response, request, runner)
 }

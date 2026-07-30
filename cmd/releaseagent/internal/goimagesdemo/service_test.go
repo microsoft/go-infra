@@ -61,17 +61,17 @@ type fakeQueueClient struct {
 	err     error
 }
 
-func (q *fakeQueueClient) QueueUnofficialDemo(_ context.Context, request QueueRequest) (int, error) {
+func (q *fakeQueueClient) QueueProductionDemo(_ context.Context, request QueueRequest) (int, error) {
 	q.request = &request
 	return q.buildID, q.err
 }
 
-func TestTriggerQueuesFixedUnofficialDemo(t *testing.T) {
+func TestTriggerQueuesFixedProductionDemo(t *testing.T) {
 	reader := &fakePipelineReader{}
 	queue := &fakeQueueClient{buildID: 321}
 	service := newTestService(t, reader, queue, nil)
 	buildID, err := service.TriggerBuildPipeline(
-		context.Background(), DefinitionID, releasesteps.GoImagesUnofficialDemoPipelineParameters(), nil, nil,
+		context.Background(), DefinitionID, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -89,20 +89,20 @@ func TestTriggerQueuesFixedUnofficialDemo(t *testing.T) {
 func TestTriggerRejectsUnsafeTargetOrParameters(t *testing.T) {
 	service := newTestService(t, &fakePipelineReader{}, &fakeQueueClient{}, nil)
 	if _, err := service.TriggerBuildPipeline(
-		context.Background(), 1023, releasesteps.GoImagesUnofficialDemoPipelineParameters(), nil, nil,
+		context.Background(), 1492, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
 	); err == nil {
-		t.Fatal("official pipeline was accepted")
+		t.Fatal("nonproduction pipeline was accepted")
 	}
-	unsafe := releasesteps.GoImagesUnofficialDemoPipelineParameters()
-	unsafe["publishRepoPrefix"] = "public/"
+	unsafe := releasesteps.GoImagesProductionDemoPipelineParameters()
+	unsafe["publishRepoPrefix"] = "dev/"
 	if _, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, unsafe, nil, nil); err == nil {
-		t.Fatal("public publish prefix was accepted")
+		t.Fatal("nonproduction publish prefix was accepted")
 	}
 }
 
 func TestTriggerReconcilesExistingRun(t *testing.T) {
 	parameters := make(map[string]any)
-	for name, value := range releasesteps.GoImagesUnofficialDemoPipelineParameters() {
+	for name, value := range releasesteps.GoImagesProductionDemoPipelineParameters() {
 		parameters[name] = value
 	}
 	reader := &fakePipelineReader{recent: []*azdopipeline.Build{{
@@ -118,7 +118,7 @@ func TestTriggerReconcilesExistingRun(t *testing.T) {
 	queue := &fakeQueueClient{buildID: 999}
 	service := newTestService(t, reader, queue, nil)
 	buildID, err := service.TriggerBuildPipeline(
-		context.Background(), DefinitionID, releasesteps.GoImagesUnofficialDemoPipelineParameters(), nil, nil,
+		context.Background(), DefinitionID, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestTriggerReconcilesExistingRun(t *testing.T) {
 
 func TestTriggerWaitsForEventuallyVisiblePriorRun(t *testing.T) {
 	parameters := make(map[string]any)
-	for name, value := range releasesteps.GoImagesUnofficialDemoPipelineParameters() {
+	for name, value := range releasesteps.GoImagesProductionDemoPipelineParameters() {
 		parameters[name] = value
 	}
 	correlated := &azdopipeline.Build{
@@ -160,7 +160,7 @@ func TestTriggerWaitsForEventuallyVisiblePriorRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	buildID, err := service.TriggerBuildPipeline(
-		context.Background(), DefinitionID, releasesteps.GoImagesUnofficialDemoPipelineParameters(), nil, nil,
+		context.Background(), DefinitionID, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestTriggerWaitsForEventuallyVisiblePriorRun(t *testing.T) {
 
 func TestTriggerRejectsConflictingCorrelatedRun(t *testing.T) {
 	parameters := make(map[string]any)
-	for name, value := range releasesteps.GoImagesUnofficialDemoPipelineParameters() {
+	for name, value := range releasesteps.GoImagesProductionDemoPipelineParameters() {
 		parameters[name] = value
 	}
 	reader := &fakePipelineReader{recent: []*azdopipeline.Build{{
@@ -187,9 +187,49 @@ func TestTriggerRejectsConflictingCorrelatedRun(t *testing.T) {
 	}}}
 	service := newTestService(t, reader, &fakeQueueClient{}, nil)
 	if _, err := service.TriggerBuildPipeline(
-		context.Background(), DefinitionID, releasesteps.GoImagesUnofficialDemoPipelineParameters(), nil, nil,
+		context.Background(), DefinitionID, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
 	); err == nil {
 		t.Fatal("conflicting correlated run was accepted")
+	}
+}
+
+func TestTriggerRejectsEventuallyVisibleConflictingRun(t *testing.T) {
+	parameters := make(map[string]any)
+	for name, value := range releasesteps.GoImagesProductionDemoPipelineParameters() {
+		parameters[name] = value
+	}
+	conflicting := &azdopipeline.Build{
+		ID: 321, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: testCommit,
+		Parameters: map[string]string{
+			correlationVariable:     "session-1",
+			executionDigestVariable: strings.Repeat("b", 64),
+			versionsVariable:        `["1.26.5-2"]`,
+			sourceBuildVariable:     "3019035",
+		},
+		TemplateParameters: parameters,
+	}
+	reader := &fakePipelineReader{recentResponses: [][]*azdopipeline.Build{nil, {conflicting}}}
+	queue := &fakeQueueClient{buildID: 999}
+	service, err := New(reader, queue, Config{
+		SessionID:            "session-1",
+		ExecutionDigest:      testDigest,
+		Versions:             []string{"1.26.5-2"},
+		SourceBuildID:        "3019035",
+		SourceVersion:        testCommit,
+		PreviousQueueAttempt: true,
+		ReconcileAttempts:    3,
+		ReconcileInterval:    time.Millisecond,
+	}, func(context.Context, time.Duration) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.TriggerBuildPipeline(
+		context.Background(), DefinitionID, releasesteps.GoImagesProductionDemoPipelineParameters(), nil, nil,
+	); err == nil || !strings.Contains(err.Error(), executionDigestVariable) {
+		t.Fatalf("conflicting delayed run error = %v", err)
+	}
+	if queue.request != nil {
+		t.Fatalf("queued after delayed conflict: %#v", queue.request)
 	}
 }
 
@@ -234,11 +274,11 @@ func TestPollPipelineCompleteFailureAndCancellation(t *testing.T) {
 
 func TestParametersAreExactlyDev(t *testing.T) {
 	want := map[string]string{
-		"_info":                    "🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵",
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
 		"sourceBuildPipelineRunId": "$(Build.BuildId)",
-		"publishRepoPrefix":        "dev/",
+		"publishRepoPrefix":        "public/",
 	}
-	if got := releasesteps.GoImagesUnofficialDemoPipelineParameters(); !reflect.DeepEqual(got, want) {
+	if got := releasesteps.GoImagesProductionDemoPipelineParameters(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("parameters = %#v, want %#v", got, want)
 	}
 }

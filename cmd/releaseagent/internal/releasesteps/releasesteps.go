@@ -256,14 +256,14 @@ func GoImagesPipelineParameters() map[string]string {
 	}
 }
 
-// GoImagesUnofficialDemoPipelineParameters returns the only parameter set the release UI may send
-// to the real demo pipeline. It builds new images and publishes them under dev/ using nonproduction
-// registries and test signing configured by the unofficial pipeline definition.
-func GoImagesUnofficialDemoPipelineParameters() map[string]string {
+// GoImagesProductionDemoPipelineParameters returns the only parameter set the release UI may send
+// to the authorized real demo pipeline. It builds, signs, and publishes production images under
+// public/ using the official pipeline definition.
+func GoImagesProductionDemoPipelineParameters() map[string]string {
 	return map[string]string{
-		"_info":                    "🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵",
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
 		"sourceBuildPipelineRunId": "$(Build.BuildId)",
-		"publishRepoPrefix":        "dev/",
+		"publishRepoPrefix":        "public/",
 	}
 }
 
@@ -356,10 +356,10 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	return steps, rs, nil
 }
 
-// CreateGoImagesUnofficialDemoGraphWithCheckpoint queues and monitors an allowlisted unofficial
+// CreateGoImagesProductionDemoGraphWithCheckpoint queues and monitors an allowlisted official
 // go-images build. The selected completed official run supplies the exact source commit. The
 // service implementation must independently enforce the pipeline, branch, commit, and parameters.
-func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
+func CreateGoImagesProductionDemoGraphWithCheckpoint(
 	ri *Input,
 	secret *Secret,
 	rs *State,
@@ -368,7 +368,7 @@ func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
 	checkpoint StateCheckpoint,
 ) ([]*coordinator.Step, *State, error) {
 	if ri == nil || pipelineID <= 0 {
-		return nil, nil, fmt.Errorf("no unofficial go-images demo pipeline specified")
+		return nil, nil, fmt.Errorf("no production go-images demo pipeline specified")
 	}
 	var err error
 	rs, err = initializeState(ri, rs)
@@ -383,11 +383,11 @@ func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
 		return nil, nil, fmt.Errorf("a pipeline 1023 run with result succeeded from microsoft/main must be imported first")
 	}
 	state := &stateAccess{state: rs, checkpoint: checkpoint}
-	parameters := GoImagesUnofficialDemoPipelineParameters()
+	parameters := GoImagesProductionDemoPipelineParameters()
 
 	queue := coordinator.NewRootStep(
-		"go-images.unofficial-demo.queue",
-		"🚀 Queue unofficial go-images demo",
+		"go-images.production-demo.queue",
+		"🚀 Queue production go-images demo",
 		shortTimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) string { return s.Day.GoImagesDemoBuildID }) != "" {
@@ -411,8 +411,8 @@ func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
 		},
 	)
 	wait := queue.Then(
-		"go-images.unofficial-demo.wait",
-		"⌚ Wait for unofficial go-images demo",
+		"go-images.production-demo.wait",
+		"⌚ Wait for production go-images demo",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) bool { return s.Day.GoImagesDemoComplete }) {
@@ -428,8 +428,8 @@ func CreateGoImagesUnofficialDemoGraphWithCheckpoint(
 		},
 	)
 	complete := coordinator.NewIndicatorStep(
-		"go-images.unofficial-demo.complete",
-		"✅ Unofficial go-images demo complete",
+		"go-images.production-demo.complete",
+		"✅ Production go-images demo complete",
 		wait,
 	)
 	steps, err := complete.TransitiveDependencies()

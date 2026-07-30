@@ -68,27 +68,3 @@ func TestValidatePipelineParameterContract(t *testing.T) {
 		})
 	}
 }
-
-func TestValidateUnofficialPipelineParameterContract(t *testing.T) {
-	valid := "parameters:\n" +
-		"  - name: _info\n" +
-		"    type: string\n" +
-		"    values:\n" +
-		"      - '🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵'\n" +
-		"    default: '🔵  go-docker-rolling-internal-pipeline-unofficial.yml  🔵 🔵'\n" +
-		"  - name: sourceBuildPipelineRunId\n" +
-		"    type: string\n" +
-		"    default: '$(Build.BuildId)'\n" +
-		"  - name: publishRepoPrefix\n" +
-		"    type: string\n" +
-		"    default: dev/\n"
-	if err := ValidateUnofficialPipelineParameterContract([]byte(valid)); err != nil {
-		t.Fatal(err)
-	}
-	unsafe := strings.Replace(valid, "default: dev/", "default: public/", 1)
-	if err := ValidateUnofficialPipelineParameterContract([]byte(unsafe)); err == nil ||
-		!strings.Contains(err.Error(), `expected "dev/"`) {
-
-		t.Fatalf("unsafe contract error = %v", err)
-	}
-}
