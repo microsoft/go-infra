@@ -10,3 +10,7 @@
 # Use LF for all embedded markdown template files to avoid different results per
 # platform and mismatching tests.
 *.template.md text eol=lf
+
+# Mark gh-aw lock files as generated, as recommended by:
+# https://github.com/github/gh-aw/blob/main/create.md
+.github/workflows/*.lock.yml linguist-generated=true
