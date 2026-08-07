@@ -1172,7 +1172,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 		if request.Method == http.MethodGet && request.URL.Path == "/" && secureEqual(request.URL.Query().Get("token"), s.token) {
 			http.SetCookie(response, &http.Cookie{
-				Name: sessionCookieName, Value: s.token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
+				Name: sessionCookieName, Value: s.token, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 			})
 			http.Redirect(response, request, "/", http.StatusSeeOther)
 			return
