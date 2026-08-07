@@ -42,10 +42,8 @@ const (
 	legacyGoImagesWorkflowRevision5Digest = "7182e0900b9b575ad50962c2e3a7586ff4fb713ae749e4e8ca22e3de53358c40"
 )
 
-var (
-	//go:embed web/*
-	webFiles embed.FS
-)
+//go:embed web/*
+var webFiles embed.FS
 
 // Server hosts a single local release session. Dashboard responses use slices so the storage model
 // can grow to multiple concurrent sessions without changing the browser contract.
