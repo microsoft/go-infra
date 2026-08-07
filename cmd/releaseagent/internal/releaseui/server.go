@@ -229,8 +229,8 @@ func (s *Server) LaunchURL(baseURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse base URL: %w", err)
 	}
-	if parsed.Scheme != "http" || parsed.Host == "" || parsed.Path != "" {
-		return "", fmt.Errorf("base URL must be an HTTP origin, got %q", baseURL)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" || parsed.Path != "" {
+		return "", fmt.Errorf("base URL must be an HTTP or HTTPS origin, got %q", baseURL)
 	}
 	query := parsed.Query()
 	query.Set("token", s.token)

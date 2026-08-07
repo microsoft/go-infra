@@ -42,12 +42,13 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	if err != nil {
 		t.Fatal(err)
 	}
-	httpServer := httptest.NewServer(server.Handler())
+	httpServer := httptest.NewTLSServer(server.Handler())
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &http.Client{Jar: jar}
+	client := httpServer.Client()
+	client.Jar = jar
 	launchURL, err := server.LaunchURL(httpServer.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -753,6 +754,41 @@ func TestAuthenticationAndHostValidation(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusMisdirectedRequest {
 		t.Fatalf("non-loopback status = %d", response.StatusCode)
+	}
+}
+
+func TestLaunchCookieSecurity(t *testing.T) {
+	server, err := New(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewTLSServer(server.Handler())
+	defer httpServer.Close()
+	client := httpServer.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	launchURL, err := server.LaunchURL(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(launchURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/" {
+		t.Fatalf("launch response = %d, location = %q", response.StatusCode, response.Header.Get("Location"))
+	}
+	cookies := response.Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("launch cookies = %#v", cookies)
+	}
+	cookie := cookies[0]
+	if cookie.Name != sessionCookieName || !cookie.Secure || !cookie.HttpOnly || cookie.Path != "/" ||
+		cookie.SameSite != http.SameSiteStrictMode {
+
+		t.Fatalf("launch cookie = %#v", cookie)
 	}
 }
 
