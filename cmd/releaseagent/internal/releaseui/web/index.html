@@ -3,156 +3,87 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Microsoft Go Release UI</title>
+  <title>Microsoft Build of Go Release UI</title>
   <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/app.js" defer></script>
+  <script src="/assets/dashboard.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Microsoft Go Release UI home">
+    <a class="brand" href="/" aria-label="Microsoft Build of Go Release UI home">
       <span class="brand-mark" aria-hidden="true">Go</span>
       <span>
         <strong>Release UI</strong>
-        <small>Microsoft build of Go</small>
+        <small>Microsoft Build of Go</small>
       </span>
     </a>
     <div class="connection" title="This server is available only on this computer">
-      <span id="connection-dot" class="connection-dot"></span>
-      <span id="connection-label">Local session</span>
+      <span class="connection-dot"></span>
+      <span>Local session</span>
     </div>
   </header>
 
-  <main>
-    <section class="hero">
+  <main class="dashboard-main">
+    <section class="hero dashboard-hero">
       <div>
-        <p class="eyebrow">Go-images release workspace</p>
-        <h1>Inspect the image build pipeline.</h1>
-        <p class="hero-copy">Find and import direct go-images pipeline runs by the versions present in their source commit.</p>
+        <p class="eyebrow">Release control center</p>
+        <h1>Manage releases from one place.</h1>
+        <p class="hero-copy">
+          Track work already in progress or start a focused release process. Each process owns its
+          inputs, validation, and safety boundaries.
+        </p>
+        <a class="release-guide-link" href="https://github.com/microsoft/go-lab/tree/main/docs/release" target="_blank" rel="noreferrer">
+          Release documentation <span aria-hidden="true">↗</span>
+        </a>
       </div>
-      <div class="safety-card">
-        <span class="safety-icon" aria-hidden="true">✓</span>
-        <div>
-          <strong id="safety-title">External execution disabled</strong>
-          <p id="safety-copy">The UI can prepare and simulate pipeline 1023. Azure access is disabled by default.</p>
-          <ul id="preflight-list" class="preflight-list" aria-label="Local readiness checks"></ul>
-        </div>
+      <div class="hero-stat" aria-label="Available release processes">
+        <strong id="available-count">1</strong>
+        <span>process available</span>
       </div>
     </section>
 
-    <section class="workspace">
-      <aside class="panel setup-panel">
-        <div class="panel-heading">
-          <span class="step-number">01</span>
-          <div>
-            <h2>Go-images inputs</h2>
-            <p>Versions are used only to match source commits for pipeline 1023.</p>
-          </div>
+    <section class="dashboard-section" aria-labelledby="ongoing-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live work</p>
+          <h2 id="ongoing-title">Ongoing releases</h2>
+          <p>Reopen the release currently owned by this durable local session.</p>
         </div>
+        <button id="track-releases" class="button button-secondary" type="button">
+          Track ongoing releases
+        </button>
+      </div>
+      <div id="ongoing-releases" class="release-list" aria-live="polite">
+        <article class="release-empty loading-card">Checking the local session…</article>
+      </div>
+    </section>
 
-        <form id="plan-form">
-          <label for="versions">Versions</label>
-          <textarea id="versions" name="versions" rows="4" placeholder="1.26.1-1&#10;1.25.6-1" required spellcheck="false"></textarea>
-          <p class="field-help">One Microsoft release version per line, including its revision suffix. Versions are not pipeline 1023 parameters.</p>
-
-          <button id="find-runs-button" class="button button-secondary find-runs-button" type="button" hidden>
-            Find existing runs for versions
-          </button>
-          <section id="run-candidates" class="run-candidates" aria-live="polite" hidden>
-            <div class="candidate-heading">
-              <strong>Matching pipeline runs</strong>
-              <span id="candidate-count"></span>
-            </div>
-            <div id="candidate-list" class="candidate-list"></div>
-          </section>
-
-          <button id="plan-button" class="button button-primary" type="submit">
-            <span>Build go-images plan</span>
-            <span aria-hidden="true">→</span>
-          </button>
-        </form>
-      </aside>
-
-      <section class="panel plan-panel">
-        <div class="panel-heading plan-heading">
-          <span class="step-number">02</span>
-          <div>
-            <h2>Pipeline plan</h2>
-            <p id="plan-subtitle">Enter inputs to generate the focused go-images workflow.</p>
-          </div>
-          <button id="demo-button" class="button button-secondary" type="button" disabled>
-            Simulate queue and monitor
-          </button>
+    <section class="dashboard-section" aria-labelledby="processes-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Start new work</p>
+          <h2 id="processes-title">Release processes</h2>
+          <p>Choose the product to release. More processes can be added without changing this dashboard.</p>
         </div>
+      </div>
+      <div id="process-grid" class="process-grid" aria-live="polite"></div>
+    </section>
 
-        <div id="empty-state" class="empty-state">
-          <div class="empty-graphic" aria-hidden="true">
-            <span></span><span></span><span></span>
-          </div>
-          <h3>No plan yet</h3>
-          <p>The pipeline request and its three-step workflow will appear here.</p>
+    <section id="recent-section" class="dashboard-section" aria-labelledby="recent-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">This session</p>
+          <h2 id="recent-title">Recently completed</h2>
         </div>
+      </div>
+      <div id="recent-releases" class="release-list"></div>
+    </section>
 
-        <div id="plan-content" class="plan-content" hidden>
-          <div class="progress-summary" aria-live="polite">
-            <div>
-              <span id="progress-label">Ready to simulate</span>
-              <strong id="progress-count">0 / 0 complete</strong>
-            </div>
-            <div class="progress-track" aria-hidden="true">
-              <span id="progress-bar"></span>
-            </div>
-            <div id="status-counts" class="status-counts"></div>
-          </div>
-          <section class="request-preview" aria-labelledby="request-preview-title">
-            <div class="request-preview-heading">
-              <div>
-                <p class="eyebrow">Azure DevOps request preview · not sent</p>
-                <h3 id="request-preview-title">Pipeline <span id="pipeline-id"></span></h3>
-              </div>
-              <span id="pipeline-target" class="pipeline-target"></span>
-            </div>
-            <dl id="pipeline-parameters" class="pipeline-parameters"></dl>
-          </section>
-          <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
-          <p id="production-demo-unavailable" class="demo-unavailable" hidden></p>
-          <section id="production-demo-controls" class="real-demo-controls" hidden>
-            <p class="eyebrow">Real production execution</p>
-            <h3>Queue production pipeline 1023</h3>
-            <p class="real-demo-warning">
-              This is not a simulation. It builds images, performs production signing, and
-              publishes production images under <strong>public/</strong>. Explicit authorization is required.
-            </p>
-            <dl class="demo-intent">
-              <dt>Source</dt>
-              <dd id="production-demo-source"></dd>
-              <dt>Parameters</dt>
-              <dd id="production-demo-parameters"></dd>
-              <dt>Confirmed digest</dt>
-              <dd><code id="production-demo-digest"></code></dd>
-            </dl>
-            <label for="production-demo-confirmation">
-              Type <strong id="production-demo-phrase"></strong>
-            </label>
-            <input id="production-demo-confirmation" autocomplete="off" spellcheck="false">
-            <button id="production-demo-button" class="button button-danger" type="button" disabled>
-              Queue real production demo
-            </button>
-            <a id="production-demo-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
-            <div class="demo-progress" aria-live="polite">
-              <div>
-                <span id="production-demo-progress-label">Ready for confirmation</span>
-                <strong id="production-demo-progress-count">0 / 3 complete</strong>
-              </div>
-              <div class="progress-track" aria-hidden="true">
-                <span id="production-demo-progress-bar"></span>
-              </div>
-              <div id="production-demo-status-counts" class="status-counts"></div>
-            </div>
-            <ol id="production-demo-step-list" class="step-list demo-step-list"></ol>
-          </section>
-          <ol id="step-list" class="step-list"></ol>
-        </div>
-      </section>
+    <section class="readiness-strip" aria-labelledby="readiness-title">
+      <div>
+        <p class="eyebrow">Local readiness</p>
+        <h2 id="readiness-title">Execution boundaries</h2>
+      </div>
+      <ul id="preflight-list" class="preflight-list" aria-live="polite"></ul>
     </section>
   </main>
 

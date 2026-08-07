@@ -167,6 +167,75 @@ func TestValidateCandidateChecksDefinitionAndCommit(t *testing.T) {
 	}
 }
 
+func TestValidateRollbackSource(t *testing.T) {
+	client := &fakePipelineClient{getBuilds: []*azdopipeline.Build{{
+		ID: 3019035, DefinitionID: 1023, Status: "completed", Result: "succeeded",
+		SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+		TemplateParameters: map[string]any{
+			"sourceBuildPipelineRunId": "$(Build.BuildId)",
+			"publishRepoPrefix":        "public/",
+		},
+	}}}
+	candidate, err := ValidateRollbackSource(
+		context.Background(),
+		client,
+		VersionResolverFunc(func(context.Context, string) ([]string, error) {
+			return []string{"1.26.5-2", "1.25.12-1"}, nil
+		}),
+		1023,
+		3019035,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.BuildID != 3019035 || candidate.State != azdopipeline.RunStateSucceeded ||
+		candidate.VersionSet != `["1.25.12-1","1.26.5-2"]` {
+
+		t.Fatalf("candidate = %#v", candidate)
+	}
+}
+
+func TestValidateRollbackSourceRejectsUnsafeBuilds(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		build *azdopipeline.Build
+	}{
+		{name: "wrong definition", build: &azdopipeline.Build{
+			ID: 1, DefinitionID: 1492, Status: "completed", Result: "succeeded",
+			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+		}},
+		{name: "failed", build: &azdopipeline.Build{
+			ID: 1, DefinitionID: 1023, Status: "completed", Result: "failed",
+			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+		}},
+		{name: "wrong branch", build: &azdopipeline.Build{
+			ID: 1, DefinitionID: 1023, Status: "completed", Result: "succeeded",
+			SourceBranch: "refs/heads/feature", SourceVersion: testCommit,
+		}},
+		{name: "already republished", build: &azdopipeline.Build{
+			ID: 1, DefinitionID: 1023, Status: "completed", Result: "succeeded",
+			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+			TemplateParameters: map[string]any{"sourceBuildPipelineRunId": "123"},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePipelineClient{getBuilds: []*azdopipeline.Build{test.build}}
+			_, err := ValidateRollbackSource(
+				context.Background(),
+				client,
+				VersionResolverFunc(func(context.Context, string) ([]string, error) {
+					return []string{"1.26.5-2"}, nil
+				}),
+				1023,
+				test.build.ID,
+			)
+			if err == nil {
+				t.Fatal("unsafe rollback source was accepted")
+			}
+		})
+	}
+}
+
 func newTestService(t *testing.T, client PipelineClient) *Service {
 	t.Helper()
 	return newTestServiceWithSleeper(t, client, func(context.Context, time.Duration) error { return nil })

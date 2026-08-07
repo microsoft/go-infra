@@ -5,6 +5,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -104,6 +105,52 @@ func TestFileStoreRoundTripAndReplace(t *testing.T) {
 	}
 	if !loaded.UpdatedAt.Equal(document.UpdatedAt) {
 		t.Fatalf("updated time = %v, want %v", loaded.UpdatedAt, document.UpdatedAt)
+	}
+}
+
+func TestMigratableWorkflowDocumentLoadsAndUpgrades(t *testing.T) {
+	document := testDocument(t)
+	document.Plan.WorkflowRevision = MigratableWorkflowRevision
+	var err error
+	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := document.Validate(); err == nil {
+		t.Fatal("migratable document passed current validation")
+	}
+	if err := document.ValidateLoadable(); err != nil {
+		t.Fatalf("migratable document did not pass load validation: %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "session.json")
+	data, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedAt := document.UpdatedAt.Add(time.Minute)
+	upgraded, err := loaded.UpgradeWorkflow(&loaded.Input, &loaded.State, testSteps(), updatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upgraded.ID != document.ID || upgraded.Plan.WorkflowRevision != CurrentWorkflowRevision ||
+		!upgraded.UpdatedAt.Equal(updatedAt) {
+
+		t.Fatalf("upgraded document = %#v", upgraded)
+	}
+	if err := store.Save(context.Background(), upgraded); err != nil {
+		t.Fatal(err)
 	}
 }
 

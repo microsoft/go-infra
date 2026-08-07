@@ -90,6 +90,10 @@ type importedRunMonitor struct {
 	monitor func(context.Context, int) error
 }
 
+func (importedRunMonitor) PollAzDOMirror(context.Context, string, string, *releasesteps.Secret) error {
+	return errors.New("an imported-run monitor cannot verify a source mirror")
+}
+
 func (m importedRunMonitor) TriggerBuildPipeline(context.Context, int, map[string]string, map[string]string, *releasesteps.Secret) (string, error) {
 	return "", errors.New("an imported-run monitor cannot queue a pipeline")
 }

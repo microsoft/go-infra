@@ -97,6 +97,73 @@ func TestStepRunnerSnapshots(t *testing.T) {
 	}
 }
 
+func TestStepRunnerProgressSnapshots(t *testing.T) {
+	reported := make(chan struct{})
+	releaseStep := make(chan struct{})
+	items := []string{"Build › linux-amd64 › Compile"}
+	step := NewRootStep("progress", "Progress step", NoTimeout, func(ctx context.Context) error {
+		ReportProgress(ctx, StepProgress{
+			Summary:   "Running one pipeline task",
+			Detail:    "1/3 stages complete",
+			Items:     items,
+			Completed: 1,
+			Total:     3,
+		})
+		items[0] = "mutated after reporting"
+		close(reported)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-releaseStep:
+			return nil
+		}
+	})
+
+	var runner StepRunner
+	_, updates, unsubscribe := runner.Subscribe(16)
+	defer unsubscribe()
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.Execute(context.Background(), []*Step{step})
+	}()
+
+	select {
+	case <-reported:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for progress report")
+	}
+	snapshot := runner.Snapshot()
+	if len(snapshot.Steps) != 1 || snapshot.Steps[0].Progress == nil {
+		t.Fatalf("snapshot has no progress: %#v", snapshot)
+	}
+	progress := snapshot.Steps[0].Progress
+	if progress.Summary != "Running one pipeline task" || progress.Completed != 1 || progress.Total != 3 ||
+		len(progress.Items) != 1 || progress.Items[0] != "Build › linux-amd64 › Compile" {
+
+		t.Fatalf("progress = %#v", progress)
+	}
+	progress.Items[0] = "mutated snapshot"
+	if got := runner.Snapshot().Steps[0].Progress.Items[0]; got != "Build › linux-amd64 › Compile" {
+		t.Fatalf("snapshot mutation changed runner state: %q", got)
+	}
+
+	sawProgressUpdate := false
+	for !sawProgressUpdate {
+		select {
+		case update := <-updates:
+			for _, candidate := range update.Steps {
+				sawProgressUpdate = candidate.Progress != nil
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for progress snapshot")
+		}
+	}
+	close(releaseStep)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func waitForSnapshotStatus(t *testing.T, updates <-chan Snapshot, want StepStatus) Snapshot {
 	t.Helper()
 	timeout := time.NewTimer(5 * time.Second)

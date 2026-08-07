@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesdemo
+package goimagesexecution
 
 import (
 	"bytes"
@@ -24,8 +24,9 @@ const maxResponseSize = 4 << 20
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// HTTPQueueClient can issue exactly one kind of mutation: queue definition 1023 with the fixed
-// official public/ payload. It cannot accept a browser-controlled definition, branch, or prefix.
+// HTTPQueueClient can issue exactly one kind of mutation: queue definition 1023 on microsoft/main
+// with parameters derived from an allowlisted release mode. It cannot accept a browser-controlled
+// definition, branch, commit, prefix, or arbitrary parameter map.
 type HTTPQueueClient struct {
 	baseURL string
 	project string
@@ -33,7 +34,7 @@ type HTTPQueueClient struct {
 	tokens  azdopipeline.TokenProvider
 }
 
-// NewHTTPQueueClient validates and creates the dedicated production-demo queue client.
+// NewHTTPQueueClient validates and creates the dedicated go-images release queue client.
 func NewHTTPQueueClient(
 	baseURL,
 	project string,
@@ -52,40 +53,42 @@ func NewHTTPQueueClient(
 	}, nil
 }
 
-// QueueProductionDemo queues the fixed definition, branch, parameters, and correlation variables.
-func (c *HTTPQueueClient) QueueProductionDemo(ctx context.Context, request QueueRequest) (int, error) {
+// QueueRelease queues the fixed definition and branch with one mode-derived parameter set.
+func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest) (int, error) {
 	if !commitPattern.MatchString(request.SourceVersion) {
-		return 0, fmt.Errorf("invalid production demo source commit %q", request.SourceVersion)
+		return 0, fmt.Errorf("invalid go-images release source commit %q", request.SourceVersion)
 	}
 	if request.SessionID == "" || !digestPattern.MatchString(request.ExecutionDigest) {
-		return 0, errors.New("production demo session ID and 64-character execution digest are required")
+		return 0, errors.New("go-images release session ID and 64-character execution digest are required")
 	}
-	if id, err := strconv.Atoi(request.SourceBuildID); err != nil || id <= 0 {
-		return 0, fmt.Errorf("invalid production demo source build ID %q", request.SourceBuildID)
+	parameters, err := releasesteps.GoImagesPipelineParametersForMode(request.Mode, request.SourceBuildID)
+	if err != nil {
+		return 0, err
 	}
 	var versions []string
 	if err := json.Unmarshal([]byte(request.VersionSet), &versions); err != nil || len(versions) == 0 {
-		return 0, errors.New("production demo canonical version set is invalid")
+		return 0, errors.New("go-images release canonical version set is invalid")
 	}
 	variables, err := json.Marshal(map[string]string{
 		correlationVariable:     request.SessionID,
 		executionDigestVariable: request.ExecutionDigest,
+		modeVariable:            string(request.Mode),
 		versionsVariable:        request.VersionSet,
 		sourceBuildVariable:     request.SourceBuildID,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("marshal production demo variables: %w", err)
+		return 0, fmt.Errorf("marshal go-images release variables: %w", err)
 	}
 	body, err := json.Marshal(map[string]any{
 		"definition":         map[string]int{"id": DefinitionID},
 		"sourceBranch":       SourceBranch,
 		"sourceVersion":      request.SourceVersion,
-		"templateParameters": releasesteps.GoImagesProductionDemoPipelineParameters(),
+		"templateParameters": parameters,
 		// The Build API's legacy parameters field carries pipeline variables as a JSON string.
 		"parameters": string(variables),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("marshal production demo request: %w", err)
+		return 0, fmt.Errorf("marshal go-images release request: %w", err)
 	}
 	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/build/builds?" + url.Values{
 		"definitionId": {strconv.Itoa(DefinitionID)},
@@ -100,22 +103,22 @@ func (c *HTTPQueueClient) QueueProductionDemo(ctx context.Context, request Queue
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0, fmt.Errorf("create production demo queue request: %w", err)
+		return 0, fmt.Errorf("create go-images release queue request: %w", err)
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+token)
 	httpRequest.Header.Set("Accept", "application/json")
 	httpRequest.Header.Set("Content-Type", "application/json; charset=utf-8")
 	response, err := c.http.Do(httpRequest)
 	if err != nil {
-		return 0, fmt.Errorf("send production demo queue request: %w", err)
+		return 0, fmt.Errorf("send go-images release queue request: %w", err)
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
 	if err != nil {
-		return 0, fmt.Errorf("read production demo queue response: %w", err)
+		return 0, fmt.Errorf("read go-images release queue response: %w", err)
 	}
 	if len(data) > maxResponseSize {
-		return 0, fmt.Errorf("production demo queue response exceeds %d bytes", maxResponseSize)
+		return 0, fmt.Errorf("go-images release queue response exceeds %d bytes", maxResponseSize)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		responseBody := strings.ReplaceAll(strings.TrimSpace(string(data)), token, "[REDACTED]")
@@ -130,10 +133,10 @@ func (c *HTTPQueueClient) QueueProductionDemo(ctx context.Context, request Queue
 		ID int `json:"id"`
 	}
 	if err := json.Unmarshal(data, &build); err != nil {
-		return 0, fmt.Errorf("decode production demo queue response: %w", err)
+		return 0, fmt.Errorf("decode go-images release queue response: %w", err)
 	}
 	if build.ID <= 0 {
-		return 0, errors.New("production demo queue response has no build ID")
+		return 0, errors.New("go-images release queue response has no build ID")
 	}
 	return build.ID, nil
 }

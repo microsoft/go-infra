@@ -1,5 +1,5 @@
 {
-  "InputChecksum": 3840014725,
+  "InputChecksum": 3390784144,
   "Day": {
     "ReleaseIssue": 42,
     "GoImagesCommit": "abcdef-images-with-versions",
@@ -9,13 +9,10 @@
     "GoImagesReleaseResult": "",
     "GoImagesReleaseComplete": false,
     "GoImagesReleaseImported": false,
+    "GoImagesReleaseMode": "",
+    "GoImagesSourceBuildID": "",
+    "GoImagesReleaseQueueAttempted": false,
     "GoImagesReleaseParameters": null,
-    "GoImagesDemoBuildID": "",
-    "GoImagesDemoSourceValidated": false,
-    "GoImagesDemoSourceValidationError": "",
-    "GoImagesDemoQueueAttempted": false,
-    "GoImagesDemoComplete": false,
-    "GoImagesDemoParameters": null,
     "AnnouncementWritten": true,
     "MARVersionChecked": true
   },

@@ -20,10 +20,13 @@ import (
 
 const (
 	// CurrentSchemaVersion is the only session document schema understood by this version.
-	CurrentSchemaVersion = 5
+	CurrentSchemaVersion = 6
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
 	// even if step IDs and dependencies have not changed.
-	CurrentWorkflowRevision = 4
+	CurrentWorkflowRevision = 6
+	// MigratableWorkflowRevision is accepted only while loading an integrity-checked document for
+	// explicit migration. It cannot be saved or used as a current execution plan.
+	MigratableWorkflowRevision = 5
 )
 
 // Document is the durable, non-secret state needed to reconstruct a release plan.
@@ -134,6 +137,16 @@ func NewPlan(steps []*coordinator.Step) (Plan, error) {
 
 // Validate checks the document schema and internal structural fingerprint.
 func (d *Document) Validate() error {
+	return d.validate(false)
+}
+
+// ValidateLoadable checks current documents and the one explicitly migratable workflow revision.
+// Callers must upgrade a migratable document before saving or executing it.
+func (d *Document) ValidateLoadable() error {
+	return d.validate(true)
+}
+
+func (d *Document) validate(allowMigration bool) error {
 	if d == nil {
 		return errors.New("session document is nil")
 	}
@@ -155,7 +168,9 @@ func (d *Document) Validate() error {
 	if len(d.Plan.Steps) == 0 {
 		return errors.New("session plan has no steps")
 	}
-	if d.Plan.WorkflowRevision != CurrentWorkflowRevision {
+	if d.Plan.WorkflowRevision != CurrentWorkflowRevision &&
+		(!allowMigration || d.Plan.WorkflowRevision != MigratableWorkflowRevision) {
+
 		return fmt.Errorf("unsupported workflow revision %d, expected %d", d.Plan.WorkflowRevision, CurrentWorkflowRevision)
 	}
 	if err := validatePlanSteps(d.Plan.Steps); err != nil {
@@ -176,6 +191,56 @@ func (d *Document) Validate() error {
 		return fmt.Errorf("session execution digest mismatch: stored %q, calculated %q", d.ExecutionDigest, executionDigest)
 	}
 	return nil
+}
+
+// UpgradeWorkflow returns a current document with replacement immutable input, state, and graph.
+// The original session identity and creation time are preserved.
+func (d *Document) UpgradeWorkflow(
+	input *releasesteps.Input,
+	state *releasesteps.State,
+	steps []*coordinator.Step,
+	now time.Time,
+) (*Document, error) {
+	if err := d.ValidateLoadable(); err != nil {
+		return nil, err
+	}
+	if d.Plan.WorkflowRevision != MigratableWorkflowRevision {
+		return nil, fmt.Errorf("workflow revision %d does not require migration", d.Plan.WorkflowRevision)
+	}
+	if input == nil || state == nil {
+		return nil, errors.New("migrated session input and state are required")
+	}
+	if now.IsZero() {
+		return nil, errors.New("session migration time is zero")
+	}
+	plan, err := NewPlan(steps)
+	if err != nil {
+		return nil, err
+	}
+	document, err := cloneJSON(*d)
+	if err != nil {
+		return nil, fmt.Errorf("copy session document for migration: %w", err)
+	}
+	inputCopy, err := cloneJSON(*input)
+	if err != nil {
+		return nil, fmt.Errorf("copy migrated session input: %w", err)
+	}
+	stateCopy, err := cloneJSON(*state)
+	if err != nil {
+		return nil, fmt.Errorf("copy migrated session state: %w", err)
+	}
+	document.Input = inputCopy
+	document.State = stateCopy
+	document.Plan = plan
+	document.UpdatedAt = now.UTC()
+	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := document.Validate(); err != nil {
+		return nil, err
+	}
+	return &document, nil
 }
 
 func validatePlanSteps(steps []PlanStep) error {

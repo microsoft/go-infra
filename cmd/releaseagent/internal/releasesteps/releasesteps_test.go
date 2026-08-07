@@ -15,6 +15,9 @@ import (
 
 var exampleInput = &Input{
 	Versions:                   []string{"1.22.10-1", "1.23.4-1"},
+	GoImagesReleaseMode:        GoImagesReleaseModeNormal,
+	GoImagesSourceBranch:       "refs/heads/microsoft/main",
+	GoImagesSourceVersion:      "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
 	Security:                   false,
 	RunnerGitHubUser:           "ghost",
 	ReleaseConfigVariableGroup: "go-release-variables",
@@ -44,12 +47,49 @@ func TestGoImagesPipelineParameters(t *testing.T) {
 	}
 }
 
+func TestGoImagesPipelineParametersForMode(t *testing.T) {
+	for _, test := range []struct {
+		mode          GoImagesReleaseMode
+		sourceBuildID string
+		wantSource    string
+		wantPrefix    string
+	}{
+		{mode: GoImagesReleaseModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{mode: GoImagesReleaseModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
+		{mode: GoImagesReleaseModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+	} {
+		t.Run(string(test.mode), func(t *testing.T) {
+			parameters, err := GoImagesPipelineParametersForMode(test.mode, test.sourceBuildID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parameters["sourceBuildPipelineRunId"] != test.wantSource || parameters["publishRepoPrefix"] != test.wantPrefix {
+				t.Fatalf("parameters = %#v", parameters)
+			}
+		})
+	}
+	if _, err := GoImagesPipelineParametersForMode(GoImagesReleaseModeNormal, "123"); err == nil {
+		t.Fatal("normal release accepted a source build")
+	}
+	if _, err := GoImagesPipelineParametersForMode(GoImagesReleaseModeRollback, "not-a-build"); err == nil {
+		t.Fatal("rollback accepted an invalid source build")
+	}
+}
+
 func TestRunFakeGoImagesPipeline(t *testing.T) {
 	input := *exampleInput
 	input.ReleaseIssue = 42
+	var mirrorVerified bool
 	var queued bool
 	var polled bool
 	sb := &ServiceBundleMock{
+		PollAzDOMirrorFunc: func(_ context.Context, target, commit string, _ *Secret) error {
+			mirrorVerified = true
+			if target != input.TargetAzDOGoImagesRepo || commit != input.GoImagesSourceVersion {
+				t.Fatalf("mirror target = %q at %q, want %q at %q", target, commit, input.TargetAzDOGoImagesRepo, input.GoImagesSourceVersion)
+			}
+			return nil
+		},
 		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
 			queued = true
 			if pipelineID != 1023 {
@@ -93,24 +133,56 @@ func TestRunFakeGoImagesPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) != 3 {
-		t.Fatalf("step count = %d, want 3", len(steps))
+	if len(steps) != 4 {
+		t.Fatalf("step count = %d, want 4", len(steps))
 	}
 	var runner coordinator.StepRunner
 	if err := runner.Execute(context.Background(), steps); err != nil {
 		t.Fatal(err)
 	}
-	if !queued || !polled {
-		t.Fatalf("queued = %v, polled = %v; want both true", queued, polled)
+	if !mirrorVerified || !queued || !polled {
+		t.Fatalf("mirror verified = %v, queued = %v, polled = %v; want all true", mirrorVerified, queued, polled)
 	}
 	if state.Day.GoImagesReleaseBuildID != "build-123" || !state.Day.GoImagesReleaseComplete {
 		t.Fatalf("unexpected final state: %#v", state.Day)
 	}
-	if len(checkpoints) != 2 {
-		t.Fatalf("checkpoint count = %d, want 2", len(checkpoints))
+	if len(checkpoints) != 3 {
+		t.Fatalf("checkpoint count = %d, want 3", len(checkpoints))
 	}
-	if checkpoints[0].Day.GoImagesReleaseBuildID != "build-123" || checkpoints[0].Day.GoImagesReleaseComplete {
-		t.Fatalf("unexpected queue checkpoint: %#v", checkpoints[0].Day)
+	if !checkpoints[0].Day.GoImagesReleaseQueueAttempted || checkpoints[0].Day.GoImagesReleaseBuildID != "" {
+		t.Fatalf("unexpected pre-queue checkpoint: %#v", checkpoints[0].Day)
+	}
+	if checkpoints[1].Day.GoImagesReleaseBuildID != "build-123" || checkpoints[1].Day.GoImagesReleaseComplete {
+		t.Fatalf("unexpected queue checkpoint: %#v", checkpoints[1].Day)
+	}
+}
+
+func TestGoImagesReleaseBlocksQueueUntilCommitIsMirrored(t *testing.T) {
+	input := *exampleInput
+	mirrorErr := errors.New("commit is not mirrored")
+	queued := false
+	sb := &ServiceBundleMock{
+		PollAzDOMirrorFunc: func(_ context.Context, target, commit string, _ *Secret) error {
+			return mirrorErr
+		},
+		TriggerBuildPipelineFunc: func(context.Context, int, map[string]string, map[string]string, *Secret) (string, error) {
+			queued = true
+			return "", nil
+		},
+		PollPipelineCompleteFunc: func(context.Context, string, *Secret) error {
+			return nil
+		},
+	}
+	steps, _, err := CreateGoImagesPipelineGraph(&input, exampleSecret, nil, sb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); !errors.Is(err, mirrorErr) {
+		t.Fatalf("error = %v, want %v", err, mirrorErr)
+	}
+	if queued {
+		t.Fatal("pipeline was queued before the source commit was mirrored")
 	}
 }
 
@@ -143,95 +215,6 @@ func TestGoImagesReleasePipelineResume(t *testing.T) {
 	}
 	if !state.Day.GoImagesReleaseComplete {
 		t.Fatal("restored pipeline was not marked complete")
-	}
-}
-
-func TestRunFakeGoImagesProductionDemo(t *testing.T) {
-	input := *exampleInput
-	state, err := initializeState(&input, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.Day.GoImagesReleaseImported = true
-	state.Day.GoImagesReleaseComplete = true
-	state.Day.GoImagesReleaseResult = "succeeded"
-	state.Day.GoImagesDemoSourceValidated = true
-	state.Day.GoImagesReleaseBuildID = "3019035"
-	state.Day.GoImagesSourceBranch = "refs/heads/microsoft/main"
-	state.Day.GoImagesCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
-	queued := 0
-	polled := 0
-	service := &ServiceBundleMock{
-		TriggerBuildPipelineFunc: func(_ context.Context, pipelineID int, parameters, optionalParameters map[string]string, _ *Secret) (string, error) {
-			queued++
-			if pipelineID != 1023 {
-				t.Fatalf("pipeline ID = %d, want 1023", pipelineID)
-			}
-			if parameters["publishRepoPrefix"] != "public/" || parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" {
-				t.Fatalf("parameters = %#v", parameters)
-			}
-			if len(optionalParameters) != 0 {
-				t.Fatalf("optional parameters = %#v", optionalParameters)
-			}
-			return "demo-321", nil
-		},
-		PollPipelineCompleteFunc: func(_ context.Context, buildID string, _ *Secret) error {
-			polled++
-			if buildID != "demo-321" {
-				t.Fatalf("build ID = %q", buildID)
-			}
-			return nil
-		},
-	}
-	checkpoints := 0
-	steps, finalState, err := CreateGoImagesProductionDemoGraphWithCheckpoint(
-		&input,
-		exampleSecret,
-		state,
-		1023,
-		service,
-		func(context.Context, *State) error { checkpoints++; return nil },
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runner coordinator.StepRunner
-	if err := runner.Execute(context.Background(), steps); err != nil {
-		t.Fatal(err)
-	}
-	if queued != 1 || polled != 1 || checkpoints != 3 {
-		t.Fatalf("queued = %d, polled = %d, checkpoints = %d", queued, polled, checkpoints)
-	}
-	if finalState.Day.GoImagesDemoBuildID != "demo-321" || !finalState.Day.GoImagesDemoComplete ||
-		finalState.Day.GoImagesDemoParameters["publishRepoPrefix"] != "public/" {
-
-		t.Fatalf("demo state = %#v", finalState.Day)
-	}
-
-	queued = 0
-	polled = 0
-	steps, _, err = CreateGoImagesProductionDemoGraphWithCheckpoint(&input, exampleSecret, finalState, 1023, service, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Execute(context.Background(), steps); err != nil {
-		t.Fatal(err)
-	}
-	if queued != 0 || polled != 0 {
-		t.Fatalf("completed demo was repeated: queued = %d, polled = %d", queued, polled)
-	}
-}
-
-func TestGoImagesProductionDemoRequiresImportedMainRun(t *testing.T) {
-	input := *exampleInput
-	state, err := initializeState(&input, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := CreateGoImagesProductionDemoGraphWithCheckpoint(
-		&input, exampleSecret, state, 1023, &ServiceBundleMock{}, nil,
-	); err == nil {
-		t.Fatal("demo graph accepted state without an imported completed run")
 	}
 }
 

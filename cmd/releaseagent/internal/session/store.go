@@ -55,7 +55,7 @@ func (s *FileStore) Path() string {
 	return s.path
 }
 
-// Load reads and validates the current session document.
+// Load reads and validates a current or explicitly migratable session document.
 func (s *FileStore) Load(ctx context.Context) (*Document, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (s *FileStore) Load(ctx context.Context) (*Document, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("session file must contain exactly one JSON value")
 	}
-	if err := document.Validate(); err != nil {
+	if err := document.ValidateLoadable(); err != nil {
 		return nil, fmt.Errorf("validate session file: %w", err)
 	}
 	return &document, nil

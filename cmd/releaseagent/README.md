@@ -1,119 +1,139 @@
 # Release UI prototype
 
-This command contains the release coordination prototype and the first local release UI iteration.
-The UI runs an HTTP server on the release runner's machine and opens it in their default browser.
+This command contains the release coordination prototype and the local release-management UI. The
+server runs on the release runner's machine and opens in their default browser.
 
 Subcommands:
 
-* `releaseagent serve` - Start the local release UI.
-* `releaseagent write-mermaid-diagram` - Writes a mermaid diagram showing the steps and dependencies of the release process.
+* `releaseagent serve` starts the local release UI.
+* `releaseagent write-mermaid-diagram` writes a Mermaid diagram of the broader release process.
 
-Run the UI from the repository root:
+The landing page is a release dashboard. It lists work tracked by the current durable session and a
+catalog of release processes. Go images is the only available process in this iteration; go-infra
+and the complete Microsoft Build of Go release process are represented as future additions rather than being
+mixed into the go-images workflow.
+
+With read-only Azure access enabled, **Track ongoing releases** discovers waiting and running
+pipeline `1023` builds and refreshes their status every 15 seconds. These live Azure entries are
+merged with the durable local session and link directly to their Azure run; tracking never queues or
+changes a run.
+
+## Go-images release modes
+
+See the canonical [Golang toolset images release instructions](https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images).
+
+The go-images page targets `microsoft-go-images (official)` pipeline definition `1023`, repository
+`microsoft-go-images`, and branch `refs/heads/microsoft/main`. It offers three explicit modes:
+
+* **Normal** resolves the current `microsoft/main` tip, builds fresh images, and publishes to
+  `public/`. The browser has no editable pipeline parameters.
+* **Rollback / republish** accepts one positive pipeline `1023` build ID. The server verifies that
+  the build succeeded, came from `microsoft/main`, and produced its own artifacts. It then uses that
+  ID as `sourceBuildPipelineRunId` and publishes to `public/`. The build ID is the only editable
+  pipeline input.
+* **Test** resolves the current `microsoft/main` tip, builds fresh images, and fixes
+  `publishRepoPrefix` to `dev/`. It still queues a real official build and may consume signing and
+  agent resources, but it does not publish under `public/`.
+
+The pipeline declares `publishRepoPrefix` as an unrestricted string whose official default is
+`public/`. The release execution layer independently allowlists exactly `public/` for normal and
+rollback and `dev/` for test; arbitrary prefixes never cross the browser/API boundary.
+
+All modes pin the exact current-main commit when the plan is created. Immediately before the first
+queue attempt, the server resolves main again and rejects a stale plan if the branch advanced. The
+first DAG step then polls the internal `microsoft-go-images` Azure Repos mirror for that exact SHA;
+the queue step cannot start until the commit is available. The pipeline definition, branch, YAML
+path, complete parameter contract, and mode-derived parameter set are validated server-side.
+Browser requests cannot provide a definition, branch, commit, mirror target, prefix, or arbitrary
+parameter map.
+
+Release versions are read from `src/microsoft/versions.json` at an exact commit and displayed only
+as audit metadata. There is no version input on the dashboard or go-images release page, and
+versions are not parameters of pipeline `1023`.
+
+## Running locally
+
+The default mode serves the dashboard but makes no Azure requests:
 
 ```console
 go run ./cmd/releaseagent serve
 ```
 
-The first integration is intentionally focused on the direct `microsoft-go-images (official)`
-pipeline (definition `1023`). It can:
-
-* Validate Microsoft release versions used to find matching source commits.
-* Display a three-step queue, monitor, and complete graph for pipeline `1023`.
-* Preview all three runtime defaults: fixed informational `_info`,
-	`sourceBuildPipelineRunId=$(Build.BuildId)`, and `publishRepoPrefix=public/`.
-* Run that focused graph as an in-memory simulation and stream status changes to the browser.
-* Optionally persist and restore the non-secret release plan using `-session-file <path>`.
-* Report local readiness, including whether `gh` and `az` executables are present, without running
-	them or checking authentication.
-
-By default it cannot contact GitHub, Azure DevOps, or any publishing service. Queueing remains
-hard-disabled unless the explicit production-demo flag is supplied.
-
-For example, this preserves the plan across process restarts:
-
-```console
-go run ./cmd/releaseagent serve -session-file "$HOME/.config/microsoft-go/release-session.json"
-```
-
-The session document is schema-versioned, structurally fingerprinted, written using an atomic file
-replacement, and protected from concurrent cooperative processes by a lease file. It contains no
-credentials. If the process terminates without cleaning up the lease, verify no release UI process
-is using the session and remove the adjacent `.lock` file manually.
-
-The focused graph checkpoints the pipeline build ID and successful completion immediately
-after they are recorded. A failed checkpoint stops subsequent work until the pending state can be
-saved.
-
-External execution remains hard-disabled in default and read-only modes. Default startup only
-discovers `gh` and `az` in `PATH`; it does not invoke either command. Explicit read-only mode
-invokes `az` only to authenticate Azure DevOps GET requests.
-
-## Pre-production testing
-
-The focused workflow has hermetic tests for:
-
-* Exact pipeline `1023` parameter generation.
-* Queue, monitor, checkpoint, and restart/resume behavior using mocks.
-* Azure CLI token command construction using a fake command runner.
-* Azure DevOps HTTP request serialization using a loopback `httptest` server.
-* Status/result normalization, authentication errors, cancellation, and token redaction.
-* Read-only candidate discovery, selected-build revalidation, import, and monitoring.
-
-The read-only Azure client and token provider are wired behind an explicit, default-off flag, exact
-definition/repository/YAML allowlists, live validation of all parameter names, types, defaults, and
-allowed values, and durable state. A separate queue client exists only in production-demo mode and
-can serialize only the hardcoded definition `1023`, `microsoft/main`, and `public/` payload.
-
-### Read-only pipeline 1023 discovery
-
-Authenticated read-only discovery and monitoring can be enabled for production definition `1023`:
+Live planning requires authenticated read-only Azure access and durable storage:
 
 ```console
 go run ./cmd/releaseagent serve \
-	-session-file "$HOME/.config/microsoft-go/release-session.json" \
-	-enable-go-images-azure-read-only
+  -session-file "$HOME/.config/microsoft-go/release-session.json" \
+  -enable-go-images-azure-read-only
 ```
 
-Pipeline `1023` does not accept release versions directly. Discovery lists recent runs, reads
-`src/microsoft/versions.json` at each run's exact `sourceVersion` from the internal
-`microsoft-go-images` repository, and keeps runs whose source contains every requested version.
-Selecting a candidate re-fetches and revalidates its definition, source commit, and versions before
-creating a local session. A running imported build can be monitored by ID using read-only GETs.
+Read-only mode can resolve current main, read the pipeline YAML and `versions.json` at that exact
+commit, and validate a rollback source build. It exposes no queue capability. The UI can still run
+the four-step workflow as an in-memory simulation.
 
-Normal and read-only startup deliberately expose no endpoint that can queue production pipeline
-`1023`. It builds, signs, and publishes images with `publishRepoPrefix=public/`, and it has no
-switch that disables all release effects. Real execution requires the separately enabled,
-confirmation-protected mode below.
-
-### Authorized production pipeline demo
-
-A separate explicit mode can queue `microsoft-go-images (official)` definition `1023`. This is a
-real production run: it builds images, performs production signing, consumes Azure agents, and
-publishes production images under `public/`. Use it only with explicit authorization. The queue
-client hardcodes definition `1023`, branch `refs/heads/microsoft/main`,
-`sourceBuildPipelineRunId=$(Build.BuildId)`, and `publishRepoPrefix=public/`.
+Explicitly authorized execution is enabled separately:
 
 ```console
 go run ./cmd/releaseagent serve \
-	-session-file "$HOME/.config/microsoft-go/release-session.json" \
-	-enable-go-images-azure-read-only \
-	-enable-go-images-production-demo
+  -session-file "$HOME/.config/microsoft-go/release-session.json" \
+  -enable-go-images-azure-read-only \
+  -enable-go-images-execution
 ```
 
-To enable the queue button, first search by version and explicitly import a **completed successful**
-pipeline `1023` run from `microsoft/main`. The imported build pins the exact source commit. The UI
-also reads the official pipeline YAML at that exact commit and requires its full contract to match
-the allowlisted `public/` payload. It then previews the fixed `1023` request and requires both a
-digest match and a dynamic phrase of the form
-`QUEUE PRODUCTION PIPELINE 1023 DEMO FROM 1023 BUILD <id>`. Correlation metadata prevents a
-restart immediately after queueing from creating a duplicate run. A durable pre-queue marker makes
-restart recovery wait and retry Azure run discovery for up to 30 seconds before issuing a new POST.
-Do not edit the session file: the source build, commit, execution digest, and confirmation phrase
-are derived from its application-owned state.
+Every new real run uses a two-step **Run** then **Confirm run** interaction. The second request must
+include explicit confirmation and the exact current plan digest, so a stale or changed plan is
+rejected. Normal and rollback runs can publish production images under `public/`. Test runs are
+fixed to `dev/`. Do not enable real execution without authorization.
 
-The server only binds to a loopback address. A random one-time launch token establishes an
-HTTP-only, same-site session cookie, and state-changing requests require a matching Origin header.
+The review page renders the coordinator DAG as a left-to-right dependency graph. Steps at the same
+dependency depth are grouped vertically and labeled as parallel work, so future release processes
+can expose fan-out and fan-in directly. During the pipeline wait step, the existing SSE stream also
+shows the active Azure stage/job/task paths, stage/job/task completion counts, and a stage progress
+bar. Lightweight build status is checked every five seconds; the much larger Azure timeline is
+refreshed every 30 seconds. Timeline detail is ephemeral UI state and is not written to the durable
+session file.
+
+## Durability and duplicate prevention
+
+The focused graph checkpoints queue intent **before** issuing the Azure POST, then checkpoints the
+returned build ID and successful completion. Correlation variables bind an Azure run to the local
+session, release mode, execution digest, source build, source commit, and version metadata. If the
+process restarts in the queue-response crash window, it reconciles recent runs before attempting
+another POST.
+
+When execution is enabled and startup restores an incomplete session that already has a build ID,
+monitoring resumes automatically and checkpoints the terminal result. The restored path wraps the
+execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new
+one.
+
+The session document is schema-versioned, structurally fingerprinted, atomically replaced, and
+protected from concurrent cooperative processes by an adjacent lease file. It contains no
+credentials. Schema version 6 intentionally rejects the earlier import-first production-demo
+sessions. Workflow revision 6 automatically migrates the exact revision-5 go-images plan only when
+it already contains a checkpointed build ID; the restored path can then monitor that run without
+queue authority. A revision-5 queue attempt with no build ID remains rejected because its queue
+status is uncertain. Start a new session file for any other earlier workflow.
+
+The current file store owns one durable release at a time. Dashboard responses already model
+ongoing and recent releases as lists so a future multi-session store can expand tracking without
+changing the browser API.
+
+If a process terminates without cleaning up its lease, verify no release UI process is using the
+session and remove the adjacent `.lock` file manually.
+
+## Security boundaries
+
+* The server binds only to a loopback address.
+* A random one-time launch token establishes an HTTP-only, same-site session cookie.
+* State-changing requests require a matching Origin header.
+* Azure CLI tokens are acquired on demand, cached only in memory, and never sent to the browser,
+  logged, or persisted.
+* The generic Azure pipeline client is read-only.
+* The dedicated queue client can only POST definition `1023` on `refs/heads/microsoft/main` with a
+  server-derived normal, rollback, or test parameter set.
+* The durable session stores non-secret input, state, structural and execution digests, and no
+  credentials.
 
 See [ADR 0020: Create UI for release management](https://github.com/microsoft/go-lab/blob/main/docs/adr/0020-microsoft-release-ui-for-go.md)
-for the accepted design. The earlier graph prototype came from
+for the accepted local-server design. The earlier graph prototype came from
 [ADR 0005: Use a release agent to coordinate releases](https://github.com/microsoft/go-lab/blob/main/docs/adr/0005-use-a-release-agent-to-coordinate-releases.md).

@@ -81,6 +81,90 @@ func TestGetFileAtBranch(t *testing.T) {
 	}
 }
 
+func TestVerifyCommit(t *testing.T) {
+	const commit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/internal/_apis/git/repositories/microsoft-go-images/commits/"+commit {
+			t.Fatalf("request = %s %s", request.Method, request.URL)
+		}
+		if request.URL.Query().Get("api-version") != "7.1" {
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		if request.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("authorization = %q", request.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(response).Encode(map[string]string{"commitId": strings.ToUpper(commit)})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", "microsoft-go-images", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.VerifyCommit(context.Background(), commit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetBranchTip(t *testing.T) {
+	const commit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/internal/_apis/git/repositories/microsoft-go-images/refs" {
+			t.Fatalf("request = %s %s", request.Method, request.URL)
+		}
+		if request.URL.Query().Get("filter") != "heads/microsoft/main" {
+			t.Fatalf("query = %v", request.URL.Query())
+		}
+		_ = json.NewEncoder(response).Encode(map[string]any{"value": []map[string]string{{
+			"name": "refs/heads/microsoft/main", "objectId": strings.ToUpper(commit),
+		}}})
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", "microsoft-go-images", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tip, err := client.GetBranchTip(context.Background(), "refs/heads/microsoft/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tip.Name != "refs/heads/microsoft/main" || tip.ObjectID != commit {
+		t.Fatalf("tip = %#v", tip)
+	}
+}
+
+func TestGetBranchTipRejectsUnexpectedResponse(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "missing", value: []any{}},
+		{name: "ambiguous", value: []map[string]string{
+			{"name": "refs/heads/microsoft/main", "objectId": "81ce9afc2b75ec4e153dd15fc3c7539b12024945"},
+			{"name": "refs/heads/microsoft/main-old", "objectId": "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"},
+		}},
+		{name: "wrong ref", value: []map[string]string{{
+			"name": "refs/heads/main", "objectId": "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+		}}},
+		{name: "malformed commit", value: []map[string]string{{
+			"name": "refs/heads/microsoft/main", "objectId": "not-a-commit",
+		}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(response).Encode(map[string]any{"value": test.value})
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, "internal", "microsoft-go-images", server.Client(), staticToken("test-token"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.GetBranchTip(context.Background(), "microsoft/main"); err == nil {
+				t.Fatal("unexpected branch response was accepted")
+			}
+		})
+	}
+}
+
 func TestGetJSONFileAtCommitRedactsToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusForbidden)

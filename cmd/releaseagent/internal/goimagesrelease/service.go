@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ type PipelineClient interface {
 	ListRecent(context.Context, int) ([]*azdopipeline.Build, error)
 }
 
-// VersionResolver returns the canonical Microsoft Go versions present in go-images at a commit.
+// VersionResolver returns the canonical Microsoft Build of Go versions present in go-images at a commit.
 type VersionResolver interface {
 	VersionsAtCommit(context.Context, string) ([]string, error)
 }
@@ -98,6 +99,74 @@ type Candidate struct {
 	SourceVersion string
 	VersionSet    string
 	Parameters    map[string]string
+}
+
+var sourceCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// ValidateRollbackSource verifies that buildID is a successful pipeline 1023 run which produced
+// its own artifacts. The returned versions are informational and are resolved from the build's
+// exact source commit; they are not pipeline parameters.
+func ValidateRollbackSource(
+	ctx context.Context,
+	client PipelineClient,
+	resolver VersionResolver,
+	definitionID,
+	buildID int,
+) (Candidate, error) {
+	if client == nil || resolver == nil {
+		return Candidate{}, errors.New("rollback pipeline client and version resolver are required")
+	}
+	if definitionID <= 0 || buildID <= 0 {
+		return Candidate{}, errors.New("rollback definition and build IDs must be positive")
+	}
+	build, err := client.Get(ctx, buildID)
+	if err != nil {
+		return Candidate{}, fmt.Errorf("get rollback source build %d: %w", buildID, err)
+	}
+	if build.DefinitionID != definitionID {
+		return Candidate{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, definitionID)
+	}
+	state, err := build.State()
+	if err != nil {
+		return Candidate{}, fmt.Errorf("interpret rollback source build %d: %w", buildID, err)
+	}
+	if state != azdopipeline.RunStateSucceeded || build.Result != "succeeded" {
+		return Candidate{}, fmt.Errorf("rollback source build %d must have result succeeded", buildID)
+	}
+	if build.SourceBranch != "refs/heads/microsoft/main" || !sourceCommitPattern.MatchString(build.SourceVersion) {
+		return Candidate{}, fmt.Errorf(
+			"rollback source build %d has unsupported source %s@%s",
+			buildID,
+			build.SourceBranch,
+			build.SourceVersion,
+		)
+	}
+	if source, ok := build.TemplateParameters["sourceBuildPipelineRunId"].(string); ok &&
+		source != "" && source != "$(Build.BuildId)" {
+
+		return Candidate{}, fmt.Errorf("rollback source build %d reused artifacts from build %q", buildID, source)
+	}
+	versions, err := resolver.VersionsAtCommit(ctx, build.SourceVersion)
+	if err != nil {
+		return Candidate{}, fmt.Errorf("resolve rollback source build %d versions: %w", buildID, err)
+	}
+	versionSet, err := CanonicalVersionSet(versions)
+	if err != nil {
+		return Candidate{}, fmt.Errorf("canonicalize rollback source build %d versions: %w", buildID, err)
+	}
+	return Candidate{
+		BuildID:       build.ID,
+		DefinitionID:  build.DefinitionID,
+		Status:        build.Status,
+		Result:        build.Result,
+		State:         state,
+		URL:           build.WebURL,
+		QueueTime:     build.QueueTime,
+		SourceBranch:  build.SourceBranch,
+		SourceVersion: build.SourceVersion,
+		VersionSet:    versionSet,
+		Parameters:    stringifyTemplateParameters(build.TemplateParameters),
+	}, nil
 }
 
 // FindCandidates finds recent direct go-images runs whose source commit contains every requested

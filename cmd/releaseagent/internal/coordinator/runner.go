@@ -33,13 +33,40 @@ var (
 
 // StepSnapshot is an immutable view of a step's state at a point in time.
 type StepSnapshot struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Status     StepStatus `json:"status"`
-	DependsOn  []string   `json:"dependsOn,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	ID         string        `json:"id"`
+	Name       string        `json:"name"`
+	Status     StepStatus    `json:"status"`
+	DependsOn  []string      `json:"dependsOn,omitempty"`
+	Progress   *StepProgress `json:"progress,omitempty"`
+	Error      string        `json:"error,omitempty"`
+	StartedAt  *time.Time    `json:"startedAt,omitempty"`
+	FinishedAt *time.Time    `json:"finishedAt,omitempty"`
+}
+
+// StepProgress is optional live detail reported by a running step. Summary and Detail are short
+// human-readable strings. Items contains active sub-operations, while Completed and Total can be
+// used to render a determinate progress indicator when Total is positive.
+type StepProgress struct {
+	Summary   string   `json:"summary,omitempty"`
+	Detail    string   `json:"detail,omitempty"`
+	Items     []string `json:"items,omitempty"`
+	Completed int      `json:"completed,omitempty"`
+	Total     int      `json:"total,omitempty"`
+}
+
+type progressReporterKey struct{}
+
+// ReportProgress publishes live detail for the step currently executing with ctx. It is a no-op
+// when ctx did not come from a StepRunner, allowing services to report progress without coupling
+// their behavior to whether a UI is attached.
+func ReportProgress(ctx context.Context, progress StepProgress) {
+	if ctx == nil {
+		return
+	}
+	reporter, ok := ctx.Value(progressReporterKey{}).(func(StepProgress))
+	if ok {
+		reporter(progress)
+	}
 }
 
 // Snapshot is an immutable view of an entire execution. Sequence increases on every change.
@@ -169,6 +196,10 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 			Status:    state.status,
 			DependsOn: make([]string, len(state.step.DependsOn)),
 		}
+		if state.progress != nil {
+			progress := cloneStepProgress(*state.progress)
+			stepSnapshot.Progress = &progress
+		}
 		for i, dependency := range state.step.DependsOn {
 			stepSnapshot.DependsOn[i] = dependency.ID
 		}
@@ -203,6 +234,36 @@ func (r *StepRunner) transition(state *stepState, status StepStatus, err error) 
 	r.mu.Unlock()
 }
 
+func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if state.status != StepStatusRunning || stepProgressEqual(state.progress, progress) {
+		return
+	}
+	cloned := cloneStepProgress(progress)
+	state.progress = &cloned
+	r.publishLocked()
+}
+
+func cloneStepProgress(progress StepProgress) StepProgress {
+	progress.Items = append([]string(nil), progress.Items...)
+	return progress
+}
+
+func stepProgressEqual(current *StepProgress, next StepProgress) bool {
+	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
+		current.Completed != next.Completed || current.Total != next.Total || len(current.Items) != len(next.Items) {
+
+		return false
+	}
+	for index := range current.Items {
+		if current.Items[index] != next.Items[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *StepRunner) publishLocked() {
 	r.sequence++
 	snapshot := r.snapshotLocked()
@@ -226,6 +287,7 @@ type stepState struct {
 
 	err        error
 	status     StepStatus
+	progress   *StepProgress
 	startedAt  time.Time
 	finishedAt time.Time
 	// complete is closed after err and status are updated.
@@ -260,6 +322,9 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 		return err
 	}
 	runner.transition(s, StepStatusRunning, nil)
+	ctx = context.WithValue(ctx, progressReporterKey{}, func(progress StepProgress) {
+		runner.reportProgress(s, progress)
+	})
 
 	if s.step.Timeout == NoTimeout {
 		return s.step.Func(ctx)

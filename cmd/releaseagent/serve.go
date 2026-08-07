@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesdemo"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
@@ -30,8 +31,8 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "serve",
-		Summary:     "Start the local go-images release pipeline planning UI",
-		Description: "\n\nThis iteration previews and simulates pipeline 1023. Optional Azure access is read-only.\n",
+		Summary:     "Start the local release management UI",
+		Description: "\n\nThe dashboard currently supports normal, rollback, and test go-images releases.\n",
 		Handle:      handleServe,
 	})
 }
@@ -41,16 +42,16 @@ func handleServe(parse subcmd.ParseFunc) error {
 	noOpen := flag.Bool("no-open", false, "Do not automatically open the UI in the default browser")
 	demoDelay := flag.Duration("demo-step-delay", 250*time.Millisecond, "Duration of each step in the safe simulation")
 	sessionFile := flag.String("session-file", "", "Optional JSON file used to persist and restore the non-secret release plan")
-	enableAzureReadOnly := flag.Bool("enable-go-images-azure-read-only", false, "Enable authenticated read-only discovery of pipeline 1023 runs")
-	enableProductionDemo := flag.Bool("enable-go-images-production-demo", false, "Enable confirmation-protected real execution of production pipeline 1023 with public/ publishing")
+	enableAzureReadOnly := flag.Bool("enable-go-images-azure-read-only", false, "Enable authenticated current-main resolution and rollback-build validation")
+	enableExecution := flag.Bool("enable-go-images-execution", false, "Enable two-step-confirmed normal, rollback, and test execution of pipeline 1023")
 	if err := parse(); err != nil {
 		return err
 	}
 	if *enableAzureReadOnly && *sessionFile == "" {
 		return errors.New("-enable-go-images-azure-read-only requires -session-file")
 	}
-	if *enableProductionDemo && !*enableAzureReadOnly {
-		return errors.New("-enable-go-images-production-demo requires -enable-go-images-azure-read-only")
+	if *enableExecution && !*enableAzureReadOnly {
+		return errors.New("-enable-go-images-execution requires -enable-go-images-azure-read-only")
 	}
 
 	var options []releaseui.Option
@@ -110,6 +111,28 @@ func handleServe(parse subcmd.ParseFunc) error {
 			sort.Strings(versions)
 			return versions, nil
 		})
+		resolveCurrentSource := func(ctx context.Context) (releaseui.GoImagesSource, error) {
+			tip, err := repoClient.GetBranchTip(ctx, "refs/heads/microsoft/main")
+			if err != nil {
+				return releaseui.GoImagesSource{}, err
+			}
+			pipelineYAML, err := repoClient.GetFileAtCommit(
+				ctx,
+				"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
+				tip.ObjectID,
+			)
+			if err != nil {
+				return releaseui.GoImagesSource{}, fmt.Errorf("read pipeline 1023 YAML at %s: %w", tip.ObjectID, err)
+			}
+			if err := goimagesrelease.ValidatePipelineParameterContract(pipelineYAML); err != nil {
+				return releaseui.GoImagesSource{}, fmt.Errorf("verify pipeline 1023 parameters at %s: %w", tip.ObjectID, err)
+			}
+			versions, err := versionResolver.VersionsAtCommit(ctx, tip.ObjectID)
+			if err != nil {
+				return releaseui.GoImagesSource{}, fmt.Errorf("read versions at %s: %w", tip.ObjectID, err)
+			}
+			return releaseui.GoImagesSource{Branch: tip.Name, Commit: tip.ObjectID, Versions: versions}, nil
+		}
 		options = append(options, releaseui.WithGoImagesReadOnlyIntegration(releaseui.GoImagesReadOnlyIntegration{
 			DefinitionID: 1023,
 			Preflight: func(ctx context.Context) (string, error) {
@@ -125,68 +148,47 @@ func handleServe(parse subcmd.ParseFunc) error {
 
 					return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
 				}
-				pipelineYAML, err := repoClient.GetFileAtBranch(
-					ctx,
-					"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
-					"refs/heads/microsoft/main",
-				)
-				if err != nil {
-					return "", fmt.Errorf("read pipeline 1023 YAML: %w", err)
-				}
-				if err := goimagesrelease.ValidatePipelineParameterContract(pipelineYAML); err != nil {
-					return "", fmt.Errorf("verify pipeline 1023 parameters: %w", err)
-				}
-				return "Authenticated and verified direct go-images pipeline 1023 and its runtime parameter contract. Access is read-only.", nil
+				return "Authenticated and verified direct go-images pipeline 1023. Source resolution and rollback validation are read-only.", nil
 			},
-			FindRuns: func(ctx context.Context, versions []string) ([]releaseui.PipelineRunCandidate, error) {
-				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1023,
-					Versions:        versions,
-					VersionResolver: versionResolver,
-				}, nil)
+			ResolveCurrentSource: resolveCurrentSource,
+			ValidateRollback: func(ctx context.Context, buildID int) (releaseui.GoImagesRollbackSource, error) {
+				candidate, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, 1023, buildID)
+				if err != nil {
+					return releaseui.GoImagesRollbackSource{}, err
+				}
+				var versions []string
+				if err := json.Unmarshal([]byte(candidate.VersionSet), &versions); err != nil {
+					return releaseui.GoImagesRollbackSource{}, fmt.Errorf("decode rollback version set: %w", err)
+				}
+				return releaseui.GoImagesRollbackSource{
+					BuildID: candidate.BuildID, URL: candidate.URL, SourceBranch: candidate.SourceBranch,
+					SourceVersion: candidate.SourceVersion, Versions: versions,
+				}, nil
+			},
+			ListOngoing: func(ctx context.Context) ([]releaseui.GoImagesOngoingRun, error) {
+				builds, err := azureClient.ListRecent(ctx, 1023)
 				if err != nil {
 					return nil, err
 				}
-				candidates, err := service.FindCandidates(ctx)
-				if err != nil {
-					return nil, err
-				}
-				result := make([]releaseui.PipelineRunCandidate, 0, len(candidates))
-				for _, candidate := range candidates {
-					result = append(result, convertRunCandidate(candidate))
+				result := make([]releaseui.GoImagesOngoingRun, 0)
+				for _, build := range builds {
+					state, err := build.State()
+					if err != nil {
+						return nil, fmt.Errorf("interpret pipeline 1023 build %d: %w", build.ID, err)
+					}
+					if state != azdopipeline.RunStateWaiting && state != azdopipeline.RunStateRunning {
+						continue
+					}
+					result = append(result, releaseui.GoImagesOngoingRun{
+						BuildID: build.ID, Mode: goImagesModeFromBuild(build), Status: string(state),
+						URL: build.WebURL, Queued: build.QueueTime,
+					})
 				}
 				return result, nil
 			},
-			ValidateRun: func(ctx context.Context, buildID int, versions []string) (releaseui.PipelineRunCandidate, error) {
-				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1023,
-					Versions:        versions,
-					VersionResolver: versionResolver,
-				}, nil)
-				if err != nil {
-					return releaseui.PipelineRunCandidate{}, err
-				}
-				candidate, err := service.ValidateCandidate(ctx, buildID)
-				if err != nil {
-					return releaseui.PipelineRunCandidate{}, err
-				}
-				return convertRunCandidate(candidate), nil
-			},
-			MonitorRun: func(ctx context.Context, buildID int, versions []string) error {
-				service, err := goimagesrelease.New(azureClient, goimagesrelease.Config{
-					DefinitionID:    1023,
-					Versions:        versions,
-					VersionResolver: versionResolver,
-					PollInterval:    5 * time.Second,
-				}, nil)
-				if err != nil {
-					return err
-				}
-				return service.MonitorRun(ctx, buildID)
-			},
 		}))
-		if *enableProductionDemo {
-			queueClient, err := goimagesdemo.NewHTTPQueueClient(
+		if *enableExecution {
+			queueClient, err := goimagesexecution.NewHTTPQueueClient(
 				"https://dev.azure.com/dnceng",
 				"internal",
 				azureHTTPClient,
@@ -195,22 +197,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 			if err != nil {
 				return err
 			}
-			validateProductionSource := func(ctx context.Context, commit string) error {
-				pipelineYAML, err := repoClient.GetFileAtCommit(
-					ctx,
-					"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
-					commit,
-				)
-				if err != nil {
-					return fmt.Errorf("read production pipeline YAML at %s: %w", commit, err)
-				}
-				return goimagesrelease.ValidatePipelineParameterContract(pipelineYAML)
-			}
-			options = append(options, releaseui.WithGoImagesProductionDemoIntegration(
-				releaseui.GoImagesProductionDemoIntegration{
-					DefinitionID: goimagesdemo.DefinitionID,
+			options = append(options, releaseui.WithGoImagesExecutionIntegration(
+				releaseui.GoImagesExecutionIntegration{
+					DefinitionID: goimagesexecution.DefinitionID,
 					Preflight: func(ctx context.Context) (string, error) {
-						definition, err := azureClient.GetDefinition(ctx, goimagesdemo.DefinitionID)
+						definition, err := azureClient.GetDefinition(ctx, goimagesexecution.DefinitionID)
 						if err != nil {
 							return "", err
 						}
@@ -220,30 +211,22 @@ func handleServe(parse subcmd.ParseFunc) error {
 							definition.Repository != "microsoft-go-images" ||
 							definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
 
-							return "", fmt.Errorf("pipeline 1023 does not match the production-demo allowlist: %#v", definition)
+							return "", fmt.Errorf("pipeline 1023 does not match the execution allowlist: %#v", definition)
 						}
-						pipelineYAML, err := repoClient.GetFileAtBranch(
-							ctx,
-							"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
-							"refs/heads/microsoft/main",
-						)
-						if err != nil {
-							return "", fmt.Errorf("read pipeline 1023 YAML: %w", err)
-						}
-						if err := goimagesrelease.ValidatePipelineParameterContract(pipelineYAML); err != nil {
-							return "", fmt.Errorf("verify pipeline 1023 production parameters: %w", err)
-						}
-						return "Verified production pipeline 1023. It performs a real build, production signing, and public/ publication.", nil
+						return "Verified pipeline 1023. Normal and rollback publish to public/; test publishes to dev/.", nil
 					},
-					ValidateSource: validateProductionSource,
-					NewService: func(request releaseui.GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error) {
-						return goimagesdemo.New(azureClient, queueClient, goimagesdemo.Config{
+					NewService: func(request releaseui.GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+						return goimagesexecution.New(azureClient, queueClient, goimagesexecution.Config{
+							Mode:                 request.Mode,
 							SessionID:            request.SessionID,
 							ExecutionDigest:      request.ExecutionDigest,
 							Versions:             request.Versions,
 							SourceBuildID:        request.SourceBuildID,
 							SourceVersion:        request.SourceVersion,
+							VerifyMirrorCommit:   repoClient.VerifyCommit,
+							MirrorPollInterval:   5 * time.Second,
 							PollInterval:         5 * time.Second,
+							TimelinePollInterval: 30 * time.Second,
 							PreviousQueueAttempt: request.PreviousQueueAttempt,
 							ReconcileAttempts:    6,
 							ReconcileInterval:    5 * time.Second,
@@ -289,12 +272,12 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 
 	fmt.Printf("Release UI listening at %s\n", launchURL)
-	if *enableProductionDemo {
-		fmt.Println("Real production pipeline 1023 demo is enabled with public/ publishing.")
+	if *enableExecution {
+		fmt.Println("Go-images pipeline 1023 execution is enabled for normal, rollback, and dev/ test releases.")
 	} else if *enableAzureReadOnly {
-		fmt.Println("Read-only discovery of pipeline 1023 is enabled. Queueing is not implemented.")
+		fmt.Println("Read-only source resolution and rollback validation are enabled. Queueing is disabled.")
 	} else {
-		fmt.Println("Go-images pipeline execution is disabled; this UI can only plan and simulate it.")
+		fmt.Println("Azure access is disabled; release plans requiring live source resolution are unavailable.")
 	}
 	if sessionPath != "" {
 		fmt.Printf("Durable session file: %s\n", sessionPath)
@@ -321,18 +304,24 @@ func handleServe(parse subcmd.ParseFunc) error {
 	return nil
 }
 
-func convertRunCandidate(candidate goimagesrelease.Candidate) releaseui.PipelineRunCandidate {
-	return releaseui.PipelineRunCandidate{
-		BuildID:       candidate.BuildID,
-		DefinitionID:  candidate.DefinitionID,
-		Status:        candidate.Status,
-		Result:        candidate.Result,
-		State:         string(candidate.State),
-		URL:           candidate.URL,
-		QueueTime:     candidate.QueueTime,
-		SourceBranch:  candidate.SourceBranch,
-		SourceVersion: candidate.SourceVersion,
-		VersionSet:    candidate.VersionSet,
-		Parameters:    candidate.Parameters,
+func goImagesModeFromBuild(build *azdopipeline.Build) releasesteps.GoImagesReleaseMode {
+	if build == nil {
+		return releasesteps.GoImagesReleaseModeNormal
 	}
+	switch mode := releasesteps.GoImagesReleaseMode(build.Parameters["ReleaseUIGoImagesMode"]); mode {
+	case releasesteps.GoImagesReleaseModeNormal,
+		releasesteps.GoImagesReleaseModeRollback,
+		releasesteps.GoImagesReleaseModeTest:
+
+		return mode
+	}
+	prefix, _ := build.TemplateParameters["publishRepoPrefix"].(string)
+	if prefix == "dev/" {
+		return releasesteps.GoImagesReleaseModeTest
+	}
+	sourceBuild, _ := build.TemplateParameters["sourceBuildPipelineRunId"].(string)
+	if sourceBuild != "" && sourceBuild != "$(Build.BuildId)" {
+		return releasesteps.GoImagesReleaseModeRollback
+	}
+	return releasesteps.GoImagesReleaseModeNormal
 }

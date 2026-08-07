@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,11 +19,35 @@ import (
 
 //go:generate moq -out ServiceBundle_moq_test.go . ServiceBundle
 
+// GoImagesReleaseMode identifies one explicitly allowlisted use of pipeline 1023.
+type GoImagesReleaseMode string
+
+const (
+	// GoImagesInternalMirrorTarget is the only Azure Repos mirror accepted by the focused flow.
+	GoImagesInternalMirrorTarget = "dnceng/internal/_git/microsoft-go-images"
+	// GoImagesReleaseModeNormal builds current microsoft/main and publishes to public/.
+	GoImagesReleaseModeNormal GoImagesReleaseMode = "normal"
+	// GoImagesReleaseModeRollback republishes artifacts from one prior successful build to public/.
+	GoImagesReleaseModeRollback GoImagesReleaseMode = "rollback"
+	// GoImagesReleaseModeTest builds current microsoft/main and publishes under dev/.
+	GoImagesReleaseModeTest GoImagesReleaseMode = "test"
+)
+
+var goImagesCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // Input is the collection of inputs for a given release that don't change. They are provided once
 // by the release runner and stay the same upon retry.
 type Input struct {
 	// Versions is a list of versions to release.
 	Versions []string
+
+	// GoImagesReleaseMode and source fields bind a focused go-images plan to one allowlisted
+	// operation and the exact microsoft/main commit resolved by the server. SourceBuildID is set
+	// only for rollback and identifies the prior pipeline 1023 artifacts to republish.
+	GoImagesReleaseMode   GoImagesReleaseMode
+	GoImagesSourceBranch  string
+	GoImagesSourceVersion string
+	GoImagesSourceBuildID string
 
 	// Security is true if any of the versions contains security fixes.
 	Security bool
@@ -97,20 +123,17 @@ type DayState struct {
 	// ReleaseIssue is the ID of the release issue to supply with updates.
 	ReleaseIssue int
 
-	GoImagesCommit                    string
-	GoImagesSourceBranch              string
-	GoImagesOfficialBuildID           string
-	GoImagesReleaseBuildID            string
-	GoImagesReleaseResult             string
-	GoImagesReleaseComplete           bool
-	GoImagesReleaseImported           bool
-	GoImagesReleaseParameters         map[string]string
-	GoImagesDemoBuildID               string
-	GoImagesDemoSourceValidated       bool
-	GoImagesDemoSourceValidationError string
-	GoImagesDemoQueueAttempted        bool
-	GoImagesDemoComplete              bool
-	GoImagesDemoParameters            map[string]string
+	GoImagesCommit                string
+	GoImagesSourceBranch          string
+	GoImagesOfficialBuildID       string
+	GoImagesReleaseBuildID        string
+	GoImagesReleaseResult         string
+	GoImagesReleaseComplete       bool
+	GoImagesReleaseImported       bool
+	GoImagesReleaseMode           GoImagesReleaseMode
+	GoImagesSourceBuildID         string
+	GoImagesReleaseQueueAttempted bool
+	GoImagesReleaseParameters     map[string]string
 
 	AnnouncementWritten bool
 	MARVersionChecked   bool
@@ -163,6 +186,7 @@ type ServiceBundle interface {
 // GoImagesReleaseService is the intentionally narrow external surface required by the first UI
 // integration. Implementing it cannot accidentally enable unrelated GitHub or publishing steps.
 type GoImagesReleaseService interface {
+	PollAzDOMirror(ctx context.Context, target, commit string, secret *Secret) error
 	TriggerBuildPipeline(ctx context.Context, pipelineID int, parameters, optionalParameters map[string]string, secret *Secret) (string, error)
 	PollPipelineComplete(ctx context.Context, buildID string, secret *Secret) error
 }
@@ -244,27 +268,45 @@ const (
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
 )
 
-// GoImagesPipelineParameters returns the runtime parameters accepted by the direct
-// microsoft-go-images pipeline. The _info parameter is fixed and informational. The operational
-// production defaults build from the new run's own artifacts and publish to public/. The release
-// UI does not currently queue this pipeline.
+// GoImagesPipelineParameters returns the fixed runtime parameters for a normal release. It is kept
+// as a convenience for the broader release graph, whose go-images operation is a normal release.
 func GoImagesPipelineParameters() map[string]string {
-	return map[string]string{
-		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
-		"sourceBuildPipelineRunId": "$(Build.BuildId)",
-		"publishRepoPrefix":        "public/",
+	parameters, err := GoImagesPipelineParametersForMode(GoImagesReleaseModeNormal, "")
+	if err != nil {
+		panic(err)
 	}
+	return parameters
 }
 
-// GoImagesProductionDemoPipelineParameters returns the only parameter set the release UI may send
-// to the authorized real demo pipeline. It builds, signs, and publishes production images under
-// public/ using the official pipeline definition.
-func GoImagesProductionDemoPipelineParameters() map[string]string {
-	return map[string]string{
+// GoImagesPipelineParametersForMode derives the entire pipeline parameter set from an allowlisted
+// mode. Browser input can select a mode and, for rollback only, a positive source build ID; it can
+// never supply a branch, prefix, or arbitrary parameter map.
+func GoImagesPipelineParametersForMode(mode GoImagesReleaseMode, sourceBuildID string) (map[string]string, error) {
+	parameters := map[string]string{
 		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
 		"sourceBuildPipelineRunId": "$(Build.BuildId)",
 		"publishRepoPrefix":        "public/",
 	}
+	switch mode {
+	case GoImagesReleaseModeNormal:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("normal go-images release must not specify source build %q", sourceBuildID)
+		}
+	case GoImagesReleaseModeRollback:
+		buildID, err := strconv.Atoi(sourceBuildID)
+		if err != nil || buildID <= 0 {
+			return nil, fmt.Errorf("rollback source build ID %q must be a positive integer", sourceBuildID)
+		}
+		parameters["sourceBuildPipelineRunId"] = sourceBuildID
+	case GoImagesReleaseModeTest:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("test go-images release must not specify source build %q", sourceBuildID)
+		}
+		parameters["publishRepoPrefix"] = "dev/"
+	default:
+		return nil, fmt.Errorf("unsupported go-images release mode %q", mode)
+	}
+	return parameters, nil
 }
 
 // CreateGoImagesPipelineGraph creates the initial focused workflow that queues and monitors
@@ -290,7 +332,19 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	if ri == nil || ri.MicrosoftGoImagesPipeline == 0 {
 		return nil, nil, fmt.Errorf("no go-images pipeline specified")
 	}
-	var err error
+	if ri.GoImagesSourceBranch != "refs/heads/microsoft/main" {
+		return nil, nil, fmt.Errorf("go-images source branch %q is not allowlisted", ri.GoImagesSourceBranch)
+	}
+	if ri.TargetAzDOGoImagesRepo != GoImagesInternalMirrorTarget {
+		return nil, nil, fmt.Errorf("go-images mirror target %q is not allowlisted", ri.TargetAzDOGoImagesRepo)
+	}
+	if !goImagesCommitPattern.MatchString(ri.GoImagesSourceVersion) {
+		return nil, nil, fmt.Errorf("invalid go-images source commit %q", ri.GoImagesSourceVersion)
+	}
+	parameters, err := GoImagesPipelineParametersForMode(ri.GoImagesReleaseMode, ri.GoImagesSourceBuildID)
+	if err != nil {
+		return nil, nil, err
+	}
 	rs, err = initializeState(ri, rs)
 	if err != nil {
 		return nil, nil, err
@@ -298,16 +352,40 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	if rs.Day.ReleaseIssue == 0 {
 		rs.Day.ReleaseIssue = ri.ReleaseIssue
 	}
+	rs.Day.GoImagesReleaseMode = ri.GoImagesReleaseMode
+	rs.Day.GoImagesSourceBranch = ri.GoImagesSourceBranch
+	rs.Day.GoImagesCommit = ri.GoImagesSourceVersion
+	rs.Day.GoImagesSourceBuildID = ri.GoImagesSourceBuildID
+	if len(rs.Day.GoImagesReleaseParameters) == 0 {
+		rs.Day.GoImagesReleaseParameters = cloneStringMap(parameters)
+	}
 	state := &stateAccess{state: rs, checkpoint: checkpoint}
-	parameters := GoImagesPipelineParameters()
 
-	queue := coordinator.NewRootStep(
-		"go-images.pipeline.queue",
-		"🚀 Queue go-images pipeline",
+	verifyMirror := coordinator.NewRootStep(
+		"go-images.release.verify-internal-mirror",
+		"Verify go-images commit is mirrored internally",
+		internalMirrorTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
+				return nil
+			}
+			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, ri.GoImagesSourceVersion, secret)
+		},
+	)
+	queue := verifyMirror.Then(
+		"go-images.release.queue",
+		"🚀 Queue go-images release",
 		shortTimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
 				return nil
+			}
+			if !stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseQueueAttempted }) {
+				if err := state.update(ctx, func(s *State) {
+					s.Day.GoImagesReleaseQueueAttempted = true
+				}); err != nil {
+					return err
+				}
 			}
 			buildID, err := sb.TriggerBuildPipeline(
 				ctx,
@@ -322,13 +400,12 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 			return state.update(ctx, func(s *State) {
 				s.Day.GoImagesReleaseBuildID = buildID
 				s.Day.GoImagesReleaseImported = false
-				s.Day.GoImagesReleaseParameters = cloneStringMap(parameters)
 			})
 		},
 	)
 	wait := queue.Then(
-		"go-images.pipeline.wait",
-		"⌚ Wait for go-images pipeline",
+		"go-images.release.wait",
+		"⌚ Wait for go-images release",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
 			if stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseComplete }) {
@@ -340,96 +417,13 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 			}
 			return state.update(ctx, func(s *State) {
 				s.Day.GoImagesReleaseComplete = true
+				s.Day.GoImagesReleaseResult = "succeeded"
 			})
 		},
 	)
 	complete := coordinator.NewIndicatorStep(
-		"go-images.pipeline.complete",
-		"✅ Go-images pipeline complete",
-		wait,
-	)
-	steps, err := complete.TransitiveDependencies()
-	if err != nil {
-		return nil, nil, err
-	}
-	wrapStepsWithStateFlush(steps, state, checkpoint)
-	return steps, rs, nil
-}
-
-// CreateGoImagesProductionDemoGraphWithCheckpoint queues and monitors an allowlisted official
-// go-images build. The selected completed official run supplies the exact source commit. The
-// service implementation must independently enforce the pipeline, branch, commit, and parameters.
-func CreateGoImagesProductionDemoGraphWithCheckpoint(
-	ri *Input,
-	secret *Secret,
-	rs *State,
-	pipelineID int,
-	sb GoImagesReleaseService,
-	checkpoint StateCheckpoint,
-) ([]*coordinator.Step, *State, error) {
-	if ri == nil || pipelineID <= 0 {
-		return nil, nil, fmt.Errorf("no production go-images demo pipeline specified")
-	}
-	var err error
-	rs, err = initializeState(ri, rs)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !rs.Day.GoImagesReleaseImported || !rs.Day.GoImagesReleaseComplete || rs.Day.GoImagesReleaseResult != "succeeded" ||
-		!rs.Day.GoImagesDemoSourceValidated ||
-		rs.Day.GoImagesReleaseBuildID == "" || rs.Day.GoImagesCommit == "" ||
-		rs.Day.GoImagesSourceBranch != "refs/heads/microsoft/main" {
-
-		return nil, nil, fmt.Errorf("a pipeline 1023 run with result succeeded from microsoft/main must be imported first")
-	}
-	state := &stateAccess{state: rs, checkpoint: checkpoint}
-	parameters := GoImagesProductionDemoPipelineParameters()
-
-	queue := coordinator.NewRootStep(
-		"go-images.production-demo.queue",
-		"🚀 Queue production go-images demo",
-		shortTimeout,
-		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) string { return s.Day.GoImagesDemoBuildID }) != "" {
-				return nil
-			}
-			if !stateValue(state, func(s *State) bool { return s.Day.GoImagesDemoQueueAttempted }) {
-				if err := state.update(ctx, func(s *State) {
-					s.Day.GoImagesDemoQueueAttempted = true
-				}); err != nil {
-					return err
-				}
-			}
-			buildID, err := sb.TriggerBuildPipeline(ctx, pipelineID, parameters, nil, secret)
-			if err != nil {
-				return err
-			}
-			return state.update(ctx, func(s *State) {
-				s.Day.GoImagesDemoBuildID = buildID
-				s.Day.GoImagesDemoParameters = cloneStringMap(parameters)
-			})
-		},
-	)
-	wait := queue.Then(
-		"go-images.production-demo.wait",
-		"⌚ Wait for production go-images demo",
-		microsoftGoImagesOfficialCITimeout,
-		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) bool { return s.Day.GoImagesDemoComplete }) {
-				return nil
-			}
-			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesDemoBuildID })
-			if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
-				return err
-			}
-			return state.update(ctx, func(s *State) {
-				s.Day.GoImagesDemoComplete = true
-			})
-		},
-	)
-	complete := coordinator.NewIndicatorStep(
-		"go-images.production-demo.complete",
-		"✅ Production go-images demo complete",
+		"go-images.release.complete",
+		"✅ Go-images release complete",
 		wait,
 	)
 	steps, err := complete.TransitiveDependencies()
@@ -494,7 +488,7 @@ func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, chec
 	}
 }
 
-// CreateStepGraph creates the steps for a release of one or more versions of Microsoft build of Go. The
+// CreateStepGraph creates the steps for a release of one or more versions of Microsoft Build of Go. The
 // returned step graph is not running.
 //
 // If rs is nil, creates a new empty state that indicates no release work has been done yet.

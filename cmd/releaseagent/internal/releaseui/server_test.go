@@ -6,12 +6,16 @@ package releaseui
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
+	"hash/crc32"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +25,8 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
+
+const testSourceCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 
 type testUI struct {
 	server *Server
@@ -52,12 +58,11 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("launch status = %d, want %d", response.StatusCode, http.StatusOK)
+		t.Fatalf("launch status = %d", response.StatusCode)
 	}
-	if csp := response.Header.Get("Content-Security-Policy"); csp == "" {
+	if response.Header.Get("Content-Security-Policy") == "" {
 		t.Fatal("launch response has no Content-Security-Policy")
 	}
-
 	t.Cleanup(func() {
 		cancel()
 		httpServer.Close()
@@ -65,56 +70,93 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	return &testUI{server: server, http: httpServer, client: client}
 }
 
-func TestPersistAndRestorePlan(t *testing.T) {
+func testReadOnly(source *GoImagesSource, rollbackCalls *int) GoImagesReadOnlyIntegration {
+	return GoImagesReadOnlyIntegration{
+		DefinitionID: goImagesPipelineID,
+		Preflight:    func(context.Context) (string, error) { return "verified", nil },
+		ResolveCurrentSource: func(context.Context) (GoImagesSource, error) {
+			return *source, nil
+		},
+		ValidateRollback: func(_ context.Context, buildID int) (GoImagesRollbackSource, error) {
+			if rollbackCalls != nil {
+				*rollbackCalls++
+			}
+			if buildID != 3019035 {
+				return GoImagesRollbackSource{}, errors.New("unexpected build")
+			}
+			return GoImagesRollbackSource{
+				BuildID: buildID, URL: "https://example/build/3019035", SourceBranch: goImagesSourceBranch,
+				SourceVersion: testSourceCommit, Versions: []string{"1.25.12-1", "1.26.5-2"},
+			}, nil
+		},
+		ListOngoing: func(context.Context) ([]GoImagesOngoingRun, error) { return nil, nil },
+	}
+}
+
+func TestDashboardShowsProcessCatalog(t *testing.T) {
+	ui := newTestUI(t)
+	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboard dashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if response.StatusCode != http.StatusOK || len(dashboard.Processes) != 3 {
+		t.Fatalf("dashboard = %#v", dashboard)
+	}
+	if !dashboard.Processes[0].Available || dashboard.Processes[0].ID != goImagesProcessID || dashboard.Processes[1].Available {
+		t.Fatalf("processes = %#v", dashboard.Processes)
+	}
+	if len(dashboard.Ongoing) != 0 {
+		t.Fatalf("ongoing = %#v", dashboard.Ongoing)
+	}
+	response, err = ui.client.Get(ui.http.URL + "/go-images")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("go-images page status = %d", response.StatusCode)
+	}
+}
+
+func TestTrackOngoingReleases(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := newTestUI(t, WithSessionStore(store))
-	created := createTestPlan(t, first)
-	if created.SessionID == "" || created.Restored {
-		t.Fatalf("unexpected created plan metadata: %#v", created)
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	readOnly := testReadOnly(&source, nil)
+	queued := time.Date(2026, 8, 6, 12, 30, 0, 0, time.UTC)
+	readOnly.ListOngoing = func(context.Context) ([]GoImagesOngoingRun, error) {
+		return []GoImagesOngoingRun{{
+			BuildID: 3035000, Mode: releasesteps.GoImagesReleaseModeTest,
+			Status: "running", URL: "https://example/build/3035000", Queued: queued,
+		}}, nil
 	}
-	persisted, err := store.Load(context.Background())
+	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(readOnly))
+	response, err := ui.client.Get(ui.http.URL + "/api/releases/ongoing")
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := persisted.State
-	state.Day.ReleaseIssue = 42
-	if err := first.server.checkpointReleaseState(context.Background(), &state); err != nil {
-		t.Fatal(err)
+	var result struct {
+		Releases []releaseSummary `json:"releases"`
 	}
+	decodeResponse(t, response, &result)
+	if response.StatusCode != http.StatusOK || len(result.Releases) != 1 ||
+		result.Releases[0].BuildID != "3035000" || result.Releases[0].Mode != releasesteps.GoImagesReleaseModeTest ||
+		result.Releases[0].Href != "https://example/build/3035000" {
 
-	second := newTestUI(t, WithSessionStore(store))
-	response, err := second.client.Get(second.http.URL + "/api/plan")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var restored planResponse
-	decodeResponse(t, response, &restored)
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("restored plan status = %d, want %d", response.StatusCode, http.StatusOK)
-	}
-	if !restored.Restored || restored.SessionID != created.SessionID {
-		t.Fatalf("restored plan metadata = %#v, created = %#v", restored, created)
-	}
-	if len(restored.Steps) != len(created.Steps) {
-		t.Fatalf("restored step count = %d, want %d", len(restored.Steps), len(created.Steps))
-	}
-	second.server.mu.Lock()
-	restoredReleaseIssue := second.server.releaseState.Day.ReleaseIssue
-	second.server.mu.Unlock()
-	if restoredReleaseIssue != 42 {
-		t.Fatalf("restored release issue = %d, want 42", restoredReleaseIssue)
+		t.Fatalf("ongoing releases = %#v", result.Releases)
 	}
 }
 
-func TestPreflightIsLocalAndExternalExecutionDisabled(t *testing.T) {
+func TestPreflightIsLocalAndExecutionDisabled(t *testing.T) {
 	var lookedUp []string
 	ui := newTestUI(t, WithExecutableLookup(func(name string) (string, error) {
 		lookedUp = append(lookedUp, name)
-		if name == "gh" {
-			return "/test/bin/gh", nil
+		if name == "az" {
+			return "/test/bin/az", nil
 		}
 		return "", errors.New("not found")
 	}))
@@ -124,302 +166,321 @@ func TestPreflightIsLocalAndExternalExecutionDisabled(t *testing.T) {
 	}
 	var report PreflightReport
 	decodeResponse(t, response, &report)
-	if report.ExternalExecutionEnabled {
-		t.Fatal("external execution unexpectedly enabled")
-	}
-	if strings.Join(lookedUp, ",") != "gh,az" {
-		t.Fatalf("looked up executables %q, want gh,az", lookedUp)
-	}
-	statusByID := make(map[string]CheckStatus)
-	for _, check := range report.Checks {
-		statusByID[check.ID] = check.Status
-	}
-	if statusByID["github-cli"] != CheckStatusPassed || statusByID["azure-cli"] != CheckStatusWarning || statusByID["external-execution"] != CheckStatusUnavailable {
-		t.Fatalf("unexpected preflight statuses: %#v", statusByID)
+	if report.ExternalExecutionEnabled || report.GoImagesExecutionEnabled || strings.Join(lookedUp, ",") != "gh,az" {
+		t.Fatalf("report = %#v, looked up = %v", report, lookedUp)
 	}
 }
 
-func TestProductionDemoOptionRequiresSafetyBoundaries(t *testing.T) {
+func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	demo := GoImagesProductionDemoIntegration{
-		DefinitionID:   goImagesProductionDemoID,
-		Preflight:      func(context.Context) (string, error) { return "ok", nil },
-		ValidateSource: func(context.Context, string) error { return nil },
-		NewService: func(GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error) {
-			return &fakeProductionDemoService{}, nil
+	execution := GoImagesExecutionIntegration{
+		DefinitionID: goImagesPipelineID,
+		Preflight:    func(context.Context) (string, error) { return "ok", nil },
+		NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+			return &fakeExecutionService{}, nil
 		},
 	}
-	if _, err := New(context.Background(), WithSessionStore(store), WithGoImagesProductionDemoIntegration(demo)); err == nil {
-		t.Fatal("production demo was enabled without read-only source selection")
+	if _, err := New(context.Background(), WithSessionStore(store), WithGoImagesExecutionIntegration(execution)); err == nil {
+		t.Fatal("execution was enabled without read-only validation")
 	}
 }
 
-func TestReadOnlyIntegrationDoesNotExposeQueueEndpoint(t *testing.T) {
+func TestPrepareReleaseModes(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		body         string
+		wantMode     releasesteps.GoImagesReleaseMode
+		wantSource   string
+		wantPrefix   string
+		wantRollback bool
+	}{
+		{name: "normal", body: `{"mode":"normal"}`, wantMode: releasesteps.GoImagesReleaseModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{name: "rollback", body: `{"mode":"rollback","sourceBuildId":"3019035"}`, wantMode: releasesteps.GoImagesReleaseModeRollback, wantSource: "3019035", wantPrefix: "public/", wantRollback: true},
+		{name: "test", body: `{"mode":"test"}`, wantMode: releasesteps.GoImagesReleaseModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := GoImagesSource{
+				Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2", "1.25.12-1"},
+			}
+			rollbackCalls := 0
+			ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, &rollbackCalls)))
+			response := postJSON(t, ui, "/api/plan", test.body)
+			var plan planResponse
+			decodeResponse(t, response, &plan)
+			if response.StatusCode != http.StatusOK || plan.Input.Mode != test.wantMode || len(plan.Steps) != 4 {
+				t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
+			}
+			if !plan.Pipeline.Locked || plan.Pipeline.Parameters["sourceBuildPipelineRunId"] != test.wantSource ||
+				plan.Pipeline.Parameters["publishRepoPrefix"] != test.wantPrefix {
+
+				t.Fatalf("pipeline = %#v", plan.Pipeline)
+			}
+			if (plan.RollbackSource != nil) != test.wantRollback || rollbackCalls != boolInt(test.wantRollback) {
+				t.Fatalf("rollback = %#v, calls = %d", plan.RollbackSource, rollbackCalls)
+			}
+			persisted, err := store.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Input.GoImagesReleaseMode != test.wantMode || persisted.Input.GoImagesSourceVersion != testSourceCommit {
+				t.Fatalf("persisted input = %#v", persisted.Input)
+			}
+		})
+	}
+}
+
+func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ui := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "verified", nil },
-			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
-			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
-				return PipelineRunCandidate{}, errors.New("not configured")
-			},
-			MonitorRun: func(context.Context, int, []string) error { return nil },
-		}),
-	)
-	response, err := ui.client.Get(ui.http.URL + "/api/preflight")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var report PreflightReport
-	decodeResponse(t, response, &report)
-	if !report.AzureReadOnlyEnabled || report.ExternalExecutionEnabled {
-		t.Fatalf("preflight report = %#v", report)
-	}
-	response = postJSON(t, ui, "/api/go-images/smoke/start", `{}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("removed queue endpoint status = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
-	}
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", `{}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("disabled production demo status = %d, want %d", response.StatusCode, http.StatusForbidden)
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	for _, body := range []string{
+		`{"mode":"normal","sourceBuildId":"123"}`,
+		`{"mode":"rollback","sourceBuildId":"not-a-build"}`,
+		`{"mode":"test","publishRepoPrefix":"public/"}`,
+		`{"mode":"unknown"}`,
+	} {
+		response := postJSON(t, ui, "/api/plan", body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d", body, response.StatusCode)
+		}
 	}
 }
 
-func TestFindAndImportExistingRun(t *testing.T) {
+func TestPersistAndRestoreModePlan(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := PipelineRunCandidate{
-		BuildID:       777,
-		DefinitionID:  goImagesPipelineID,
-		Status:        "inProgress",
-		State:         "running",
-		URL:           "https://example/build/777",
-		QueueTime:     time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
-		SourceBranch:  "refs/heads/microsoft/main",
-		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
-		VersionSet:    `["1.25.6-1","1.26.1-1"]`,
-		Parameters: map[string]string{
-			"sourceBuildPipelineRunId": "$(Build.BuildId)",
-			"publishRepoPrefix":        "public/",
-		},
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	created := createTestPlan(t, first, `{"mode":"test"}`)
+	if created.SessionID == "" || created.Restored {
+		t.Fatalf("created = %#v", created)
 	}
-	validated := false
-	monitored := false
-	ui := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight: func(context.Context) (string, error) {
-				return "fake preflight passed", nil
-			},
-			FindRuns: func(_ context.Context, versions []string) ([]PipelineRunCandidate, error) {
-				if strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
-					t.Fatalf("versions = %#v", versions)
-				}
-				return []PipelineRunCandidate{candidate}, nil
-			},
-			ValidateRun: func(_ context.Context, buildID int, versions []string) (PipelineRunCandidate, error) {
-				validated = true
-				if buildID != 777 || strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
-					t.Fatalf("build ID = %d, versions = %#v", buildID, versions)
-				}
-				return candidate, nil
-			},
-			MonitorRun: func(_ context.Context, buildID int, versions []string) error {
-				monitored = true
-				if buildID != 777 || strings.Join(versions, ",") != "1.25.6-1,1.26.1-1" {
-					t.Fatalf("monitor build ID = %d, versions = %#v", buildID, versions)
-				}
-				return nil
-			},
-		}),
-	)
-
-	response := postJSON(t, ui, "/api/go-images/runs/search", `{"versions":["1.26.1-1","1.25.6-1"]}`)
-	var search struct {
-		Versions   []string               `json:"versions"`
-		Candidates []PipelineRunCandidate `json:"candidates"`
-	}
-	decodeResponse(t, response, &search)
-	if response.StatusCode != http.StatusOK || len(search.Candidates) != 1 || search.Candidates[0].BuildID != 777 {
-		t.Fatalf("search status = %d, response = %#v", response.StatusCode, search)
-	}
-
-	response = postJSON(t, ui, "/api/go-images/runs/import", `{
-		"buildId":777,
-		"versions":["1.26.1-1","1.25.6-1"]
-	}`)
-	var imported planResponse
-	decodeResponse(t, response, &imported)
-	if response.StatusCode != http.StatusOK || !validated {
-		t.Fatalf("import status = %d, validated = %v", response.StatusCode, validated)
-	}
-	if imported.Run.BuildID != "777" || imported.Run.Complete || !imported.Run.Imported {
-		t.Fatalf("imported run = %#v", imported.Run)
-	}
-	if imported.Pipeline.Parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" ||
-		imported.Pipeline.Parameters["publishRepoPrefix"] != "public/" {
-
-		t.Fatalf("imported parameters = %#v", imported.Pipeline.Parameters)
-	}
-	response = postJSON(t, ui, "/api/go-images/runs/monitor", `{}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusAccepted {
-		t.Fatalf("monitor status = %d, want %d", response.StatusCode, http.StatusAccepted)
-	}
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for {
-		ui.server.mu.Lock()
-		complete := ui.server.document.State.Day.GoImagesReleaseComplete
-		active := ui.server.monitorRunning
-		ui.server.mu.Unlock()
-		if complete && !active {
-			break
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("timed out waiting for imported-run monitor")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if !monitored {
-		t.Fatal("imported run was not monitored")
-	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.State.Day.GoImagesReleaseBuildID != "777" ||
-		persisted.State.Day.GoImagesCommit != candidate.SourceVersion ||
-		persisted.State.Day.GoImagesSourceBranch != candidate.SourceBranch {
-
-		t.Fatalf("persisted go-images state = %#v", persisted.State.Day)
-	}
-	restoredUI := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
-			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) {
-				return candidate, nil
-			},
-			MonitorRun: func(context.Context, int, []string) error { return nil },
-		}),
-	)
-	response, err = restoredUI.client.Get(restoredUI.http.URL + "/api/plan")
+	second := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	response, err := second.client.Get(second.http.URL + "/api/plan")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var restored planResponse
 	decodeResponse(t, response, &restored)
-	if restored.Run.BuildID != "777" || !restored.Run.Imported || restored.Run.SourceVersion != candidate.SourceVersion {
-		t.Fatalf("restored imported run = %#v", restored.Run)
+	if !restored.Restored || restored.SessionID != created.SessionID || restored.Input.Mode != releasesteps.GoImagesReleaseModeTest {
+		t.Fatalf("restored = %#v", restored)
+	}
+	response, err = second.client.Get(second.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboard dashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if len(dashboard.Ongoing) != 1 || dashboard.Ongoing[0].Status != "ready" {
+		t.Fatalf("dashboard = %#v", dashboard)
 	}
 }
 
-func TestImportRejectsCandidateFromWrongDefinition(t *testing.T) {
+func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := PipelineRunCandidate{
-		BuildID:       777,
-		DefinitionID:  1492,
-		State:         "succeeded",
-		SourceBranch:  goImagesDemoSourceBranch,
-		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
-	}
-	ui := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
-			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
-			MonitorRun:   func(context.Context, int, []string) error { return nil },
-		}),
-	)
-	response := postJSON(t, ui, "/api/go-images/runs/import", `{
-		"buildId":777,
-		"versions":["1.26.5-2"]
-	}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusConflict {
-		t.Fatalf("wrong-definition import status = %d, want %d", response.StatusCode, http.StatusConflict)
-	}
-	if _, err := store.Load(context.Background()); !errors.Is(err, session.ErrNotFound) {
-		t.Fatalf("wrong-definition candidate unexpectedly persisted: %v", err)
-	}
-}
-
-func TestImportWithIncompatibleSourceCannotEnableDemo(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	createTestPlan(t, first, `{"mode":"test"}`)
+	document, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := PipelineRunCandidate{
-		BuildID:       777,
-		DefinitionID:  goImagesPipelineID,
-		Status:        "completed",
-		Result:        "succeeded",
-		State:         "succeeded",
-		SourceBranch:  goImagesDemoSourceBranch,
-		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+	state := document.State
+	state.Day.GoImagesReleaseQueueAttempted = true
+	state.Day.GoImagesReleaseBuildID = "888"
+	document, err = document.WithState(&state, time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	ui := newTestUI(t,
+	if err := store.Save(context.Background(), document); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	second := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
-			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
-			MonitorRun:   func(context.Context, int, []string) error { return nil },
-		}),
-		WithGoImagesProductionDemoIntegration(GoImagesProductionDemoIntegration{
-			DefinitionID: goImagesProductionDemoID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			ValidateSource: func(context.Context, string) error {
-				return errors.New("historical parameter contract mismatch")
-			},
-			NewService: func(GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error) {
-				t.Fatal("incompatible source created a demo service")
-				return nil, nil
+			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
+			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+				return service, nil
 			},
 		}),
 	)
-	response := postJSON(t, ui, "/api/go-images/runs/import", `{
-		"buildId":777,
-		"versions":["1.26.5-2"]
-	}`)
-	var imported planResponse
-	decodeResponse(t, response, &imported)
-	if response.StatusCode != http.StatusOK || imported.ProductionDemo.Eligible ||
-		!strings.Contains(imported.ProductionDemo.UnavailableReason, "historical parameter contract mismatch") {
-
-		t.Fatalf("incompatible source response = %#v", imported.ProductionDemo)
+	waitForRelease(t, second)
+	if service.mirrors != 0 || service.queued != 0 || service.polled != 1 {
+		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
+	}
+	persisted, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
+		t.Fatalf("persisted state = %#v", persisted.State.Day)
 	}
 }
 
-type fakeProductionDemoService struct {
-	queued int
-	polled int
+func TestRevision5QueuedReleaseMigratesAndResumesMonitoring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release-session.json")
+	store, err := session.NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	createTestPlan(t, first, `{"mode":"test"}`)
+	document, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalID := document.ID
+	writeRevision5Session(t, path, document, "888")
+
+	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	second := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
+			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+				return service, nil
+			},
+		}),
+	)
+	waitForRelease(t, second)
+	if service.mirrors != 0 || service.queued != 0 || service.polled != 1 {
+		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
+	}
+	persisted, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ID != originalID || persisted.Plan.WorkflowRevision != session.CurrentWorkflowRevision ||
+		persisted.Input.TargetAzDOGoImagesRepo != releasesteps.GoImagesInternalMirrorTarget ||
+		!persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
+
+		t.Fatalf("persisted migrated session = %#v", persisted)
+	}
 }
 
-func (s *fakeProductionDemoService) TriggerBuildPipeline(
+func TestRevision5ReleaseWithoutBuildIDFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "release-session.json")
+	store, err := session.NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	createTestPlan(t, first, `{"mode":"test"}`)
+	document, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRevision5Session(t, path, document, "")
+
+	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	_, err = New(
+		context.Background(),
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
+			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+				return service, nil
+			},
+		}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "queue status is uncertain") {
+		t.Fatalf("error = %v", err)
+	}
+	if service.mirrors != 0 || service.queued != 0 || service.polled != 0 {
+		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
+	}
+}
+
+func writeRevision5Session(t *testing.T, path string, document *session.Document, buildID string) {
+	t.Helper()
+	document.Input.TargetAzDOGoImagesRepo = ""
+	inputData, err := json.Marshal(document.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.State.InputChecksum = crc32.ChecksumIEEE(inputData)
+	document.State.Day.GoImagesReleaseQueueAttempted = true
+	document.State.Day.GoImagesReleaseBuildID = buildID
+	document.Plan = session.Plan{
+		WorkflowRevision: session.MigratableWorkflowRevision,
+		Digest:           legacyGoImagesWorkflowRevision5Digest,
+		Steps: []session.PlanStep{
+			{ID: "go-images.release.queue", TimeoutNanos: int64(10 * time.Minute)},
+			{ID: "go-images.release.wait", DependsOn: []string{"go-images.release.queue"}, TimeoutNanos: int64(2 * time.Hour)},
+			{ID: "go-images.release.complete", DependsOn: []string{"go-images.release.wait"}},
+		},
+	}
+	executionData, err := json.Marshal(struct {
+		Input            releasesteps.Input `json:"input"`
+		PlanDigest       string             `json:"planDigest"`
+		WorkflowRevision int                `json:"workflowRevision"`
+	}{
+		Input: document.Input, PlanDigest: document.Plan.Digest,
+		WorkflowRevision: document.Plan.WorkflowRevision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionDigest := sha256.Sum256(executionData)
+	document.ExecutionDigest = hex.EncodeToString(executionDigest[:])
+	legacyData, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, legacyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type fakeExecutionService struct {
+	mirrors     int
+	queued      int
+	polled      int
+	mode        releasesteps.GoImagesReleaseMode
+	sourceBuild string
+	mirrorErr   error
+}
+
+func (s *fakeExecutionService) PollAzDOMirror(
+	_ context.Context,
+	target,
+	commit string,
+	_ *releasesteps.Secret,
+) error {
+	s.mirrors++
+	if target != releasesteps.GoImagesInternalMirrorTarget || commit != testSourceCommit {
+		return errors.New("unexpected mirror source")
+	}
+	return s.mirrorErr
+}
+
+func (s *fakeExecutionService) TriggerBuildPipeline(
 	_ context.Context,
 	pipelineID int,
 	parameters,
@@ -427,231 +488,239 @@ func (s *fakeProductionDemoService) TriggerBuildPipeline(
 	_ *releasesteps.Secret,
 ) (string, error) {
 	s.queued++
-	if pipelineID != goImagesProductionDemoID || parameters["publishRepoPrefix"] != "public/" ||
-		parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" || len(optionalParameters) != 0 {
-
-		return "", errors.New("unsafe production demo request")
+	if pipelineID != goImagesPipelineID || len(optionalParameters) != 0 {
+		return "", errors.New("unsafe execution request")
+	}
+	want, err := releasesteps.GoImagesPipelineParametersForMode(s.mode, s.sourceBuild)
+	if err != nil {
+		return "", err
+	}
+	if !maps.Equal(parameters, want) {
+		return "", errors.New("parameters do not match selected mode")
 	}
 	return "888", nil
 }
 
-func (s *fakeProductionDemoService) PollPipelineComplete(
-	_ context.Context,
-	buildID string,
-	_ *releasesteps.Secret,
-) error {
+func (s *fakeExecutionService) PollPipelineComplete(_ context.Context, buildID string, _ *releasesteps.Secret) error {
 	s.polled++
 	if buildID != "888" {
-		return errors.New("unexpected production demo build ID")
+		return errors.New("unexpected build ID")
 	}
 	return nil
 }
 
-func TestRealProductionDemoRequiresExactImportedIntent(t *testing.T) {
+func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := PipelineRunCandidate{
-		BuildID:       3019035,
-		DefinitionID:  goImagesPipelineID,
-		Status:        "completed",
-		Result:        "succeeded",
-		State:         "succeeded",
-		SourceBranch:  goImagesDemoSourceBranch,
-		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
-		VersionSet:    `["1.26.5-2"]`,
-		Parameters: map[string]string{
-			"sourceBuildPipelineRunId": "$(Build.BuildId)",
-			"publishRepoPrefix":        "public/",
-		},
-	}
-	service := &fakeProductionDemoService{}
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeNormal}
 	ui := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "official verified", nil },
-			FindRuns: func(context.Context, []string) ([]PipelineRunCandidate, error) {
-				return []PipelineRunCandidate{candidate}, nil
-			},
-			ValidateRun: func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
-			MonitorRun:  func(context.Context, int, []string) error { return nil },
-		}),
-		WithGoImagesProductionDemoIntegration(GoImagesProductionDemoIntegration{
-			DefinitionID: goImagesProductionDemoID,
-			Preflight:    func(context.Context) (string, error) { return "production verified", nil },
-			ValidateSource: func(_ context.Context, commit string) error {
-				if commit != candidate.SourceVersion {
-					t.Fatalf("validated source commit = %q", commit)
-				}
-				return nil
-			},
-			NewService: func(request GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error) {
-				if request.SourceBuildID != "3019035" || request.SourceVersion != candidate.SourceVersion ||
-					strings.Join(request.Versions, ",") != "1.26.5-2" || len(request.ExecutionDigest) != 64 {
+			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
+			NewService: func(request GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+				if request.Mode != releasesteps.GoImagesReleaseModeNormal || request.SourceVersion != testSourceCommit ||
+					len(request.ExecutionDigest) != 64 || request.SourceBuildID != "" {
 
-					t.Fatalf("production demo request = %#v", request)
+					t.Fatalf("request = %#v", request)
 				}
 				return service, nil
 			},
 		}),
 	)
-
-	response, err := ui.client.Get(ui.http.URL + "/api/preflight")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var report PreflightReport
-	decodeResponse(t, response, &report)
-	if !report.ExternalExecutionEnabled || !report.ProductionDemoEnabled {
-		t.Fatalf("preflight = %#v", report)
+	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
+	if !plan.Execution.Eligible || len(plan.Execution.PlanDigest) != 64 {
+		t.Fatalf("execution = %#v", plan.Execution)
 	}
 
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", `{}`)
+	response := postJSON(t, ui, "/api/go-images/release/start", `{"planDigest":"wrong","confirmed":true}`)
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict || service.queued != 0 {
-		t.Fatalf("pre-import status = %d, queued = %d", response.StatusCode, service.queued)
+		t.Fatalf("wrong intent status = %d, queued = %d", response.StatusCode, service.queued)
 	}
-
-	response = postJSON(t, ui, "/api/go-images/runs/import", `{
-		"buildId":3019035,
-		"versions":["1.26.5-2"]
-	}`)
-	var imported planResponse
-	decodeResponse(t, response, &imported)
-	if response.StatusCode != http.StatusOK || !imported.ProductionDemo.Eligible ||
-		imported.ProductionDemo.DefinitionID != goImagesPipelineID ||
-		len(imported.ProductionDemo.PlanDigest) != 64 ||
-		imported.ProductionDemo.Parameters["publishRepoPrefix"] != "public/" ||
-		imported.ProductionDemo.Confirmation != "QUEUE PRODUCTION PIPELINE 1023 DEMO FROM 1023 BUILD 3019035" {
-
-		t.Fatalf("imported demo intent = %#v", imported.ProductionDemo)
-	}
-
-	wrongDigest, err := json.Marshal(productionDemoStartRequest{
-		PlanDigest:   strings.Repeat("0", 64),
-		Confirmation: imported.ProductionDemo.Confirmation,
-	})
+	body, err := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", string(wrongDigest))
-	response.Body.Close()
-	if response.StatusCode != http.StatusConflict || service.queued != 0 {
-		t.Fatalf("wrong-digest status = %d, queued = %d", response.StatusCode, service.queued)
-	}
-	wrongPhrase, err := json.Marshal(productionDemoStartRequest{
-		PlanDigest:   imported.ProductionDemo.PlanDigest,
-		Confirmation: "QUEUE SOMETHING ELSE",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", string(wrongPhrase))
+	response = postJSON(t, ui, "/api/go-images/release/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest || service.queued != 0 {
-		t.Fatalf("wrong-phrase status = %d, queued = %d", response.StatusCode, service.queued)
+		t.Fatalf("unconfirmed status = %d, queued = %d", response.StatusCode, service.queued)
 	}
-
-	startBody, err := json.Marshal(productionDemoStartRequest{
-		PlanDigest:   imported.ProductionDemo.PlanDigest,
-		Confirmation: imported.ProductionDemo.Confirmation,
-	})
+	body, err = json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", string(startBody))
+	response = postJSON(t, ui, "/api/go-images/release/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
-		t.Fatalf("start status = %d, want %d", response.StatusCode, http.StatusAccepted)
+		t.Fatalf("start status = %d", response.StatusCode)
 	}
-
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for {
-		ui.server.mu.Lock()
-		complete := ui.server.document.State.Day.GoImagesDemoComplete
-		active := ui.server.productionDemoRunning
-		ui.server.mu.Unlock()
-		if complete && !active {
-			break
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("timed out waiting for fake production demo")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	if service.queued != 1 || service.polled != 1 {
-		t.Fatalf("queued = %d, polled = %d", service.queued, service.polled)
+	waitForRelease(t, ui)
+	if service.mirrors != 1 || service.queued != 1 || service.polled != 1 {
+		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
 	}
 	persisted, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.State.Day.GoImagesDemoBuildID != "888" || !persisted.State.Day.GoImagesDemoComplete ||
-		persisted.State.Day.GoImagesDemoParameters["publishRepoPrefix"] != "public/" {
+	if !persisted.State.Day.GoImagesReleaseQueueAttempted || persisted.State.Day.GoImagesReleaseBuildID != "888" ||
+		!persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
 
-		t.Fatalf("persisted demo state = %#v", persisted.State.Day)
+		t.Fatalf("persisted state = %#v", persisted.State.Day)
 	}
-	restoredUI := newTestUI(t,
+	response, err = ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboard dashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if len(dashboard.Recent) != 1 || len(dashboard.Ongoing) != 0 {
+		t.Fatalf("dashboard = %#v", dashboard)
+	}
+}
+
+func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	service := &fakeExecutionService{
+		mode:      releasesteps.GoImagesReleaseModeNormal,
+		mirrorErr: errors.New("commit is not available in the internal mirror"),
+	}
+	ui := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(GoImagesReadOnlyIntegration{
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "official verified", nil },
-			FindRuns:     func(context.Context, []string) ([]PipelineRunCandidate, error) { return nil, nil },
-			ValidateRun:  func(context.Context, int, []string) (PipelineRunCandidate, error) { return candidate, nil },
-			MonitorRun:   func(context.Context, int, []string) error { return nil },
-		}),
-		WithGoImagesProductionDemoIntegration(GoImagesProductionDemoIntegration{
-			DefinitionID:   goImagesProductionDemoID,
-			Preflight:      func(context.Context) (string, error) { return "production verified", nil },
-			ValidateSource: func(context.Context, string) error { return nil },
-			NewService: func(GoImagesProductionDemoRequest) (releasesteps.GoImagesReleaseService, error) {
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
 				return service, nil
 			},
 		}),
 	)
-	response, err = restoredUI.client.Get(restoredUI.http.URL + "/api/plan")
+	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
+	body, _ := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
+	response := postJSON(t, ui, "/api/go-images/release/start", string(body))
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("start status = %d", response.StatusCode)
+	}
+	waitForReleaseStopped(t, ui)
+	if service.mirrors != 1 || service.queued != 0 || service.polled != 0 {
+		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
+	}
+}
+
+func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var restored planResponse
-	decodeResponse(t, response, &restored)
-	if !restored.Restored || restored.ProductionDemo.Run.BuildID != "888" ||
-		!restored.ProductionDemo.Run.Complete || !restored.ProductionDemo.Eligible {
-
-		t.Fatalf("restored production demo = %#v", restored.ProductionDemo)
-	}
-	response = postJSON(t, ui, "/api/go-images/production-demo/start", string(startBody))
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
+			DefinitionID: goImagesPipelineID,
+			Preflight:    func(context.Context) (string, error) { return "ok", nil },
+			NewService:   func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) { return service, nil },
+		}),
+	)
+	plan := createTestPlan(t, ui, `{"mode":"test"}`)
+	source.Commit = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
+	body, _ := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
+	response := postJSON(t, ui, "/api/go-images/release/start", string(body))
 	response.Body.Close()
-	if response.StatusCode != http.StatusConflict || service.queued != 1 {
-		t.Fatalf("repeat status = %d, queued = %d", response.StatusCode, service.queued)
+	if response.StatusCode != http.StatusConflict || service.queued != 0 {
+		t.Fatalf("status = %d, queued = %d", response.StatusCode, service.queued)
 	}
 }
 
-func TestRetainedPlanCannotPerformExternalOperations(t *testing.T) {
-	ui := newTestUI(t)
-	createTestPlan(t, ui)
-
-	ui.server.mu.Lock()
-	steps := append([]*coordinator.Step(nil), ui.server.steps...)
-	ui.server.mu.Unlock()
-	var runner coordinator.StepRunner
-	err := runner.Execute(context.Background(), steps)
-	if !errors.Is(err, ErrExternalExecutionDisabled) {
-		t.Fatalf("original graph execution error = %v, want ErrExternalExecutionDisabled", err)
+func TestCreatePlanAndRunSimulation(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
+	if plan.Execution.Enabled || len(plan.Steps) != 4 {
+		t.Fatalf("plan = %#v", plan)
+	}
+	response := postJSON(t, ui, "/api/demo/start", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("simulation status = %d", response.StatusCode)
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		response, err := ui.client.Get(ui.http.URL + "/api/state")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var snapshot coordinator.Snapshot
+		decodeResponse(t, response, &snapshot)
+		if !snapshot.Active && len(snapshot.Steps) != 0 {
+			for _, step := range snapshot.Steps {
+				if step.Status != coordinator.StepStatusSucceeded {
+					t.Fatalf("step = %#v", step)
+				}
+			}
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for simulation")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
-func TestImportedRunMonitorCannotQueue(t *testing.T) {
-	monitor := importedRunMonitor{
-		buildID: 777,
-		monitor: func(context.Context, int) error { return nil },
+func TestEventsSendInitialSnapshot(t *testing.T) {
+	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := monitor.TriggerBuildPipeline(context.Background(), goImagesPipelineID, nil, nil, nil); err == nil {
-		t.Fatal("imported-run monitor accepted a queue request")
+	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
+	createTestPlan(t, ui, `{"mode":"normal"}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+"/api/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := ui.client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	scanner := bufio.NewScanner(response.Body)
+	var sawEvent, sawData bool
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "event: state" {
+			sawEvent = true
+		}
+		if strings.HasPrefix(line, "data: ") {
+			sawData = true
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !sawEvent || !sawData {
+		t.Fatalf("event = %v, data = %v", sawEvent, sawData)
 	}
 }
 
@@ -664,16 +733,14 @@ func TestAuthenticationAndHostValidation(t *testing.T) {
 	}
 	httpServer := httptest.NewServer(server.Handler())
 	defer httpServer.Close()
-
 	response, err := http.Get(httpServer.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	response.Body.Close()
 	if response.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("unauthenticated status = %d, want %d", response.StatusCode, http.StatusUnauthorized)
+		t.Fatalf("unauthenticated status = %d", response.StatusCode)
 	}
-
 	request, err := http.NewRequest(http.MethodGet, httpServer.URL, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -685,137 +752,56 @@ func TestAuthenticationAndHostValidation(t *testing.T) {
 	}
 	response.Body.Close()
 	if response.StatusCode != http.StatusMisdirectedRequest {
-		t.Fatalf("non-loopback Host status = %d, want %d", response.StatusCode, http.StatusMisdirectedRequest)
+		t.Fatalf("non-loopback status = %d", response.StatusCode)
 	}
 }
 
-func TestCreatePlanAndRunDemo(t *testing.T) {
-	ui := newTestUI(t)
-	plan := createTestPlan(t, ui)
-	if !plan.DemoOnly {
-		t.Fatal("plan is not marked as demo-only")
-	}
-	if len(plan.Steps) != 3 {
-		t.Fatalf("plan has %d steps, want focused three-step go-images graph", len(plan.Steps))
-	}
-	if plan.Pipeline.DefinitionID != goImagesPipelineID {
-		t.Fatalf("pipeline ID = %d, want %d", plan.Pipeline.DefinitionID, goImagesPipelineID)
-	}
-	if plan.Pipeline.Parameters["sourceBuildPipelineRunId"] != "$(Build.BuildId)" ||
-		plan.Pipeline.Parameters["publishRepoPrefix"] != "public/" {
-
-		t.Fatalf("unexpected focused pipeline parameters: %#v", plan.Pipeline.Parameters)
-	}
-	ids := make(map[string]struct{}, len(plan.Steps))
-	for _, step := range plan.Steps {
-		if _, ok := ids[step.ID]; ok {
-			t.Fatalf("duplicate step ID %q", step.ID)
-		}
-		ids[step.ID] = struct{}{}
-	}
-
-	response := postJSON(t, ui, "/api/demo/start", `{}`)
-	response.Body.Close()
-	if response.StatusCode != http.StatusAccepted {
-		t.Fatalf("start demo status = %d, want %d", response.StatusCode, http.StatusAccepted)
-	}
-
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
+func waitForRelease(t *testing.T, ui *testUI) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
 	for {
-		select {
-		case <-timer.C:
-			t.Fatal("timed out waiting for demo to finish")
-		case <-ticker.C:
-			response, err := ui.client.Get(ui.http.URL + "/api/state")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var snapshot coordinator.Snapshot
-			decodeResponse(t, response, &snapshot)
-			if snapshot.Active || len(snapshot.Steps) == 0 {
-				continue
-			}
-			for _, step := range snapshot.Steps {
-				if step.Status != coordinator.StepStatusSucceeded {
-					t.Fatalf("step %q status = %q, want succeeded", step.ID, step.Status)
-				}
-			}
+		ui.server.mu.Lock()
+		complete := ui.server.document.State.Day.GoImagesReleaseComplete
+		active := ui.server.releaseRunning
+		ui.server.mu.Unlock()
+		if complete && !active {
 			return
 		}
-	}
-}
-
-func TestEventsSendInitialSnapshot(t *testing.T) {
-	ui := newTestUI(t)
-	createTestPlan(t, ui)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+"/api/events", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := ui.client.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
-		t.Fatalf("Content-Type = %q, want text/event-stream", contentType)
-	}
-
-	reader := bufio.NewReader(response.Body)
-	var event strings.Builder
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatal(err)
-		}
-		event.WriteString(line)
-		if line == "\n" {
-			break
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for release")
+		case <-time.After(time.Millisecond):
 		}
 	}
-	if !strings.Contains(event.String(), "event: state") || !strings.Contains(event.String(), `"sequence":`) {
-		t.Fatalf("unexpected initial server event: %q", event.String())
-	}
 }
 
-func TestPlanRejectsCrossOriginAndInvalidInput(t *testing.T) {
-	ui := newTestUI(t)
-
-	request, err := http.NewRequest(http.MethodPost, ui.http.URL+"/api/plan", strings.NewReader(`{"versions":["1.26.1-1"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Origin", "https://example.com")
-	response, err := ui.client.Do(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin status = %d, want %d", response.StatusCode, http.StatusForbidden)
-	}
-
-	response = postJSON(t, ui, "/api/plan", `{"versions":["not-a-version"]}`)
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid input status = %d, want %d", response.StatusCode, http.StatusBadRequest)
-	}
-}
-
-func createTestPlan(t *testing.T, ui *testUI) planResponse {
+func waitForReleaseStopped(t *testing.T, ui *testUI) {
 	t.Helper()
-	response := postJSON(t, ui, "/api/plan", `{"versions":["1.26.1-1","1.27rc1-1"]}`)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		ui.server.mu.Lock()
+		active := ui.server.releaseRunning
+		ui.server.mu.Unlock()
+		if !active {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("timed out waiting for release to stop")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func createTestPlan(t *testing.T, ui *testUI, body string) planResponse {
+	t.Helper()
+	response := postJSON(t, ui, "/api/plan", body)
 	var plan planResponse
 	decodeResponse(t, response, &plan)
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("plan status = %d, want %d", response.StatusCode, http.StatusOK)
+		t.Fatalf("plan status = %d", response.StatusCode)
 	}
 	return plan
 }
@@ -839,7 +825,13 @@ func decodeResponse(t *testing.T, response *http.Response, target any) {
 	t.Helper()
 	defer response.Body.Close()
 	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
-		body, _ := io.ReadAll(response.Body)
-		t.Fatalf("decode response: %v; remaining body: %q", err, body)
+		t.Fatalf("decode response with status %d: %v", response.StatusCode, err)
 	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

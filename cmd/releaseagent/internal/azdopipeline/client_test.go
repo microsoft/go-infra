@@ -78,6 +78,35 @@ func TestGetDefinition(t *testing.T) {
 	}
 }
 
+func TestGetTimeline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/internal/_apis/build/builds/888/timeline" ||
+			request.URL.Query().Get("api-version") != "7.1" {
+
+			t.Fatalf("request = %s %s", request.Method, request.URL)
+		}
+		_, _ = response.Write([]byte(`{"records":[
+			{"id":"stage","type":"Stage","name":"Build","state":"inProgress","order":1},
+			{"id":"job","parentId":"stage","type":"Job","name":"linux-amd64","state":"inProgress","order":2},
+			{"id":"task","parentId":"job","type":"Task","name":"Build image","state":"inProgress","order":3}
+		]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := client.GetTimeline(context.Background(), 888)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Records) != 3 || timeline.Records[2].Name != "Build image" ||
+		timeline.Records[2].ParentID != "job" || timeline.Records[0].Type != "Stage" {
+
+		t.Fatalf("timeline = %#v", timeline)
+	}
+}
+
 func TestRunState(t *testing.T) {
 	for _, test := range []struct {
 		status string

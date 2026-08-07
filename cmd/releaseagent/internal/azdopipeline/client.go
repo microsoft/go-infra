@@ -62,6 +62,23 @@ type Definition struct {
 	YAMLPath      string
 }
 
+// Timeline is the execution hierarchy of an Azure Pipelines build.
+type Timeline struct {
+	Records []TimelineRecord
+}
+
+// TimelineRecord is one stage, phase, job, task, or other timeline node. ParentID links records
+// into the hierarchy returned by Azure DevOps.
+type TimelineRecord struct {
+	ID       string
+	ParentID string
+	Type     string
+	Name     string
+	State    string
+	Result   string
+	Order    int
+}
+
 // RunState is the normalized lifecycle of an Azure Pipelines run.
 type RunState string
 
@@ -119,6 +136,36 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 		return nil, err
 	}
 	return response.build()
+}
+
+// GetTimeline returns the current stage, job, and task hierarchy for one pipeline run.
+func (c *Client) GetTimeline(ctx context.Context, buildID int) (*Timeline, error) {
+	if buildID <= 0 {
+		return nil, errors.New("build ID must be positive")
+	}
+	endpoint := c.buildsURL(nil) + "/" + strconv.Itoa(buildID) + "/timeline?api-version=7.1"
+	var response struct {
+		Records []struct {
+			ID       string `json:"id"`
+			ParentID string `json:"parentId"`
+			Type     string `json:"type"`
+			Name     string `json:"name"`
+			State    string `json:"state"`
+			Result   string `json:"result"`
+			Order    int    `json:"order"`
+		} `json:"records"`
+	}
+	if err := c.getJSON(ctx, endpoint, &response); err != nil {
+		return nil, err
+	}
+	timeline := &Timeline{Records: make([]TimelineRecord, 0, len(response.Records))}
+	for _, record := range response.Records {
+		timeline.Records = append(timeline.Records, TimelineRecord{
+			ID: record.ID, ParentID: record.ParentID, Type: record.Type, Name: record.Name,
+			State: record.State, Result: record.Result, Order: record.Order,
+		})
+	}
+	return timeline, nil
 }
 
 // GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.

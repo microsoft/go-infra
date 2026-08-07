@@ -29,7 +29,7 @@ type PreflightCheck struct {
 type PreflightReport struct {
 	ExternalExecutionEnabled bool             `json:"externalExecutionEnabled"`
 	AzureReadOnlyEnabled     bool             `json:"azureReadOnlyEnabled"`
-	ProductionDemoEnabled    bool             `json:"productionDemoEnabled"`
+	GoImagesExecutionEnabled bool             `json:"goImagesExecutionEnabled"`
 	Checks                   []PreflightCheck `json:"checks"`
 }
 
@@ -110,33 +110,33 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 			Details: details,
 		})
 	}
-	if s.productionDemo == nil {
+	if s.execution == nil {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real production pipeline demo",
+			Name:    "Go-images pipeline execution",
 			Status:  CheckStatusUnavailable,
 			Details: "Disabled. No Azure pipeline can be queued.",
 		})
 	} else if !report.AzureReadOnlyEnabled {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real production pipeline demo",
+			Name:    "Go-images pipeline execution",
 			Status:  CheckStatusWarning,
-			Details: "Unavailable until pipeline 1023 source selection passes preflight.",
+			Details: "Unavailable until pipeline 1023 source validation passes preflight.",
 		})
-	} else if details, err := s.productionDemo.Preflight(ctx); err != nil {
+	} else if details, err := s.execution.Preflight(ctx); err != nil {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real production pipeline demo",
+			Name:    "Go-images pipeline execution",
 			Status:  CheckStatusWarning,
 			Details: err.Error(),
 		})
 	} else {
 		report.ExternalExecutionEnabled = true
-		report.ProductionDemoEnabled = true
+		report.GoImagesExecutionEnabled = true
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "external-execution",
-			Name:    "Real production pipeline 1023 demo",
+			Name:    "Go-images pipeline 1023 execution",
 			Status:  CheckStatusPassed,
 			Details: details,
 		})
