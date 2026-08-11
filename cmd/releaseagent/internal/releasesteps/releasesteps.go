@@ -14,7 +14,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 )
 
-//go:generate moq -out ServiceBundle_moq_test.go . ServiceBundle
+//go:generate go run github.com/matryer/moq -out ServiceBundle_moq_test.go . ServiceBundle
 
 // Input is the collection of inputs for a given release that don't change. They are provided once
 // by the release runner and stay the same upon retry.
