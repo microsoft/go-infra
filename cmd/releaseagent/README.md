@@ -8,10 +8,58 @@ Subcommands:
 * `releaseagent serve` starts the local release UI.
 * `releaseagent write-mermaid-diagram` writes a Mermaid diagram of the broader release process.
 
-The landing page is a release dashboard.
-It lists work tracked by the current durable session and a catalog of release processes.
-Go images is the only available process in this iteration.
-Go-infra and the complete Microsoft Build of Go release process remain future additions rather than being mixed into the go-images workflow.
+The landing page is a release dashboard. It lists work tracked by the current durable session and a
+validated registry of release processes. Go images provides local planning, execution, and
+monitoring. Go infrastructure and the complete Microsoft Build of Go release process remain future
+additions rather than being mixed into the go-images workflow.
+
+Each registry entry owns its dashboard metadata, documented release methods, inputs, dependency
+graph, and optional server callbacks. The server derives `/{ID}` and every process API route from
+that entry. A single `process.html` template and its generic JavaScript render every process.
+
+## Adding a release process
+
+Add one `ProcessDefinition` to `defaultProcessRegistry` in
+`internal/releaseui/process_registry.go`. No HTML, JavaScript, or route change is required.
+
+| Field | Purpose |
+| --- | --- |
+| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `example-process`. |
+| `Name` | User-facing process name shown on the dashboard and process page. |
+| `Mark` | Short visual abbreviation shown on the dashboard card, such as `EX`. |
+| `Description` | Brief dashboard explanation of what the process releases. |
+| `Status` | User-facing badge text, such as `Available`, `Planned`, or `Future`. This is display-only; `Available` controls whether the process can be opened. |
+| `Available` | Whether the dashboard card links to the process page. |
+| `DocumentationURL` | Canonical HTTPS release instructions linked from the process page. |
+| `Methods` | Documented external release paths. Use these when GitHub or another authenticated UI owns execution. |
+| `Workflow` | Optional in-UI inputs, dependency steps, and server callbacks. |
+
+For an external process, fill `Methods` and stop. For an in-UI process, describe the form and graph
+with `ProcessInput` and `ProcessStep`. Set only the callbacks it needs:
+
+```go
+ProcessDefinition{
+    ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
+    Status: "Available", Available: true,
+    Workflow: &ProcessWorkflow{
+        Heading: "Configure release", SubmitLabel: "Prepare release",
+        Inputs: []ProcessInput{{ID: "version", Type: "text", Label: "Version", Required: true}},
+        Steps: []ProcessStep{
+          {Name: "Verify release"},
+          {Name: "Publish release", DependsOn: []string{"Verify release"}},
+        },
+        GetPlan: (*Server).handleExampleGetPlan,
+        Prepare: (*Server).handleExamplePlan,
+        Start:   (*Server).handleExampleStart,
+    },
+}
+```
+
+`Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` are optional Go callbacks. `GetPlan` and
+`Prepare` are a pair: one restores the current plan and one creates it. Their routes are generated
+from the process ID; do not register routes or add browser code. Keep credentials, target
+allowlists, input validation, checkpointing, duplicate prevention, and external calls inside those
+Go boundaries. Go-images is the complete reference implementation.
 
 With read-only Azure access enabled, **Track ongoing releases** discovers waiting and running pipeline `1023` builds and refreshes their status every 15 seconds.
 These live Azure entries are merged with the durable local session and link directly to their Azure run; tracking never queues or changes a run.

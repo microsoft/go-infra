@@ -48,10 +48,12 @@ var webFiles embed.FS
 // Server hosts a single local release session. Dashboard responses use slices so the storage model
 // can grow to multiple concurrent sessions without changing the browser contract.
 type Server struct {
-	ctx       context.Context
-	token     string
-	demoDelay time.Duration
-	lookPath  executableLookup
+	ctx             context.Context
+	token           string
+	demoDelay       time.Duration
+	lookPath        executableLookup
+	processes       *processRegistry
+	activeProcessID string
 
 	sessionStore session.Store
 	readOnly     *GoImagesReadOnlyIntegration
@@ -180,6 +182,11 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		lookPath:  defaultExecutableLookup,
 		runner:    &coordinator.StepRunner{},
 	}
+	var err error
+	server.processes, err = defaultProcessRegistry()
+	if err != nil {
+		return nil, err
+	}
 	for _, option := range options {
 		option(server)
 	}
@@ -246,29 +253,102 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handlePage)
-	mux.HandleFunc("GET /go-images", s.handlePage)
+	for _, definition := range s.processes.ordered {
+		if !definition.Available {
+			continue
+		}
+		processID := definition.ID
+		mux.HandleFunc("GET "+processPath(processID), s.handlePage)
+		workflow := definition.Workflow
+		if workflow == nil {
+			continue
+		}
+		prefix := "/api/processes/" + processID
+		if workflow.Preflight != nil {
+			preflight := workflow.Preflight
+			mux.HandleFunc("GET "+prefix+"/preflight", func(response http.ResponseWriter, request *http.Request) {
+				preflight(s, response, request)
+			})
+		}
+		if workflow.GetPlan != nil {
+			mux.HandleFunc("GET "+prefix+"/plan", s.requireActiveProcess(processID, workflow.GetPlan))
+		}
+		if workflow.Prepare != nil {
+			mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID, workflow.Prepare))
+		}
+		if workflow.Simulate != nil {
+			mux.HandleFunc("POST "+prefix+"/simulate", s.requireActiveProcess(processID, workflow.Simulate))
+		}
+		if workflow.Start != nil {
+			mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, workflow.Start))
+		}
+		if workflow.GetPlan != nil {
+			mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, (*Server).handleState))
+			mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, (*Server).handleEvents))
+		}
+	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
+	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
 	mux.HandleFunc("GET /api/releases/ongoing", s.handleOngoingReleases)
-	mux.HandleFunc("GET /api/plan", s.handleGetPlan)
-	mux.HandleFunc("POST /api/plan", s.handlePlan)
-	mux.HandleFunc("GET /api/preflight", s.handlePreflight)
-	mux.HandleFunc("POST /api/demo/start", s.handleDemoStart)
-	mux.HandleFunc("POST /api/go-images/release/start", s.handleReleaseStart)
-	mux.HandleFunc("GET /api/state", s.handleState)
-	mux.HandleFunc("GET /api/events", s.handleEvents)
 	return s.withSecurityHeaders(s.authenticate(mux))
+}
+
+type processResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *processResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *processResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (s *Server) prepareProcess(processID string, handler ProcessHandler) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		writer := &processResponseWriter{ResponseWriter: response}
+		handler(s, writer, request)
+		if writer.status < http.StatusOK || writer.status >= http.StatusMultipleChoices {
+			return
+		}
+		s.mu.Lock()
+		s.activeProcessID = processID
+		s.mu.Unlock()
+	}
+}
+
+func (s *Server) requireActiveProcess(processID string, handler ProcessHandler) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		s.mu.Lock()
+		active := s.activeProcessID
+		s.mu.Unlock()
+		if active != "" && active != processID {
+			writeError(response, http.StatusConflict, "prepare this release process first")
+			return
+		}
+		handler(s, response, request)
+	}
 }
 
 func (s *Server) handlePage(response http.ResponseWriter, request *http.Request) {
 	name := "index.html"
-	switch request.URL.Path {
-	case "/":
-	case "/go-images":
-		name = "go-images.html"
-	default:
-		http.NotFound(response, request)
-		return
+	if request.URL.Path != "/" {
+		var ok bool
+		name, ok = s.processes.page(request.URL.Path)
+		if !ok {
+			http.NotFound(response, request)
+			return
+		}
 	}
 	content, err := webFiles.ReadFile("web/" + name)
 	if err != nil {
@@ -290,6 +370,7 @@ type planStep struct {
 	Name      string   `json:"name"`
 	DependsOn []string `json:"dependsOn,omitempty"`
 	Timeout   string   `json:"timeout,omitempty"`
+	Status    string   `json:"status,omitempty"`
 }
 
 type planResponse struct {
@@ -301,6 +382,42 @@ type planResponse struct {
 	SessionID      string                  `json:"sessionId,omitempty"`
 	Restored       bool                    `json:"restored"`
 	Execution      executionResponse       `json:"execution"`
+	View           ProcessPlanView         `json:"view"`
+}
+
+// ProcessPlanView contains process-neutral display data for the shared release page.
+type ProcessPlanView struct {
+	Subtitle              string                 `json:"subtitle"`
+	IntentTitle           string                 `json:"intentTitle"`
+	IntentBadge           string                 `json:"intentBadge,omitempty"`
+	Facts                 []ProcessPlanFact      `json:"facts,omitempty"`
+	Request               *ProcessRequestPreview `json:"request,omitempty"`
+	ExecutionTitle        string                 `json:"executionTitle,omitempty"`
+	ExecutionWarning      string                 `json:"executionWarning,omitempty"`
+	ExecutionConfirmation string                 `json:"executionConfirmation,omitempty"`
+	ExecutionButtonLabel  string                 `json:"executionButtonLabel,omitempty"`
+}
+
+// ProcessPlanFact is one resolved value shown while reviewing a prepared plan.
+type ProcessPlanFact struct {
+	Label  string `json:"label"`
+	Value  string `json:"value"`
+	Detail string `json:"detail,omitempty"`
+	Href   string `json:"href,omitempty"`
+}
+
+// ProcessRequestPreview describes the locked external request without sending it.
+type ProcessRequestPreview struct {
+	Eyebrow string                `json:"eyebrow"`
+	Title   string                `json:"title"`
+	Target  string                `json:"target,omitempty"`
+	Fields  []ProcessRequestField `json:"fields,omitempty"`
+}
+
+// ProcessRequestField is one name/value pair in an external request preview.
+type ProcessRequestField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type pipelinePreview struct {
@@ -313,10 +430,11 @@ type pipelinePreview struct {
 }
 
 type pipelineRun struct {
-	BuildID  string `json:"buildId,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Complete bool   `json:"complete"`
-	Result   string `json:"result,omitempty"`
+	BuildID   string `json:"buildId,omitempty"`
+	URL       string `json:"url,omitempty"`
+	LinkLabel string `json:"linkLabel,omitempty"`
+	Complete  bool   `json:"complete"`
+	Result    string `json:"result,omitempty"`
 }
 
 type executionResponse struct {
@@ -347,31 +465,67 @@ type releaseSummary struct {
 type processSummary struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
+	Mark        string `json:"mark"`
 	Description string `json:"description"`
 	Href        string `json:"href,omitempty"`
 	Available   bool   `json:"available"`
 	Status      string `json:"status"`
 }
 
+type processDetail struct {
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Mark             string          `json:"mark"`
+	Description      string          `json:"description"`
+	DocumentationURL string          `json:"documentationUrl"`
+	Methods          []ProcessMethod `json:"methods"`
+	Workflow         *workflowDetail `json:"workflow,omitempty"`
+}
+
+type workflowDetail struct {
+	Heading      string         `json:"heading"`
+	Description  string         `json:"description,omitempty"`
+	SubmitLabel  string         `json:"submitLabel,omitempty"`
+	Inputs       []ProcessInput `json:"inputs,omitempty"`
+	Steps        []ProcessStep  `json:"steps,omitempty"`
+	HasPreflight bool           `json:"hasPreflight"`
+	CanPrepare   bool           `json:"canPrepare"`
+	CanSimulate  bool           `json:"canSimulate"`
+	CanStart     bool           `json:"canStart"`
+}
+
+func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
+	definition, ok := s.processes.process(request.PathValue("id"))
+	if !ok || !definition.Available {
+		http.NotFound(response, request)
+		return
+	}
+	detail := processDetail{
+		ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
+		Description: definition.Description, DocumentationURL: definition.DocumentationURL,
+		Methods: append([]ProcessMethod(nil), definition.Methods...),
+	}
+	if definition.Workflow != nil {
+		detail.Workflow = &workflowDetail{
+			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
+			SubmitLabel:  definition.Workflow.SubmitLabel,
+			Inputs:       append([]ProcessInput(nil), definition.Workflow.Inputs...),
+			Steps:        append([]ProcessStep(nil), definition.Workflow.Steps...),
+			HasPreflight: definition.Workflow.Preflight != nil,
+			CanPrepare:   definition.Workflow.Prepare != nil,
+			CanSimulate:  definition.Workflow.Simulate != nil,
+			CanStart:     definition.Workflow.Start != nil,
+		}
+	}
+	writeJSON(response, http.StatusOK, detail)
+}
+
 func (s *Server) handleDashboard(response http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	result := dashboardResponse{
-		Ongoing: make([]releaseSummary, 0),
-		Recent:  make([]releaseSummary, 0),
-		Processes: []processSummary{
-			{
-				ID: goImagesProcessID, Name: "Go images", Available: true, Href: "/go-images", Status: "Available",
-				Description: "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
-			},
-			{
-				ID: "go-infra", Name: "Go infrastructure", Status: "Planned",
-				Description: "Infrastructure release automation will be added in a future iteration.",
-			},
-			{
-				ID: "microsoft-go", Name: "Microsoft Build of Go", Status: "Future",
-				Description: "The complete Microsoft Build of Go release process is intentionally out of scope for now.",
-			},
-		},
+		Ongoing:   make([]releaseSummary, 0),
+		Recent:    make([]releaseSummary, 0),
+		Processes: s.processes.summaries(),
 	}
 	if s.document != nil {
 		summary := s.releaseSummaryLocked()
@@ -580,8 +734,21 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 			parameters = derived
 		}
 	}
+	steps := describeSteps(s.steps)
+	if s.document != nil {
+		state := s.document.State.Day
+		if state.GoImagesReleaseComplete {
+			for i := range steps {
+				steps[i].Status = "succeeded"
+			}
+		} else if state.GoImagesReleaseBuildID != "" {
+			setPlanStepStatus(steps, "Verify go-images commit is mirrored internally", "succeeded")
+			setPlanStepStatus(steps, "🚀 Queue go-images release", "succeeded")
+			setPlanStepStatus(steps, "⌚ Wait for go-images release", "running")
+		}
+	}
 	result := planResponse{
-		Input: s.input, Source: s.source, RollbackSource: s.rollbackSource, Steps: describeSteps(s.steps),
+		Input: s.input, Source: s.source, RollbackSource: s.rollbackSource, Steps: steps,
 		Pipeline: pipelinePreview{
 			DefinitionID: goImagesPipelineID, Organization: goImagesPipelineOrg, Project: goImagesPipelineProject,
 			Name: goImagesPipelineName, Parameters: parameters, Locked: true,
@@ -592,7 +759,78 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 		result.SessionID = s.document.ID
 	}
 	result.Execution = s.executionResponseLocked()
+	result.View = goImagesPlanView(result)
 	return result
+}
+
+func setPlanStepStatus(steps []planStep, name, status string) {
+	for i := range steps {
+		if steps[i].Name == name {
+			steps[i].Status = status
+			return
+		}
+	}
+}
+
+func goImagesPlanView(plan planResponse) ProcessPlanView {
+	modeName := string(plan.Input.Mode)
+	if modeName != "" {
+		modeName = strings.ToUpper(modeName[:1]) + modeName[1:]
+	}
+	view := ProcessPlanView{
+		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, plan.Pipeline.DefinitionID, len(plan.Steps)),
+		IntentBadge: plan.Pipeline.Parameters["publishRepoPrefix"],
+		Facts: []ProcessPlanFact{{
+			Label: "Pipeline source", Value: plan.Source.Branch, Detail: plan.Source.Commit,
+		}},
+		Request: &ProcessRequestPreview{
+			Eyebrow: "Azure DevOps request preview · not sent",
+			Title:   fmt.Sprintf("Pipeline %d · %s", plan.Pipeline.DefinitionID, plan.Pipeline.Name),
+			Target:  plan.Pipeline.Organization + "/" + plan.Pipeline.Project,
+		},
+	}
+	if plan.Restored {
+		view.Subtitle += " · restored from disk"
+	}
+	for _, name := range sortedMapKeys(plan.Pipeline.Parameters) {
+		view.Request.Fields = append(view.Request.Fields, ProcessRequestField{Name: name, Value: plan.Pipeline.Parameters[name]})
+	}
+	switch plan.Input.Mode {
+	case releasesteps.GoImagesReleaseModeNormal:
+		view.IntentTitle = "Build current main and publish production images"
+		view.ExecutionTitle = "Run production release"
+		view.ExecutionWarning = "This builds current main, performs production signing, and publishes production images under public/."
+		view.ExecutionConfirmation = "Confirm run to build, sign, and publish current main to public/."
+		view.ExecutionButtonLabel = "Run production release"
+	case releasesteps.GoImagesReleaseModeRollback:
+		view.IntentTitle = "Republish artifacts from build " + plan.Input.SourceBuildID
+		view.ExecutionTitle = "Run rollback / republish"
+		view.ExecutionWarning = "This republishes artifacts from build " + plan.Input.SourceBuildID + " under public/. It does not rebuild those images."
+		view.ExecutionConfirmation = "Confirm run to republish artifacts from build " + plan.Input.SourceBuildID + " to public/."
+		view.ExecutionButtonLabel = "Run rollback"
+		if plan.RollbackSource != nil {
+			view.Facts = append(view.Facts, ProcessPlanFact{
+				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goImagesPipelineID, plan.RollbackSource.BuildID),
+				Href: plan.RollbackSource.URL,
+			})
+		}
+	case releasesteps.GoImagesReleaseModeTest:
+		view.IntentTitle = "Build current main and publish a dev/ test release"
+		view.ExecutionTitle = "Run test release"
+		view.ExecutionWarning = "This queues a real build and may use production signing resources, but publication is fixed to dev/ rather than public/."
+		view.ExecutionConfirmation = "Confirm run to queue pipeline 1023 with publication locked to dev/."
+		view.ExecutionButtonLabel = "Run test release"
+	}
+	return view
+}
+
+func sortedMapKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s *Server) executionResponseLocked() executionResponse {
@@ -607,6 +845,7 @@ func (s *Server) executionResponseLocked() executionResponse {
 	}
 	if result.Run.BuildID != "" {
 		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
+		result.Run.LinkLabel = "Open Azure DevOps run " + result.Run.BuildID
 	}
 	if !result.Enabled {
 		result.UnavailableReason = "Real pipeline execution is disabled. The workflow can still be simulated."
@@ -703,6 +942,7 @@ func (s *Server) restoreSession() error {
 	s.document = document
 	s.runner = &coordinator.StepRunner{}
 	s.restoredFromDisk = true
+	s.activeProcessID = goImagesProcessID
 	return nil
 }
 
@@ -1050,7 +1290,7 @@ func normalizeResolvedVersions(versions []string) ([]string, error) {
 func describeSteps(steps []*coordinator.Step) []planStep {
 	descriptions := make([]planStep, 0, len(steps))
 	for _, step := range steps {
-		description := planStep{Name: step.Name, DependsOn: make([]string, len(step.DependsOn))}
+		description := planStep{Name: step.Name, DependsOn: make([]string, len(step.DependsOn)), Status: "waiting"}
 		if step.Timeout != coordinator.NoTimeout {
 			description.Timeout = step.Timeout.String()
 		}
