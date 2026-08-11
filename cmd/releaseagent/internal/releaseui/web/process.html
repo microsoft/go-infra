@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Release Process · Microsoft Build of Go Release UI</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/process.js" defer></script>
+  <script src="/assets/workflow.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Back to release dashboard">
+      <span class="brand-mark" aria-hidden="true">Go</span>
+      <span>
+        <strong>Release UI</strong>
+        <small>Microsoft Build of Go</small>
+      </span>
+    </a>
+    <a class="back-link" href="/">← All release processes</a>
+  </header>
+
+  <main class="release-main">
+    <section class="release-hero">
+      <div id="process-mark" class="release-product-mark" aria-hidden="true"></div>
+      <div>
+        <p class="eyebrow">Release process</p>
+        <h1 id="process-name">Loading release process…</h1>
+        <p id="process-description" class="hero-copy"></p>
+        <a id="process-documentation" class="release-guide-link" target="_blank" rel="noreferrer" hidden>
+          Release documentation <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+      <div id="process-safety" class="safety-card compact-safety" hidden>
+        <span class="safety-icon" aria-hidden="true">✓</span>
+        <div>
+          <strong id="safety-title">Checking execution boundaries</strong>
+          <p id="safety-copy">No external request is sent while preparing a plan.</p>
+          <ul id="preflight-list" class="preflight-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="methods-section" aria-labelledby="methods-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Available paths</p>
+          <h2 id="methods-title">Choose how to release</h2>
+        </div>
+      </div>
+      <div id="process-methods" class="process-method-grid" aria-live="polite"></div>
+    </section>
+
+    <section id="workflow-section" class="release-layout" hidden>
+      <aside class="panel release-options-panel">
+        <div class="panel-heading">
+          <span class="step-number">01</span>
+          <div>
+            <h2 id="workflow-heading">Configure release</h2>
+            <p id="workflow-description"></p>
+          </div>
+        </div>
+
+        <form id="plan-form">
+          <div id="process-inputs"></div>
+          <button id="plan-button" class="button button-primary" type="submit">
+            <span>Prepare release</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+      </aside>
+
+      <section class="panel release-plan-panel">
+        <div class="panel-heading plan-heading">
+          <span class="step-number">02</span>
+          <div>
+            <h2>Review and run</h2>
+            <p id="plan-subtitle">Configure the release to prepare a validated plan.</p>
+          </div>
+          <button id="demo-button" class="button button-secondary" type="button" disabled hidden>Simulate workflow</button>
+        </div>
+
+        <div id="empty-state" class="empty-state">
+          <div class="empty-graphic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <h3>No release prepared</h3>
+          <p>Complete the available inputs to prepare a release plan.</p>
+        </div>
+
+        <div id="plan-content" class="plan-content" hidden>
+          <section class="intent-banner" id="intent-banner">
+            <div>
+              <p class="eyebrow">Confirmed intent</p>
+              <h3 id="intent-title"></h3>
+            </div>
+            <span id="intent-badge" class="intent-prefix" hidden></span>
+          </section>
+
+          <div id="plan-facts" class="source-grid"></div>
+
+          <section id="request-preview" class="request-preview" aria-labelledby="request-preview-title" hidden>
+            <div class="request-preview-heading">
+              <div>
+                <p id="request-preview-eyebrow" class="eyebrow"></p>
+                <h3 id="request-preview-title"></h3>
+              </div>
+              <span id="request-preview-target" class="pipeline-target" hidden></span>
+            </div>
+            <div class="locked-label"><span aria-hidden="true">🔒</span> Request values are read-only</div>
+            <dl id="request-preview-fields" class="pipeline-parameters"></dl>
+          </section>
+
+          <div class="progress-summary" aria-live="polite">
+            <div>
+              <span id="progress-label">Ready</span>
+              <strong id="progress-count"></strong>
+            </div>
+            <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+            <div id="status-counts" class="status-counts"></div>
+          </div>
+          <div id="step-graph" class="step-graph-viewport" aria-label="Release workflow dependency graph">
+            <svg id="step-edges" class="step-graph-edges" aria-hidden="true"></svg>
+            <div id="step-list" class="step-graph-list" role="list"></div>
+          </div>
+          <a id="pipeline-run-link" class="pipeline-run-link" target="_blank" rel="noreferrer" hidden></a>
+
+          <section id="execution-controls" class="execution-controls" hidden>
+            <p class="eyebrow">External execution</p>
+            <h3 id="execution-title">Run release</h3>
+            <p id="execution-warning" class="execution-warning"></p>
+            <div id="run-confirmation" class="run-confirmation" role="status" hidden>
+              <strong>Confirm this run</strong>
+              <p id="run-confirmation-copy"></p>
+            </div>
+            <div class="execution-actions">
+              <button id="execution-cancel" class="button button-secondary" type="button" hidden>Cancel</button>
+              <button id="execution-button" class="button button-danger" type="button" disabled>Run release</button>
+            </div>
+          </section>
+          <p id="execution-unavailable" class="demo-unavailable" hidden></p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+</body>
+</html>
