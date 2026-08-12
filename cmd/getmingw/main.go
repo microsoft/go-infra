@@ -303,7 +303,7 @@ func getWithRetry(client *http.Client, url string, sleep func(time.Duration)) (*
 		}
 		sleep(delay)
 	}
-	panic("unreachable")
+	return resp, err
 }
 
 func (b *build) CacheKey() string {
