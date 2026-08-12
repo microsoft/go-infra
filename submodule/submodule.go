@@ -35,12 +35,14 @@ func Init(rootDir, origin, fetchBearerToken string, shallow bool) error {
 // Reset updates the submodule (with '--init'). If "force", throw away changes in the submodule,
 // abort all in-progress Git operations like rebases, and clean all untracked files.
 func Reset(rootDir, submoduleDir string, force bool) error {
+	return ResetWithReference(rootDir, submoduleDir, force, "")
+}
+
+// ResetWithReference is like Reset, but uses reference as a local reference repository when cloning
+// an uninitialized submodule.
+func ResetWithReference(rootDir, submoduleDir string, force bool, reference string) error {
 	// Update the submodule commit, and initialize if it hasn't been done already.
-	submoduleUpdateCmd := dirCmd(rootDir, "git", "submodule", "update", "--init")
-	if force {
-		// If any conflicting changes are in the stage in the submodule, throw them away.
-		submoduleUpdateCmd.Args = append(submoduleUpdateCmd.Args, "-f")
-	}
+	submoduleUpdateCmd := resetUpdateCmd(rootDir, reference, force)
 	if err := executil.Run(submoduleUpdateCmd); err != nil {
 		return err
 	}
@@ -82,6 +84,18 @@ func Reset(rootDir, submoduleDir string, force bool) error {
 	// '.gitignore': these files shouldn't interfere with the build process and could be used for
 	// incremental builds.
 	return executil.Run(dirCmd(submoduleDir, "git", "clean", "-df"))
+}
+
+func resetUpdateCmd(rootDir, reference string, force bool) *exec.Cmd {
+	cmd := dirCmd(rootDir, "git", "submodule", "update", "--init")
+	if reference != "" {
+		cmd.Args = append(cmd.Args, "--reference", reference)
+	}
+	if force {
+		// If any conflicting changes are in the stage in the submodule, throw them away.
+		cmd.Args = append(cmd.Args, "-f")
+	}
+	return cmd
 }
 
 func getToplevel(dir string) (string, error) {

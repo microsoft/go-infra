@@ -20,7 +20,6 @@ import (
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/subcmd"
-	"github.com/microsoft/go-infra/submodule"
 )
 
 func init() {
@@ -258,7 +257,7 @@ func handleReviewGH(p subcmd.ParseFunc) error {
 // resetSubmoduleTo resets the submodule (or fails if dirty) then checks out the
 // target commit.
 func resetSubmoduleTo(rootDir, goDir, commit string, force bool) error {
-	if err := submodule.Reset(rootDir, goDir, force); err != nil {
+	if err := resetSubmodule(rootDir, goDir, force); err != nil {
 		return fmt.Errorf("failed to reset submodule: %v", err)
 	}
 	if err := gitcmd.Run(goDir, "checkout", commit); err != nil {

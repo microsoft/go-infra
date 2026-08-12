@@ -14,7 +14,6 @@ import (
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/subcmd"
-	"github.com/microsoft/go-infra/submodule"
 )
 
 // errSubmoduleDirty indicates that reapplying patches would discard unexpected changes in the
@@ -90,7 +89,7 @@ func applyPatches(config *patch.FoundConfig, force, noRefresh bool, branch strin
 	}
 
 	if !noRefresh {
-		if err := submodule.Reset(rootDir, goDir, force); err != nil {
+		if err := resetSubmodule(rootDir, goDir, force); err != nil {
 			return err
 		}
 	}

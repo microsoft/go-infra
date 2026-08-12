@@ -207,6 +207,30 @@ git go-patch apply
 # Proj and proj's submodule are now ready to examine.
 ```
 
+To speed up cloning a submodule, set `GIT_GO_PATCH_SUBMODULE_REFERENCES` to comma-separated pairs of submodule repository URLs and local reference repository paths.
+Whitespace around each value is ignored.
+For example, set this in your sh shell's environment to make future `git go-patch apply` setup faster:
+
+```sh
+export GIT_GO_PATCH_SUBMODULE_REFERENCES="
+  https://github.com/golang/go, $HOME/git/golang-go,
+  https://github.com/docker-library/golang, $HOME/git/docker-library-golang
+"
+```
+
+> [!WARNING]
+> Make sure any local directories mentioned in `GIT_GO_PATCH_SUBMODULE_REFERENCES` stick around.
+>
+> If you delete or move a reference directory, any submodules based on the reference will be missing Git objects, causing failures with common Git commands.
+> Fresh `git go-patch apply` runs with a misconfigured `GIT_GO_PATCH_SUBMODULE_REFERENCES` may attempt to fall back to the remote, but may still fail due to the missing target.
+
+> [!TIP]
+> This makes it much faster and less storage-intensive to use many short-lived worktrees with repositories like the Microsoft build of Go's!
+>
+> See [the `--reference` documentation in the Git manual](https://git-scm.com/docs/git-submodule.html?utm_source=openai#Documentation/git-submodule.txt---referencerepository) for more information about how this works.
+
+When a configured URL matches the submodule URL, `git-go-patch` passes the corresponding path to `git submodule update` using `--reference`.
+
 However, in build scripts, you may want to use traditional Git commands to avoid the dependency on the `git-go-patch` tool in production environments.
 We suggest:
 
