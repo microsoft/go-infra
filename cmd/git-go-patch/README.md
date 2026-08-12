@@ -227,7 +227,7 @@ export GIT_GO_PATCH_SUBMODULE_REFERENCES="
 > [!TIP]
 > This makes it much faster and less storage-intensive to use many short-lived worktrees with repositories like the Microsoft build of Go's!
 >
-> See [the `--reference` documentation in the Git manual](https://git-scm.com/docs/git-submodule.html?utm_source=openai#Documentation/git-submodule.txt---referencerepository) for more information about how this works.
+> See [the `--reference` documentation in the Git manual](https://git-scm.com/docs/git-submodule.html#Documentation/git-submodule.txt---referencerepository) for more information about how this works.
 
 When a configured URL matches the submodule URL, `git-go-patch` passes the corresponding path to `git submodule update` using `--reference`.
 

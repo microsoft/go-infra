@@ -20,6 +20,15 @@ func resetSubmodule(rootDir, submoduleDir string, force bool) error {
 	if err != nil {
 		return err
 	}
+	if reference != "" {
+		fi, err := os.Stat(reference)
+		if err != nil {
+			return fmt.Errorf("%s reference path %q does not exist: %w", submoduleReferencesEnv, reference, err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("%s reference path %q is not a directory", submoduleReferencesEnv, reference)
+		}
+	}
 	return submodule.ResetWithReference(rootDir, submoduleDir, force, reference)
 }
 
