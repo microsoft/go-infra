@@ -22,6 +22,7 @@ permissions:
    issues: read
    pull-requests: read
    copilot-requests: write
+inlined-imports: true
 network: defaults
 tools:
    cli-proxy: true
