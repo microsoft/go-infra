@@ -41,6 +41,7 @@ safe-outputs:
          - kind:dependencies
          - kind:ci
          - failed-auto-classify
+      # A PR may have any number of kinds, but a kind and the failure label are never applied simultaneously.
       max: 6
       target: "${{ inputs.pr_number }}"
    remove-labels:
