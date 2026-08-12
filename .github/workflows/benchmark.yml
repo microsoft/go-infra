@@ -48,7 +48,7 @@ jobs:
     steps:
       - name: Resolve refs
         id: resolve
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           DEFAULT_BASE_REF: ${{ inputs.default-base-ref }}
           DISPATCH_BASE_REF: ${{ inputs.dispatch-base-ref }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # MUST match the label inside the job's `name:` above.
           name: benchstat-${{ matrix.runs-on }}-go${{ matrix.go-version }}${{ matrix.fips-mode && format('-fips{0}', matrix.fips-mode) || '' }}${{ matrix.cgo-enabled && format('-cgo{0}', matrix.cgo-enabled) || '' }}${{ matrix.xcode-version && format('-xcode{0}', matrix.xcode-version) || '' }}${{ matrix.openssl-version && format('-ossl{0}', matrix.openssl-version) || '' }}${{ matrix.container-label && format('-{0}', matrix.container-label) || '' }}
@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all benchstat artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: results
           pattern: benchstat-*
@@ -246,7 +246,7 @@ jobs:
 
       - name: Post PR comment
         if: needs.setup.outputs.pr-number != ''
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PR_NUMBER: ${{ needs.setup.outputs.pr-number }}
         with:
