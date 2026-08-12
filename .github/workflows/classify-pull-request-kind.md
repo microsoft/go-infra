@@ -53,6 +53,8 @@ safe-outputs:
          - kind:dependencies
          - kind:ci
          - failed-auto-classify
+      # A PR edited by a dev may have every kind and also the failure label.
+      # The classifier may correctly decide a PR in that state has no kind, and all labels must be removed.
       max: 7
       target: "${{ inputs.pr_number }}"
 timeout-minutes: 10
