@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/microsoft/go-infra/executil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -43,6 +44,9 @@ const (
 const (
 	niXmanPrefix  = "https://github.com/niXman/mingw-builds-binaries/releases/"
 	winlibsPrefix = "https://github.com/brechtsanders/winlibs_mingw/releases/download/"
+
+	downloadAttempts   = 5
+	downloadRetryDelay = time.Second
 )
 
 var subcommands []subcmd.Option
@@ -161,14 +165,14 @@ type build struct {
 func (b *build) CreateFreshChecksum() error {
 	// Download the URL and compute the SHA512:
 	var client http.Client
-	resp, err := client.Get(b.URL)
+	resp, err := getWithRetry(&client, b.URL, time.Sleep)
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return errBuildNotFound
 	}
-	defer resp.Body.Close()
 	hash := sha512.New()
 	if _, err := io.Copy(hash, resp.Body); err != nil {
 		return err
@@ -212,14 +216,14 @@ func (b *build) GetOrCreateCacheBinDir() (string, error) {
 		log.Printf("Downloading %v...", b.URL)
 		// Download the URL and compute the SHA512:
 		var client http.Client
-		resp, err := client.Get(b.URL)
+		resp, err := getWithRetry(&client, b.URL, time.Sleep)
 		if err != nil {
 			return "", err
 		}
+		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("unexpected status code %v", resp.StatusCode)
 		}
-		defer resp.Body.Close()
 		// Open the file for writing:
 		f, err := os.OpenFile(downloadFile, os.O_CREATE|os.O_WRONLY, 0o666)
 		if err != nil {
@@ -275,6 +279,31 @@ func (b *build) GetOrCreateCacheBinDir() (string, error) {
 		}
 	}
 	return extractedBinDir, nil
+}
+
+func getWithRetry(client *http.Client, url string, sleep func(time.Duration)) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	for attempt := range downloadAttempts {
+		resp, err = client.Get(url)
+		if err == nil && (resp.StatusCode < http.StatusInternalServerError && resp.StatusCode != http.StatusTooManyRequests) {
+			return resp, nil
+		}
+		if attempt+1 == downloadAttempts {
+			return resp, err
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		delay := downloadRetryDelay << attempt
+		if err != nil {
+			log.Printf("Download attempt %d/%d failed: %v. Retrying in %v.", attempt+1, downloadAttempts, err, delay)
+		} else {
+			log.Printf("Download attempt %d/%d received HTTP %s. Retrying in %v.", attempt+1, downloadAttempts, resp.Status, delay)
+		}
+		sleep(delay)
+	}
+	panic("unreachable")
 }
 
 func (b *build) CacheKey() string {
