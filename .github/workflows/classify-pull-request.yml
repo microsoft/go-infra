@@ -1,0 +1,91 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Reusable workflow that applies size and repository-defined area labels
+# to pull requests. It reads PR metadata through the GitHub API and never checks
+# out or executes pull request code, so callers may safely invoke it from
+# pull_request_target to classify fork PRs.
+# Size thresholds are defined in:
+# https://github.com/microsoft/go-infra/blob/main/cmd/prclassifier/classify.go
+#
+# Example caller:
+#
+#   permissions:
+#     contents: read
+#     issues: write
+#     pull-requests: read
+#
+#   jobs:
+#     classify:
+#       uses: microsoft/go-infra/.github/workflows/classify-pull-request.yml@<sha>
+#       permissions:
+#         contents: read
+#         issues: write
+#         pull-requests: read
+#       with:
+#         pr-number: ${{ github.event.pull_request.number || inputs.pr-number || 0 }}
+#         area-prefixes: |
+#           {
+#             "area:library": ["library/"],
+#             "area:tooling": ["cmd/"]
+#           }
+
+name: Classify pull request
+
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: "PR number to classify, or 0 to classify every open PR."
+        required: false
+        default: 0
+        type: number
+      area-prefixes:
+        description: |
+          JSON object mapping area:* labels to repository-relative path
+          prefixes. A PR receives every area whose prefixes match a changed
+          file. Prefixes may name a directory or an exact file.
+        required: false
+        default: "{}"
+        type: string
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # job.workflow_sha is the SHA the caller pinned microsoft/go-infra to.
+      # github.workflow_sha would point at the caller's workflow file instead.
+      - name: Checkout go-infra
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/go-infra
+          ref: ${{ job.workflow_sha }}
+          path: _go-infra
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache-dependency-path: _go-infra/go.sum
+
+      - name: Build pull request classifier
+        shell: bash
+        run: go build -C _go-infra/cmd/prclassifier -o "$RUNNER_TEMP/prclassifier" .
+
+      - name: Apply classification labels
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          AREA_PREFIXES: ${{ inputs.area-prefixes }}
+        run: |
+          "$RUNNER_TEMP/prclassifier" \
+            -repo "$TARGET_REPOSITORY" \
+            -pr-number "$PR_NUMBER" \
+            -area-prefixes "$AREA_PREFIXES"
