@@ -171,9 +171,11 @@ func (b *build) CreateFreshChecksum() error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return errBuildNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
 	}
 	hash := sha512.New()
