@@ -200,7 +200,7 @@ type dependabotEntry struct {
 // gives the community time to detect and report compromised releases before
 // they're automatically pulled in.
 type dependabotCooldown struct {
-	DefaultDays int `json:"default-days,omitempty" yaml:"default-days,omitempty"`
+	DefaultDays int `json:"default-days" yaml:"default-days"`
 }
 
 // githubActionsCooldownDays is the minimum number of days to wait after a new
