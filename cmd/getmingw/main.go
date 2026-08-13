@@ -173,6 +173,9 @@ func (b *build) CreateFreshChecksum() error {
 	if resp.StatusCode == http.StatusNotFound {
 		return errBuildNotFound
 	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code %v", resp.StatusCode)
+	}
 	hash := sha512.New()
 	if _, err := io.Copy(hash, resp.Body); err != nil {
 		return err
@@ -293,6 +296,7 @@ func getWithRetry(client *http.Client, url string, sleep func(time.Duration)) (*
 			return resp, err
 		}
 		if resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 		}
 		delay := downloadRetryDelay << attempt
