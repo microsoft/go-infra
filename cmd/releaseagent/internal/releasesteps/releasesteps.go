@@ -35,15 +35,25 @@ const (
 
 var goImagesCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+// GoImagesInput is the immutable input for one focused go-images release.
+type GoImagesInput struct {
+	Versions      []string
+	Mode          GoImagesReleaseMode
+	SourceBranch  string
+	SourceVersion string
+	SourceBuildID string
+	MirrorTarget  string
+	PipelineID    int
+}
+
 // Input is the collection of inputs for a given release that don't change. They are provided once
 // by the release runner and stay the same upon retry.
 type Input struct {
 	// Versions is a list of versions to release.
 	Versions []string
 
-	// GoImagesReleaseMode and source fields bind a focused go-images plan to one allowlisted
-	// operation and the exact microsoft/main commit resolved by the server. SourceBuildID is set
-	// only for rollback and identifies the prior pipeline 1023 artifacts to republish.
+	// The focused UI uses GoImagesInput. These flattened fields remain in the legacy full-release
+	// input to preserve existing durable session documents while that envelope is migrated.
 	GoImagesReleaseMode   GoImagesReleaseMode
 	GoImagesSourceBranch  string
 	GoImagesSourceVersion string
@@ -197,6 +207,9 @@ type GoImagesReleaseService interface {
 type StateCheckpoint func(ctx context.Context, state *State) error
 
 type stateAccess struct {
+	// StepRunner executes independent DAG branches concurrently, while checkpoints encode the
+	// complete State. Serialize reads, mutations, and checkpoints to avoid races and torn snapshots;
+	// step dependencies, rather than this mutex, continue to define execution ordering.
 	mu         sync.Mutex
 	state      *State
 	checkpoint StateCheckpoint
@@ -312,7 +325,7 @@ func GoImagesPipelineParametersForMode(mode GoImagesReleaseMode, sourceBuildID s
 // CreateGoImagesPipelineGraph creates the initial focused workflow that queues and monitors
 // the direct microsoft-go-images pipeline as one coarse-grained operation.
 func CreateGoImagesPipelineGraph(
-	ri *Input,
+	ri *GoImagesInput,
 	secret *Secret,
 	rs *State,
 	sb GoImagesReleaseService,
@@ -323,39 +336,36 @@ func CreateGoImagesPipelineGraph(
 // CreateGoImagesPipelineGraphWithCheckpoint is like CreateGoImagesPipelineGraph and
 // durably records the queued pipeline ID and successful completion.
 func CreateGoImagesPipelineGraphWithCheckpoint(
-	ri *Input,
+	ri *GoImagesInput,
 	secret *Secret,
 	rs *State,
 	sb GoImagesReleaseService,
 	checkpoint StateCheckpoint,
 ) ([]*coordinator.Step, *State, error) {
-	if ri == nil || ri.MicrosoftGoImagesPipeline == 0 {
+	if ri == nil || ri.PipelineID == 0 {
 		return nil, nil, fmt.Errorf("no go-images pipeline specified")
 	}
-	if ri.GoImagesSourceBranch != "refs/heads/microsoft/main" {
-		return nil, nil, fmt.Errorf("go-images source branch %q is not allowlisted", ri.GoImagesSourceBranch)
+	if ri.SourceBranch != "refs/heads/microsoft/main" {
+		return nil, nil, fmt.Errorf("go-images source branch %q is not allowlisted", ri.SourceBranch)
 	}
-	if ri.TargetAzDOGoImagesRepo != GoImagesInternalMirrorTarget {
-		return nil, nil, fmt.Errorf("go-images mirror target %q is not allowlisted", ri.TargetAzDOGoImagesRepo)
+	if ri.MirrorTarget != GoImagesInternalMirrorTarget {
+		return nil, nil, fmt.Errorf("go-images mirror target %q is not allowlisted", ri.MirrorTarget)
 	}
-	if !goImagesCommitPattern.MatchString(ri.GoImagesSourceVersion) {
-		return nil, nil, fmt.Errorf("invalid go-images source commit %q", ri.GoImagesSourceVersion)
+	if !goImagesCommitPattern.MatchString(ri.SourceVersion) {
+		return nil, nil, fmt.Errorf("invalid go-images source commit %q", ri.SourceVersion)
 	}
-	parameters, err := GoImagesPipelineParametersForMode(ri.GoImagesReleaseMode, ri.GoImagesSourceBuildID)
+	parameters, err := GoImagesPipelineParametersForMode(ri.Mode, ri.SourceBuildID)
 	if err != nil {
 		return nil, nil, err
 	}
-	rs, err = initializeState(ri, rs)
+	rs, err = initializeState(goImagesCompatibilityInput(ri), rs)
 	if err != nil {
 		return nil, nil, err
 	}
-	if rs.Day.ReleaseIssue == 0 {
-		rs.Day.ReleaseIssue = ri.ReleaseIssue
-	}
-	rs.Day.GoImagesReleaseMode = ri.GoImagesReleaseMode
-	rs.Day.GoImagesSourceBranch = ri.GoImagesSourceBranch
-	rs.Day.GoImagesCommit = ri.GoImagesSourceVersion
-	rs.Day.GoImagesSourceBuildID = ri.GoImagesSourceBuildID
+	rs.Day.GoImagesReleaseMode = ri.Mode
+	rs.Day.GoImagesSourceBranch = ri.SourceBranch
+	rs.Day.GoImagesCommit = ri.SourceVersion
+	rs.Day.GoImagesSourceBuildID = ri.SourceBuildID
 	if len(rs.Day.GoImagesReleaseParameters) == 0 {
 		rs.Day.GoImagesReleaseParameters = cloneStringMap(parameters)
 	}
@@ -369,7 +379,7 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
 				return nil
 			}
-			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, ri.GoImagesSourceVersion, secret)
+			return sb.PollAzDOMirror(ctx, ri.MirrorTarget, ri.SourceVersion, secret)
 		},
 	)
 	queue := verifyMirror.Then(
@@ -389,7 +399,7 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 			}
 			buildID, err := sb.TriggerBuildPipeline(
 				ctx,
-				ri.MicrosoftGoImagesPipeline,
+				ri.PipelineID,
 				parameters,
 				nil,
 				secret,
@@ -432,6 +442,24 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	}
 	wrapStepsWithStateFlush(steps, state, checkpoint)
 	return steps, rs, nil
+}
+
+// goImagesCompatibilityInput preserves the existing State checksum and session-file shape while
+// the legacy full-release graph continues to use Input.
+func goImagesCompatibilityInput(input *GoImagesInput) *Input {
+	if input == nil {
+		return nil
+	}
+	return &Input{
+		Versions:                  append([]string(nil), input.Versions...),
+		GoImagesReleaseMode:       input.Mode,
+		GoImagesSourceBranch:      input.SourceBranch,
+		GoImagesSourceVersion:     input.SourceVersion,
+		GoImagesSourceBuildID:     input.SourceBuildID,
+		RunnerGitHubUser:          "ghost",
+		TargetAzDOGoImagesRepo:    input.MirrorTarget,
+		MicrosoftGoImagesPipeline: input.PipelineID,
+	}
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
@@ -502,41 +530,24 @@ func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, chec
 // between steps through the State and synchronizing). All work involving external resources should
 // be done by calling methods on the ServiceBundle.
 func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]*coordinator.Step, *State, error) {
-	return CreateStepGraphWithCheckpoint(ri, secret, rs, sb, nil)
-}
-
-// CreateStepGraphWithCheckpoint is like CreateStepGraph, and also records State after every
-// meaningful mutation. External service calls are never made while the State lock is held.
-func CreateStepGraphWithCheckpoint(
-	ri *Input,
-	secret *Secret,
-	rs *State,
-	sb ServiceBundle,
-	checkpoint StateCheckpoint,
-) ([]*coordinator.Step, *State, error) {
-	var initializeErr error
-	rs, initializeErr = initializeState(ri, rs)
-	if initializeErr != nil {
-		return nil, nil, initializeErr
+	var err error
+	rs, err = initializeState(ri, rs)
+	if err != nil {
+		return nil, nil, err
 	}
-	state := &stateAccess{state: rs, checkpoint: checkpoint}
 
 	createStatusReportIssue := coordinator.NewRootStep(
 		"release-day.issue",
 		"Create release day issue",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) int { return s.Day.ReleaseIssue }) != 0 {
+			if rs.Day.ReleaseIssue != 0 {
 				return nil
 			}
-			issue, err := sb.CreateReleaseDayTrackingIssue(
+			var err error
+			rs.Day.ReleaseIssue, err = sb.CreateReleaseDayTrackingIssue(
 				ctx, ri.TargetRepo, ri.RunnerGitHubUser, ri.Versions, secret)
-			if err != nil {
-				return err
-			}
-			return state.update(ctx, func(s *State) {
-				s.Day.ReleaseIssue = issue
-			})
+			return err
 		},
 	)
 
@@ -544,6 +555,7 @@ func CreateStepGraphWithCheckpoint(
 	var versionSpecificPublishSteps []*coordinator.Step
 
 	for _, version := range ri.Versions {
+		vs := rs.Versions[version]
 		id := func(id string) string {
 			return fmt.Sprintf("version.%s.%s", version, id)
 		}
@@ -556,16 +568,12 @@ func CreateStepGraphWithCheckpoint(
 			name("⌚ Get upstream commit for release"),
 			noTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].UpstreamCommit }) != "" {
+				if vs.UpstreamCommit != "" {
 					return nil
 				}
-				commit, err := sb.PollUpstreamTagCommit(ctx, version)
-				if err != nil {
-					return err
-				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].UpstreamCommit = commit
-				})
+				var err error
+				vs.UpstreamCommit, err = sb.PollUpstreamTagCommit(ctx, version)
+				return err
 			},
 			createStatusReportIssue,
 		).Then(
@@ -573,42 +581,31 @@ func CreateStepGraphWithCheckpoint(
 			name("Create sync PR"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) int { return s.Versions[version].UpdatePR }) != 0 {
+				if vs.UpdatePR != 0 {
 					return nil
 				}
-				upstreamCommit := stateValue(state, func(s *State) string { return s.Versions[version].UpstreamCommit })
-				pr, err := sb.CreateGitHubSyncPR(ctx, ri.TargetRepo, upstreamCommit, secret)
-				if err != nil {
-					return err
-				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].UpdatePR = pr
-				})
+				var err error
+				vs.UpdatePR, err = sb.CreateGitHubSyncPR(ctx, ri.TargetRepo, vs.UpstreamCommit, secret)
+				return err
 			},
 		).Then(
 			id("sync-pr-merge"),
 			name("⌚ Wait for PR merge"),
 			microsoftGoPRCITimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].Commit }) != "" {
+				if vs.Commit != "" {
 					return nil
 				}
-				pr := stateValue(state, func(s *State) int { return s.Versions[version].UpdatePR })
-				commit, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, pr, secret)
-				if err != nil {
-					return err
-				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].Commit = commit
-				})
+				var err error
+				vs.Commit, err = sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, vs.UpdatePR, secret)
+				return err
 			},
 		).Then(
 			id("azdo-sync"),
 			name("⌚ Wait for AzDO sync"),
 			internalMirrorTimeout,
 			func(ctx context.Context) error {
-				commit := stateValue(state, func(s *State) string { return s.Versions[version].Commit })
-				return sb.PollAzDOMirror(ctx, ri.TargetAzDORepo, commit, secret)
+				return sb.PollAzDOMirror(ctx, ri.TargetAzDORepo, vs.Commit, secret)
 			},
 		)
 
@@ -617,16 +614,12 @@ func CreateStepGraphWithCheckpoint(
 			name("🚀 Trigger official build"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID }) != "" {
+				if vs.OfficialBuildID != "" {
 					return nil
 				}
-				buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoPipeline, nil, nil, secret)
-				if err != nil {
-					return err
-				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].OfficialBuildID = buildID
-				})
+				var err error
+				vs.OfficialBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoPipeline, nil, nil, secret)
+				return err
 			},
 			syncUpdate,
 		).Then(
@@ -634,8 +627,7 @@ func CreateStepGraphWithCheckpoint(
 			name("⌚ Wait for official build"),
 			microsoftGoOfficialCITimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
-				return sb.PollPipelineComplete(ctx, buildID, secret)
+				return sb.PollPipelineComplete(ctx, vs.OfficialBuildID, secret)
 			},
 		)
 
@@ -644,16 +636,12 @@ func CreateStepGraphWithCheckpoint(
 			name("🚀 Trigger innerloop build"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].InnerloopBuildID }) != "" {
+				if vs.InnerloopBuildID != "" {
 					return nil
 				}
-				buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoInnerloopPipeline, nil, nil, secret)
-				if err != nil {
-					return err
-				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].InnerloopBuildID = buildID
-				})
+				var err error
+				vs.InnerloopBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoInnerloopPipeline, nil, nil, secret)
+				return err
 			},
 			syncUpdate,
 		).Then(
@@ -661,8 +649,7 @@ func CreateStepGraphWithCheckpoint(
 			name("⌚ Wait for innerloop build"),
 			microsoftGoInnerloopCITimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].InnerloopBuildID })
-				return sb.PollPipelineComplete(ctx, buildID, secret)
+				return sb.PollPipelineComplete(ctx, vs.InnerloopBuildID, secret)
 			},
 		)
 
@@ -689,10 +676,9 @@ func CreateStepGraphWithCheckpoint(
 			name("Download asset metadata"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
 				dir, err := sb.DownloadPipelineArtifactToDir(
 					ctx,
-					buildID,
+					vs.OfficialBuildID,
 					"BuildAssets",
 					secret,
 				)
@@ -710,11 +696,10 @@ func CreateStepGraphWithCheckpoint(
 			name("Download artifacts"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].OfficialBuildID })
 				var err error
 				artifactsDir, err = sb.DownloadPipelineArtifactToDir(
 					ctx,
-					buildID,
+					vs.OfficialBuildID,
 					"Binaries Signed",
 					secret,
 				)
@@ -728,18 +713,16 @@ func CreateStepGraphWithCheckpoint(
 			name("🎓 Create GitHub tag"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].GitHubTag }) != "" {
+				if vs.GitHubTag != "" {
 					return nil
 				}
 				tag := fmt.Sprintf("v%s", version)
-				commit := stateValue(state, func(s *State) string { return s.Versions[version].Commit })
-				err := sb.CreateGitHubTag(ctx, version, ri.TargetRepo, tag, commit, secret)
+				err := sb.CreateGitHubTag(ctx, version, ri.TargetRepo, tag, vs.Commit, secret)
 				if err != nil {
 					return err
 				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].GitHubTag = tag
-				})
+				vs.GitHubTag = tag
+				return nil
 			},
 			readyForPublish,
 		).Then(
@@ -747,17 +730,15 @@ func CreateStepGraphWithCheckpoint(
 			name("🎓 Create GitHub release"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				if stateValue(state, func(s *State) string { return s.Versions[version].GitHubRelease }) != "" {
+				if vs.GitHubRelease != "" {
 					return nil
 				}
-				tag := stateValue(state, func(s *State) string { return s.Versions[version].GitHubTag })
-				err := sb.CreateGitHubRelease(ctx, ri.TargetRepo, tag, assetJSONPath, artifactsDir, secret)
+				err := sb.CreateGitHubRelease(ctx, ri.TargetRepo, vs.GitHubTag, assetJSONPath, artifactsDir, secret)
 				if err != nil {
 					return err
 				}
-				return state.update(ctx, func(s *State) {
-					s.Versions[version].GitHubRelease = tag
-				})
+				vs.GitHubRelease = vs.GitHubTag
+				return nil
 			},
 			downloadAssetMetadata, downloadArtifacts,
 		)
@@ -767,26 +748,18 @@ func CreateStepGraphWithCheckpoint(
 			name("🎓 Update aka.ms links"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].AkaMSBuildID })
-				if buildID == "" {
+				if vs.AkaMSBuildID == "" {
 					var err error
-					buildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoAkaMSPipeline, nil, nil, secret)
+					vs.AkaMSBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoAkaMSPipeline, nil, nil, secret)
 					if err != nil {
 						return err
 					}
-					if err := state.update(ctx, func(s *State) {
-						s.Versions[version].AkaMSBuildID = buildID
-					}); err != nil {
-						return err
-					}
 				}
-				if !stateValue(state, func(s *State) bool { return s.Versions[version].AkaMSUpdated }) {
-					if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+				if !vs.AkaMSUpdated {
+					if err := sb.PollPipelineComplete(ctx, vs.AkaMSBuildID, secret); err != nil {
 						return err
 					}
-					return state.update(ctx, func(s *State) {
-						s.Versions[version].AkaMSUpdated = true
-					})
+					vs.AkaMSUpdated = true
 				}
 				return nil
 			},
@@ -800,27 +773,19 @@ func CreateStepGraphWithCheckpoint(
 			// version contributes a Dockerfile update to the shared PR just before CI finishes.
 			microsoftGoImagesPRCITimeout*time.Duration(len(ri.Versions)),
 			func(ctx context.Context) error {
-				imageUpdatePR := stateValue(state, func(s *State) int { return s.Versions[version].ImageUpdatePR })
-				if imageUpdatePR == 0 {
+				if vs.ImageUpdatePR == 0 {
 					var err error
-					imageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetGoImagesRepo, assetJSONPath, "", secret)
+					vs.ImageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetGoImagesRepo, assetJSONPath, "", secret)
 					if err != nil {
-						return err
-					}
-					if err := state.update(ctx, func(s *State) {
-						s.Versions[version].ImageUpdatePR = imageUpdatePR
-					}); err != nil {
 						return err
 					}
 				}
-				if !stateValue(state, func(s *State) bool { return s.Versions[version].ImagesUpdated }) {
-					_, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetGoImagesRepo, imageUpdatePR, secret)
+				if !vs.ImagesUpdated {
+					_, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetGoImagesRepo, vs.ImageUpdatePR, secret)
 					if err != nil {
 						return err
 					}
-					return state.update(ctx, func(s *State) {
-						s.Versions[version].ImagesUpdated = true
-					})
+					vs.ImagesUpdated = true
 				}
 				return nil
 			},
@@ -839,26 +804,18 @@ func CreateStepGraphWithCheckpoint(
 			name("🚀 Trigger Azure Linux PR creation"),
 			shortTimeout,
 			func(ctx context.Context) error {
-				buildID := stateValue(state, func(s *State) string { return s.Versions[version].AzureLinuxUpdateBuildID })
-				if buildID == "" {
+				if vs.AzureLinuxUpdateBuildID == "" {
 					var err error
-					buildID, err = sb.TriggerBuildPipeline(ctx, ri.AzureLinuxCreatePRPipeline, nil, nil, secret)
+					vs.AzureLinuxUpdateBuildID, err = sb.TriggerBuildPipeline(ctx, ri.AzureLinuxCreatePRPipeline, nil, nil, secret)
 					if err != nil {
 						return err
 					}
-					if err := state.update(ctx, func(s *State) {
-						s.Versions[version].AzureLinuxUpdateBuildID = buildID
-					}); err != nil {
-						return err
-					}
 				}
-				if !stateValue(state, func(s *State) bool { return s.Versions[version].AzureLinuxPRSubmitted }) {
-					if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+				if !vs.AzureLinuxPRSubmitted {
+					if err := sb.PollPipelineComplete(ctx, vs.AzureLinuxUpdateBuildID, secret); err != nil {
 						return err
 					}
-					return state.update(ctx, func(s *State) {
-						s.Versions[version].AzureLinuxPRSubmitted = true
-					})
+					vs.AzureLinuxPRSubmitted = true
 				}
 				// Note: we don't keep track of the PR inside this process because it may take
 				// an arbitrary time to get approval to merge.
@@ -885,20 +842,14 @@ func CreateStepGraphWithCheckpoint(
 		"Get go-images commit",
 		shortTimeout,
 		func(ctx context.Context) error {
-			commit := stateValue(state, func(s *State) string { return s.Day.GoImagesCommit })
-			if commit == "" {
+			if rs.Day.GoImagesCommit == "" {
 				var err error
-				commit, err = sb.PollImagesCommit(ctx, ri.Versions, secret)
+				rs.Day.GoImagesCommit, err = sb.PollImagesCommit(ctx, ri.Versions, secret)
 				if err != nil {
 					return err
 				}
-				if err := state.update(ctx, func(s *State) {
-					s.Day.GoImagesCommit = commit
-				}); err != nil {
-					return err
-				}
 			}
-			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, commit, secret)
+			return sb.PollAzDOMirror(ctx, ri.TargetAzDOGoImagesRepo, rs.Day.GoImagesCommit, secret)
 		},
 		versionsComplete,
 	).Then(
@@ -906,24 +857,19 @@ func CreateStepGraphWithCheckpoint(
 		"🚀 Trigger go-image build/publish",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) string { return s.Day.GoImagesOfficialBuildID }) != "" {
+			if rs.Day.GoImagesOfficialBuildID != "" {
 				return nil
 			}
-			buildID, err := sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoImagesPipeline, nil, nil, secret)
-			if err != nil {
-				return err
-			}
-			return state.update(ctx, func(s *State) {
-				s.Day.GoImagesOfficialBuildID = buildID
-			})
+			var err error
+			rs.Day.GoImagesOfficialBuildID, err = sb.TriggerBuildPipeline(ctx, ri.MicrosoftGoImagesPipeline, nil, nil, secret)
+			return err
 		},
 	).Then(
 		"images.build-wait",
 		"⌚ Wait for go-image build/publish",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
-			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesOfficialBuildID })
-			return sb.PollPipelineComplete(ctx, buildID, secret)
+			return sb.PollPipelineComplete(ctx, rs.Day.GoImagesOfficialBuildID, secret)
 		},
 	).Then(
 		"images.version-check",
@@ -932,15 +878,14 @@ func CreateStepGraphWithCheckpoint(
 		// Alternatively, the go-images build can wait: https://github.com/microsoft/go/issues/1258
 		shortTimeout,
 		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) bool { return s.Day.MARVersionChecked }) {
+			if rs.Day.MARVersionChecked {
 				return nil
 			}
 			if err := sb.CheckLatestMARGoVersion(ctx, ri.Versions); err != nil {
 				return err
 			}
-			return state.update(ctx, func(s *State) {
-				s.Day.MARVersionChecked = true
-			})
+			rs.Day.MARVersionChecked = true
+			return nil
 		},
 	)
 
@@ -949,15 +894,14 @@ func CreateStepGraphWithCheckpoint(
 		"📰 Create blog post markdown",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if stateValue(state, func(s *State) bool { return s.Day.AnnouncementWritten }) {
+			if rs.Day.AnnouncementWritten {
 				return nil
 			}
 			if err := sb.CreateAnnouncementBlogFile(ctx, ri.Versions, ri.RunnerGitHubUser, ri.Security, secret); err != nil {
 				return err
 			}
-			return state.update(ctx, func(s *State) {
-				s.Day.AnnouncementWritten = true
-			})
+			rs.Day.AnnouncementWritten = true
+			return nil
 		},
 		versionsComplete, imagesReady,
 	)
@@ -976,6 +920,5 @@ func CreateStepGraphWithCheckpoint(
 	if err != nil {
 		return nil, nil, err
 	}
-	wrapStepsWithStateFlush(allSteps, state, checkpoint)
 	return allSteps, rs, nil
 }

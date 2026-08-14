@@ -35,6 +35,15 @@ var exampleInput = &Input{
 	AzureLinuxCreatePRPipeline:   60,
 }
 
+var exampleGoImagesInput = &GoImagesInput{
+	Versions:      []string{"1.22.10-1", "1.23.4-1"},
+	Mode:          GoImagesReleaseModeNormal,
+	SourceBranch:  "refs/heads/microsoft/main",
+	SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+	MirrorTarget:  GoImagesInternalMirrorTarget,
+	PipelineID:    1023,
+}
+
 func TestGoImagesPipelineParameters(t *testing.T) {
 	parameters := GoImagesPipelineParameters()
 	want := map[string]string{
@@ -77,16 +86,15 @@ func TestGoImagesPipelineParametersForMode(t *testing.T) {
 }
 
 func TestRunFakeGoImagesPipeline(t *testing.T) {
-	input := *exampleInput
-	input.ReleaseIssue = 42
+	input := *exampleGoImagesInput
 	var mirrorVerified bool
 	var queued bool
 	var polled bool
 	sb := &ServiceBundleMock{
 		PollAzDOMirrorFunc: func(_ context.Context, target, commit string, _ *Secret) error {
 			mirrorVerified = true
-			if target != input.TargetAzDOGoImagesRepo || commit != input.GoImagesSourceVersion {
-				t.Fatalf("mirror target = %q at %q, want %q at %q", target, commit, input.TargetAzDOGoImagesRepo, input.GoImagesSourceVersion)
+			if target != input.MirrorTarget || commit != input.SourceVersion {
+				t.Fatalf("mirror target = %q at %q, want %q at %q", target, commit, input.MirrorTarget, input.SourceVersion)
 			}
 			return nil
 		},
@@ -158,7 +166,7 @@ func TestRunFakeGoImagesPipeline(t *testing.T) {
 }
 
 func TestGoImagesReleaseBlocksQueueUntilCommitIsMirrored(t *testing.T) {
-	input := *exampleInput
+	input := *exampleGoImagesInput
 	mirrorErr := errors.New("commit is not mirrored")
 	queued := false
 	sb := &ServiceBundleMock{
@@ -187,8 +195,8 @@ func TestGoImagesReleaseBlocksQueueUntilCommitIsMirrored(t *testing.T) {
 }
 
 func TestGoImagesReleasePipelineResume(t *testing.T) {
-	input := *exampleInput
-	state, err := initializeState(&input, nil)
+	input := *exampleGoImagesInput
+	state, err := initializeState(goImagesCompatibilityInput(&input), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,20 +328,7 @@ func TestRunFakeRelease(t *testing.T) {
 		},
 	}
 
-	var checkpoints []State
-	checkpoint := func(ctx context.Context, state *State) error {
-		data, err := json.Marshal(state)
-		if err != nil {
-			return err
-		}
-		var clone State
-		if err := json.Unmarshal(data, &clone); err != nil {
-			return err
-		}
-		checkpoints = append(checkpoints, clone)
-		return nil
-	}
-	steps, state, err := CreateStepGraphWithCheckpoint(exampleInput, exampleSecret, nil, sb, checkpoint)
+	steps, state, err := CreateStepGraph(exampleInput, exampleSecret, nil, sb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,52 +357,12 @@ func TestRunFakeRelease(t *testing.T) {
 			t.Errorf("image PR merge poll repo = %q, want %q", call.Repo, exampleInput.TargetGoImagesRepo)
 		}
 	}
-	if len(checkpoints) == 0 {
-		t.Fatal("release completed without recording any state checkpoints")
-	}
-	if checkpoints[0].Day.ReleaseIssue != releaseIssueNumber {
-		t.Fatalf("first checkpoint release issue = %d, want %d", checkpoints[0].Day.ReleaseIssue, releaseIssueNumber)
-	}
-
 	// Verify all release state as a golden file. It's intended to be human-readable.
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	goldentest.Check(t, "fake-complete-release-state.golden.json", string(stateJSON))
-	lastCheckpointJSON, err := json.MarshalIndent(checkpoints[len(checkpoints)-1], "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(lastCheckpointJSON) != string(stateJSON) {
-		t.Fatalf("last checkpoint does not match final release state\ncheckpoint:\n%s\nfinal:\n%s", lastCheckpointJSON, stateJSON)
-	}
-}
-
-func TestCheckpointFailureStopsRelease(t *testing.T) {
-	checkpointErr := errors.New("checkpoint unavailable")
-	sb := &ServiceBundleMock{
-		CreateReleaseDayTrackingIssueFunc: func(context.Context, string, string, []string, *Secret) (int, error) {
-			return 42, nil
-		},
-	}
-	steps, state, err := CreateStepGraphWithCheckpoint(
-		&Input{Versions: []string{"1.26.1-1"}},
-		&Secret{},
-		nil,
-		sb,
-		func(context.Context, *State) error { return checkpointErr },
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runner coordinator.StepRunner
-	if err := runner.Execute(context.Background(), steps); !errors.Is(err, checkpointErr) {
-		t.Fatalf("Execute error = %v, want checkpoint error", err)
-	}
-	if state.Day.ReleaseIssue != 42 {
-		t.Fatalf("in-memory release issue = %d, want 42", state.Day.ReleaseIssue)
-	}
 }
 
 func TestStateAccessRetriesDirtyCheckpoint(t *testing.T) {

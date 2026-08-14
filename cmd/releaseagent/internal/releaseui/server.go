@@ -62,7 +62,7 @@ type Server struct {
 	input             PlanInput
 	source            GoImagesSource
 	rollbackSource    *GoImagesRollbackSource
-	releaseInput      *releasesteps.Input
+	releaseInput      *releasesteps.GoImagesInput
 	releaseState      *releasesteps.State
 	document          *session.Document
 	runner            *coordinator.StepRunner
@@ -523,15 +523,14 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	releaseInput := &releasesteps.Input{
-		Versions:                  versions,
-		GoImagesReleaseMode:       normalized.Mode,
-		GoImagesSourceBranch:      source.Branch,
-		GoImagesSourceVersion:     source.Commit,
-		GoImagesSourceBuildID:     normalized.SourceBuildID,
-		RunnerGitHubUser:          "ghost",
-		TargetAzDOGoImagesRepo:    releasesteps.GoImagesInternalMirrorTarget,
-		MicrosoftGoImagesPipeline: goImagesPipelineID,
+	releaseInput := &releasesteps.GoImagesInput{
+		Versions:      versions,
+		Mode:          normalized.Mode,
+		SourceBranch:  source.Branch,
+		SourceVersion: source.Commit,
+		SourceBuildID: normalized.SourceBuildID,
+		MirrorTarget:  releasesteps.GoImagesInternalMirrorTarget,
+		PipelineID:    goImagesPipelineID,
 	}
 	steps, releaseState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
 		releaseInput, nil, nil, disabledServices{}, s.checkpointReleaseState,
@@ -540,7 +539,8 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create go-images plan: %v", err))
 		return
 	}
-	document, err := session.NewDocument(releaseInput, releaseState, steps, time.Now())
+	sessionInput := goImagesSessionInput(*releaseInput)
+	document, err := session.NewDocument(&sessionInput, releaseState, steps, time.Now())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create durable release session: %v", err))
 		return
@@ -575,8 +575,8 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 	parameters := map[string]string{}
 	if s.releaseInput != nil {
 		if derived, err := releasesteps.GoImagesPipelineParametersForMode(
-			s.releaseInput.GoImagesReleaseMode,
-			s.releaseInput.GoImagesSourceBuildID,
+			s.releaseInput.Mode,
+			s.releaseInput.SourceBuildID,
 		); err == nil {
 			parameters = derived
 		}
@@ -619,8 +619,8 @@ func (s *Server) executionResponseLocked() executionResponse {
 		return result
 	}
 	parameters, err := releasesteps.GoImagesPipelineParametersForMode(
-		s.releaseInput.GoImagesReleaseMode,
-		s.releaseInput.GoImagesSourceBuildID,
+		s.releaseInput.Mode,
+		s.releaseInput.SourceBuildID,
 	)
 	if err != nil {
 		result.UnavailableReason = err.Error()
@@ -640,9 +640,9 @@ func (s *Server) executionResponseLocked() executionResponse {
 		WorkflowDigest   string
 	}{
 		SessionID: s.document.ID, ExecutionDigest: s.document.ExecutionDigest,
-		Mode: s.releaseInput.GoImagesReleaseMode, Versions: append([]string(nil), s.releaseInput.Versions...),
-		SourceBranch: s.releaseInput.GoImagesSourceBranch, SourceVersion: s.releaseInput.GoImagesSourceVersion,
-		SourceBuildID: s.releaseInput.GoImagesSourceBuildID, DefinitionID: goImagesPipelineID,
+		Mode: s.releaseInput.Mode, Versions: append([]string(nil), s.releaseInput.Versions...),
+		SourceBranch: s.releaseInput.SourceBranch, SourceVersion: s.releaseInput.SourceVersion,
+		SourceBuildID: s.releaseInput.SourceBuildID, DefinitionID: goImagesPipelineID,
 		Parameters: parameters, WorkflowRevision: plan.WorkflowRevision, WorkflowDigest: plan.Digest,
 	}
 	data, err := json.Marshal(payload)
@@ -673,7 +673,8 @@ func (s *Server) restoreSession() error {
 			return fmt.Errorf("migrate release session: %w", err)
 		}
 	}
-	input := document.Input
+	sessionInput := document.Input
+	input := goImagesInputFromSession(sessionInput)
 	state := document.State
 	steps, restoredState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
 		&input, nil, &state, disabledServices{}, s.checkpointReleaseState,
@@ -689,13 +690,13 @@ func (s *Server) restoreSession() error {
 		return fmt.Errorf("restore release session: %w", err)
 	}
 	s.steps = steps
-	s.input = PlanInput{Mode: input.GoImagesReleaseMode, SourceBuildID: input.GoImagesSourceBuildID}
+	s.input = PlanInput{Mode: input.Mode, SourceBuildID: input.SourceBuildID}
 	s.source = GoImagesSource{
-		Branch: input.GoImagesSourceBranch, Commit: input.GoImagesSourceVersion,
+		Branch: input.SourceBranch, Commit: input.SourceVersion,
 		Versions: append([]string(nil), input.Versions...),
 	}
-	if input.GoImagesReleaseMode == releasesteps.GoImagesReleaseModeRollback {
-		buildID, _ := strconv.Atoi(input.GoImagesSourceBuildID)
+	if input.Mode == releasesteps.GoImagesReleaseModeRollback {
+		buildID, _ := strconv.Atoi(input.SourceBuildID)
 		s.rollbackSource = &GoImagesRollbackSource{BuildID: buildID, Versions: append([]string(nil), input.Versions...)}
 	}
 	s.releaseInput = &input
@@ -728,8 +729,9 @@ func (s *Server) migrateGoImagesWorkflowRevision5(document *session.Document) (*
 		)
 	}
 
-	input := document.Input
-	input.TargetAzDOGoImagesRepo = releasesteps.GoImagesInternalMirrorTarget
+	sessionInput := document.Input
+	sessionInput.TargetAzDOGoImagesRepo = releasesteps.GoImagesInternalMirrorTarget
+	input := goImagesInputFromSession(sessionInput)
 	_, initializedState, err := releasesteps.CreateGoImagesPipelineGraph(&input, nil, nil, disabledServices{})
 	if err != nil {
 		return nil, fmt.Errorf("initialize revision-6 state: %w", err)
@@ -740,7 +742,7 @@ func (s *Server) migrateGoImagesWorkflowRevision5(document *session.Document) (*
 	if err != nil {
 		return nil, fmt.Errorf("create revision-6 graph: %w", err)
 	}
-	upgraded, err := document.UpgradeWorkflow(&input, migratedState, steps, time.Now())
+	upgraded, err := document.UpgradeWorkflow(&sessionInput, migratedState, steps, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("upgrade revision-5 document: %w", err)
 	}
@@ -767,9 +769,9 @@ func (s *Server) resumeRestoredMonitoring() error {
 		return errors.New("restore go-images monitoring without an eligible execution plan")
 	}
 	service, err := s.execution.NewService(GoImagesExecutionRequest{
-		Mode: s.releaseInput.GoImagesReleaseMode, SessionID: s.document.ID, ExecutionDigest: intent.PlanDigest,
-		Versions: append([]string(nil), s.releaseInput.Versions...), SourceBuildID: s.releaseInput.GoImagesSourceBuildID,
-		SourceVersion:        s.releaseInput.GoImagesSourceVersion,
+		Mode: s.releaseInput.Mode, SessionID: s.document.ID, ExecutionDigest: intent.PlanDigest,
+		Versions: append([]string(nil), s.releaseInput.Versions...), SourceBuildID: s.releaseInput.SourceBuildID,
+		SourceVersion:        s.releaseInput.SourceVersion,
 		PreviousQueueAttempt: s.releaseState.Day.GoImagesReleaseQueueAttempted,
 	})
 	if err != nil {
@@ -824,6 +826,31 @@ func (s *Server) checkpointReleaseState(ctx context.Context, state *releasesteps
 	}
 	s.document = document
 	return nil
+}
+
+func goImagesSessionInput(input releasesteps.GoImagesInput) releasesteps.Input {
+	return releasesteps.Input{
+		Versions:                  append([]string(nil), input.Versions...),
+		GoImagesReleaseMode:       input.Mode,
+		GoImagesSourceBranch:      input.SourceBranch,
+		GoImagesSourceVersion:     input.SourceVersion,
+		GoImagesSourceBuildID:     input.SourceBuildID,
+		RunnerGitHubUser:          "ghost",
+		TargetAzDOGoImagesRepo:    input.MirrorTarget,
+		MicrosoftGoImagesPipeline: input.PipelineID,
+	}
+}
+
+func goImagesInputFromSession(input releasesteps.Input) releasesteps.GoImagesInput {
+	return releasesteps.GoImagesInput{
+		Versions:      append([]string(nil), input.Versions...),
+		Mode:          input.GoImagesReleaseMode,
+		SourceBranch:  input.GoImagesSourceBranch,
+		SourceVersion: input.GoImagesSourceVersion,
+		SourceBuildID: input.GoImagesSourceBuildID,
+		MirrorTarget:  input.TargetAzDOGoImagesRepo,
+		PipelineID:    input.MicrosoftGoImagesPipeline,
+	}
 }
 
 func (s *Server) handlePreflight(response http.ResponseWriter, request *http.Request) {
@@ -903,13 +930,13 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 			writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("re-resolve current microsoft/main: %v", err))
 			return
 		}
-		if current.Branch != input.GoImagesSourceBranch || current.Commit != input.GoImagesSourceVersion {
+		if current.Branch != input.SourceBranch || current.Commit != input.SourceVersion {
 			s.finishRelease()
 			writeError(response, http.StatusConflict, "microsoft/main changed after this plan was prepared; refresh the plan before queueing")
 			return
 		}
-		if input.GoImagesReleaseMode == releasesteps.GoImagesReleaseModeRollback {
-			buildID, _ := strconv.Atoi(input.GoImagesSourceBuildID)
+		if input.Mode == releasesteps.GoImagesReleaseModeRollback {
+			buildID, _ := strconv.Atoi(input.SourceBuildID)
 			if _, err := validateRollback(request.Context(), buildID); err != nil {
 				s.finishRelease()
 				writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("revalidate rollback source: %v", err))
@@ -923,9 +950,9 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		return
 	}
 	service, err := newService(GoImagesExecutionRequest{
-		Mode: input.GoImagesReleaseMode, SessionID: sessionID, ExecutionDigest: intent.PlanDigest,
-		Versions: append([]string(nil), input.Versions...), SourceBuildID: input.GoImagesSourceBuildID,
-		SourceVersion: input.GoImagesSourceVersion, PreviousQueueAttempt: previousQueueAttempt,
+		Mode: input.Mode, SessionID: sessionID, ExecutionDigest: intent.PlanDigest,
+		Versions: append([]string(nil), input.Versions...), SourceBuildID: input.SourceBuildID,
+		SourceVersion: input.SourceVersion, PreviousQueueAttempt: previousQueueAttempt,
 	})
 	if err != nil {
 		s.finishRelease()

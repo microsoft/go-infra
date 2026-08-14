@@ -21,8 +21,8 @@ type StepFunc func(ctx context.Context) error
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
 type Step struct {
-	// ID is the stable, machine-readable identity of the step. It must be unique within the release
-	// step graph and must not change when display text changes.
+	// ID is serialized into durable plans and browser snapshots. It must be unique and stable so
+	// changing the user-facing Name doesn't invalidate a resumable release or break UI correlation.
 	ID string
 	// Name is the human-readable name of the step.
 	Name string
@@ -90,7 +90,8 @@ func (s *Step) Then(id, name string, timeout time.Duration, f StepFunc, dependsO
 	}
 }
 
-// ValidateSteps checks that steps form a complete, executable directed acyclic graph.
+// ValidateSteps checks an arbitrary step slice before execution or persistence. Unlike
+// TransitiveDependencies, it verifies that every dependency is present in the supplied slice.
 func ValidateSteps(steps []*Step) error {
 	if len(steps) == 0 {
 		return errors.New("step graph is empty")

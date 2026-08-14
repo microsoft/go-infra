@@ -97,6 +97,8 @@ type StepRunner struct {
 // running steps. A panic is recovered, wrapped with errStepPanic, and treated as an error. The
 // graph is validated before any step starts.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
+	// Callers may supply any step slice, not only one returned by TransitiveDependencies. Validate
+	// again at this trust boundary in case the graph was incomplete or mutated after construction.
 	if err := ValidateSteps(steps); err != nil {
 		return err
 	}

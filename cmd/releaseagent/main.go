@@ -15,7 +15,7 @@ import (
 )
 
 const description = `
-releaseagent coordinates a release of Microsoft Build of Go repository.
+releaseagent coordinates a release related to the Microsoft build of Go project.
 `
 
 // subcommands is the list of subcommand options, populated by each file's init function.
