@@ -13,7 +13,7 @@
 #   permissions:
 #     contents: read
 #     issues: write
-#     pull-requests: read
+#     pull-requests: write
 #
 #   jobs:
 #     classify:
@@ -21,7 +21,7 @@
 #       permissions:
 #         contents: read
 #         issues: write
-#         pull-requests: read
+#         pull-requests: write
 #       with:
 #         pr-number: ${{ github.event.pull_request.number || inputs.pr-number || 0 }}
 #         area-prefixes: |
@@ -51,7 +51,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   classify:
