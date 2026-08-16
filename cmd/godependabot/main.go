@@ -188,11 +188,25 @@ type dependabotEntry struct {
 	Schedule         struct {
 		Interval string `json:"interval" yaml:"interval"`
 	} `json:"schedule" yaml:"schedule"`
-	Groups                map[string]any   `json:"groups,omitempty" yaml:"groups,omitempty"`
-	Ignore                []map[string]any `json:"ignore,omitempty" yaml:"ignore,omitempty"`
-	ExcludePaths          []string         `json:"exclude-paths,omitempty" yaml:"exclude-paths,omitempty"`
-	OpenPullRequestsLimit int              `json:"open-pull-requests-limit,omitempty" yaml:"open-pull-requests-limit,omitempty"`
+	Groups                map[string]any      `json:"groups,omitempty" yaml:"groups,omitempty"`
+	Ignore                []map[string]any    `json:"ignore,omitempty" yaml:"ignore,omitempty"`
+	ExcludePaths          []string            `json:"exclude-paths,omitempty" yaml:"exclude-paths,omitempty"`
+	OpenPullRequestsLimit int                 `json:"open-pull-requests-limit,omitempty" yaml:"open-pull-requests-limit,omitempty"`
+	Cooldown              *dependabotCooldown `json:"cooldown,omitempty" yaml:"cooldown,omitempty"`
 }
+
+// dependabotCooldown configures the minimum number of days Dependabot waits
+// after a new version is published before proposing it as an update. This
+// gives the community time to detect and report compromised releases before
+// they're automatically pulled in.
+type dependabotCooldown struct {
+	DefaultDays int `json:"default-days" yaml:"default-days"`
+}
+
+// githubActionsCooldownDays is the minimum number of days to wait after a new
+// GitHub Actions release is published before Dependabot proposes it as an
+// update. See https://github.com/microsoft/go-infra/pull/539.
+const githubActionsCooldownDays = 7
 
 // initialDependabotContent is the minimal dependabot config used to bootstrap
 // the file when the repository doesn't already have one. The generated block is
@@ -253,6 +267,7 @@ func appendGitHubActionsEntries(entries []dependabotEntry, root string, files []
 		PackageEcosystem:      "github-actions",
 		Directory:             "/",
 		OpenPullRequestsLimit: 10,
+		Cooldown:              &dependabotCooldown{DefaultDays: githubActionsCooldownDays},
 	}
 	entry.Schedule.Interval = "daily"
 	if hasCodeQL {
