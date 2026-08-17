@@ -24,12 +24,12 @@ func execute(t *testing.T, step *Step) error {
 func TestStepRunner_Execute_Cancel(t *testing.T) {
 	// Test that when a step fails, steps that depend on it don't enter their impls.
 	a := NewRootStep(
-		"failure", "Failure", NoTimeout,
+		"Failure", NoTimeout,
 		func(ctx context.Context) error {
 			return fmt.Errorf("intentional failure")
 		},
 	).Then(
-		"dependent", "Dependent", NoTimeout,
+		"Dependent", NoTimeout,
 		func(ctx context.Context) error {
 			t.Fatal("dependent step ran")
 			return nil
@@ -42,7 +42,7 @@ func TestStepRunner_Execute_Cancel(t *testing.T) {
 func TestStepRunner_Execute_PanicToError(t *testing.T) {
 	// Test that when a step panics, it is treated as an error.
 	a := NewRootStep(
-		"panic", "Panic", NoTimeout,
+		"Panic", NoTimeout,
 		func(ctx context.Context) error {
 			panic("intentional panic")
 		},
@@ -58,7 +58,7 @@ func TestStepRunner_Execute_PanicToError(t *testing.T) {
 
 func TestStepRunnerSnapshots(t *testing.T) {
 	releaseStep := make(chan struct{})
-	step := NewRootStep("controlled", "Controlled step", NoTimeout, func(ctx context.Context) error {
+	step := NewRootStep("Controlled step", NoTimeout, func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -101,7 +101,7 @@ func TestStepRunnerProgressSnapshots(t *testing.T) {
 	reported := make(chan struct{})
 	releaseStep := make(chan struct{})
 	items := []string{"Build › linux-amd64 › Compile"}
-	step := NewRootStep("progress", "Progress step", NoTimeout, func(ctx context.Context) error {
+	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context) error {
 		ReportProgress(ctx, StepProgress{
 			Summary:   "Running one pipeline task",
 			Detail:    "1/3 stages complete",

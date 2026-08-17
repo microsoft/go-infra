@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package azdopipeline provides the narrow Azure DevOps Build API surface needed by release UI
-// workflows. It does not log tokens or request authorization headers.
+// Package azdopipeline adapts the Azure DevOps Build SDK and provides the few additional REST
+// operations needed by release UI workflows. It does not log tokens or authorization headers.
 package azdopipeline
 
 import (
@@ -16,9 +16,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/microsoft/azure-devops-go-api/azuredevops"
+	azdobuild "github.com/microsoft/azure-devops-go-api/azuredevops/build"
 )
 
-const maxResponseSize = 4 << 20
+const (
+	maxResponseSize   = 4 << 20
+	sdkRequestTimeout = 3 * time.Minute
+)
 
 // TokenProvider acquires an Azure DevOps bearer token when a request is made.
 type TokenProvider interface {
@@ -32,10 +38,20 @@ type HTTPDoer interface {
 
 // Client accesses one Azure DevOps project.
 type Client struct {
-	baseURL string
-	project string
-	http    HTTPDoer
-	tokens  TokenProvider
+	baseURL             string
+	project             string
+	http                HTTPDoer
+	tokens              TokenProvider
+	newDefinitionClient func(context.Context) (definitionClient, string, error)
+	newTimelineClient   func(context.Context) (timelineClient, string, error)
+}
+
+type definitionClient interface {
+	GetDefinition(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+}
+
+type timelineClient interface {
+	GetBuildTimeline(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
 }
 
 // Build is the release UI's stable view of an Azure Pipelines run.
@@ -117,12 +133,15 @@ func NewClient(baseURL, project string, httpClient HTTPDoer, tokens TokenProvide
 	if tokens == nil {
 		return nil, errors.New("azure DevOps token provider must not be nil")
 	}
-	return &Client{
+	client := &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		project: project,
 		http:    httpClient,
 		tokens:  tokens,
-	}, nil
+	}
+	client.newDefinitionClient = client.createDefinitionClient
+	client.newTimelineClient = client.createTimelineClient
+	return client, nil
 }
 
 // Get returns one pipeline run.
@@ -143,27 +162,36 @@ func (c *Client) GetTimeline(ctx context.Context, buildID int) (*Timeline, error
 	if buildID <= 0 {
 		return nil, errors.New("build ID must be positive")
 	}
-	endpoint := c.buildsURL(nil) + "/" + strconv.Itoa(buildID) + "/timeline?api-version=7.1"
-	var response struct {
-		Records []struct {
-			ID       string `json:"id"`
-			ParentID string `json:"parentId"`
-			Type     string `json:"type"`
-			Name     string `json:"name"`
-			State    string `json:"state"`
-			Result   string `json:"result"`
-			Order    int    `json:"order"`
-		} `json:"records"`
+	client, token, err := c.newTimelineClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &response); err != nil {
-		return nil, err
+	response, err := client.GetBuildTimeline(ctx, azdobuild.GetBuildTimelineArgs{
+		Project: &c.project, BuildId: &buildID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get Azure DevOps build timeline: %w", redactError(err, token))
 	}
-	timeline := &Timeline{Records: make([]TimelineRecord, 0, len(response.Records))}
-	for _, record := range response.Records {
-		timeline.Records = append(timeline.Records, TimelineRecord{
-			ID: record.ID, ParentID: record.ParentID, Type: record.Type, Name: record.Name,
-			State: record.State, Result: record.Result, Order: record.Order,
-		})
+	timeline := &Timeline{}
+	if response == nil || response.Records == nil {
+		return timeline, nil
+	}
+	timeline.Records = make([]TimelineRecord, 0, len(*response.Records))
+	for _, record := range *response.Records {
+		mapped := TimelineRecord{
+			Type: stringValue(record.Type), Name: stringValue(record.Name),
+			State: enumValue(record.State), Result: enumValue(record.Result),
+		}
+		if record.Id != nil {
+			mapped.ID = record.Id.String()
+		}
+		if record.ParentId != nil {
+			mapped.ParentID = record.ParentId.String()
+		}
+		if record.Order != nil {
+			mapped.Order = *record.Order
+		}
+		timeline.Records = append(timeline.Records, mapped)
 	}
 	return timeline, nil
 }
@@ -173,34 +201,93 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 	if definitionID <= 0 {
 		return nil, errors.New("pipeline definition ID must be positive")
 	}
-	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/build/definitions/" +
-		strconv.Itoa(definitionID) + "?api-version=7.1"
-	var response struct {
-		ID          int    `json:"id"`
-		Name        string `json:"name"`
-		QueueStatus string `json:"queueStatus"`
-		Process     struct {
-			YAMLPath string `json:"yamlFilename"`
-		} `json:"process"`
-		Repository struct {
-			DefaultBranch string `json:"defaultBranch"`
-			Name          string `json:"name"`
-		} `json:"repository"`
+	client, token, err := c.newDefinitionClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &response); err != nil {
-		return nil, err
+	response, err := client.GetDefinition(ctx, azdobuild.GetDefinitionArgs{
+		Project: &c.project, DefinitionId: &definitionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get Azure DevOps pipeline definition: %w", redactError(err, token))
 	}
-	if response.ID != definitionID {
-		return nil, fmt.Errorf("azure DevOps returned definition %d, expected %d", response.ID, definitionID)
+	if response == nil || response.Id == nil || *response.Id != definitionID {
+		return nil, fmt.Errorf("azure DevOps returned an unexpected definition, expected %d", definitionID)
 	}
 	return &Definition{
-		ID:            response.ID,
-		Name:          response.Name,
-		QueueStatus:   response.QueueStatus,
-		DefaultBranch: response.Repository.DefaultBranch,
-		Repository:    response.Repository.Name,
-		YAMLPath:      response.Process.YAMLPath,
+		ID:            *response.Id,
+		Name:          stringValue(response.Name),
+		QueueStatus:   enumValue(response.QueueStatus),
+		DefaultBranch: repositoryValue(response.Repository, func(repository *azdobuild.BuildRepository) *string { return repository.DefaultBranch }),
+		Repository:    repositoryValue(response.Repository, func(repository *azdobuild.BuildRepository) *string { return repository.Name }),
+		YAMLPath:      processString(response.Process, "yamlFilename"),
 	}, nil
+}
+
+func (c *Client) createDefinitionClient(ctx context.Context) (definitionClient, string, error) {
+	client, token, err := c.createBuildClient(ctx)
+	return client, token, err
+}
+
+func (c *Client) createTimelineClient(ctx context.Context) (timelineClient, string, error) {
+	client, token, err := c.createBuildClient(ctx)
+	return client, token, err
+}
+
+func (c *Client) createBuildClient(ctx context.Context) (azdobuild.Client, string, error) {
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("acquire Azure DevOps token: %w", err)
+	}
+	if token == "" {
+		return nil, "", errors.New("azure DevOps token provider returned an empty token")
+	}
+	connection := azuredevops.NewAnonymousConnection(c.baseURL)
+	connection.AuthorizationString = "Bearer " + token
+	timeout := sdkRequestTimeout
+	if httpClient, ok := c.http.(*http.Client); ok && httpClient.Timeout > 0 {
+		timeout = httpClient.Timeout
+	}
+	connection.Timeout = &timeout
+	client, err := azdobuild.NewClient(ctx, connection)
+	return client, token, err
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func enumValue[T ~string](value *T) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
+}
+
+func repositoryValue(repository *azdobuild.BuildRepository, field func(*azdobuild.BuildRepository) *string) string {
+	if repository == nil {
+		return ""
+	}
+	return stringValue(field(repository))
+}
+
+func processString(process any, name string) string {
+	fields, ok := process.(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := fields[name].(string)
+	return value
+}
+
+func redactError(err error, token string) error {
+	if err == nil || token == "" {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), token, "[REDACTED]"))
 }
 
 // ListRecent returns up to 50 recent runs of a pipeline, newest first.

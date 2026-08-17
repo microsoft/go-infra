@@ -287,7 +287,6 @@ type PlanInput struct {
 }
 
 type planStep struct {
-	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	DependsOn []string `json:"dependsOn,omitempty"`
 	Timeout   string   `json:"timeout,omitempty"`
@@ -734,20 +733,20 @@ func (s *Server) migrateGoImagesWorkflowRevision5(document *session.Document) (*
 	input := goImagesInputFromSession(sessionInput)
 	_, initializedState, err := releasesteps.CreateGoImagesPipelineGraph(&input, nil, nil, disabledServices{})
 	if err != nil {
-		return nil, fmt.Errorf("initialize revision-6 state: %w", err)
+		return nil, fmt.Errorf("initialize revision-7 state: %w", err)
 	}
 	state := document.State
 	state.InputChecksum = initializedState.InputChecksum
 	steps, migratedState, err := releasesteps.CreateGoImagesPipelineGraph(&input, nil, &state, disabledServices{})
 	if err != nil {
-		return nil, fmt.Errorf("create revision-6 graph: %w", err)
+		return nil, fmt.Errorf("create revision-7 graph: %w", err)
 	}
 	upgraded, err := document.UpgradeWorkflow(&sessionInput, migratedState, steps, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("upgrade revision-5 document: %w", err)
 	}
 	if err := s.sessionStore.Save(s.ctx, upgraded); err != nil {
-		return nil, fmt.Errorf("persist revision-6 session: %w", err)
+		return nil, fmt.Errorf("persist revision-7 session: %w", err)
 	}
 	return upgraded, nil
 }
@@ -1051,12 +1050,12 @@ func normalizeResolvedVersions(versions []string) ([]string, error) {
 func describeSteps(steps []*coordinator.Step) []planStep {
 	descriptions := make([]planStep, 0, len(steps))
 	for _, step := range steps {
-		description := planStep{ID: step.ID, Name: step.Name, DependsOn: make([]string, len(step.DependsOn))}
+		description := planStep{Name: step.Name, DependsOn: make([]string, len(step.DependsOn))}
 		if step.Timeout != coordinator.NoTimeout {
 			description.Timeout = step.Timeout.String()
 		}
 		for i, dependency := range step.DependsOn {
-			description.DependsOn[i] = dependency.ID
+			description.DependsOn[i] = dependency.Name
 		}
 		descriptions = append(descriptions, description)
 	}
@@ -1097,7 +1096,7 @@ func cloneForDemo(steps []*coordinator.Step, delay time.Duration) []*coordinator
 	result := make([]*coordinator.Step, 0, len(steps))
 	for _, step := range steps {
 		clone := &coordinator.Step{
-			ID: step.ID, Name: step.Name, Timeout: step.Timeout,
+			Name: step.Name, Timeout: step.Timeout,
 			Func: func(ctx context.Context) error {
 				timer := time.NewTimer(delay)
 				defer timer.Stop()

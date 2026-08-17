@@ -235,11 +235,11 @@ function initialSnapshot(nextPlan) {
   const steps = nextPlan.steps.map((step) => ({ ...step, status: "waiting" }));
   const monitoring = Boolean(nextPlan.execution?.enabled && nextPlan.execution?.run?.buildId && !nextPlan.execution.run.complete);
   if (nextPlan.execution?.run?.buildId) {
-    for (const id of ["go-images.release.verify-internal-mirror", "go-images.release.queue"]) {
-      const completedStep = steps.find((step) => step.id === id);
+    for (const name of ["Verify go-images commit is mirrored internally", "🚀 Queue go-images release"]) {
+      const completedStep = steps.find((step) => step.name === name);
       if (completedStep) completedStep.status = "succeeded";
     }
-    const monitor = steps.find((step) => step.id === "go-images.release.wait");
+    const monitor = steps.find((step) => step.name === "⌚ Wait for go-images release");
     if (monitor && monitoring) monitor.status = "running";
   }
   if (nextPlan.execution?.run?.complete) {
@@ -251,7 +251,7 @@ function initialSnapshot(nextPlan) {
 function createStepCard(step) {
   const item = document.createElement("article");
   item.className = "step-card";
-  item.dataset.stepId = step.id;
+  item.dataset.stepName = step.name;
   item.dataset.status = "waiting";
   item.setAttribute("role", "listitem");
   const head = document.createElement("div");
@@ -263,9 +263,6 @@ function createStepCard(step) {
   status.className = "status-badge";
   status.textContent = "waiting";
   head.append(title, status);
-  const id = document.createElement("code");
-  id.className = "step-id";
-  id.textContent = step.id;
   const liveProgress = document.createElement("div");
   liveProgress.className = "step-live-progress";
   liveProgress.hidden = true;
@@ -282,7 +279,7 @@ function createStepCard(step) {
   const progressItems = document.createElement("ul");
   progressItems.className = "step-progress-items";
   liveProgress.append(progressSummary, progressDetail, progressTrack, progressItems);
-  item.append(head, id, liveProgress);
+  item.append(head, liveProgress);
   return item;
 }
 
@@ -290,7 +287,7 @@ function renderStepGraph(steps) {
   const levels = computeStepLevels(steps);
   const maxLevel = Math.max(0, ...levels.values());
   const columns = Array.from({ length: maxLevel + 1 }, () => []);
-  for (const step of steps) columns[levels.get(step.id) || 0].push(step);
+  for (const step of steps) columns[levels.get(step.name) || 0].push(step);
 
   stepList.replaceChildren(...columns.map((stepsAtLevel, level) => {
     const column = document.createElement("section");
@@ -313,17 +310,17 @@ function renderStepGraph(steps) {
 }
 
 function computeStepLevels(steps) {
-  const byID = new Map(steps.map((step) => [step.id, step]));
+  const byName = new Map(steps.map((step) => [step.name, step]));
   const levels = new Map();
   const visiting = new Set();
   const visit = (step) => {
-    if (levels.has(step.id)) return levels.get(step.id);
-    if (visiting.has(step.id)) return 0;
-    visiting.add(step.id);
-    const dependencies = (step.dependsOn || []).map((id) => byID.get(id)).filter(Boolean);
+    if (levels.has(step.name)) return levels.get(step.name);
+    if (visiting.has(step.name)) return 0;
+    visiting.add(step.name);
+    const dependencies = (step.dependsOn || []).map((name) => byName.get(name)).filter(Boolean);
     const level = dependencies.length ? Math.max(...dependencies.map(visit)) + 1 : 0;
-    visiting.delete(step.id);
-    levels.set(step.id, level);
+    visiting.delete(step.name);
+    levels.set(step.name, level);
     return level;
   };
   for (const step of steps) visit(step);
@@ -361,7 +358,7 @@ function renderGraphEdges() {
   const graphRect = stepGraph.getBoundingClientRect();
   const paths = [];
   for (const step of plan.steps) {
-    const target = findStepCard(step.id);
+    const target = findStepCard(step.name);
     if (!target) continue;
     const targetRect = target.getBoundingClientRect();
     for (const dependencyID of step.dependsOn || []) {
@@ -391,13 +388,13 @@ function graphEdgeStatus(dependencyStatus, targetStatus) {
   return "waiting";
 }
 
-function findStepCard(stepID) {
-  return Array.from(stepList.querySelectorAll(".step-card")).find((card) => card.dataset.stepId === stepID);
+function findStepCard(stepName) {
+  return Array.from(stepList.querySelectorAll(".step-card")).find((card) => card.dataset.stepName === stepName);
 }
 
 function updateSteps(snapshot) {
   for (const step of snapshot.steps || []) {
-    const card = findStepCard(step.id);
+    const card = findStepCard(step.name);
     if (!card) continue;
     card.dataset.status = step.status;
     card.querySelector(".status-badge").textContent = statusText(step.status);
@@ -514,7 +511,7 @@ function connectEvents() {
     }
     updateActionButtons();
     if (!snapshot.active && snapshot.error) showError(snapshot.error);
-    if (!snapshot.active || snapshot.steps.some((step) => step.id === "go-images.release.queue" && step.status === "succeeded")) {
+    if (!snapshot.active || snapshot.steps.some((step) => step.name === "🚀 Queue go-images release" && step.status === "succeeded")) {
       refreshPlan().catch((error) => showError(error.message));
     }
   });

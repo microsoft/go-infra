@@ -372,7 +372,6 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 	state := &stateAccess{state: rs, checkpoint: checkpoint}
 
 	verifyMirror := coordinator.NewRootStep(
-		"go-images.release.verify-internal-mirror",
 		"Verify go-images commit is mirrored internally",
 		internalMirrorTimeout,
 		func(ctx context.Context) error {
@@ -383,7 +382,6 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 		},
 	)
 	queue := verifyMirror.Then(
-		"go-images.release.queue",
 		"🚀 Queue go-images release",
 		shortTimeout,
 		func(ctx context.Context) error {
@@ -414,7 +412,6 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 		},
 	)
 	wait := queue.Then(
-		"go-images.release.wait",
 		"⌚ Wait for go-images release",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
@@ -432,7 +429,6 @@ func CreateGoImagesPipelineGraphWithCheckpoint(
 		},
 	)
 	complete := coordinator.NewIndicatorStep(
-		"go-images.release.complete",
 		"✅ Go-images release complete",
 		wait,
 	)
@@ -537,7 +533,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 	}
 
 	createStatusReportIssue := coordinator.NewRootStep(
-		"release-day.issue",
 		"Create release day issue",
 		shortTimeout,
 		func(ctx context.Context) error {
@@ -556,15 +551,11 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 
 	for _, version := range ri.Versions {
 		vs := rs.Versions[version]
-		id := func(id string) string {
-			return fmt.Sprintf("version.%s.%s", version, id)
-		}
 		name := func(n string) string {
 			return fmt.Sprintf("%s, %s", n, version)
 		}
 
 		syncUpdate := coordinator.NewStep(
-			id("upstream-commit"),
 			name("⌚ Get upstream commit for release"),
 			noTimeout,
 			func(ctx context.Context) error {
@@ -577,7 +568,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 			createStatusReportIssue,
 		).Then(
-			id("sync-pr"),
 			name("Create sync PR"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -589,7 +579,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 				return err
 			},
 		).Then(
-			id("sync-pr-merge"),
 			name("⌚ Wait for PR merge"),
 			microsoftGoPRCITimeout,
 			func(ctx context.Context) error {
@@ -601,7 +590,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 				return err
 			},
 		).Then(
-			id("azdo-sync"),
 			name("⌚ Wait for AzDO sync"),
 			internalMirrorTimeout,
 			func(ctx context.Context) error {
@@ -610,7 +598,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		officialBuild := coordinator.NewStep(
-			id("official-build-trigger"),
 			name("🚀 Trigger official build"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -623,7 +610,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 			syncUpdate,
 		).Then(
-			id("official-build-wait"),
 			name("⌚ Wait for official build"),
 			microsoftGoOfficialCITimeout,
 			func(ctx context.Context) error {
@@ -632,7 +618,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		testOfficialBuildCommit := coordinator.NewStep(
-			id("innerloop-build-trigger"),
 			name("🚀 Trigger innerloop build"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -645,7 +630,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 			syncUpdate,
 		).Then(
-			id("innerloop-build-wait"),
 			name("⌚ Wait for innerloop build"),
 			microsoftGoInnerloopCITimeout,
 			func(ctx context.Context) error {
@@ -654,7 +638,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		readyForPublish := coordinator.NewIndicatorStep(
-			id("artifacts-ready"),
 			name("✅ Artifacts ok to publish"),
 			officialBuild,
 			testOfficialBuildCommit,
@@ -672,7 +655,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		downloadAssetMetadata := coordinator.NewStep(
-			id("asset-metadata-download"),
 			name("Download asset metadata"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -692,7 +674,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		downloadArtifacts := coordinator.NewStep(
-			id("artifacts-download"),
 			name("Download artifacts"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -709,7 +690,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		githubPublish := coordinator.NewStep(
-			id("github-tag"),
 			name("🎓 Create GitHub tag"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -726,7 +706,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			},
 			readyForPublish,
 		).Then(
-			id("github-release"),
 			name("🎓 Create GitHub release"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -744,7 +723,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		akaMSPublish := coordinator.NewStep(
-			id("akams-update"),
 			name("🎓 Update aka.ms links"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -767,7 +745,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		dockerfilePublish := coordinator.NewStep(
-			id("dockerfiles-update"),
 			name("Update Dockerfiles"),
 			// Set timeout to expect one CI run per version. This accounts for the worst case: each
 			// version contributes a Dockerfile update to the shared PR just before CI finishes.
@@ -792,7 +769,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			readyForPublish, downloadAssetMetadata,
 		)
 		versionCompleteSteps = append(versionCompleteSteps, coordinator.NewIndicatorStep(
-			id("microsoft-go-publish-complete"),
 			name("✅ microsoft/go publish and go-images PR complete"),
 			githubPublish,
 			akaMSPublish,
@@ -800,7 +776,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		))
 
 		azureLinuxPRPublish := coordinator.NewStep(
-			id("azure-linux-pr"),
 			name("🚀 Trigger Azure Linux PR creation"),
 			shortTimeout,
 			func(ctx context.Context) error {
@@ -825,20 +800,17 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		)
 
 		versionSpecificPublishSteps = append(versionSpecificPublishSteps, coordinator.NewIndicatorStep(
-			id("external-publish-complete"),
 			name("✅ External publish complete"),
 			azureLinuxPRPublish,
 		))
 	}
 
 	versionsComplete := coordinator.NewIndicatorStep(
-		"versions.publish-complete",
 		"✅ All microsoft/go publish and go-images PRs complete",
 		versionCompleteSteps...,
 	)
 
 	imagesReady := coordinator.NewStep(
-		"images.commit",
 		"Get go-images commit",
 		shortTimeout,
 		func(ctx context.Context) error {
@@ -853,7 +825,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 		},
 		versionsComplete,
 	).Then(
-		"images.build-trigger",
 		"🚀 Trigger go-image build/publish",
 		shortTimeout,
 		func(ctx context.Context) error {
@@ -865,14 +836,12 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			return err
 		},
 	).Then(
-		"images.build-wait",
 		"⌚ Wait for go-image build/publish",
 		microsoftGoImagesOfficialCITimeout,
 		func(ctx context.Context) error {
 			return sb.PollPipelineComplete(ctx, rs.Day.GoImagesOfficialBuildID, secret)
 		},
 	).Then(
-		"images.version-check",
 		"🌊 Check published image version",
 		// This may need to be expanded to deal with MAR latency.
 		// Alternatively, the go-images build can wait: https://github.com/microsoft/go/issues/1258
@@ -890,7 +859,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 	)
 
 	createBlog := coordinator.NewStep(
-		"announcement.create",
 		"📰 Create blog post markdown",
 		shortTimeout,
 		func(ctx context.Context) error {
@@ -907,7 +875,6 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 	)
 
 	completeStep := coordinator.NewIndicatorStep(
-		"release.complete",
 		"✅ Complete",
 		append(
 			versionSpecificPublishSteps,

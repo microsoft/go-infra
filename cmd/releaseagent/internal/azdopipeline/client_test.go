@@ -10,11 +10,26 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
+	azdobuild "github.com/microsoft/azure-devops-go-api/azuredevops/build"
 )
 
 type staticToken string
 
 func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
+
+type definitionClientFunc func(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+
+func (f definitionClientFunc) GetDefinition(ctx context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+	return f(ctx, args)
+}
+
+type timelineClientFunc func(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
+
+func (f timelineClientFunc) GetBuildTimeline(ctx context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+	return f(ctx, args)
+}
 
 func TestListRecent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -49,22 +64,26 @@ func TestListRecent(t *testing.T) {
 }
 
 func TestGetDefinition(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/internal/_apis/build/definitions/1023" {
-			t.Fatalf("path = %q", request.URL.Path)
-		}
-		_, _ = response.Write([]byte(`{
-			"id":1023,
-			"name":"microsoft-go-images (official)",
-			"queueStatus":"enabled",
-			"process":{"yamlFilename":"eng/pipeline/go-docker-rolling-internal-pipeline.yml"},
-			"repository":{"defaultBranch":"refs/heads/microsoft/main","name":"microsoft-go-images"}
-		}`))
-	}))
-	defer server.Close()
-	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	client.newDefinitionClient = func(context.Context) (definitionClient, string, error) {
+		return definitionClientFunc(func(_ context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+			if args.Project == nil || *args.Project != "internal" || args.DefinitionId == nil || *args.DefinitionId != 1023 {
+				t.Fatalf("definition args = %#v", args)
+			}
+			id := 1023
+			name := "microsoft-go-images (official)"
+			queueStatus := azdobuild.DefinitionQueueStatusValues.Enabled
+			defaultBranch := "refs/heads/microsoft/main"
+			repositoryName := "microsoft-go-images"
+			return &azdobuild.BuildDefinition{
+				Id: idPointer(id), Name: &name, QueueStatus: &queueStatus,
+				Process:    map[string]any{"yamlFilename": "eng/pipeline/go-docker-rolling-internal-pipeline.yml"},
+				Repository: &azdobuild.BuildRepository{DefaultBranch: &defaultBranch, Name: &repositoryName},
+			}, nil
+		}), "test-token", nil
 	}
 	definition, err := client.GetDefinition(context.Background(), 1023)
 	if err != nil {
@@ -78,30 +97,40 @@ func TestGetDefinition(t *testing.T) {
 	}
 }
 
-func TestGetTimeline(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/internal/_apis/build/builds/888/timeline" ||
-			request.URL.Query().Get("api-version") != "7.1" {
+func idPointer(value int) *int { return &value }
 
-			t.Fatalf("request = %s %s", request.Method, request.URL)
-		}
-		_, _ = response.Write([]byte(`{"records":[
-			{"id":"stage","type":"Stage","name":"Build","state":"inProgress","order":1},
-			{"id":"job","parentId":"stage","type":"Job","name":"linux-amd64","state":"inProgress","order":2},
-			{"id":"task","parentId":"job","type":"Task","name":"Build image","state":"inProgress","order":3}
-		]}`))
-	}))
-	defer server.Close()
-	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+func stringPointer(value string) *string { return &value }
+
+func TestGetTimeline(t *testing.T) {
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	stageID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	jobID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	taskID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	inProgress := azdobuild.TimelineRecordStateValues.InProgress
+	succeeded := azdobuild.TaskResultValues.Succeeded
+	client.newTimelineClient = func(context.Context) (timelineClient, string, error) {
+		return timelineClientFunc(func(_ context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+			if args.Project == nil || *args.Project != "internal" || args.BuildId == nil || *args.BuildId != 888 {
+				t.Fatalf("timeline args = %#v", args)
+			}
+			records := []azdobuild.TimelineRecord{
+				{Id: &stageID, Type: stringPointer("Stage"), Name: stringPointer("Build"), State: &inProgress, Order: idPointer(1)},
+				{Id: &jobID, ParentId: &stageID, Type: stringPointer("Job"), Name: stringPointer("linux-amd64"), State: &inProgress, Order: idPointer(2)},
+				{Id: &taskID, ParentId: &jobID, Type: stringPointer("Task"), Name: stringPointer("Build image"), State: &inProgress, Result: &succeeded, Order: idPointer(3)},
+			}
+			return &azdobuild.Timeline{Records: &records}, nil
+		}), "test-token", nil
 	}
 	timeline, err := client.GetTimeline(context.Background(), 888)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(timeline.Records) != 3 || timeline.Records[2].Name != "Build image" ||
-		timeline.Records[2].ParentID != "job" || timeline.Records[0].Type != "Stage" {
+		timeline.Records[2].ParentID != jobID.String() || timeline.Records[0].Type != "Stage" ||
+		timeline.Records[2].Result != "succeeded" || timeline.Records[2].Order != 3 {
 
 		t.Fatalf("timeline = %#v", timeline)
 	}

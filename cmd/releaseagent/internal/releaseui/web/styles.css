@@ -241,7 +241,6 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .step-card[data-status="succeeded"] .status-badge { background: rgb(72 213 151 / 12%); color: var(--green); }
 .step-card[data-status="failed"] .status-badge, .step-card[data-status="canceled"] .status-badge { background: rgb(255 123 135 / 12%); color: var(--red); }
 .step-card[data-status="blocked"] .status-badge { background: rgb(241 199 91 / 12%); color: var(--yellow); }
-.step-id { display: block; margin-top: 9px; color: #7892aa; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; overflow-wrap: anywhere; }
 .step-error { margin: 8px 0 0; color: var(--red); font-size: 12px; line-height: 1.45; }
 .step-live-progress { margin: 12px -4px -2px; padding: 11px; border: 1px solid rgb(57 213 255 / 20%); border-radius: 9px; background: rgb(4 15 27 / 58%); }
 .step-progress-summary { display: block; color: var(--cyan); font-size: 12px; line-height: 1.4; }

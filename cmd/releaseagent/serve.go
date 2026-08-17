@@ -93,7 +93,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 			"https://dev.azure.com/dnceng",
 			"internal",
 			"microsoft-go-images",
-			azureHTTPClient,
 			tokenProvider,
 		)
 		if err != nil {

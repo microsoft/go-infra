@@ -47,20 +47,20 @@ func TestDocumentPlanFingerprint(t *testing.T) {
 	}
 
 	document = testDocument(t)
-	document.Plan.Steps[0].ID = "tampered"
+	document.Plan.Steps[0].Name = "tampered"
 	if err := document.Validate(); err == nil {
 		t.Fatal("tampered plan unexpectedly passed validation")
 	}
 
 	document = testDocument(t)
-	document.Plan.Steps[1].ID = document.Plan.Steps[0].ID
+	document.Plan.Steps[1].Name = document.Plan.Steps[0].Name
 	digest, err := planDigest(document.Plan.Steps)
 	if err != nil {
 		t.Fatal(err)
 	}
 	document.Plan.Digest = digest
 	if err := document.Validate(); err == nil {
-		t.Fatal("duplicate persisted step ID unexpectedly passed validation")
+		t.Fatal("duplicate persisted step name unexpectedly passed validation")
 	}
 }
 
@@ -112,6 +112,10 @@ func TestMigratableWorkflowDocumentLoadsAndUpgrades(t *testing.T) {
 	document := testDocument(t)
 	document.Plan.WorkflowRevision = MigratableWorkflowRevision
 	var err error
+	document.Plan.Digest, err = legacyPlanDigest(document.Plan.Steps)
+	if err != nil {
+		t.Fatal(err)
+	}
 	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +258,7 @@ func testDocument(t *testing.T) *Document {
 }
 
 func testSteps() []*coordinator.Step {
-	root := coordinator.NewRootStep("root", "Root", coordinator.NoTimeout, func(context.Context) error { return nil })
-	leaf := coordinator.NewStep("leaf", "Leaf", time.Minute, func(context.Context) error { return nil }, root)
+	root := coordinator.NewRootStep("Root", coordinator.NoTimeout, func(context.Context) error { return nil })
+	leaf := coordinator.NewStep("Leaf", time.Minute, func(context.Context) error { return nil }, root)
 	return []*coordinator.Step{root, leaf}
 }

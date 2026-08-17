@@ -85,6 +85,11 @@ During the pipeline wait step, the existing SSE stream also shows the active Azu
 Lightweight build status is checked every five seconds; the much larger Azure timeline is refreshed every 30 seconds.
 Timeline detail is ephemeral UI state and is not written to the durable session file.
 
+Azure Pipeline definition metadata and timelines, plus Azure Repos reads, use the official Azure DevOps Go SDK.
+The generated SDK's `build.Build` model omits run-level `templateParameters`.
+Custom REST calls are therefore limited to build retrieval and listing, where those parameters are required, and parameterized queueing.
+The generated `Build.Parameters` field can carry the legacy correlation variables, but `QueueBuild` cannot emit the `templateParameters` required for the full queue payload.
+
 ## Durability and duplicate prevention
 
 The focused graph checkpoints queue intent **before** issuing the Azure POST, then checkpoints the returned build ID and successful completion.
@@ -97,7 +102,8 @@ The restored path wraps the execution service in a queue-denying adapter, so it 
 The session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
 It contains no credentials.
 Schema version 6 intentionally rejects the earlier import-first production-demo sessions.
-Workflow revision 6 automatically migrates the exact revision-5 go-images plan only when it already contains a checkpointed build ID; the restored path can then monitor that run without queue authority.
+Workflow revision 7 uses unique step names as graph identity and rejects revision-6 plans.
+It automatically migrates the exact revision-5 go-images plan only when it already contains a checkpointed build ID; the restored path can then monitor that run without queue authority.
 A revision-5 queue attempt with no build ID remains rejected because its queue status is uncertain.
 Start a new session file for any other earlier workflow.
 

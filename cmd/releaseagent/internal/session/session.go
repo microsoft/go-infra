@@ -22,8 +22,8 @@ const (
 	// CurrentSchemaVersion is the only session document schema understood by this version.
 	CurrentSchemaVersion = 6
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
-	// even if step IDs and dependencies have not changed.
-	CurrentWorkflowRevision = 6
+	// even if step names and dependencies have not changed.
+	CurrentWorkflowRevision = 7
 	// MigratableWorkflowRevision is accepted only while loading an integrity-checked document for
 	// explicit migration. It cannot be saved or used as a current execution plan.
 	MigratableWorkflowRevision = 5
@@ -50,12 +50,35 @@ type Plan struct {
 	Steps            []PlanStep `json:"steps"`
 }
 
-// PlanStep contains only properties that affect execution structure. Human-readable names are not
-// included so copy changes do not invalidate an otherwise compatible session.
+// PlanStep contains only properties that affect execution structure. Names identify steps, so a
+// name change intentionally invalidates an existing plan.
 type PlanStep struct {
-	ID           string   `json:"id"`
+	Name         string   `json:"name"`
 	DependsOn    []string `json:"dependsOn,omitempty"`
 	TimeoutNanos int64    `json:"timeoutNanos"`
+}
+
+// UnmarshalJSON accepts the ID field used by the one explicitly migratable workflow revision.
+func (s *PlanStep) UnmarshalJSON(data []byte) error {
+	var encoded struct {
+		Name         string   `json:"name"`
+		ID           string   `json:"id"`
+		DependsOn    []string `json:"dependsOn,omitempty"`
+		TimeoutNanos int64    `json:"timeoutNanos"`
+	}
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return err
+	}
+	if encoded.Name != "" && encoded.ID != "" {
+		return errors.New("session plan step contains both name and legacy ID")
+	}
+	s.Name = encoded.Name
+	if s.Name == "" {
+		s.Name = encoded.ID
+	}
+	s.DependsOn = encoded.DependsOn
+	s.TimeoutNanos = encoded.TimeoutNanos
+	return nil
 }
 
 // NewDocument creates and validates a new durable session document.
@@ -109,23 +132,23 @@ func NewDocument(input *releasesteps.Input, state *releasesteps.State, steps []*
 
 // NewPlan creates a deterministic structural fingerprint of steps.
 func NewPlan(steps []*coordinator.Step) (Plan, error) {
-	if err := coordinator.ValidateSteps(steps); err != nil {
-		return Plan{}, fmt.Errorf("validate session plan: %w", err)
-	}
 	plan := Plan{
 		WorkflowRevision: CurrentWorkflowRevision,
 		Steps:            make([]PlanStep, 0, len(steps)),
 	}
 	for _, step := range steps {
 		planStep := PlanStep{
-			ID:           step.ID,
+			Name:         step.Name,
 			DependsOn:    make([]string, len(step.DependsOn)),
 			TimeoutNanos: int64(step.Timeout),
 		}
 		for i, dependency := range step.DependsOn {
-			planStep.DependsOn[i] = dependency.ID
+			planStep.DependsOn[i] = dependency.Name
 		}
 		plan.Steps = append(plan.Steps, planStep)
+	}
+	if err := validatePlanSteps(plan.Steps); err != nil {
+		return Plan{}, err
 	}
 	digest, err := planDigest(plan.Steps)
 	if err != nil {
@@ -176,7 +199,11 @@ func (d *Document) validate(allowMigration bool) error {
 	if err := validatePlanSteps(d.Plan.Steps); err != nil {
 		return err
 	}
-	digest, err := planDigest(d.Plan.Steps)
+	digestPlan := planDigest
+	if d.Plan.WorkflowRevision == MigratableWorkflowRevision {
+		digestPlan = legacyPlanDigest
+	}
+	digest, err := digestPlan(d.Plan.Steps)
 	if err != nil {
 		return err
 	}
@@ -244,25 +271,25 @@ func (d *Document) UpgradeWorkflow(
 }
 
 func validatePlanSteps(steps []PlanStep) error {
-	byID := make(map[string]PlanStep, len(steps))
+	byName := make(map[string]PlanStep, len(steps))
 	for _, step := range steps {
-		if step.ID == "" {
-			return errors.New("session plan contains an empty step ID")
+		if step.Name == "" {
+			return errors.New("session plan contains an empty step name")
 		}
-		if _, exists := byID[step.ID]; exists {
-			return fmt.Errorf("session plan contains duplicate step ID %q", step.ID)
+		if _, exists := byName[step.Name]; exists {
+			return fmt.Errorf("session plan contains duplicate step name %q", step.Name)
 		}
-		byID[step.ID] = step
+		byName[step.Name] = step
 	}
 
 	for _, step := range steps {
 		dependencies := make(map[string]struct{}, len(step.DependsOn))
 		for _, dependency := range step.DependsOn {
-			if _, exists := byID[dependency]; !exists {
-				return fmt.Errorf("session step %q depends on unknown step %q", step.ID, dependency)
+			if _, exists := byName[dependency]; !exists {
+				return fmt.Errorf("session step %q depends on unknown step %q", step.Name, dependency)
 			}
 			if _, exists := dependencies[dependency]; exists {
-				return fmt.Errorf("session step %q repeats dependency %q", step.ID, dependency)
+				return fmt.Errorf("session step %q repeats dependency %q", step.Name, dependency)
 			}
 			dependencies[dependency] = struct{}{}
 		}
@@ -276,28 +303,28 @@ func validatePlanSteps(steps []PlanStep) error {
 	)
 	visits := make(map[string]visitState, len(steps))
 	var visit func(string) error
-	visit = func(id string) error {
-		switch visits[id] {
+	visit = func(name string) error {
+		switch visits[name] {
 		case visiting:
-			return fmt.Errorf("session plan contains a dependency cycle at %q", id)
+			return fmt.Errorf("session plan contains a dependency cycle at %q", name)
 		case visited:
 			return nil
 		}
 
-		visits[id] = visiting
-		for _, dependency := range byID[id].DependsOn {
+		visits[name] = visiting
+		for _, dependency := range byName[name].DependsOn {
 			if err := visit(dependency); err != nil {
 				return err
 			}
 		}
-		visits[id] = visited
+		visits[name] = visited
 		return nil
 	}
-	for id := range byID {
-		if visits[id] != unvisited {
+	for name := range byName {
+		if visits[name] != unvisited {
 			continue
 		}
-		if err := visit(id); err != nil {
+		if err := visit(name); err != nil {
 			return err
 		}
 	}
@@ -360,6 +387,25 @@ func planDigest(steps []PlanStep) (string, error) {
 	data, err := json.Marshal(steps)
 	if err != nil {
 		return "", fmt.Errorf("marshal session plan: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func legacyPlanDigest(steps []PlanStep) (string, error) {
+	legacy := make([]struct {
+		ID           string   `json:"id"`
+		DependsOn    []string `json:"dependsOn,omitempty"`
+		TimeoutNanos int64    `json:"timeoutNanos"`
+	}, len(steps))
+	for i, step := range steps {
+		legacy[i].ID = step.Name
+		legacy[i].DependsOn = step.DependsOn
+		legacy[i].TimeoutNanos = step.TimeoutNanos
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		return "", fmt.Errorf("marshal legacy session plan: %w", err)
 	}
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:]), nil

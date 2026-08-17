@@ -33,7 +33,6 @@ var (
 
 // StepSnapshot is an immutable view of a step's state at a point in time.
 type StepSnapshot struct {
-	ID         string        `json:"id"`
 	Name       string        `json:"name"`
 	Status     StepStatus    `json:"status"`
 	DependsOn  []string      `json:"dependsOn,omitempty"`
@@ -95,14 +94,8 @@ type StepRunner struct {
 //
 // If any step fails, Execute returns the first error that occurred and cooperatively cancels other
 // running steps. A panic is recovered, wrapped with errStepPanic, and treated as an error. The
-// graph is validated before any step starts.
+// steps must be the validated graph returned by Step.TransitiveDependencies.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
-	// Callers may supply any step slice, not only one returned by TransitiveDependencies. Validate
-	// again at this trust boundary in case the graph was incomplete or mutated after construction.
-	if err := ValidateSteps(steps); err != nil {
-		return err
-	}
-
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
@@ -193,7 +186,6 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 	}
 	for _, state := range r.ordered {
 		stepSnapshot := StepSnapshot{
-			ID:        state.step.ID,
 			Name:      state.step.Name,
 			Status:    state.status,
 			DependsOn: make([]string, len(state.step.DependsOn)),
@@ -203,7 +195,7 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 			stepSnapshot.Progress = &progress
 		}
 		for i, dependency := range state.step.DependsOn {
-			stepSnapshot.DependsOn[i] = dependency.ID
+			stepSnapshot.DependsOn[i] = dependency.Name
 		}
 		if state.err != nil {
 			stepSnapshot.Error = state.err.Error()
@@ -314,7 +306,7 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 			case errors.Is(err, context.Canceled) && ctx.Err() != nil:
 				status = StepStatusCanceled
 			}
-			err = fmt.Errorf("step %q (%s) failed: %w", s.step.Name, s.step.ID, err)
+			err = fmt.Errorf("step %q failed: %w", s.step.Name, err)
 		}
 		runner.transition(s, status, err)
 		close(s.complete)
@@ -350,12 +342,12 @@ func (s *stepState) waitForDependencies(ctx context.Context, states map[*Step]*s
 }
 
 type errDependencyFailed struct {
-	stepID string
-	err    error
+	stepName string
+	err      error
 }
 
 func (e *errDependencyFailed) Error() string {
-	return fmt.Sprintf("dependency %q failed: %v", e.stepID, e.err)
+	return fmt.Sprintf("dependency %q failed: %v", e.stepName, e.err)
 }
 
 func (e *errDependencyFailed) Unwrap() error {
@@ -368,7 +360,7 @@ func (s *stepState) done(ctx context.Context) error {
 		return ctx.Err()
 	case <-s.complete:
 		if s.err != nil {
-			return &errDependencyFailed{stepID: s.step.ID, err: s.err}
+			return &errDependencyFailed{stepName: s.step.Name, err: s.err}
 		}
 		return nil
 	}

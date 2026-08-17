@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package azdorepo provides the narrow read-only Azure Repos API surface needed by release UI
-// workflows. It does not log tokens or request authorization headers.
+// Package azdorepo adapts the Azure DevOps Git SDK to the narrow read-only repository surface
+// needed by release UI workflows. It does not log tokens or authorization headers.
 package azdorepo
 
 import (
@@ -10,16 +10,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/microsoft/azure-devops-go-api/azuredevops"
+	azdogit "github.com/microsoft/azure-devops-go-api/azuredevops/git"
 )
 
-const maxResponseSize = 4 << 20
-
 var commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+const sdkRequestTimeout = 3 * time.Minute
 
 // BranchTip is the exact commit currently referenced by an Azure Repos branch.
 type BranchTip struct {
@@ -32,22 +34,23 @@ type TokenProvider interface {
 	Token(context.Context) (string, error)
 }
 
-// HTTPDoer is implemented by *http.Client and hermetic test clients.
-type HTTPDoer interface {
-	Do(*http.Request) (*http.Response, error)
-}
-
 // Client accesses one repository in an Azure DevOps project.
 type Client struct {
-	baseURL    string
-	project    string
-	repository string
-	http       HTTPDoer
-	tokens     TokenProvider
+	baseURL      string
+	project      string
+	repository   string
+	tokens       TokenProvider
+	newGitClient func(context.Context) (gitClient, string, error)
+}
+
+type gitClient interface {
+	GetCommit(context.Context, azdogit.GetCommitArgs) (*azdogit.GitCommit, error)
+	GetItem(context.Context, azdogit.GetItemArgs) (*azdogit.GitItem, error)
+	GetRefs(context.Context, azdogit.GetRefsArgs) (*azdogit.GetRefsResponseValue, error)
 }
 
 // NewClient validates and creates a read-only repository client.
-func NewClient(baseURL, project, repository string, httpClient HTTPDoer, tokens TokenProvider) (*Client, error) {
+func NewClient(baseURL, project, repository string, tokens TokenProvider) (*Client, error) {
 	parsed, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.Host == "" {
 		return nil, fmt.Errorf("invalid Azure DevOps base URL %q", baseURL)
@@ -55,16 +58,17 @@ func NewClient(baseURL, project, repository string, httpClient HTTPDoer, tokens 
 	if project == "" || repository == "" {
 		return nil, errors.New("azure DevOps project and repository must not be empty")
 	}
-	if httpClient == nil || tokens == nil {
-		return nil, errors.New("azure DevOps HTTP client and token provider must not be nil")
+	if tokens == nil {
+		return nil, errors.New("azure DevOps token provider must not be nil")
 	}
-	return &Client{
+	client := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		project:    project,
 		repository: repository,
-		http:       httpClient,
 		tokens:     tokens,
-	}, nil
+	}
+	client.newGitClient = client.createGitClient
+	return client, nil
 }
 
 // GetFileAtCommit returns a file from an exact repository commit.
@@ -81,17 +85,22 @@ func (c *Client) VerifyCommit(ctx context.Context, commit string) error {
 	if !commitPattern.MatchString(commit) {
 		return fmt.Errorf("invalid repository commit %q", commit)
 	}
-	query := url.Values{"api-version": {"7.1"}}
-	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/git/repositories/" +
-		url.PathEscape(c.repository) + "/commits/" + url.PathEscape(commit) + "?" + query.Encode()
-	var response struct {
-		CommitID string `json:"commitId"`
+	client, token, err := c.newGitClient(ctx)
+	if err != nil {
+		return fmt.Errorf("create Azure Repos Git client: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &response); err != nil {
-		return err
+	response, err := client.GetCommit(ctx, azdogit.GetCommitArgs{
+		CommitId: &commit, RepositoryId: &c.repository, Project: &c.project,
+	})
+	if err != nil {
+		return fmt.Errorf("get Azure Repos commit: %w", redactError(err, token))
 	}
-	if actual := strings.ToLower(response.CommitID); actual != commit {
-		return fmt.Errorf("azure Repos returned commit %q, expected %q", response.CommitID, commit)
+	actual := ""
+	if response != nil && response.CommitId != nil {
+		actual = strings.ToLower(*response.CommitId)
+	}
+	if actual != commit {
+		return fmt.Errorf("azure Repos returned commit %q, expected %q", actual, commit)
 	}
 	return nil
 }
@@ -114,32 +123,35 @@ func (c *Client) GetBranchTip(ctx context.Context, branch string) (BranchTip, er
 		return BranchTip{}, fmt.Errorf("invalid repository branch %q", branch)
 	}
 	expectedName := "refs/heads/" + shortBranch
-	query := url.Values{
-		"filter":      {"heads/" + shortBranch},
-		"api-version": {"7.1"},
+	filter := "heads/" + shortBranch
+	client, token, err := c.newGitClient(ctx)
+	if err != nil {
+		return BranchTip{}, fmt.Errorf("create Azure Repos Git client: %w", redactError(err, token))
 	}
-	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/git/repositories/" +
-		url.PathEscape(c.repository) + "/refs?" + query.Encode()
-	var response struct {
-		Value []struct {
-			Name     string `json:"name"`
-			ObjectID string `json:"objectId"`
-		} `json:"value"`
+	response, err := client.GetRefs(ctx, azdogit.GetRefsArgs{
+		RepositoryId: &c.repository, Project: &c.project, Filter: &filter,
+	})
+	if err != nil {
+		return BranchTip{}, fmt.Errorf("get Azure Repos branch: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &response); err != nil {
-		return BranchTip{}, err
-	}
-	if len(response.Value) != 1 || response.Value[0].Name != expectedName {
+	if response == nil || len(response.Value) != 1 || response.Value[0].Name == nil || *response.Value[0].Name != expectedName {
+		count := 0
+		if response != nil {
+			count = len(response.Value)
+		}
 		return BranchTip{}, fmt.Errorf(
 			"azure Repos returned %d refs for branch %q, expected exactly %q",
-			len(response.Value),
+			count,
 			branch,
 			expectedName,
 		)
 	}
-	objectID := strings.ToLower(response.Value[0].ObjectID)
+	objectID := ""
+	if response.Value[0].ObjectId != nil {
+		objectID = strings.ToLower(*response.Value[0].ObjectId)
+	}
 	if !commitPattern.MatchString(objectID) {
-		return BranchTip{}, fmt.Errorf("azure Repos branch %q has invalid object ID %q", expectedName, response.Value[0].ObjectID)
+		return BranchTip{}, fmt.Errorf("azure Repos branch %q has invalid object ID %q", expectedName, objectID)
 	}
 	return BranchTip{Name: expectedName, ObjectID: objectID}, nil
 }
@@ -163,60 +175,50 @@ func (c *Client) getFile(ctx context.Context, path, version, versionType string)
 	if path == "" || path[0] != '/' {
 		return nil, errors.New("repository file path must be absolute")
 	}
-	query := url.Values{
-		"path":                             {path},
-		"versionDescriptor.version":        {version},
-		"versionDescriptor.versionType":    {versionType},
-		"versionDescriptor.versionOptions": {"none"},
-		"includeContent":                   {"true"},
-		"api-version":                      {"7.1"},
+	client, token, err := c.newGitClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Azure Repos Git client: %w", redactError(err, token))
 	}
-	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/git/repositories/" +
-		url.PathEscape(c.repository) + "/items?" + query.Encode()
-	var item struct {
-		Content string `json:"content"`
+	versionKind := azdogit.GitVersionType(versionType)
+	versionOptions := azdogit.GitVersionOptionsValues.None
+	includeContent := true
+	item, err := client.GetItem(ctx, azdogit.GetItemArgs{
+		RepositoryId: &c.repository,
+		Project:      &c.project,
+		Path:         &path,
+		VersionDescriptor: &azdogit.GitVersionDescriptor{
+			Version: &version, VersionType: &versionKind, VersionOptions: &versionOptions,
+		},
+		IncludeContent: &includeContent,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get Azure Repos file: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &item); err != nil {
-		return nil, err
-	}
-	if item.Content == "" {
+	if item == nil || item.Content == nil || *item.Content == "" {
 		return nil, fmt.Errorf("azure Repos returned empty file content for %s at %s %s", path, versionType, version)
 	}
-	return []byte(item.Content), nil
+	return []byte(*item.Content), nil
 }
 
-func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error {
+func (c *Client) createGitClient(ctx context.Context) (gitClient, string, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
-		return fmt.Errorf("acquire Azure DevOps token: %w", err)
+		return nil, "", fmt.Errorf("acquire Azure DevOps token: %w", err)
 	}
 	if token == "" {
-		return errors.New("azure DevOps token provider returned an empty token")
+		return nil, "", errors.New("azure DevOps token provider returned an empty token")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("create Azure Repos request: %w", err)
+	connection := azuredevops.NewAnonymousConnection(c.baseURL)
+	connection.AuthorizationString = "Bearer " + token
+	timeout := sdkRequestTimeout
+	connection.Timeout = &timeout
+	client, err := azdogit.NewClient(ctx, connection)
+	return client, token, err
+}
+
+func redactError(err error, token string) error {
+	if err == nil || token == "" {
+		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", "application/json")
-	response, err := c.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("send Azure Repos request: %w", err)
-	}
-	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxResponseSize+1))
-	if err != nil {
-		return fmt.Errorf("read Azure Repos response: %w", err)
-	}
-	if len(data) > maxResponseSize {
-		return fmt.Errorf("azure Repos response exceeds %d bytes", maxResponseSize)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body := strings.ReplaceAll(strings.TrimSpace(string(data)), token, "[REDACTED]")
-		return fmt.Errorf("azure Repos request returned %d: %s", response.StatusCode, body)
-	}
-	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("decode Azure Repos response: %w", err)
-	}
-	return nil
+	return errors.New(strings.ReplaceAll(err.Error(), token, "[REDACTED]"))
 }

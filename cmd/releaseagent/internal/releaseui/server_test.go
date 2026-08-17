@@ -432,9 +432,9 @@ func writeRevision5Session(t *testing.T, path string, document *session.Document
 		WorkflowRevision: session.MigratableWorkflowRevision,
 		Digest:           legacyGoImagesWorkflowRevision5Digest,
 		Steps: []session.PlanStep{
-			{ID: "go-images.release.queue", TimeoutNanos: int64(10 * time.Minute)},
-			{ID: "go-images.release.wait", DependsOn: []string{"go-images.release.queue"}, TimeoutNanos: int64(2 * time.Hour)},
-			{ID: "go-images.release.complete", DependsOn: []string{"go-images.release.wait"}},
+			{Name: "go-images.release.queue", TimeoutNanos: int64(10 * time.Minute)},
+			{Name: "go-images.release.wait", DependsOn: []string{"go-images.release.queue"}, TimeoutNanos: int64(2 * time.Hour)},
+			{Name: "go-images.release.complete", DependsOn: []string{"go-images.release.wait"}},
 		},
 	}
 	executionData, err := json.Marshal(struct {

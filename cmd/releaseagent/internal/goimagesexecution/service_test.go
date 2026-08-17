@@ -269,7 +269,7 @@ func TestPollPipelineComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := coordinator.NewRootStep("wait", "Wait", coordinator.NoTimeout, func(ctx context.Context) error {
+	step := coordinator.NewRootStep("Wait", coordinator.NoTimeout, func(ctx context.Context) error {
 		return service.PollPipelineComplete(ctx, "888", nil)
 	})
 	var runner coordinator.StepRunner
