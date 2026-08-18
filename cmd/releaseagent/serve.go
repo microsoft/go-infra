@@ -23,6 +23,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goinfragithub"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
@@ -33,7 +34,7 @@ func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "serve",
 		Summary:     "Start the local release management UI",
-		Description: "\n\nThe dashboard currently supports normal, rollback, and test go-images releases.\n",
+		Description: "\n\nThe dashboard supports go-images execution and guided go-infra patch releases.\n",
 		Handle:      handleServe,
 	})
 }
@@ -50,7 +51,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 		filepath.Join(configDir, "microsoft-go", "release-session.json"),
 		"JSON file used to persist and restore the non-secret release plan",
 	)
+	enableGoInfraGitHub := flag.Bool("enable-go-infra-github-execution", false, "Enable two-step-confirmed go-infra labeling and workflow dispatch through the authenticated GitHub CLI")
 	if err := parse(); err != nil {
+		return err
+	}
+	if err := validateServeOptions(*sessionFile, *enableGoInfraGitHub); err != nil {
 		return err
 	}
 
@@ -70,6 +75,40 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 	sessionPath := store.Path()
 	options = append(options, releaseui.WithSessionStore(store))
+
+	if *enableGoInfraGitHub {
+		service, err := goinfragithub.New(goinfragithub.ExecCommandRunner{})
+		if err != nil {
+			return err
+		}
+		actionStore, err := releaseui.NewGoInfraActionFileStore(sessionPath + ".go-infra-action.json")
+		if err != nil {
+			return err
+		}
+		options = append(options,
+			releaseui.WithGoInfraActionStore(actionStore),
+			releaseui.WithGoInfraGitHubIntegration(releaseui.GoInfraGitHubIntegration{
+				Preflight: service.Preflight,
+				GetPullRequest: func(ctx context.Context, number int) (releaseui.GoInfraPullRequest, error) {
+					pullRequest, err := service.GetPullRequest(ctx, number)
+					return releaseui.GoInfraPullRequest{
+						Number: pullRequest.Number, Title: pullRequest.Title, URL: pullRequest.URL,
+						BaseRef: pullRequest.BaseRef, HeadRef: pullRequest.HeadRef, HeadSHA: pullRequest.HeadSHA,
+						Fork: pullRequest.Fork, Labels: append([]string(nil), pullRequest.Labels...),
+					}, err
+				},
+				AddReleaseOnMergeLabel: func(ctx context.Context, number int, expectedHeadSHA string) (releaseui.GoInfraPullRequest, error) {
+					pullRequest, err := service.AddReleaseOnMergeLabel(ctx, number, expectedHeadSHA)
+					return releaseui.GoInfraPullRequest{
+						Number: pullRequest.Number, Title: pullRequest.Title, URL: pullRequest.URL,
+						BaseRef: pullRequest.BaseRef, HeadRef: pullRequest.HeadRef, HeadSHA: pullRequest.HeadSHA,
+						Fork: pullRequest.Fork, Labels: append([]string(nil), pullRequest.Labels...),
+					}, err
+				},
+				DispatchPatchRelease: service.DispatchPatchRelease,
+			}),
+		)
+	}
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
 	tokenProvider := &azdopipeline.CachingTokenProvider{
@@ -284,6 +323,13 @@ func handleServe(parse subcmd.ParseFunc) error {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down release UI: %w", err)
+	}
+	return nil
+}
+
+func validateServeOptions(sessionFile string, enableGoInfraGitHub bool) error {
+	if enableGoInfraGitHub && sessionFile == "" {
+		return errors.New("-enable-go-infra-github-execution requires -session-file")
 	}
 	return nil
 }

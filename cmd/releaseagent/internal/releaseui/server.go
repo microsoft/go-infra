@@ -58,6 +58,8 @@ type Server struct {
 	sessionStore session.Store
 	readOnly     *GoImagesReadOnlyIntegration
 	execution    *GoImagesExecutionIntegration
+	goInfra      *GoInfraGitHubIntegration
+	goInfraStore GoInfraActionStore
 
 	mu                sync.Mutex
 	steps             []*coordinator.Step
@@ -70,6 +72,8 @@ type Server struct {
 	runner            *coordinator.StepRunner
 	simulationRunning bool
 	releaseRunning    bool
+	goInfraPlan       *goInfraPlan
+	goInfraRunning    bool
 	restoredFromDisk  bool
 }
 
@@ -165,6 +169,20 @@ func WithGoImagesExecutionIntegration(integration GoImagesExecutionIntegration) 
 	}
 }
 
+// WithGoInfraGitHubIntegration enables confirmed, allowlisted go-infra GitHub actions.
+func WithGoInfraGitHubIntegration(integration GoInfraGitHubIntegration) Option {
+	return func(server *Server) {
+		server.goInfra = &integration
+	}
+}
+
+// WithGoInfraActionStore enables durable go-infra action intent and result journaling.
+func WithGoInfraActionStore(store GoInfraActionStore) Option {
+	return func(server *Server) {
+		server.goInfraStore = store
+	}
+}
+
 // New creates a local release UI server. External execution exists only when the explicit
 // execution option is supplied and all server-side safety boundaries validate.
 func New(ctx context.Context, options ...Option) (*Server, error) {
@@ -220,7 +238,22 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 			return nil, errors.New("go-images execution integration is incomplete")
 		}
 	}
+	if server.goInfra != nil {
+		if server.goInfra.Preflight == nil || server.goInfra.GetPullRequest == nil ||
+			server.goInfra.AddReleaseOnMergeLabel == nil || server.goInfra.DispatchPatchRelease == nil {
+
+			return nil, errors.New("go-infra GitHub integration is incomplete")
+		}
+		if server.goInfraStore == nil {
+			return nil, errors.New("go-infra GitHub integration requires a durable action store")
+		}
+	} else if server.goInfraStore != nil {
+		return nil, errors.New("go-infra action store requires the GitHub integration")
+	}
 	if err := server.restoreSession(); err != nil {
+		return nil, err
+	}
+	if err := server.restoreGoInfraAction(); err != nil {
 		return nil, err
 	}
 	if err := server.resumeRestoredMonitoring(); err != nil {

@@ -10,8 +10,9 @@ Subcommands:
 
 The landing page is a release dashboard. It lists work tracked by the current durable session and a
 validated registry of release processes. Go images provides local planning, execution, and
-monitoring. Go infrastructure and the complete Microsoft Build of Go release process remain future
-additions rather than being mixed into the go-images workflow.
+monitoring. Go infrastructure provides reviewed, confirmed actions for the two GitHub-owned patch
+release paths documented by the team. The complete Microsoft Build of Go release process remains a
+future addition rather than being mixed into either focused workflow.
 
 Each registry entry owns its dashboard metadata, documented release methods, inputs, dependency
 graph, and optional server callbacks. The server derives `/{ID}` and every process API route from
@@ -24,9 +25,9 @@ Add one `ProcessDefinition` to `defaultProcessRegistry` in
 
 | Field | Purpose |
 | --- | --- |
-| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `example-process`. |
+| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `go-infra`. |
 | `Name` | User-facing process name shown on the dashboard and process page. |
-| `Mark` | Short visual abbreviation shown on the dashboard card, such as `EX`. |
+| `Mark` | Short visual abbreviation shown on the dashboard card, such as `IN`. |
 | `Description` | Brief dashboard explanation of what the process releases. |
 | `Status` | User-facing badge text, such as `Available`, `Planned`, or `Future`. This is display-only; `Available` controls whether the process can be opened. |
 | `Available` | Whether the dashboard card links to the process page. |
@@ -92,6 +93,24 @@ Browser requests cannot provide a definition, branch, commit, mirror target, pre
 Release versions are read from `src/microsoft/versions.json` at an exact commit and displayed only as audit metadata.
 There is no version input on the dashboard or go-images release page, and versions are not parameters of pipeline `1023`.
 
+## Go-infra patch releases
+
+The go-infra page follows the canonical
+[microsoft/go-infra release instructions](https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra)
+and exposes both supported paths:
+
+* **Release on merge** accepts one pull request number. The server verifies that the PR is open,
+  targets `main`, and is not from a fork, then prepares a request to add `release-on-merge`. Starting
+  the action rechecks the exact PR head SHA before adding the fixed label. The UI never merges the
+  PR; the existing workflow creates the release only after the labeled PR is merged.
+* **Manual patch release** dispatches only `create-go-infra-patch-release.yml` on `main`. Dry-run
+  mode fixes `dry-run` to `true` and only calculates the next version. Publish mode fixes it to
+  `false` and can create the next patch release.
+
+Both paths require `-enable-go-infra-github-execution`, an authenticated `gh` CLI, a reviewed plan,
+and a separate confirmation click. The server hardcodes `microsoft/go-infra`, `main`,
+`release-on-merge`, and the workflow filename; browser input cannot replace any of those targets.
+
 ## Running locally
 
 Authenticate Azure CLI, then start the fully enabled release UI:
@@ -103,6 +122,19 @@ go run ./cmd/releaseagent serve
 
 By default, the UI stores its durable session under the operating system's user configuration directory.
 Use `-session-file` only to override that location:
+
+Explicitly enable the fixed go-infra GitHub actions after authenticating `gh`:
+
+```console
+go run ./cmd/releaseagent serve \
+  -enable-go-infra-github-execution
+```
+
+This flag uses the configured session path to create an adjacent durable GitHub action journal. It
+does not perform an action at startup. Opening the go-infra page performs read-only preflight
+checks; a mutation still requires preparing the exact request and confirming it.
+
+Override the default session location when needed:
 
 ```console
 go run ./cmd/releaseagent serve \
@@ -146,14 +178,26 @@ Start a new session file for any other earlier workflow.
 The current file store owns one durable release at a time.
 Dashboard responses already model ongoing and recent releases as lists so a future multi-session store can expand tracking without changing the browser API.
 
-If a process terminates without cleaning up its lease, verify no release UI process is using the session and remove the adjacent `.lock` file manually.
+Go-infra GitHub plans use an adjacent atomic action journal derived from `-session-file`. The server
+persists the reviewed digest and checkpoints `started` before calling GitHub. If the process exits
+before recording the result, the next startup marks the action `uncertain` and refuses a replacement
+plan. Inspect the PR or workflow runs, stop the server, and remove the adjacent
+`.go-infra-action.json` file only after deciding whether another action is safe. The UI never retries
+a GitHub mutation automatically.
+
+If a process terminates without cleaning up its lease, verify no release UI process is using the
+session and remove the adjacent `.lock` file manually.
 
 ## Security boundaries
 
 * The server binds only to a loopback address.
 * A random one-time launch token establishes an HTTP-only, same-site session cookie.
 * State-changing requests require a matching Origin header.
-* Azure CLI tokens are acquired on demand, cached only in memory, and never sent to the browser, logged, or persisted.
+* Azure CLI tokens are acquired on demand, cached only in memory, and never sent to the browser,
+  logged, or persisted.
+* Go-infra uses the locally authenticated `gh` CLI only when explicitly enabled. JSON mutation
+  bodies are sent through stdin, and the GitHub host, repository, ref, label, and workflow are
+  hardcoded server-side.
 * The generic Azure pipeline client is read-only.
 * The dedicated queue client can only POST definition `1023` on `refs/heads/microsoft/main` with a server-derived normal, rollback, or test parameter set.
 * The durable session stores non-secret input, state, structural and execution digests, and no credentials.

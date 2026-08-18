@@ -101,4 +101,9 @@ func TestProcessRegistryValidatesWorkflowDependencies(t *testing.T) {
 	if _, err := newProcessRegistry(definition); err == nil {
 		t.Fatal("invalid numeric default was accepted")
 	}
+	definition.Workflow.Inputs = nil
+	definition.Workflow.Start = prepare
+	if _, err := newProcessRegistry(definition); err != nil {
+		t.Fatalf("direct confirmed workflow was rejected: %v", err)
+	}
 }

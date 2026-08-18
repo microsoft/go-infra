@@ -71,6 +71,7 @@
     planButton.querySelector("span:first-child").textContent = workflow.submitLabel || "Prepare release";
     form.hidden = !workflow.canPrepare;
     demoButton.hidden = !workflow.canSimulate;
+    if (workflow.hasPreflight) planButton.disabled = true;
 
     processInputs.replaceChildren(...(workflow.inputs || []).map(createInput));
     updateInputState();
@@ -245,6 +246,7 @@
       showError(error.message);
     } finally {
       setBusy(planButton, false, workflow.submitLabel || "Prepare release");
+      if (workflow.hasPreflight && !preflight?.planningEnabled) planButton.disabled = true;
     }
   }
 
@@ -693,6 +695,8 @@
     processSafety.hidden = false;
     try {
       preflight = await requestJSON(`${endpointBase}/preflight`);
+      planButton.disabled = !preflight.planningEnabled;
+      planButton.title = preflight.planningEnabled ? "" : "Planning is unavailable until the readiness checks pass";
       preflightList.replaceChildren(...(preflight.checks || []).map((check) => {
         const item = document.createElement("li");
         item.dataset.status = check.status;

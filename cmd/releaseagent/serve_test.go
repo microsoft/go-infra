@@ -4,11 +4,35 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 )
+
+func TestValidateServeOptions(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		sessionFile   string
+		goInfraGitHub bool
+		wantError     string
+	}{
+		{name: "default"},
+		{name: "go-infra with journal", sessionFile: "session.json", goInfraGitHub: true},
+		{name: "go-infra without journal", goInfraGitHub: true, wantError: "requires -session-file"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateServeOptions(test.sessionFile, test.goInfraGitHub)
+			if test.wantError == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantError != "" && (err == nil || !strings.Contains(err.Error(), test.wantError)) {
+				t.Fatalf("error = %v, want substring %q", err, test.wantError)
+			}
+		})
+	}
+}
 
 func TestGoImagesModeFromBuild(t *testing.T) {
 	tests := []struct {
