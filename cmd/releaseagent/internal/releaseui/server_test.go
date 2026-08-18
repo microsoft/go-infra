@@ -110,7 +110,7 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
 	if !dashboard.Processes[0].Available || dashboard.Processes[0].ID != goImagesProcessID ||
-		dashboard.Processes[1].Available {
+		!dashboard.Processes[1].Available || dashboard.Processes[1].ID != "go-infra" {
 
 		t.Fatalf("processes = %#v", dashboard.Processes)
 	}
@@ -129,8 +129,20 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("go-images page status = %d", response.StatusCode)
 	}
-	if !strings.Contains(string(goImagesPage), "/assets/workflow.js") {
-		t.Fatal("release process does not use the workflow-aware template")
+	response, err = ui.client.Get(ui.http.URL + "/go-infra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goInfraPage, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("go-infra page status = %d", response.StatusCode)
+	}
+	if string(goImagesPage) != string(goInfraPage) || !strings.Contains(string(goImagesPage), "/assets/workflow.js") {
+		t.Fatal("release processes do not use the same workflow-aware template")
 	}
 	response, err = ui.client.Get(ui.http.URL + testGoImagesAPI)
 	if err != nil {
@@ -142,6 +154,18 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 		!goImages.Workflow.CanStart || len(goImages.Workflow.Inputs) != 2 || len(goImages.Workflow.Steps) != 4 {
 
 		t.Fatalf("go-images process = %#v", goImages)
+	}
+	response, err = ui.client.Get(ui.http.URL + "/api/processes/go-infra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var process processDetail
+	decodeResponse(t, response, &process)
+	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || len(process.Methods) != 0 ||
+		process.Workflow == nil || !process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
+		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 || len(process.Workflow.Steps) != 1 {
+
+		t.Fatalf("process = %#v", process)
 	}
 }
 

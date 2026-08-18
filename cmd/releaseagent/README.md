@@ -10,8 +10,9 @@ Subcommands:
 
 The landing page is a release dashboard. It lists work tracked by the current durable session and a
 validated registry of release processes. Go images provides local planning, execution, and
-monitoring. Go infrastructure and the complete Microsoft Build of Go release process remain future
-additions rather than being mixed into the go-images workflow.
+monitoring. Go infrastructure provides reviewed, confirmed actions for the two GitHub-owned patch
+release paths documented by the team. The complete Microsoft Build of Go release process remains a
+future addition rather than being mixed into either focused workflow.
 
 Each registry entry owns its dashboard metadata, documented release methods, inputs, dependency
 graph, and optional server callbacks. The server derives `/{ID}` and every process API route from
@@ -24,9 +25,9 @@ Add one `ProcessDefinition` to `defaultProcessRegistry` in
 
 | Field | Purpose |
 | --- | --- |
-| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `example-process`. |
+| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `go-infra`. |
 | `Name` | User-facing process name shown on the dashboard and process page. |
-| `Mark` | Short visual abbreviation shown on the dashboard card, such as `EX`. |
+| `Mark` | Short visual abbreviation shown on the dashboard card, such as `IN`. |
 | `Description` | Brief dashboard explanation of what the process releases. |
 | `Status` | User-facing badge text, such as `Available`, `Planned`, or `Future`. This is display-only; `Available` controls whether the process can be opened. |
 | `Available` | Whether the dashboard card links to the process page. |
@@ -53,21 +54,21 @@ ProcessDefinition{
 }
 ```
 
-Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store
-holds the server's single current durable external action, regardless of which executor owns it. The
-executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`.
-The server generates the HTTP lifecycle, confirmation digest, duplicate-start protection, atomic
-checkpoints, restart behavior, coordinator step, state API, and event stream. Executors keep fixed
-targets, credentials, input validation, and external calls behind their Go boundary.
+      Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store
+      holds the server's single current durable external action, regardless of which executor owns it. The
+      executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`.
+      The server generates the HTTP lifecycle, confirmation digest, duplicate-start protection, atomic
+      checkpoints, restart behavior, coordinator step, state API, and event stream. Executors keep fixed
+      targets, credentials, input validation, and external calls behind their Go boundary.
 
-Before preparation, the shared lifecycle validates request keys, required and conditional fields,
-choice values, numeric syntax, defaults, and string values against the registry input definitions.
-Executors then apply process-specific semantic and fixed-target validation.
+      Before preparation, the shared lifecycle validates request keys, required and conditional fields,
+      choice values, numeric syntax, defaults, and string values against the registry input definitions.
+      Executors then apply process-specific semantic and fixed-target validation.
 
-`Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for workflows with a
-custom lifecycle. `GetPlan` and `Prepare` are a pair. Do not combine these handlers with
-`DurableAction`; go-images retains them because its multi-step Azure session predates the generic
-single-action executor.
+      `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for workflows with a
+      custom lifecycle. `GetPlan` and `Prepare` are a pair. Do not combine these handlers with
+      `DurableAction`; go-images retains them because its multi-step Azure session predates the generic
+      single-action executor.
 
 With read-only Azure access enabled, **Track ongoing releases** discovers waiting and running pipeline `1023` builds and refreshes their status every 15 seconds.
 These live Azure entries are merged with the durable local session and link directly to their Azure run; tracking never queues or changes a run.
@@ -100,14 +101,40 @@ Browser requests cannot provide a definition, branch, commit, mirror target, pre
 Release versions are read from `src/microsoft/versions.json` at an exact commit and displayed only as audit metadata.
 There is no version input on the dashboard or go-images release page, and versions are not parameters of pipeline `1023`.
 
+## Go-infra patch releases
+
+The go-infra page follows the canonical
+[microsoft/go-infra release instructions](https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra)
+and exposes both supported paths:
+
+* **Release on merge** accepts one pull request number. The server verifies that the PR is open,
+  targets `main`, and is not from a fork, then prepares a request to add `release-on-merge`. Starting
+  the action rechecks the exact PR head SHA before adding the fixed label. The UI never merges the
+  PR; the existing workflow creates the release only after the labeled PR is merged.
+* **Manual patch release** dispatches only `create-go-infra-patch-release.yml` on `main`. Dry-run
+  mode fixes `dry-run` to `true` and only calculates the next version. Publish mode fixes it to
+  `false` and can create the next patch release. After GitHub accepts the dispatch, the server
+  discovers the new run for the authenticated user, journals its ID and URL, and polls it while it
+  is queued or running. Each UI dispatch includes a random internal correlation token reflected as
+  the exact Actions run title, so concurrent same-user dispatches cannot be mistaken for this run.
+  The UI completes the step only after the run reports a terminal conclusion. If a monitoring
+  interval reaches its timeout, polling automatically continues from the checkpointed run ID.
+
+Both paths require an authenticated `gh` CLI, a reviewed plan, and a separate confirmation click.
+The server hardcodes `microsoft/go-infra`, `main`,
+`release-on-merge`, and the workflow filename; browser input cannot replace any of those targets.
+
 ## Running locally
 
-Authenticate Azure CLI, then start the fully enabled release UI:
+Start the fully configured release UI without arguments:
 
 ```console
-az login
 go run ./cmd/releaseagent serve
 ```
+
+Authenticate `az` before using Azure-backed go-images actions and `gh` before using GitHub-backed
+go-infra actions. Missing authentication is reported by process preflight; it does not require a
+different server startup mode.
 
 By default, the UI stores its durable session under the operating system's user configuration directory.
 Use `-session-file` only to override that location:
@@ -116,6 +143,10 @@ Use `-session-file` only to override that location:
 go run ./cmd/releaseagent serve \
   -session-file /path/to/release-session.json
 ```
+
+The configured session path also derives an adjacent durable process-run journal. Starting the
+server does not perform an external action. Opening the go-infra page performs read-only preflight
+checks; a mutation still requires preparing the exact request and confirming it.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
@@ -156,14 +187,30 @@ Dashboard responses include both go-images sessions and durable process runs as 
 ongoing and recent release lists, so a future multi-session store can expand tracking without
 changing the browser API.
 
-If a process terminates without cleaning up its lease, verify no release UI process is using the session and remove the adjacent `.lock` file manually.
+Durable external actions use an adjacent, schema-versioned atomic process-run journal derived from
+`-session-file`. The shared executor persists the reviewed digest and checkpoints `started` before
+calling the target service. Once an external run is discovered, its process-specific resume state,
+ID, URL, and terminal summary are also journaled; startup validates the stored policy and resumes
+monitoring an incomplete known run. If the process exits before a run can be correlated, the next
+startup marks the action `uncertain` and refuses a replacement plan. Inspect the target service,
+stop the server, and remove the adjacent `.process-run.json` file only after deciding whether
+another action is safe. The UI never starts a replacement action automatically. Startup also fails
+closed when the former `.go-infra-action.json` journal exists so it cannot silently discard an
+uncertain action during migration.
+
+If a process terminates without cleaning up its lease, verify no release UI process is using the
+session and remove the adjacent `.lock` file manually.
 
 ## Security boundaries
 
 * The server binds only to a loopback address.
 * A random one-time launch token establishes an HTTP-only, same-site session cookie.
 * State-changing requests require a matching Origin header.
-* Azure CLI tokens are acquired on demand, cached only in memory, and never sent to the browser, logged, or persisted.
+* Azure CLI tokens are acquired on demand, cached only in memory, and never sent to the browser,
+  logged, or persisted.
+* Go-infra uses the locally authenticated `gh` CLI only when explicitly enabled. JSON mutation
+  bodies are sent through stdin, and the GitHub host, repository, ref, label, and workflow are
+  hardcoded server-side.
 * The generic Azure pipeline client is read-only.
 * The dedicated queue client can only POST definition `1023` on `refs/heads/microsoft/main` with a server-derived normal, rollback, or test parameter set.
 * The durable session stores non-secret input, state, structural and execution digests, and no credentials.

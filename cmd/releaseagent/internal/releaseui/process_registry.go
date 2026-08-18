@@ -198,8 +198,48 @@ func defaultProcessRegistry() (*processRegistry, error) {
 			},
 		},
 		ProcessDefinition{
-			ID: "go-infra", Name: "Go infrastructure", Mark: "IN", Status: "Planned",
-			Description: "Infrastructure release automation will be added in a future iteration.",
+			ID: "go-infra", Name: "Go infrastructure", Mark: "IN", Status: "Available", Available: true,
+			Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
+			DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
+			Workflow: &ProcessWorkflow{
+				Heading: "Choose release path", Description: "Review a fixed GitHub action before confirming it.",
+				SubmitLabel: "Review GitHub action",
+				Inputs: []ProcessInput{
+					{
+						ID: "action", Type: "choice", Label: "Release path", Default: goInfraActionReleaseOnMerge, Required: true,
+						Options: []ProcessInputOption{
+							{
+								Value: goInfraActionReleaseOnMerge, Name: "Release on merge", Mark: "PR",
+								Description: "Add release-on-merge to one open, non-fork PR targeting main.",
+								NoticeTitle: "The UI does not merge the PR.",
+								Notice:      "The existing workflow creates the patch release only after the labeled PR is merged.",
+							},
+							{
+								Value: goInfraActionManualDispatch, Name: "Manual workflow dispatch", Mark: "WD",
+								Description: "Dispatch the fixed patch-release workflow on main as a dry run or publish action.",
+								NoticeTitle: "Publishing requires a second confirmation.",
+								Notice:      "Dry run only calculates the next version; publish can create the next patch release.",
+							},
+						},
+					},
+					{
+						ID: "pullRequest", Type: "number", Label: "Pull request number", Required: true,
+						Placeholder: "123",
+						Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
+						VisibleWhen: &ProcessCondition{InputID: "action", Equals: goInfraActionReleaseOnMerge},
+					},
+					{
+						ID: "dispatchMode", Type: "choice", Label: "Dispatch mode", Default: goInfraDispatchModeDryRun, Required: true,
+						VisibleWhen: &ProcessCondition{InputID: "action", Equals: goInfraActionManualDispatch},
+						Options: []ProcessInputOption{
+							{Value: goInfraDispatchModeDryRun, Name: "Dry run", Mark: "D", Description: "Calculate the next v0.0.x version without creating a release."},
+							{Value: goInfraDispatchModePublish, Name: "Publish release", Mark: "P", Description: "Run the workflow on main and create the next patch release."},
+						},
+					},
+				},
+				Steps:         []ProcessStep{{Name: "Apply selected GitHub action"}},
+				DurableAction: true,
+			},
 		},
 		ProcessDefinition{
 			ID: "microsoft-go", Name: "Microsoft Build of Go", Mark: "MS", Status: "Future",
@@ -227,8 +267,8 @@ func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error 
 	if workflow.Simulate != nil && workflow.Prepare == nil {
 		return fmt.Errorf("release process %q simulates without defining preparation", processID)
 	}
-	if workflow.Start != nil && (workflow.Prepare == nil || len(workflow.Steps) == 0) {
-		return fmt.Errorf("release process %q starts without defining steps", processID)
+	if workflow.Start != nil && workflow.Prepare == nil {
+		return fmt.Errorf("release process %q starts without defining preparation", processID)
 	}
 	inputs := make(map[string]ProcessInput, len(workflow.Inputs))
 	for _, input := range workflow.Inputs {
@@ -349,8 +389,12 @@ func (r *processRegistry) page(path string) (string, bool) {
 }
 
 func (r *processRegistry) process(id string) (ProcessDefinition, bool) {
-	definition, ok := r.byID[id]
-	return definition, ok
+	for _, definition := range r.ordered {
+		if definition.ID == id {
+			return definition, true
+		}
+	}
+	return ProcessDefinition{}, false
 }
 
 func (r *processRegistry) summaries() []processSummary {

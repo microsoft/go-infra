@@ -23,6 +23,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goinfragithub"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
@@ -33,7 +34,7 @@ func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:        "serve",
 		Summary:     "Start the local release management UI",
-		Description: "\n\nThe dashboard currently supports normal, rollback, and test go-images releases.\n",
+		Description: "\n\nThe dashboard supports go-images execution and guided go-infra patch releases.\n",
 		Handle:      handleServe,
 	})
 }
@@ -70,6 +71,27 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}()
 	sessionPath := store.Path()
 	options = append(options, releaseui.WithSessionStore(store))
+
+	service, err := goinfragithub.New(goinfragithub.ExecCommandRunner{})
+	if err != nil {
+		return err
+	}
+	processRunPath, err := processRunStorePath(sessionPath)
+	if err != nil {
+		return err
+	}
+	processRunStore, err := releaseui.NewProcessRunFileStore(processRunPath)
+	if err != nil {
+		return err
+	}
+	options = append(options,
+		releaseui.WithProcessRunStore(processRunStore),
+		releaseui.WithGoInfraGitHubIntegration(releaseui.GoInfraGitHubIntegration{
+			Preflight: service.Preflight, GetPullRequest: service.GetPullRequest,
+			AddReleaseOnMergeLabel: service.AddReleaseOnMergeLabel,
+			DispatchPatchRelease:   service.DispatchPatchRelease, PollWorkflowRun: service.PollWorkflowRun,
+		}),
+	)
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
 	tokenProvider := &azdopipeline.CachingTokenProvider{
@@ -286,6 +308,16 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return fmt.Errorf("shut down release UI: %w", err)
 	}
 	return nil
+}
+
+func processRunStorePath(sessionPath string) (string, error) {
+	legacyPath := sessionPath + ".go-infra-action.json"
+	if _, err := os.Stat(legacyPath); err == nil {
+		return "", fmt.Errorf("legacy go-infra action journal exists at %s; inspect it before migrating to the process run journal", legacyPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("inspect legacy go-infra action journal: %w", err)
+	}
+	return sessionPath + ".process-run.json", nil
 }
 
 func goImagesModeFromBuild(build *azdopipeline.Build) releasesteps.GoImagesReleaseMode {
