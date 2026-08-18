@@ -52,7 +52,7 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 			ID:      "durable-session",
 			Name:    "Durable session storage",
 			Status:  CheckStatusWarning,
-			Details: "Disabled. Start with -session-file to persist and restore the release plan.",
+			Details: "Not configured. Release plans cannot be persisted or restored.",
 		})
 	} else {
 		report.Checks = append(report.Checks, PreflightCheck{

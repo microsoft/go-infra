@@ -65,7 +65,7 @@ async function refreshTrackedReleases() {
   await loadDashboard();
   if (!preflight) preflight = await requestJSON("/api/preflight");
   if (!preflight.azureReadOnlyEnabled) {
-    throw new Error("Live release tracking requires -enable-go-images-azure-read-only.");
+    throw new Error("Live release tracking is unavailable.");
   }
   const live = await requestJSON("/api/releases/ongoing");
   const merged = new Map();

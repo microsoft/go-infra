@@ -46,38 +46,26 @@ There is no version input on the dashboard or go-images release page, and versio
 
 ## Running locally
 
-The default mode serves the dashboard but makes no Azure requests:
+Authenticate Azure CLI, then start the fully enabled release UI:
 
 ```console
+az login
 go run ./cmd/releaseagent serve
 ```
 
-Live planning requires authenticated read-only Azure access and durable storage:
+By default, the UI stores its durable session under the operating system's user configuration directory.
+Use `-session-file` only to override that location:
 
 ```console
 go run ./cmd/releaseagent serve \
-  -session-file "$HOME/.config/microsoft-go/release-session.json" \
-  -enable-go-images-azure-read-only
-```
-
-Read-only mode can resolve current main, read the pipeline YAML and `versions.json` at that exact commit, and validate a rollback source build.
-It exposes no queue capability.
-The UI can still run the four-step workflow as an in-memory simulation.
-
-Explicitly authorized execution is enabled separately:
-
-```console
-go run ./cmd/releaseagent serve \
-  -session-file "$HOME/.config/microsoft-go/release-session.json" \
-  -enable-go-images-azure-read-only \
-  -enable-go-images-execution
+  -session-file /path/to/release-session.json
 ```
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
 Normal and rollback runs can publish production images under `public/`.
 Test runs are fixed to `dev/`.
-Do not enable real execution without authorization.
+Do not confirm a real execution without authorization.
 
 The review page renders the coordinator DAG as a left-to-right dependency graph.
 Steps at the same dependency depth are grouped vertically and labeled as parallel work, so future release processes can expose fan-out and fan-in directly.
@@ -96,7 +84,7 @@ The focused graph checkpoints queue intent **before** issuing the Azure POST, th
 Correlation variables bind an Azure run to the local session, release mode, execution digest, source build, source commit, and version metadata.
 If the process restarts in the queue-response crash window, it reconciles recent runs before attempting another POST.
 
-When execution is enabled and startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
+When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
 The session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
