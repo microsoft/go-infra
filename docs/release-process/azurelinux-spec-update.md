@@ -75,11 +75,13 @@ This process should have a good result for a new major version `N` and supportin
     1. Add a new `%prep` entry.
     1. Add a new `%build` call to `go_bootstrap X`.
 1. Update `LICENSES-AND-NOTICES/SPECS/LICENSES-MAP.md` and `LICENSES-AND-NOTICES/SPECS/data/licenses.json`.
-    * E.g. (Linux/WSL with podman (or Docker))
+    * E.g. (Linux/WSL with podman or Docker)
         ```
-        podman pull mcr.microsoft.com/azurelinux/base/core:3.0
-        podman run -v "$(pwd):/work:z" -w /work -it --rm mcr.microsoft.com/azurelinux/base/core:3.0
+        docker pull mcr.microsoft.com/azurelinux/base/core:3.0
+        docker run -v "$(pwd):/work:z" -w /work -it --rm mcr.microsoft.com/azurelinux/base/core:3.0
         tdnf install -y python3 python3-pip
+        export PIP_INDEX_URL=https://packagefeedproxy.microsoft.io/pypi/simple/
+        unset PIP_EXTRA_INDEX_URL
         pip install -r ./toolkit/scripts/requirements.txt
         ./toolkit/scripts/license_map.py --no_check --update --remove_missing         LICENSES-AND-NOTICES/SPECS/data/licenses.json         LICENSES-AND-NOTICES/SPECS/LICENSES-MAP.md         SPECS SPECS-EXTENDED SPECS-SIGNED
         exit
