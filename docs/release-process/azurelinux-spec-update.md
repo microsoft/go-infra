@@ -55,10 +55,9 @@ Tracked by [microsoft/go-lab#79](https://github.com/microsoft/go-lab/issues/79).
 ## Adding a new major version
 
 The tool doesn't totally handle the creation of a new major version of Go.
-The expected end state is that we only have `golang.spec` (for `N`) and `golang-<N-1>.spec` files.
-No old `golang-<X>.spec` files should be left around.
+Old `golang-<X>.spec` files should be left around, even though we only maintain the `golang.spec` (for `N`) and `golang-<N-1>.spec` files.
 
-This process should have a good result for a new major version `N`, supported `N-1`, and removing `N-2`:
+This process should have a good result for a new major version `N` and supporting `N-1`.
 
 1. Open the auto-PR locally.
 1. Go to `SPECS/golang/golang.spec`.
@@ -71,14 +70,10 @@ This process should have a good result for a new major version `N`, supported `N
     `golang.signatures.json` to `golang-<N-1>.signatures.json`
 1. Restore the auto-generated updates to `golang.spec` and `golang.signatures.json`.
     * E.g. `git restore --source=HEAD --staged --worktree -- golang.spec golang.signatures.json`
-1. Delete:  
-    `golang-<N-2>.spec`  
-    `golang-<N-2>.signatures.json`
 1. If the new major version of Go requires an update to the bootstrap version of Go, update `golang.spec` accordingly.
     1. Add a new `SourceX` entry.
     1. Add a new `%prep` entry.
     1. Add a new `%build` call to `go_bootstrap X`.
-1. In the repo root `cgmanifest.json`, remove the entry with name `golang` and `version` `<N-2>.*`.
 1. Update `LICENSES-AND-NOTICES/SPECS/LICENSES-MAP.md` and `LICENSES-AND-NOTICES/SPECS/data/licenses.json`.
     * E.g. (Linux/WSL with podman (or Docker))
         ```
