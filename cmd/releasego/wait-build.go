@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"syscall"
 	"time"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
@@ -50,14 +52,27 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 		return err
 	}
 
+	const maxSequentialFlakyErrors = 10
+	sequentialFlakyErrors := 0
+
 	for {
 		b, err := c.GetBuild(ctx, build.GetBuildArgs{
 			BuildId: id,
 			Project: azdoFlags.Proj,
 		})
 		if err != nil {
+			if isKnownAPIFlakiness(err) {
+				sequentialFlakyErrors++
+				if sequentialFlakyErrors > maxSequentialFlakyErrors {
+					return fmt.Errorf("too many sequential flaky errors: %w", err)
+				}
+				log.Printf("Encountered suspected AzDO API flakiness when querying build, next poll in %v: %v", pollDelay, err)
+				time.Sleep(pollDelay)
+				continue
+			}
 			return err
 		}
+		sequentialFlakyErrors = 0
 
 		url, _ := azdo.GetBuildWebURL(b)
 
@@ -79,4 +94,8 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 	}
 
 	return nil
+}
+
+func isKnownAPIFlakiness(err error) bool {
+	return errors.Is(err, syscall.ECONNRESET)
 }
