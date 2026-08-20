@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ type StepFunc func(ctx context.Context) error
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
 type Step struct {
-	// Name is the name of the step. It must be unique within the release step graph.
+	// Name identifies the step and must be unique within the release step graph.
 	Name string
 	// Timeout defines the deadline that should be set up for the ctx passed to Func.
 	// If NoTimeout (zero), no deadline is set.
@@ -83,7 +84,7 @@ func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdd
 }
 
 // TransitiveDependencies returns all the steps s transitively depends on. Returns an error if a
-// cycle is detected.
+// step is invalid, names are not unique, or a cycle is detected.
 //
 // The slice is topologically sorted: for each step x in the slice, every step y that x depends on
 // precedes x. This means the topologically sorted list would be a valid order to run the steps one
@@ -93,6 +94,10 @@ func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdd
 //
 // The result is reproducible for a given slice of steps and their dependency slices.
 func (s *Step) TransitiveDependencies() ([]*Step, error) {
+	if s == nil {
+		return nil, errors.New("cannot traverse dependencies of a nil step")
+	}
+
 	type visitState int
 	v := make(map[*Step]visitState)
 	const (
@@ -105,39 +110,68 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 	)
 
 	var sortedSteps []*Step
+	stepsByName := make(map[string]*Step)
+	var path []*Step
 
 	// visit is a recursive function that explores the transitive dependency graph of a given step.
 	// It updates v during the exploration.
-	// If there is no cycle, returns nil. If there is a cycle, returns the step names in the cycle.
-	var visit func(s *Step) []string
-	visit = func(s *Step) []string {
+	// If there is no cycle, returns nil. If there is a cycle, the error lists the cycle's names.
+	var visit func(s *Step) error
+	visit = func(s *Step) error {
+		if s == nil {
+			return errors.New("step graph contains a nil step")
+		}
 		switch v[s] {
 		case visiting:
-			// Cycle.
-			return []string{s.Name}
+			cycleStart := 0
+			for i, candidate := range path {
+				if candidate == s {
+					cycleStart = i
+					break
+				}
+			}
+			cycle := append(append([]*Step(nil), path[cycleStart:]...), s)
+			names := make([]string, len(cycle))
+			for i, step := range cycle {
+				names[i] = step.Name
+			}
+			return fmt.Errorf("encountered cycle: %s", strings.Join(names, " <- "))
 		case visited:
-			// Already know there's no cycle here, and nothing to visit.
 			return nil
 		}
+		if s.Name == "" {
+			return errors.New("step has an empty name")
+		}
+		if existing, ok := stepsByName[s.Name]; ok && existing != s {
+			return fmt.Errorf("step name %q is not unique", s.Name)
+		}
+		stepsByName[s.Name] = s
+		if s.Func == nil {
+			return fmt.Errorf("step %q has no implementation", s.Name)
+		}
 
-		// Mark current step as visiting and check its dependencies.
 		v[s] = visiting
-		for _, d := range s.DependsOn {
-			if cycle := visit(d); cycle != nil {
-				return append(cycle, s.Name)
+		path = append(path, s)
+		dependencies := make(map[*Step]struct{}, len(s.DependsOn))
+		for i, dependency := range s.DependsOn {
+			if dependency == nil {
+				return fmt.Errorf("step %q has a nil dependency at index %d", s.Name, i)
+			}
+			if _, ok := dependencies[dependency]; ok {
+				return fmt.Errorf("step %q depends on %q more than once", s.Name, dependency.Name)
+			}
+			dependencies[dependency] = struct{}{}
+			if err := visit(dependency); err != nil {
+				return err
 			}
 		}
-		// Mark current step as visited: we have ruled out cycles.
+		path = path[:len(path)-1]
 		v[s] = visited
-
-		// We now know all steps that s transitively depends on are in sortedSteps. So, we can now
-		// add s to the end of sortedSteps.
 		sortedSteps = append(sortedSteps, s)
-
 		return nil
 	}
-	if cycle := visit(s); cycle != nil {
-		return nil, fmt.Errorf("encountered cycle: %v", strings.Join(cycle, " <- "))
+	if err := visit(s); err != nil {
+		return nil, err
 	}
 	return sortedSteps, nil
 }

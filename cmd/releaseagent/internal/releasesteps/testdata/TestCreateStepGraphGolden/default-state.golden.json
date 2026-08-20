@@ -1,9 +1,18 @@
 {
-  "InputChecksum": 3437148890,
+  "InputChecksum": 3390784144,
   "Day": {
     "ReleaseIssue": 0,
     "GoImagesCommit": "",
+    "GoImagesSourceBranch": "",
     "GoImagesOfficialBuildID": "",
+    "GoImagesReleaseBuildID": "",
+    "GoImagesReleaseResult": "",
+    "GoImagesReleaseComplete": false,
+    "GoImagesReleaseImported": false,
+    "GoImagesReleaseMode": "",
+    "GoImagesSourceBuildID": "",
+    "GoImagesReleaseQueueAttempted": false,
+    "GoImagesReleaseParameters": null,
     "AnnouncementWritten": false,
     "MARVersionChecked": false
   },

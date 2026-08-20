@@ -1,0 +1,216 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package azdopipeline
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+	azdobuild "github.com/microsoft/azure-devops-go-api/azuredevops/build"
+)
+
+type staticToken string
+
+func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
+
+type definitionClientFunc func(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+
+func (f definitionClientFunc) GetDefinition(ctx context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+	return f(ctx, args)
+}
+
+type timelineClientFunc func(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
+
+func (f timelineClientFunc) GetBuildTimeline(ctx context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+	return f(ctx, args)
+}
+
+func TestListRecent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Query().Get("definitions") != "1023" || request.URL.Query().Get("$top") != "50" {
+			t.Fatalf("unexpected query: %s", request.URL.RawQuery)
+		}
+		_, _ = response.Write([]byte(`{"value":[` +
+			`{"id":11,"status":"notStarted","queueTime":"2026-07-28T12:00:00Z",` +
+			`"definition":{"id":1023},"sourceBranch":"refs/heads/microsoft/main",` +
+			`"sourceVersion":"81ce9afc2b75ec4e153dd15fc3c7539b12024945",` +
+			`"templateParameters":{"publishRepoPrefix":"public/"}}` +
+			`]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builds, err := client.ListRecent(context.Background(), 1023)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(builds) != 1 || builds[0].ID != 11 {
+		t.Fatalf("builds = %#v, want ID 11", builds)
+	}
+	build := builds[0]
+	if build.DefinitionID != 1023 || build.TemplateParameters["publishRepoPrefix"] != "public/" || build.QueueTime.IsZero() ||
+		build.SourceBranch != "refs/heads/microsoft/main" || build.SourceVersion == "" {
+
+		t.Fatalf("build metadata = %#v", build)
+	}
+}
+
+func TestGetDefinition(t *testing.T) {
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.newDefinitionClient = func(context.Context) (definitionClient, string, error) {
+		return definitionClientFunc(func(_ context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+			if args.Project == nil || *args.Project != "internal" || args.DefinitionId == nil || *args.DefinitionId != 1023 {
+				t.Fatalf("definition args = %#v", args)
+			}
+			id := 1023
+			name := "microsoft-go-images (official)"
+			queueStatus := azdobuild.DefinitionQueueStatusValues.Enabled
+			defaultBranch := "refs/heads/microsoft/main"
+			repositoryName := "microsoft-go-images"
+			return &azdobuild.BuildDefinition{
+				Id: idPointer(id), Name: &name, QueueStatus: &queueStatus,
+				Process:    map[string]any{"yamlFilename": "eng/pipeline/go-docker-rolling-internal-pipeline.yml"},
+				Repository: &azdobuild.BuildRepository{DefaultBranch: &defaultBranch, Name: &repositoryName},
+			}, nil
+		}), "test-token", nil
+	}
+	definition, err := client.GetDefinition(context.Background(), 1023)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definition.ID != 1023 || definition.QueueStatus != "enabled" ||
+		definition.DefaultBranch != "refs/heads/microsoft/main" || definition.Repository != "microsoft-go-images" ||
+		definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
+
+		t.Fatalf("definition = %#v", definition)
+	}
+}
+
+func idPointer(value int) *int { return &value }
+
+func stringPointer(value string) *string { return &value }
+
+func TestGetTimeline(t *testing.T) {
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	jobID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	taskID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
+	inProgress := azdobuild.TimelineRecordStateValues.InProgress
+	succeeded := azdobuild.TaskResultValues.Succeeded
+	client.newTimelineClient = func(context.Context) (timelineClient, string, error) {
+		return timelineClientFunc(func(_ context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+			if args.Project == nil || *args.Project != "internal" || args.BuildId == nil || *args.BuildId != 888 {
+				t.Fatalf("timeline args = %#v", args)
+			}
+			records := []azdobuild.TimelineRecord{
+				{Id: &stageID, Type: stringPointer("Stage"), Name: stringPointer("Build"), State: &inProgress, Order: idPointer(1)},
+				{Id: &jobID, ParentId: &stageID, Type: stringPointer("Job"), Name: stringPointer("linux-amd64"), State: &inProgress, Order: idPointer(2)},
+				{Id: &taskID, ParentId: &jobID, Type: stringPointer("Task"), Name: stringPointer("Build image"), State: &inProgress, Result: &succeeded, Order: idPointer(3)},
+			}
+			return &azdobuild.Timeline{Records: &records}, nil
+		}), "test-token", nil
+	}
+	timeline, err := client.GetTimeline(context.Background(), 888)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Records) != 3 || timeline.Records[2].Name != "Build image" ||
+		timeline.Records[2].ParentID != jobID.String() || timeline.Records[0].Type != "Stage" ||
+		timeline.Records[2].Result != "succeeded" || timeline.Records[2].Order != 3 {
+
+		t.Fatalf("timeline = %#v", timeline)
+	}
+}
+
+func TestRunState(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		result string
+		want   RunState
+	}{
+		{status: "notStarted", want: RunStateWaiting},
+		{status: "postponed", want: RunStateWaiting},
+		{status: "inProgress", want: RunStateRunning},
+		{status: "completed", result: "succeeded", want: RunStateSucceeded},
+		{status: "completed", result: "partiallySucceeded", want: RunStateSucceeded},
+		{status: "completed", result: "failed", want: RunStateFailed},
+		{status: "completed", result: "canceled", want: RunStateCanceled},
+	} {
+		t.Run(test.status+"/"+test.result, func(t *testing.T) {
+			got, err := (&Build{Status: test.status, Result: test.result}).State()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != test.want {
+				t.Fatalf("State = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestHTTPErrorDoesNotExposeToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		http.Error(response, "denied", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("secret-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Get(context.Background(), 123)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("error = %v, want HTTP 401", err)
+	}
+	if strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("error exposed token: %v", err)
+	}
+}
+
+func TestGetBadRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"message":"invalid build"}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.Get(context.Background(), 123)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("error = %v, want HTTP 400", err)
+	}
+	if !strings.Contains(httpErr.Body, "invalid build") {
+		t.Fatalf("error body = %q", httpErr.Body)
+	}
+}
+
+func TestMalformedSuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"id":`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Get(context.Background(), 123); err == nil || !strings.Contains(err.Error(), "decode Azure DevOps response") {
+		t.Fatalf("error = %v, want malformed response error", err)
+	}
+}

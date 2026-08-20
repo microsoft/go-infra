@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Microsoft Build of Go Release UI</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Microsoft Build of Go Release UI home">
+      <span class="brand-mark" aria-hidden="true">Go</span>
+      <span>
+        <strong>Release UI</strong>
+        <small>Microsoft Build of Go</small>
+      </span>
+    </a>
+    <div class="connection" title="This server is available only on this computer">
+      <span class="connection-dot"></span>
+      <span>Local session</span>
+    </div>
+  </header>
+
+  <main class="dashboard-main">
+    <section class="hero dashboard-hero">
+      <div>
+        <p class="eyebrow">Release control center</p>
+        <h1>Manage releases from one place.</h1>
+        <p class="hero-copy">
+          Track work already in progress or start a focused release process. Each process owns its
+          inputs, validation, and safety boundaries.
+        </p>
+        <a class="release-guide-link" href="https://github.com/microsoft/go-lab/tree/main/docs/release" target="_blank" rel="noreferrer">
+          Release documentation <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+      <div class="hero-stat" aria-label="Available release processes">
+        <strong id="available-count">1</strong>
+        <span>process available</span>
+      </div>
+    </section>
+
+    <section class="dashboard-section" aria-labelledby="ongoing-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live work</p>
+          <h2 id="ongoing-title">Ongoing releases</h2>
+          <p>Reopen the release currently owned by this durable local session.</p>
+        </div>
+        <button id="track-releases" class="button button-secondary" type="button">
+          Track ongoing releases
+        </button>
+      </div>
+      <div id="ongoing-releases" class="release-list" aria-live="polite">
+        <article class="release-empty loading-card">Checking the local session…</article>
+      </div>
+    </section>
+
+    <section class="dashboard-section" aria-labelledby="processes-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Start new work</p>
+          <h2 id="processes-title">Release processes</h2>
+          <p>Choose the product to release. More processes can be added without changing this dashboard.</p>
+        </div>
+      </div>
+      <div id="process-grid" class="process-grid" aria-live="polite"></div>
+    </section>
+
+    <section id="recent-section" class="dashboard-section" aria-labelledby="recent-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">This session</p>
+          <h2 id="recent-title">Recently completed</h2>
+        </div>
+      </div>
+      <div id="recent-releases" class="release-list"></div>
+    </section>
+
+    <section class="readiness-strip" aria-labelledby="readiness-title">
+      <div>
+        <p class="eyebrow">Local readiness</p>
+        <h2 id="readiness-title">Execution boundaries</h2>
+      </div>
+      <ul id="preflight-list" class="preflight-list" aria-live="polite"></ul>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+</body>
+</html>

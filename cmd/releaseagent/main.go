@@ -15,14 +15,14 @@ import (
 )
 
 const description = `
-releaseagent coordinates a release of Microsoft build of Go repository.
+releaseagent coordinates a release related to the Microsoft build of Go project.
 `
 
 // subcommands is the list of subcommand options, populated by each file's init function.
 var subcommands []subcmd.Option
 
 func main() {
-	if err := subcmd.Run("releasego", description, subcommands); err != nil {
+	if err := subcmd.Run("releaseagent", description, subcommands); err != nil {
 		log.Fatal(err)
 	}
 }

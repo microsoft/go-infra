@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
@@ -16,11 +19,45 @@ import (
 
 //go:generate go run github.com/matryer/moq -out ServiceBundle_moq_test.go . ServiceBundle
 
+// GoImagesReleaseMode identifies one explicitly allowlisted use of pipeline 1023.
+type GoImagesReleaseMode string
+
+const (
+	// GoImagesInternalMirrorTarget is the only Azure Repos mirror accepted by the focused flow.
+	GoImagesInternalMirrorTarget = "dnceng/internal/_git/microsoft-go-images"
+	// GoImagesReleaseModeNormal builds current microsoft/main and publishes to public/.
+	GoImagesReleaseModeNormal GoImagesReleaseMode = "normal"
+	// GoImagesReleaseModeRollback republishes artifacts from one prior successful build to public/.
+	GoImagesReleaseModeRollback GoImagesReleaseMode = "rollback"
+	// GoImagesReleaseModeTest builds current microsoft/main and publishes under dev/.
+	GoImagesReleaseModeTest GoImagesReleaseMode = "test"
+)
+
+var goImagesCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// GoImagesInput is the immutable input for one focused go-images release.
+type GoImagesInput struct {
+	Versions      []string
+	Mode          GoImagesReleaseMode
+	SourceBranch  string
+	SourceVersion string
+	SourceBuildID string
+	MirrorTarget  string
+	PipelineID    int
+}
+
 // Input is the collection of inputs for a given release that don't change. They are provided once
 // by the release runner and stay the same upon retry.
 type Input struct {
 	// Versions is a list of versions to release.
 	Versions []string
+
+	// The focused UI uses GoImagesInput. These flattened fields remain in the legacy full-release
+	// input to preserve existing durable session documents while that envelope is migrated.
+	GoImagesReleaseMode   GoImagesReleaseMode
+	GoImagesSourceBranch  string
+	GoImagesSourceVersion string
+	GoImagesSourceBuildID string
 
 	// Security is true if any of the versions contains security fixes.
 	Security bool
@@ -32,6 +69,10 @@ type Input struct {
 	// "ghost" is a special value that indicates nobody should be notified. It is a username that
 	// GitHub has reserved as a placeholder.
 	RunnerGitHubUser string
+
+	// ReleaseIssue is an existing microsoft/go tracking issue to update, or zero for none. The
+	// focused go-images flow does not create this issue itself.
+	ReleaseIssue int
 
 	// ReleaseConfigVariableGroup is the name of the AzDO variable group containing the release
 	// configuration, mainly secrets. This is passed to child pipelines that need access.
@@ -92,8 +133,17 @@ type DayState struct {
 	// ReleaseIssue is the ID of the release issue to supply with updates.
 	ReleaseIssue int
 
-	GoImagesCommit          string
-	GoImagesOfficialBuildID string
+	GoImagesCommit                string
+	GoImagesSourceBranch          string
+	GoImagesOfficialBuildID       string
+	GoImagesReleaseBuildID        string
+	GoImagesReleaseResult         string
+	GoImagesReleaseComplete       bool
+	GoImagesReleaseImported       bool
+	GoImagesReleaseMode           GoImagesReleaseMode
+	GoImagesSourceBuildID         string
+	GoImagesReleaseQueueAttempted bool
+	GoImagesReleaseParameters     map[string]string
 
 	AnnouncementWritten bool
 	MARVersionChecked   bool
@@ -143,6 +193,63 @@ type ServiceBundle interface {
 	CreateAnnouncementBlogFile(ctx context.Context, versions []string, user string, security bool, secret *Secret) error
 }
 
+// GoImagesReleaseService is the intentionally narrow external surface required by the first UI
+// integration. Implementing it cannot accidentally enable unrelated GitHub or publishing steps.
+type GoImagesReleaseService interface {
+	PollAzDOMirror(ctx context.Context, target, commit string, secret *Secret) error
+	TriggerBuildPipeline(ctx context.Context, pipelineID int, parameters, optionalParameters map[string]string, secret *Secret) (string, error)
+	PollPipelineComplete(ctx context.Context, buildID string, secret *Secret) error
+}
+
+// StateCheckpoint durably records state. The state pointer is valid only for the duration of the
+// call and must not be retained or modified. It is called while release-state mutations are
+// serialized, so the implementation may safely encode the complete state.
+type StateCheckpoint func(ctx context.Context, state *State) error
+
+type stateAccess struct {
+	// StepRunner executes independent DAG branches concurrently, while checkpoints encode the
+	// complete State. Serialize reads, mutations, and checkpoints to avoid races and torn snapshots;
+	// step dependencies, rather than this mutex, continue to define execution ordering.
+	mu         sync.Mutex
+	state      *State
+	checkpoint StateCheckpoint
+	dirty      bool
+}
+
+func (a *stateAccess) update(ctx context.Context, update func(*State)) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	update(a.state)
+	if a.checkpoint == nil {
+		return nil
+	}
+	a.dirty = true
+	return a.flushLocked(ctx)
+}
+
+func (a *stateAccess) flush(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.flushLocked(ctx)
+}
+
+func (a *stateAccess) flushLocked(ctx context.Context) error {
+	if !a.dirty || a.checkpoint == nil {
+		return nil
+	}
+	if err := a.checkpoint(ctx, a.state); err != nil {
+		return err
+	}
+	a.dirty = false
+	return nil
+}
+
+func stateValue[T any](a *stateAccess, value func(*State) T) T {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return value(a.state)
+}
+
 // Common timeout values. The goal is for each timeout to be low enough to improve response time
 // when manual intervention is necessary, but high enough that they don't trip on transient issues.
 const (
@@ -174,7 +281,238 @@ const (
 	microsoftGoImagesOfficialCITimeout = 2 * time.Hour
 )
 
-// CreateStepGraph creates the steps for a release of one or more versions of Microsoft build of Go. The
+// GoImagesPipelineParameters returns the fixed runtime parameters for a normal release. It is kept
+// as a convenience for the broader release graph, whose go-images operation is a normal release.
+func GoImagesPipelineParameters() map[string]string {
+	parameters, err := GoImagesPipelineParametersForMode(GoImagesReleaseModeNormal, "")
+	if err != nil {
+		panic(err)
+	}
+	return parameters
+}
+
+// GoImagesPipelineParametersForMode derives the entire pipeline parameter set from an allowlisted
+// mode. Browser input can select a mode and, for rollback only, a positive source build ID; it can
+// never supply a branch, prefix, or arbitrary parameter map.
+func GoImagesPipelineParametersForMode(mode GoImagesReleaseMode, sourceBuildID string) (map[string]string, error) {
+	parameters := map[string]string{
+		"_info":                    "🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵",
+		"sourceBuildPipelineRunId": "$(Build.BuildId)",
+		"publishRepoPrefix":        "public/",
+	}
+	switch mode {
+	case GoImagesReleaseModeNormal:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("normal go-images release must not specify source build %q", sourceBuildID)
+		}
+	case GoImagesReleaseModeRollback:
+		buildID, err := strconv.Atoi(sourceBuildID)
+		if err != nil || buildID <= 0 {
+			return nil, fmt.Errorf("rollback source build ID %q must be a positive integer", sourceBuildID)
+		}
+		parameters["sourceBuildPipelineRunId"] = sourceBuildID
+	case GoImagesReleaseModeTest:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("test go-images release must not specify source build %q", sourceBuildID)
+		}
+		parameters["publishRepoPrefix"] = "dev/"
+	default:
+		return nil, fmt.Errorf("unsupported go-images release mode %q", mode)
+	}
+	return parameters, nil
+}
+
+// CreateGoImagesPipelineGraph creates the initial focused workflow that queues and monitors
+// the direct microsoft-go-images pipeline as one coarse-grained operation.
+func CreateGoImagesPipelineGraph(
+	ri *GoImagesInput,
+	secret *Secret,
+	rs *State,
+	sb GoImagesReleaseService,
+) ([]*coordinator.Step, *State, error) {
+	return CreateGoImagesPipelineGraphWithCheckpoint(ri, secret, rs, sb, nil)
+}
+
+// CreateGoImagesPipelineGraphWithCheckpoint is like CreateGoImagesPipelineGraph and
+// durably records the queued pipeline ID and successful completion.
+func CreateGoImagesPipelineGraphWithCheckpoint(
+	ri *GoImagesInput,
+	secret *Secret,
+	rs *State,
+	sb GoImagesReleaseService,
+	checkpoint StateCheckpoint,
+) ([]*coordinator.Step, *State, error) {
+	if ri == nil || ri.PipelineID == 0 {
+		return nil, nil, fmt.Errorf("no go-images pipeline specified")
+	}
+	if ri.SourceBranch != "refs/heads/microsoft/main" {
+		return nil, nil, fmt.Errorf("go-images source branch %q is not allowlisted", ri.SourceBranch)
+	}
+	if ri.MirrorTarget != GoImagesInternalMirrorTarget {
+		return nil, nil, fmt.Errorf("go-images mirror target %q is not allowlisted", ri.MirrorTarget)
+	}
+	if !goImagesCommitPattern.MatchString(ri.SourceVersion) {
+		return nil, nil, fmt.Errorf("invalid go-images source commit %q", ri.SourceVersion)
+	}
+	parameters, err := GoImagesPipelineParametersForMode(ri.Mode, ri.SourceBuildID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rs, err = initializeState(goImagesCompatibilityInput(ri), rs)
+	if err != nil {
+		return nil, nil, err
+	}
+	rs.Day.GoImagesReleaseMode = ri.Mode
+	rs.Day.GoImagesSourceBranch = ri.SourceBranch
+	rs.Day.GoImagesCommit = ri.SourceVersion
+	rs.Day.GoImagesSourceBuildID = ri.SourceBuildID
+	if len(rs.Day.GoImagesReleaseParameters) == 0 {
+		rs.Day.GoImagesReleaseParameters = cloneStringMap(parameters)
+	}
+	state := &stateAccess{state: rs, checkpoint: checkpoint}
+
+	verifyMirror := coordinator.NewRootStep(
+		"Verify go-images commit is mirrored internally",
+		internalMirrorTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
+				return nil
+			}
+			return sb.PollAzDOMirror(ctx, ri.MirrorTarget, ri.SourceVersion, secret)
+		},
+	)
+	queue := verifyMirror.Then(
+		"🚀 Queue go-images release",
+		shortTimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID }) != "" {
+				return nil
+			}
+			if !stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseQueueAttempted }) {
+				if err := state.update(ctx, func(s *State) {
+					s.Day.GoImagesReleaseQueueAttempted = true
+				}); err != nil {
+					return err
+				}
+			}
+			buildID, err := sb.TriggerBuildPipeline(
+				ctx,
+				ri.PipelineID,
+				parameters,
+				nil,
+				secret,
+			)
+			if err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesReleaseBuildID = buildID
+				s.Day.GoImagesReleaseImported = false
+			})
+		},
+	)
+	wait := queue.Then(
+		"⌚ Wait for go-images release",
+		microsoftGoImagesOfficialCITimeout,
+		func(ctx context.Context) error {
+			if stateValue(state, func(s *State) bool { return s.Day.GoImagesReleaseComplete }) {
+				return nil
+			}
+			buildID := stateValue(state, func(s *State) string { return s.Day.GoImagesReleaseBuildID })
+			if err := sb.PollPipelineComplete(ctx, buildID, secret); err != nil {
+				return err
+			}
+			return state.update(ctx, func(s *State) {
+				s.Day.GoImagesReleaseComplete = true
+				s.Day.GoImagesReleaseResult = "succeeded"
+			})
+		},
+	)
+	complete := coordinator.NewIndicatorStep(
+		"✅ Go-images release complete",
+		wait,
+	)
+	steps, err := complete.TransitiveDependencies()
+	if err != nil {
+		return nil, nil, err
+	}
+	wrapStepsWithStateFlush(steps, state, checkpoint)
+	return steps, rs, nil
+}
+
+// goImagesCompatibilityInput preserves the existing State checksum and session-file shape while
+// the legacy full-release graph continues to use Input.
+func goImagesCompatibilityInput(input *GoImagesInput) *Input {
+	if input == nil {
+		return nil
+	}
+	return &Input{
+		Versions:                  append([]string(nil), input.Versions...),
+		GoImagesReleaseMode:       input.Mode,
+		GoImagesSourceBranch:      input.SourceBranch,
+		GoImagesSourceVersion:     input.SourceVersion,
+		GoImagesSourceBuildID:     input.SourceBuildID,
+		RunnerGitHubUser:          "ghost",
+		TargetAzDOGoImagesRepo:    input.MirrorTarget,
+		MicrosoftGoImagesPipeline: input.PipelineID,
+	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	clone := make(map[string]string, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
+}
+
+func initializeState(ri *Input, rs *State) (*State, error) {
+	if ri == nil || len(ri.Versions) == 0 {
+		return nil, fmt.Errorf("no versions to release")
+	}
+	riChecksum, err := ri.checksum()
+	if err != nil {
+		return nil, fmt.Errorf("failed to checksum release input: %v", err)
+	}
+	if rs == nil {
+		rs = &State{InputChecksum: riChecksum}
+	} else if riChecksum != rs.InputChecksum {
+		return nil, fmt.Errorf(
+			"release input doesn't match initial input: expected checksum %v (from state), got %v (by calculation)",
+			rs.InputChecksum,
+			riChecksum,
+		)
+	}
+	if rs.Versions == nil {
+		rs.Versions = make(map[string]*VersionState)
+	}
+	for _, version := range ri.Versions {
+		if _, ok := rs.Versions[version]; !ok {
+			rs.Versions[version] = &VersionState{}
+		}
+	}
+	return rs, nil
+}
+
+func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, checkpoint StateCheckpoint) {
+	if checkpoint == nil {
+		return
+	}
+	for _, step := range steps {
+		run := step.Func
+		step.Func = func(ctx context.Context) error {
+			if err := state.flush(ctx); err != nil {
+				return fmt.Errorf("flush pending release state before step: %w", err)
+			}
+			return run(ctx)
+		}
+	}
+}
+
+// CreateStepGraph creates the steps for a release of one or more versions of Microsoft Build of Go. The
 // returned step graph is not running.
 //
 // If rs is nil, creates a new empty state that indicates no release work has been done yet.
@@ -188,37 +526,10 @@ const (
 // between steps through the State and synchronizing). All work involving external resources should
 // be done by calling methods on the ServiceBundle.
 func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]*coordinator.Step, *State, error) {
-	if ri == nil || len(ri.Versions) == 0 {
-		return nil, nil, fmt.Errorf("no versions to release")
-	}
-
-	// Don't use simple "err" variable name here to avoid having "err" in scope during step
-	// creation. It is easy to accidentally capture it while writing new steps, and that results in
-	// a data race.
-	riChecksum, checksumErr := ri.checksum()
-	if checksumErr != nil {
-		return nil, nil, fmt.Errorf("failed to checksum release input: %v", checksumErr)
-	}
-
-	// Either create a new state or validate the existing one's checksum.
-	if rs == nil {
-		rs = &State{
-			InputChecksum: riChecksum,
-		}
-	} else if riChecksum != rs.InputChecksum {
-		return nil, nil, fmt.Errorf(
-			"release input doesn't match initial input: expected checksum %v (from state), got %v (by calculation)",
-			rs.InputChecksum, riChecksum)
-	}
-
-	// Ensure state is initialized.
-	if rs.Versions == nil {
-		rs.Versions = make(map[string]*VersionState)
-	}
-	for _, version := range ri.Versions {
-		if _, ok := rs.Versions[version]; !ok {
-			rs.Versions[version] = &VersionState{}
-		}
+	var err error
+	rs, err = initializeState(ri, rs)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	createStatusReportIssue := coordinator.NewRootStep(
@@ -441,14 +752,13 @@ func CreateStepGraph(ri *Input, secret *Secret, rs *State, sb ServiceBundle) ([]
 			func(ctx context.Context) error {
 				if vs.ImageUpdatePR == 0 {
 					var err error
-					vs.ImageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetRepo, assetJSONPath, "", secret)
+					vs.ImageUpdatePR, err = sb.CreateDockerImagesPR(ctx, ri.TargetGoImagesRepo, assetJSONPath, "", secret)
 					if err != nil {
 						return err
 					}
 				}
 				if !vs.ImagesUpdated {
-					var err error
-					_, err = sb.PollMergedGitHubPRCommit(ctx, ri.TargetRepo, vs.ImageUpdatePR, secret)
+					_, err := sb.PollMergedGitHubPRCommit(ctx, ri.TargetGoImagesRepo, vs.ImageUpdatePR, secret)
 					if err != nil {
 						return err
 					}
