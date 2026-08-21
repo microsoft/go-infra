@@ -937,7 +937,7 @@ func formatUpstreamCommitDetails(ownerSlashRepo, oldCommit, newCommit, commitLog
 	if logFailed {
 		b.WriteString("Could not retrieve commit list.\n")
 	} else if commitLog != "" {
-		for _, line := range strings.Split(commitLog, "\n") {
+		for line := range strings.SplitSeq(commitLog, "\n") {
 			fmt.Fprintf(&b, "- ")
 			hash, message := cutLogHash(line)
 			if hash != "" {

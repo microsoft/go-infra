@@ -66,12 +66,10 @@ func TestAzDOGetBuildConnectionReset(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetBuild() returned no error, want connection reset")
 	}
-	var urlError *url.Error
-	if !errors.As(err, &urlError) {
+	if _, ok := errors.AsType[*url.Error](err); !ok {
 		t.Fatalf("GetBuild error has type %T, want wrapped *url.Error: %v", err, err)
 	}
-	var operationError *net.OpError
-	if !errors.As(err, &operationError) {
+	if _, ok := errors.AsType[*net.OpError](err); !ok {
 		t.Fatalf("GetBuild error does not wrap *net.OpError: %v", err)
 	}
 	if !isKnownAPIFlakiness(err) {

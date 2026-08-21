@@ -88,9 +88,9 @@ func handleCreateGoInfraPatch(p subcmd.ParseFunc) error {
 	log.Printf("Creating release %v from %v with generated release notes...\n", nextTag, defaultBranch)
 	generateReleaseNotes := true
 	release := &github.RepositoryRelease{
-		TagName:              github.String(nextTag),
-		Name:                 github.String(nextTag),
-		TargetCommitish:      github.String(defaultBranch),
+		TagName:              new(nextTag),
+		Name:                 new(nextTag),
+		TargetCommitish:      new(defaultBranch),
 		GenerateReleaseNotes: &generateReleaseNotes,
 	}
 	if err := githubutil.Retry(func() error {

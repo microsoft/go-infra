@@ -160,8 +160,8 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 
 		treeFile := func(path string, content []byte) *github.TreeEntry {
 			return &github.TreeEntry{
-				Path:    github.String(path),
-				Content: github.String(string(content)),
+				Path:    new(path),
+				Content: new(string(content)),
 				Mode:    github.String(githubutil.TreeModeFile),
 			}
 		}
@@ -177,7 +177,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		}
 
 		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, &github.Commit{
-			Message: github.String(azurelinux.GeneratePRTitleFromAssets(assets, security)),
+			Message: new(azurelinux.GeneratePRTitleFromAssets(assets, security)),
 			Parents: []*github.Commit{upstreamCommit},
 			Tree:    createTree,
 		}, &github.CreateCommitOptions{})
@@ -186,7 +186,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		}
 
 		newRef := &github.Reference{
-			Ref:    github.String(updateBranch),
+			Ref:    new(updateBranch),
 			Object: &github.GitObject{SHA: createCommit.SHA},
 		}
 		if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
@@ -207,12 +207,12 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			prHead = owner + ":" + updateBranch
 		}
 		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, &github.NewPullRequest{
-			Title: github.String(azurelinux.GeneratePRTitleFromAssets(assets, security)),
+			Title: new(azurelinux.GeneratePRTitleFromAssets(assets, security)),
 			Head:  &prHead,
-			Base:  github.String(baseBranch),
+			Base:  new(baseBranch),
 			// We don't know the PR number yet, so pass 0 to use a placeholder.
-			Body:  github.String(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, 0)),
-			Draft: github.Bool(true),
+			Body:  new(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, 0)),
+			Draft: new(true),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create PR: %w", err)
@@ -226,7 +226,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	// Update the PR description with the PR number.
 	if err := githubutil.Retry(func() error {
 		_, _, err := client.PullRequests.Edit(ctx, upstream, repo, pr.GetNumber(), &github.PullRequest{
-			Body: github.String(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, pr.GetNumber())),
+			Body: new(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, pr.GetNumber())),
 		})
 		return err
 	}); err != nil {

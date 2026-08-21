@@ -3,7 +3,7 @@
 
 module github.com/microsoft/go-infra
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0

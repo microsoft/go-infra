@@ -142,7 +142,7 @@ func run() error {
 	}
 
 	newLines := []string{beginGeneratedComment}
-	for _, l := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+	for l := range strings.SplitSeq(strings.TrimRight(buf.String(), "\n"), "\n") {
 		if l == "" {
 			newLines = append(newLines, "")
 			continue

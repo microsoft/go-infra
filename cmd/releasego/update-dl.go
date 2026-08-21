@@ -194,8 +194,8 @@ func updateDL(p subcmd.ParseFunc) error {
 		treeEntries := make([]*github.TreeEntry, 0, len(files))
 		for _, f := range files {
 			treeEntries = append(treeEntries, &github.TreeEntry{
-				Path:    github.String(f.path),
-				Content: github.String(string(f.content)),
+				Path:    new(f.path),
+				Content: new(string(f.content)),
 				Mode:    github.String(githubutil.TreeModeFile),
 			})
 		}
@@ -206,7 +206,7 @@ func updateDL(p subcmd.ParseFunc) error {
 		}
 
 		createCommit, _, err := client.Git.CreateCommit(ctx, labOwner, labName, &github.Commit{
-			Message: github.String(title),
+			Message: new(title),
 			Parents: []*github.Commit{baseCommit},
 			Tree:    createTree,
 		}, &github.CreateCommitOptions{})
@@ -215,7 +215,7 @@ func updateDL(p subcmd.ParseFunc) error {
 		}
 
 		newRef := &github.Reference{
-			Ref:    github.String("refs/heads/" + branchName),
+			Ref:    new("refs/heads/" + branchName),
 			Object: &github.GitObject{SHA: createCommit.SHA},
 		}
 		if _, _, err = client.Git.CreateRef(ctx, labOwner, labName, newRef); err != nil {
@@ -230,10 +230,10 @@ func updateDL(p subcmd.ParseFunc) error {
 	// Create the pull request.
 	if err := githubutil.Retry(func() error {
 		pr, _, err = client.PullRequests.Create(ctx, labOwner, labName, &github.NewPullRequest{
-			Title: github.String(title),
-			Head:  github.String(branchName),
-			Base:  github.String("main"),
-			Body:  github.String(prBody),
+			Title: new(title),
+			Head:  new(branchName),
+			Base:  new("main"),
+			Body:  new(prBody),
 		})
 		if err != nil {
 			return fmt.Errorf("error creating pull request: %w", err)

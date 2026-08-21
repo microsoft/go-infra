@@ -234,8 +234,7 @@ func Retry(f func() error) error {
 		if err != nil {
 			log.Printf("...attempt %v/%v failed with error: %v\n", i+1, retryAttempts, err)
 			if i+1 < retryAttempts {
-				var rateErr *github.RateLimitError
-				if errors.As(err, &rateErr) {
+				if rateErr, ok := errors.AsType[*github.RateLimitError](err); ok {
 					resetDuration := time.Until(rateErr.Rate.Reset.Time)
 
 					log.Printf("...rate limit exceeded. Reset at %v, %v from now.\n", rateErr.Rate.Reset, resetDuration)
@@ -299,8 +298,8 @@ func CreateBranch(ctx context.Context, client *github.Client, owner, repo, branc
 	// 2) Create the new branch at that SHA
 	if err := Retry(func() error {
 		_, _, err := client.Git.CreateRef(ctx, owner, repo, &github.Reference{
-			Ref:    github.String("refs/heads/" + branchName),
-			Object: &github.GitObject{SHA: github.String(baseSHA)},
+			Ref:    new("refs/heads/" + branchName),
+			Object: &github.GitObject{SHA: new(baseSHA)},
 		})
 		return err
 	}); err != nil {
@@ -406,8 +405,7 @@ func FullyCreateFork(ctx context.Context, client *github.Client, upstreamOwner, 
 		fork, _, err = client.Repositories.CreateFork(ctx, upstreamOwner, repo, &github.RepositoryCreateForkOptions{
 			DefaultBranchOnly: true,
 		})
-		var acceptedError *github.AcceptedError
-		if errors.As(err, &acceptedError) {
+		if _, ok := errors.AsType[*github.AcceptedError](err); ok {
 			return nil
 		}
 		return err

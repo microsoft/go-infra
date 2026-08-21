@@ -84,13 +84,11 @@ func run(p subcmd.ParseFunc) error {
 	// Download (if necessary) up front.
 	var wg sync.WaitGroup
 	for _, b := range matches {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := b.GetOrCreateCacheBinDir(); err != nil {
 				log.Panicf("failed to get %#v: %v", b.URL, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	originalPath := os.Getenv("PATH")

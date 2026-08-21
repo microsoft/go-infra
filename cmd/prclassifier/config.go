@@ -153,7 +153,7 @@ func normalizePrefix(value string) (string, error) {
 	if prefix == "" {
 		return "", errors.New("prefix must not be empty")
 	}
-	for _, part := range strings.Split(prefix, "/") {
+	for part := range strings.SplitSeq(prefix, "/") {
 		if part == "" || part == "." || part == ".." {
 			return "", errors.New("prefix must not contain empty, dot, or parent components")
 		}
