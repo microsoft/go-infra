@@ -94,14 +94,14 @@ func FuzzRSAPKCS1(f *testing.F) {
 		if key.Validate() != nil {
 			return
 		}
-		enc, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, msg)
+		enc, err := rsa.EncryptPKCS1v15(rand.Reader, &key.PublicKey, msg) //nolint:staticcheck // Intentionally fuzz PKCS #1 v1.5.
 		if err != nil {
 			if !errorCorrectlyRejectedRSAInput(err) {
 				t.Fatal(err)
 			}
 			return
 		}
-		dec, err := rsa.DecryptPKCS1v15(rand.Reader, key, enc)
+		dec, err := rsa.DecryptPKCS1v15(rand.Reader, key, enc) //nolint:staticcheck // Intentionally fuzz PKCS #1 v1.5.
 		if err != nil {
 			t.Fatal(err)
 		}
