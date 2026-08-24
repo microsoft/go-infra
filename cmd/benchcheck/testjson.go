@@ -108,7 +108,7 @@ func parseTestJSON(r io.Reader, prefix string) (testJSON, error) {
 func failureContext(output []string) []string {
 	var lines []string
 	for _, chunk := range output {
-		for _, line := range strings.Split(chunk, "\n") {
+		for line := range strings.SplitSeq(chunk, "\n") {
 			line = strings.TrimRight(line, "\r")
 			if strings.TrimSpace(line) == "" {
 				continue

@@ -115,12 +115,7 @@ func classify(cfg config, pull pullRequest, files []changedFile) classification 
 }
 
 func anyPath(paths []string, predicate func(string) bool) bool {
-	for _, file := range paths {
-		if predicate(file) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(paths, predicate)
 }
 
 func matchesAnyPrefix(file string, prefixes []string) bool {

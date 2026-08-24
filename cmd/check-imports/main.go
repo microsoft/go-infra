@@ -92,7 +92,7 @@ Example:
 					os.Exit(2)
 				}
 				allowed = make(map[string]bool)
-				for _, a := range strings.Split(args[i], ",") {
+				for a := range strings.SplitSeq(args[i], ",") {
 					a = strings.TrimSpace(a)
 					if a != "" {
 						allowed[a] = true

@@ -173,6 +173,9 @@ func CreateMermaidStepFlowchart(steps []*Step) string {
 // MermaidLiveChartURL returns a URL to view or edit the given Mermaid chart on mermaid.live.
 //
 // The URL is based on observations about Mermaid Live Editor v11.4.0, not a published API.
+//
+// The URL contains zlib-compressed data and is therefore not compatible across Go versions. It must
+// not be relied upon to return stable output.
 func MermaidLiveChartURL(chart string, edit bool) (string, error) {
 	// Including more data seems to make the diagram more likely to render without a refresh.
 	// Browsers that have already loaded a diagram before seem more likely to be able to

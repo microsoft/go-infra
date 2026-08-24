@@ -64,9 +64,9 @@ func (g *githubAPI) ListLabels(ctx context.Context, owner, repo string) ([]strin
 func (g *githubAPI) CreateLabel(ctx context.Context, owner, repo string, definition labelDefinition) error {
 	return githubutil.Retry(func() error {
 		_, _, err := g.client.Issues.CreateLabel(ctx, owner, repo, &github.Label{
-			Name:        github.String(definition.Name),
-			Color:       github.String(definition.Color),
-			Description: github.String(definition.Description),
+			Name:        new(definition.Name),
+			Color:       new(definition.Color),
+			Description: new(definition.Description),
 		})
 		return err
 	})

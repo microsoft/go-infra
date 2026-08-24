@@ -641,7 +641,7 @@ func (e *EvalState) evalRangeResult(r *evalRange) (*yaml.Node, error) {
 
 	// Handle slices and arrays via reflection to support typed slices (e.g. []string).
 	rv := reflect.ValueOf(r.collection)
-	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Ptr {
+	if rv.Kind() == reflect.Interface || rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return &dissolvedByRange, nil
 		}

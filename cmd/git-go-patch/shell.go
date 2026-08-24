@@ -164,8 +164,7 @@ func handleShell(p subcmd.ParseFunc) error {
 		} else {
 			// The shell exited non-zero, which we treat as "discard": skip extract and leave the
 			// patch files alone.
-			var exitErr *exec.ExitError
-			if errors.As(shellErr, &exitErr) {
+			if exitErr, ok := errors.AsType[*exec.ExitError](shellErr); ok {
 				fmt.Printf("\nThe shell exited with status %d, so 'extract' was skipped and your patch files were left untouched.\n", exitErr.ExitCode())
 			} else {
 				fmt.Println("\nThe shell exited abnormally, so 'extract' was skipped and your patch files were left untouched.")

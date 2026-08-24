@@ -14,7 +14,7 @@ import (
 // benchLines generates n identical benchmark result lines.
 func benchLines(name string, n int, nsPerOp float64, bPerOp, allocsPerOp int) string {
 	var b strings.Builder
-	for i := 0; i < n; i++ {
+	for range n {
 		fmt.Fprintf(&b, "%s\t1\t%.1f ns/op\t%d B/op\t%d allocs/op\n",
 			name, nsPerOp, bPerOp, allocsPerOp)
 	}

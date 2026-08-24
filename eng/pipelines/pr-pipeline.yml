@@ -29,8 +29,6 @@ jobs:
           go test -json -race ./... >> $(Build.StagingDirectory)/TestResults.json
         displayName: Test Telemetry
         workingDirectory: $(Build.SourcesDirectory)/telemetry
-        env:
-          GOEXPERIMENT: synctest
 
       - script: |
           go run ./cmd/json2junit -in $(Build.StagingDirectory)/TestResults.json -out $(Build.StagingDirectory)/TestResults.xml

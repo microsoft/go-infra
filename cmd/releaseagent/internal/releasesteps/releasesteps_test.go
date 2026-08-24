@@ -54,12 +54,11 @@ func TestCreateStepGraphGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// url must not be included in the golden file, because it is not reproducible.
+	// However, it's useful for debugging, so print it to the test log.
+	t.Logf("Mermaid Live Editor URL: %s", url)
 
-	// Add a live editor link to help visualize easily.
-	goldenMermaid := src + "\n%% " + url + "\n"
-
-	// Use "md" file: help highlight the link for devs, and there is no clear better extension.
-	goldentest.Check(t, "step-graph.golden.md", goldenMermaid)
+	goldentest.Check(t, "step-graph.golden.mermaid", src)
 
 	stateJSON, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {

@@ -174,9 +174,7 @@ func updateJson(p subcmd.ParseFunc) error {
 	var wg sync.WaitGroup
 	for _, b := range newBuilds {
 		log.Printf("Creating checksum for %v", b.URL)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := b.CreateFreshChecksum(); err != nil {
 				if errors.Is(err, errBuildNotFound) {
 					log.Printf("skipping 404 URL %#v", b)
@@ -186,7 +184,7 @@ func updateJson(p subcmd.ParseFunc) error {
 			} else {
 				log.Printf("Downloaded %v, generated checksum %v...", b.URL, b.SHA512[:16])
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	for _, b := range newBuilds {

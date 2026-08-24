@@ -115,10 +115,7 @@ func cmdReport(args []string) {
 	output := buf.String()
 	if len(output) > *maxLen {
 		truncMsg := "\n\n---\n:scissors: **Report truncated** — see workflow artifacts for full results.\n"
-		cut := *maxLen - len(truncMsg)
-		if cut < 0 {
-			cut = 0
-		}
+		cut := max(*maxLen-len(truncMsg), 0)
 		output = output[:cut] + truncMsg
 	}
 
@@ -163,7 +160,7 @@ func readJobURLsFileIfExists(path string) (map[string]string, error) {
 	if content == "" {
 		return urls, nil
 	}
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		parts := strings.SplitN(line, "\t", 2)
 		if len(parts) == 2 {
 			urls[parts[0]] = parts[1]
