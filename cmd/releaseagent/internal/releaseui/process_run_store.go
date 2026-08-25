@@ -9,14 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/atomicfile"
 )
 
 const (
@@ -104,29 +103,11 @@ func (s *ProcessRunFileStore) Load(ctx context.Context) (*ProcessRun, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file, err := os.Open(s.path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrProcessRunNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open process run: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat process run: %w", err)
-	}
-	if info.Size() > maxProcessRunSize {
-		return nil, fmt.Errorf("process run file is %d bytes, maximum is %d", info.Size(), maxProcessRunSize)
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxProcessRunSize))
-	decoder.DisallowUnknownFields()
 	var document processRunDocument
-	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode process run: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("process run file must contain exactly one JSON value")
+	if err := atomicfile.ReadJSON(s.path, maxProcessRunSize, &document); errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrProcessRunNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("read process run: %w", err)
 	}
 	if document.SchemaVersion != processRunSchemaVersion {
 		return nil, fmt.Errorf("unsupported process run schema %d", document.SchemaVersion)
@@ -156,54 +137,10 @@ func (s *ProcessRunFileStore) Save(ctx context.Context, run *ProcessRun) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("create process run directory: %w", err)
+	if err := atomicfile.WriteJSON(s.path, ".process-run-*.tmp", maxProcessRunSize, document); err != nil {
+		return fmt.Errorf("write process run: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(s.path), ".process-run-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary process run: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	keepTemporary := false
-	defer func() {
-		if !keepTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("restrict temporary process run: %w", err)
-	}
-	encoder := json.NewEncoder(temporary)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(document); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("encode process run: %w", err)
-	}
-	info, err := temporary.Stat()
-	if err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("stat temporary process run: %w", err)
-	}
-	if info.Size() > maxProcessRunSize {
-		_ = temporary.Close()
-		return fmt.Errorf("encoded process run is %d bytes, maximum is %d", info.Size(), maxProcessRunSize)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync temporary process run: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary process run: %w", err)
-	}
-	if err := os.Rename(temporaryPath, s.path); err != nil {
-		return fmt.Errorf("replace process run: %w", err)
-	}
-	keepTemporary = true
-	if err := os.Chmod(s.path, 0o600); err != nil {
-		return fmt.Errorf("restrict process run: %w", err)
-	}
-	return syncProcessRunDirectory(filepath.Dir(s.path))
+	return nil
 }
 
 func newProcessRun(processID string, prepared ProcessPreparedRun) (*ProcessRun, error) {
@@ -338,19 +275,4 @@ func cloneProcessRun(run *ProcessRun) *ProcessRun {
 		clone.External = &external
 	}
 	return &clone
-}
-
-func syncProcessRunDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open process run directory for sync: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync process run directory: %w", err)
-	}
-	return nil
 }

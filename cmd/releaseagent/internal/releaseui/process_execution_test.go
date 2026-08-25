@@ -57,7 +57,6 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 		Workflow: &ProcessWorkflow{
 			Heading: "Run example", SubmitLabel: "Review", DurableAction: true,
 			Inputs: []ProcessInput{{ID: "mode", Type: "text", Label: "Mode", Required: true}},
-			Steps:  []ProcessStep{{Name: "Run example"}},
 		},
 	})
 	if err != nil {
