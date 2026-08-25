@@ -5,13 +5,15 @@ package releaseui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 )
 
 // OpenBrowser asks the operating system to open target in the user's default browser.
 func OpenBrowser(target string) error {
-	command, args, err := browserCommand(runtime.GOOS, target)
+	isWSL := os.Getenv("WSL_INTEROP") != "" || os.Getenv("WSL_DISTRO_NAME") != ""
+	command, args, err := browserCommand(runtime.GOOS, isWSL, target)
 	if err != nil {
 		return err
 	}
@@ -21,11 +23,14 @@ func OpenBrowser(target string) error {
 	return nil
 }
 
-func browserCommand(goos, target string) (string, []string, error) {
+func browserCommand(goos string, isWSL bool, target string) (string, []string, error) {
 	switch goos {
 	case "darwin":
 		return "open", []string{target}, nil
 	case "linux":
+		if isWSL {
+			return "rundll32.exe", []string{"url.dll,FileProtocolHandler", target}, nil
+		}
 		return "xdg-open", []string{target}, nil
 	case "windows":
 		return "rundll32", []string{"url.dll,FileProtocolHandler", target}, nil
