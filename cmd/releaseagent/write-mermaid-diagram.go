@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/fullrelease"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -35,7 +35,7 @@ func handleGetPlan(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	steps, _, err := releasesteps.CreateStepGraph(input, nil, nil, nil)
+	steps, _, err := fullrelease.CreateStepGraph(input, nil, nil, nil)
 	if err != nil {
 		return err
 	}

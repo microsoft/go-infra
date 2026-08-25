@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package session persists the durable, non-secret state of the standalone go-images workflow.
-package session
+// Package goimagessession persists durable, non-secret standalone go-images state.
+package goimagessession
 
 import (
 	"crypto/rand"

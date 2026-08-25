@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releasesteps
+// Package fullrelease defines the coordinated multi-product Microsoft Go release workflow.
+package fullrelease
 
 import (
 	"context"

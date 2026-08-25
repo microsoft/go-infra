@@ -26,8 +26,8 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
 const (
@@ -51,7 +51,7 @@ type goImagesRuntime struct {
 	rollbackSource *GoImagesRollbackSource
 	workflowInput  *goimagesworkflow.Input
 	workflowState  *goimagesworkflow.State
-	document       *session.Document
+	document       *goimagessession.Document
 	restored       bool
 }
 
@@ -67,7 +67,7 @@ type Server struct {
 	processExecutors map[string]ProcessExecutor
 	processRunStore  ProcessRunStore
 
-	sessionStore session.Store
+	sessionStore goimagessession.Store
 	readOnly     *GoImagesReadOnlyIntegration
 	execution    *GoImagesExecutionIntegration
 
@@ -146,7 +146,7 @@ func WithDemoDelay(delay time.Duration) Option {
 }
 
 // WithSessionStore enables durable, non-secret release plan persistence and restoration.
-func WithSessionStore(store session.Store) Option {
+func WithSessionStore(store goimagessession.Store) Option {
 	return func(server *Server) {
 		server.sessionStore = store
 	}
@@ -781,7 +781,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create go-images plan: %v", err))
 		return
 	}
-	document, err := session.NewDocument(releaseInput, releaseState, steps, time.Now())
+	document, err := goimagessession.NewDocument(releaseInput, releaseState, steps, time.Now())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create durable release session: %v", err))
 		return
@@ -944,7 +944,7 @@ func (s *Server) executionResponseLocked() executionResponse {
 		result.UnavailableReason = "Real pipeline execution is disabled. The workflow can still be simulated."
 		return result
 	}
-	plan, err := session.NewPlan(s.steps)
+	plan, err := goimagessession.NewPlan(s.steps)
 	if err != nil {
 		result.UnavailableReason = "The release graph is invalid."
 		return result
@@ -992,7 +992,7 @@ func (s *Server) restoreSession() error {
 		return nil
 	}
 	document, err := s.sessionStore.Load(s.ctx)
-	if errors.Is(err, session.ErrNotFound) {
+	if errors.Is(err, goimagessession.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
@@ -1006,7 +1006,7 @@ func (s *Server) restoreSession() error {
 	if err != nil {
 		return fmt.Errorf("reconstruct release session: %w", err)
 	}
-	plan, err := session.NewPlan(steps)
+	plan, err := goimagessession.NewPlan(steps)
 	if err != nil {
 		return fmt.Errorf("fingerprint reconstructed release session: %w", err)
 	}
@@ -1070,7 +1070,7 @@ func (s *Server) resumeRestoredMonitoring() error {
 	if err != nil {
 		return fmt.Errorf("restore go-images monitoring graph: %w", err)
 	}
-	actualPlan, err := session.NewPlan(steps)
+	actualPlan, err := goimagessession.NewPlan(steps)
 	if err != nil || actualPlan.Digest != s.goImages.document.Plan.Digest ||
 		actualPlan.WorkflowRevision != s.goImages.document.Plan.WorkflowRevision {
 
@@ -1222,7 +1222,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create go-images execution graph: %v", err))
 		return
 	}
-	actualPlan, err := session.NewPlan(steps)
+	actualPlan, err := goimagessession.NewPlan(steps)
 	if err != nil || actualPlan.Digest != expectedPlan.Digest || actualPlan.WorkflowRevision != expectedPlan.WorkflowRevision {
 		s.finishRelease()
 		writeError(response, http.StatusConflict, "go-images execution graph no longer matches the confirmed plan")
