@@ -8,6 +8,7 @@ const trackButton = document.querySelector("#track-releases");
 const preflightList = document.querySelector("#preflight-list");
 const availableCount = document.querySelector("#available-count");
 const toast = document.querySelector("#toast");
+const trackingPreflightPath = "/api/processes/go-images/preflight";
 let toastTimer = null;
 let dashboardState = null;
 let preflight = null;
@@ -45,7 +46,7 @@ async function loadDashboard() {
 
 async function loadPreflight() {
   try {
-    preflight = await requestJSON("/api/preflight");
+    preflight = await requestJSON(trackingPreflightPath);
     preflightList.replaceChildren(...preflight.checks.map((check) => {
       const item = document.createElement("li");
       item.dataset.status = check.status;
@@ -63,15 +64,19 @@ async function loadPreflight() {
 
 async function refreshTrackedReleases() {
   await loadDashboard();
-  if (!preflight) preflight = await requestJSON("/api/preflight");
+  if (!preflight) preflight = await requestJSON(trackingPreflightPath);
   if (!preflight.azureReadOnlyEnabled) {
     throw new Error("Live release tracking is unavailable.");
   }
   const live = await requestJSON("/api/releases/ongoing");
   const merged = new Map();
-  for (const release of live.releases) merged.set(release.buildId || release.id, release);
-  for (const release of dashboardState.ongoing) merged.set(release.buildId || release.id, release);
+  for (const release of live.releases) merged.set(releaseKey(release), release);
+  for (const release of dashboardState.ongoing) merged.set(releaseKey(release), release);
   renderReleases(ongoingReleases, Array.from(merged.values()), "No ongoing pipeline 1023 releases were found.");
+}
+
+function releaseKey(release) {
+  return `${release.processId}:${release.runId || release.id}`;
 }
 
 function renderReleases(container, releases, emptyText) {
@@ -106,8 +111,8 @@ function createReleaseCard(release) {
   top.append(title, status);
 
   const details = document.createElement("p");
-  const build = release.buildId ? ` · Azure build ${release.buildId}` : "";
-  details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}${build}`;
+  const run = release.runId ? ` · ${release.runLabel || "Run"} ${release.runId}` : "";
+  details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}${run}`;
   body.append(top, details);
 
   const link = document.createElement("a");
@@ -132,7 +137,7 @@ function createProcessCard(process) {
 
   const mark = document.createElement("span");
   mark.className = "process-mark";
-  mark.textContent = process.id === "go-images" ? "GI" : process.id === "go-infra" ? "IN" : "MS";
+  mark.textContent = process.mark;
 
   const status = document.createElement("span");
   status.className = "process-status";

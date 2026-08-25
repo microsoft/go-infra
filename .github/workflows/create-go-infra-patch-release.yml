@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 name: Create go-infra patch release
+run-name: ${{ inputs.release-ui-correlation-id || 'Create go-infra patch release' }}
 
 on:
   pull_request:
@@ -13,6 +14,11 @@ on:
         required: true
         type: boolean
         default: false
+      release-ui-correlation-id:
+        description: "Internal release UI dispatch correlation token. Leave empty for manual runs."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write

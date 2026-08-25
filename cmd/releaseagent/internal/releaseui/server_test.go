@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/crc32"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/cookiejar"
@@ -26,7 +27,10 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
-const testSourceCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+const (
+	testSourceCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	testGoImagesAPI  = "/api/processes/go-images"
+)
 
 type testUI struct {
 	server *Server
@@ -105,7 +109,9 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	if response.StatusCode != http.StatusOK || len(dashboard.Processes) != 3 {
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
-	if !dashboard.Processes[0].Available || dashboard.Processes[0].ID != goImagesProcessID || dashboard.Processes[1].Available {
+	if !dashboard.Processes[0].Available || dashboard.Processes[0].ID != goImagesProcessID ||
+		!dashboard.Processes[1].Available || dashboard.Processes[1].ID != "go-infra" {
+
 		t.Fatalf("processes = %#v", dashboard.Processes)
 	}
 	if len(dashboard.Ongoing) != 0 {
@@ -115,9 +121,156 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	goImagesPage, err := io.ReadAll(response.Body)
 	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("go-images page status = %d", response.StatusCode)
+	}
+	response, err = ui.client.Get(ui.http.URL + "/go-infra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goInfraPage, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("go-infra page status = %d", response.StatusCode)
+	}
+	if string(goImagesPage) != string(goInfraPage) || !strings.Contains(string(goImagesPage), "/assets/workflow.js") {
+		t.Fatal("release processes do not use the same workflow-aware template")
+	}
+	response, err = ui.client.Get(ui.http.URL + testGoImagesAPI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goImages processDetail
+	decodeResponse(t, response, &goImages)
+	if response.StatusCode != http.StatusOK || goImages.Workflow == nil || !goImages.Workflow.CanPrepare ||
+		!goImages.Workflow.CanStart || len(goImages.Workflow.Inputs) != 2 || len(goImages.Workflow.Steps) != 4 {
+
+		t.Fatalf("go-images process = %#v", goImages)
+	}
+	response, err = ui.client.Get(ui.http.URL + "/api/processes/go-infra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var process processDetail
+	decodeResponse(t, response, &process)
+	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || len(process.Methods) != 0 ||
+		process.Workflow == nil || !process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
+		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 || len(process.Workflow.Steps) != 1 {
+
+		t.Fatalf("process = %#v", process)
+	}
+}
+
+func TestDashboardShowsDurableProcessRun(t *testing.T) {
+	ui := newTestUI(t)
+	registry, err := newProcessRegistry(ProcessDefinition{
+		ID: "example", Name: "Example", Mark: "EX", Description: "Example process", Status: "Available", Available: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := testProcessRun(t)
+	run.Started = true
+	run.Checkpoint = json.RawMessage(`{"run":7,"status":"queued"}`)
+	external := ProcessRunReference{
+		ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7", Status: "queued",
+	}
+	run.External = &external
+	ui.server.mu.Lock()
+	ui.server.processes = registry
+	ui.server.processRun = run
+	ui.server.mu.Unlock()
+
+	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboard dashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 1 {
+		t.Fatalf("dashboard = %#v", dashboard)
+	}
+	summary := dashboard.Ongoing[0]
+	if summary.ProcessID != "example" || summary.Name != "Example" || summary.Status != "queued" ||
+		summary.RunID != "7" || summary.Href != "/example" || summary.UpdatedAt.IsZero() {
+
+		t.Fatalf("summary = %#v", summary)
+	}
+}
+
+func TestProcessRoutesIsolatePreparedPlans(t *testing.T) {
+	workflow := func(processID string) *ProcessWorkflow {
+		return &ProcessWorkflow{
+			Heading: "Configure", SubmitLabel: "Prepare",
+			GetPlan: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
+				writeJSON(response, http.StatusOK, map[string]string{"process": processID})
+			},
+			Prepare: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
+				writeJSON(response, http.StatusOK, map[string]string{"prepared": processID})
+			},
+		}
+	}
+	registry, err := newProcessRegistry(
+		ProcessDefinition{
+			ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available",
+			Available: true, Workflow: workflow("one"),
+		},
+		ProcessDefinition{
+			ID: "two", Name: "Two", Mark: "T", Description: "Second process", Status: "Available",
+			Available: true, Workflow: workflow("two"),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ui := newTestUI(t, Option(func(server *Server) { server.processes = registry }))
+	assertPreparedProcess(t, ui, "one", http.StatusOK)
+	assertPreparedProcess(t, ui, "two", http.StatusOK)
+
+	response := postJSON(t, ui, "/api/processes/one/plan", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("prepare one status = %d", response.StatusCode)
+	}
+	assertPreparedProcess(t, ui, "one", http.StatusOK)
+	assertPreparedProcess(t, ui, "two", http.StatusConflict)
+
+	response = postJSON(t, ui, "/api/processes/two/plan", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("prepare two status = %d", response.StatusCode)
+	}
+	assertPreparedProcess(t, ui, "one", http.StatusConflict)
+	assertPreparedProcess(t, ui, "two", http.StatusOK)
+}
+
+func assertPreparedProcess(t *testing.T, ui *testUI, processID string, wantStatus int) {
+	t.Helper()
+	response, err := ui.client.Get(ui.http.URL + "/api/processes/" + processID + "/plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != wantStatus {
+		t.Fatalf("process %s status = %d, want %d", processID, response.StatusCode, wantStatus)
+	}
+	if wantStatus != http.StatusOK {
+		return
+	}
+	var plan map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan["process"] != processID {
+		t.Fatalf("process %s plan = %#v", processID, plan)
 	}
 }
 
@@ -145,7 +298,7 @@ func TestTrackOngoingReleases(t *testing.T) {
 	}
 	decodeResponse(t, response, &result)
 	if response.StatusCode != http.StatusOK || len(result.Releases) != 1 ||
-		result.Releases[0].BuildID != "3035000" || result.Releases[0].Mode != releasesteps.GoImagesReleaseModeTest ||
+		result.Releases[0].RunID != "3035000" || result.Releases[0].Mode != string(releasesteps.GoImagesReleaseModeTest) ||
 		result.Releases[0].Href != "https://example/build/3035000" {
 
 		t.Fatalf("ongoing releases = %#v", result.Releases)
@@ -161,7 +314,7 @@ func TestPreflightIsLocalAndExecutionDisabled(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}))
-	response, err := ui.client.Get(ui.http.URL + "/api/preflight")
+	response, err := ui.client.Get(ui.http.URL + testGoImagesAPI + "/preflight")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +365,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 			}
 			rollbackCalls := 0
 			ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, &rollbackCalls)))
-			response := postJSON(t, ui, "/api/plan", test.body)
+			response := postJSON(t, ui, testGoImagesAPI+"/plan", test.body)
 			var plan planResponse
 			decodeResponse(t, response, &plan)
 			if response.StatusCode != http.StatusOK || plan.Input.Mode != test.wantMode || len(plan.Steps) != 4 {
@@ -250,7 +403,7 @@ func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
 		`{"mode":"test","publishRepoPrefix":"public/"}`,
 		`{"mode":"unknown"}`,
 	} {
-		response := postJSON(t, ui, "/api/plan", body)
+		response := postJSON(t, ui, testGoImagesAPI+"/plan", body)
 		response.Body.Close()
 		if response.StatusCode != http.StatusBadRequest {
 			t.Fatalf("body %s status = %d", body, response.StatusCode)
@@ -270,7 +423,7 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 		t.Fatalf("created = %#v", created)
 	}
 	second := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
-	response, err := second.client.Get(second.http.URL + "/api/plan")
+	response, err := second.client.Get(second.http.URL + testGoImagesAPI + "/plan")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +691,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 		t.Fatalf("execution = %#v", plan.Execution)
 	}
 
-	response := postJSON(t, ui, "/api/go-images/release/start", `{"planDigest":"wrong","confirmed":true}`)
+	response := postJSON(t, ui, testGoImagesAPI+"/start", `{"planDigest":"wrong","confirmed":true}`)
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict || service.queued != 0 {
 		t.Fatalf("wrong intent status = %d, queued = %d", response.StatusCode, service.queued)
@@ -547,7 +700,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = postJSON(t, ui, "/api/go-images/release/start", string(body))
+	response = postJSON(t, ui, testGoImagesAPI+"/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest || service.queued != 0 {
 		t.Fatalf("unconfirmed status = %d, queued = %d", response.StatusCode, service.queued)
@@ -556,7 +709,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response = postJSON(t, ui, "/api/go-images/release/start", string(body))
+	response = postJSON(t, ui, testGoImagesAPI+"/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("start status = %d", response.StatusCode)
@@ -608,7 +761,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 	)
 	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
 	body, _ := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
-	response := postJSON(t, ui, "/api/go-images/release/start", string(body))
+	response := postJSON(t, ui, testGoImagesAPI+"/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("start status = %d", response.StatusCode)
@@ -638,7 +791,7 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 	plan := createTestPlan(t, ui, `{"mode":"test"}`)
 	source.Commit = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
 	body, _ := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
-	response := postJSON(t, ui, "/api/go-images/release/start", string(body))
+	response := postJSON(t, ui, testGoImagesAPI+"/start", string(body))
 	response.Body.Close()
 	if response.StatusCode != http.StatusConflict || service.queued != 0 {
 		t.Fatalf("status = %d, queued = %d", response.StatusCode, service.queued)
@@ -656,7 +809,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 	if plan.Execution.Enabled || len(plan.Steps) != 4 {
 		t.Fatalf("plan = %#v", plan)
 	}
-	response := postJSON(t, ui, "/api/demo/start", `{}`)
+	response := postJSON(t, ui, testGoImagesAPI+"/simulate", `{}`)
 	response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("simulation status = %d", response.StatusCode)
@@ -664,7 +817,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
-		response, err := ui.client.Get(ui.http.URL + "/api/state")
+		response, err := ui.client.Get(ui.http.URL + testGoImagesAPI + "/state")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -696,7 +849,7 @@ func TestEventsSendInitialSnapshot(t *testing.T) {
 	createTestPlan(t, ui, `{"mode":"normal"}`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+"/api/events", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+testGoImagesAPI+"/events", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +986,7 @@ func waitForReleaseStopped(t *testing.T, ui *testUI) {
 
 func createTestPlan(t *testing.T, ui *testUI, body string) planResponse {
 	t.Helper()
-	response := postJSON(t, ui, "/api/plan", body)
+	response := postJSON(t, ui, testGoImagesAPI+"/plan", body)
 	var plan planResponse
 	decodeResponse(t, response, &plan)
 	if response.StatusCode != http.StatusOK {

@@ -28,6 +28,7 @@ type PreflightCheck struct {
 // PreflightReport describes local readiness without authenticating or contacting any service.
 type PreflightReport struct {
 	ExternalExecutionEnabled bool             `json:"externalExecutionEnabled"`
+	PlanningEnabled          bool             `json:"planningEnabled"`
 	AzureReadOnlyEnabled     bool             `json:"azureReadOnlyEnabled"`
 	GoImagesExecutionEnabled bool             `json:"goImagesExecutionEnabled"`
 	Checks                   []PreflightCheck `json:"checks"`
@@ -103,6 +104,7 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 		})
 	} else {
 		report.AzureReadOnlyEnabled = true
+		report.PlanningEnabled = true
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID:      "azure-read-only",
 			Name:    "Pipeline 1023 read-only access",
