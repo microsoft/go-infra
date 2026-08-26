@@ -123,16 +123,16 @@ func (s *Server) handleProcessRunPreflight(
 		writeJSON(response, http.StatusOK, report)
 		return
 	}
+	report.PlanningEnabled = true
 	details, err := executor.Preflight(request.Context())
 	if err != nil {
 		report.Checks = append(report.Checks, PreflightCheck{
 			ID: processID + "-execution", Name: processName + " external action", Status: CheckStatusWarning,
-			Details: err.Error(),
+			Details: "Planning is available, but external execution is not ready: " + err.Error(),
 		})
 		writeJSON(response, http.StatusOK, report)
 		return
 	}
-	report.PlanningEnabled = true
 	report.ExternalExecutionEnabled = true
 	report.Checks = append(report.Checks, PreflightCheck{
 		ID: processID + "-execution", Name: processName + " external action", Status: CheckStatusPassed,
@@ -194,10 +194,6 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		return
 	}
 
-	if _, err := executor.Preflight(request.Context()); err != nil {
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("external action preflight failed: %v", err))
-		return
-	}
 	prepared, err := executor.Prepare(request.Context(), normalizedInput)
 	if err != nil {
 		status := http.StatusConflict
