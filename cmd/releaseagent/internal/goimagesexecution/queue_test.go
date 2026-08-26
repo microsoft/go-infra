@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 const (
@@ -26,14 +26,14 @@ func (t staticToken) Token(context.Context) (string, error) { return string(t), 
 
 func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 	for _, test := range []struct {
-		mode          releasesteps.GoImagesReleaseMode
+		mode          goimagesworkflow.Mode
 		sourceBuildID string
 		wantSource    string
 		wantPrefix    string
 	}{
-		{mode: releasesteps.GoImagesReleaseModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
-		{mode: releasesteps.GoImagesReleaseModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
-		{mode: releasesteps.GoImagesReleaseModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+		{mode: goimagesworkflow.ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{mode: goimagesworkflow.ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
+		{mode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(string(test.mode), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -99,14 +99,14 @@ func TestQueueReleaseRejectsInvalidModeInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := QueueRequest{
-		Mode: releasesteps.GoImagesReleaseModeNormal, SourceVersion: testCommit,
+		Mode: goimagesworkflow.ModeNormal, SourceVersion: testCommit,
 		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
 	}
 	base.SourceBuildID = "123"
 	if _, err := client.QueueRelease(context.Background(), base); err == nil {
 		t.Fatal("normal release accepted a source build")
 	}
-	base.Mode = releasesteps.GoImagesReleaseModeRollback
+	base.Mode = goimagesworkflow.ModeRollback
 	base.SourceBuildID = "invalid"
 	if _, err := client.QueueRelease(context.Background(), base); err == nil {
 		t.Fatal("rollback accepted an invalid source build")
@@ -124,7 +124,7 @@ func TestQueueReleaseRedactsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = client.QueueRelease(context.Background(), QueueRequest{
-		Mode: releasesteps.GoImagesReleaseModeTest, SourceVersion: testCommit,
+		Mode: goimagesworkflow.ModeTest, SourceVersion: testCommit,
 		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
 	})
 	if err == nil || strings.Contains(err.Error(), "test-token") || !strings.Contains(err.Error(), "[REDACTED]") {

@@ -5,7 +5,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,7 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 func TestDocumentPlanFingerprint(t *testing.T) {
@@ -108,70 +107,20 @@ func TestFileStoreRoundTripAndReplace(t *testing.T) {
 	}
 }
 
-func TestMigratableWorkflowDocumentLoadsAndUpgrades(t *testing.T) {
-	document := testDocument(t)
-	document.Plan.WorkflowRevision = MigratableWorkflowRevision
-	var err error
-	document.Plan.Digest, err = legacyPlanDigest(document.Plan.Steps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := document.Validate(); err == nil {
-		t.Fatal("migratable document passed current validation")
-	}
-	if err := document.ValidateLoadable(); err != nil {
-		t.Fatalf("migratable document did not pass load validation: %v", err)
-	}
-
-	path := filepath.Join(t.TempDir(), "session.json")
-	data, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	updatedAt := document.UpdatedAt.Add(time.Minute)
-	upgraded, err := loaded.UpgradeWorkflow(&loaded.Input, &loaded.State, testSteps(), updatedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if upgraded.ID != document.ID || upgraded.Plan.WorkflowRevision != CurrentWorkflowRevision ||
-		!upgraded.UpdatedAt.Equal(updatedAt) {
-
-		t.Fatalf("upgraded document = %#v", upgraded)
-	}
-	if err := store.Save(context.Background(), upgraded); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
 	document := testDocument(t)
 	state := document.State
-	state.Day.ReleaseIssue = 42
+	state.BuildID = "42"
 	updatedAt := document.UpdatedAt.Add(time.Minute)
 	updated, err := document.WithState(&state, updatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document.State.Day.ReleaseIssue != 0 {
-		t.Fatalf("original release issue = %d, want 0", document.State.Day.ReleaseIssue)
+	if document.State.BuildID != "" {
+		t.Fatalf("original build ID = %q, want empty", document.State.BuildID)
 	}
-	if updated.State.Day.ReleaseIssue != 42 {
-		t.Fatalf("updated release issue = %d, want 42", updated.State.Day.ReleaseIssue)
+	if updated.State.BuildID != "42" {
+		t.Fatalf("updated build ID = %q, want 42", updated.State.BuildID)
 	}
 	if !updated.UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("updated time = %v, want %v", updated.UpdatedAt, updatedAt)
@@ -183,7 +132,7 @@ func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
 
 func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 	document := testDocument(t)
-	document.Input.RunnerGitHubUser = "someone-else"
+	document.Input.SourceVersion = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
 	if err := document.Validate(); err == nil {
 		t.Fatal("modified immutable input unexpectedly passed validation")
 	}
@@ -200,6 +149,12 @@ func TestFileStoreRejectsUnknownAndInvalidDocuments(t *testing.T) {
 	}
 	if _, err := store.Load(context.Background()); err == nil {
 		t.Fatal("unknown session field unexpectedly loaded")
+	}
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":6}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background()); err == nil {
+		t.Fatal("obsolete session schema unexpectedly loaded")
 	}
 
 	document := testDocument(t)
@@ -238,15 +193,13 @@ func TestFileStoreLease(t *testing.T) {
 
 func testDocument(t *testing.T) *Document {
 	t.Helper()
-	input := &releasesteps.Input{
-		Versions:               []string{"1.26.1-1"},
-		RunnerGitHubUser:       "ghost",
-		TargetRepo:             "microsoft/go",
-		TargetAzDORepo:         "dnceng/internal/_git/microsoft-go",
-		TargetGoImagesRepo:     "microsoft/go-images",
-		TargetAzDOGoImagesRepo: "dnceng/internal/_git/microsoft-go-images",
+	input := &goimagesworkflow.Input{
+		Versions: []string{"1.26.1-1"}, Mode: goimagesworkflow.ModeNormal,
+		SourceBranch:  "refs/heads/microsoft/main",
+		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
+		MirrorTarget:  goimagesworkflow.InternalMirrorTarget, PipelineID: 1023,
 	}
-	_, state, err := releasesteps.CreateStepGraph(input, nil, nil, nil)
+	state, err := goimagesworkflow.NewState(input)
 	if err != nil {
 		t.Fatal(err)
 	}

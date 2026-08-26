@@ -20,7 +20,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 const (
@@ -52,7 +52,7 @@ type QueueClient interface {
 
 // QueueRequest contains immutable metadata for one allowlisted release run.
 type QueueRequest struct {
-	Mode            releasesteps.GoImagesReleaseMode
+	Mode            goimagesworkflow.Mode
 	SourceVersion   string
 	SourceBuildID   string
 	SessionID       string
@@ -62,7 +62,7 @@ type QueueRequest struct {
 
 // Config binds a release run to an exact source commit and durable session.
 type Config struct {
-	Mode                 releasesteps.GoImagesReleaseMode
+	Mode                 goimagesworkflow.Mode
 	SessionID            string
 	ExecutionDigest      string
 	Versions             []string
@@ -105,7 +105,7 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 	if config.VerifyMirrorCommit == nil {
 		return nil, errors.New("go-images internal mirror verifier is required")
 	}
-	parameters, err := releasesteps.GoImagesPipelineParametersForMode(config.Mode, config.SourceBuildID)
+	parameters, err := goimagesworkflow.PipelineParameters(config.Mode, config.SourceBuildID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,15 +141,10 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 	}, nil
 }
 
-// PollAzDOMirror waits until the plan's exact source commit is available in the allowlisted
+// PollMirror waits until the plan's exact source commit is available in the allowlisted
 // internal microsoft-go-images repository.
-func (s *Service) PollAzDOMirror(
-	ctx context.Context,
-	target,
-	commit string,
-	_ *releasesteps.Secret,
-) error {
-	if target != releasesteps.GoImagesInternalMirrorTarget {
+func (s *Service) PollMirror(ctx context.Context, target, commit string) error {
+	if target != goimagesworkflow.InternalMirrorTarget {
 		return fmt.Errorf("go-images mirror target %q is not allowlisted", target)
 	}
 	if commit != s.config.SourceVersion {
@@ -174,19 +169,14 @@ func (s *Service) PollAzDOMirror(
 	}
 }
 
-// TriggerBuildPipeline reconciles this session before queueing the hardcoded official pipeline.
-func (s *Service) TriggerBuildPipeline(
+// QueuePipeline reconciles this session before queueing the hardcoded official pipeline.
+func (s *Service) QueuePipeline(
 	ctx context.Context,
 	pipelineID int,
-	parameters,
-	optionalParameters map[string]string,
-	_ *releasesteps.Secret,
+	parameters map[string]string,
 ) (string, error) {
 	if pipelineID != DefinitionID {
 		return "", fmt.Errorf("pipeline %d is not the allowlisted go-images definition %d", pipelineID, DefinitionID)
-	}
-	if len(optionalParameters) != 0 {
-		return "", errors.New("go-images release pipeline does not accept optional parameters")
 	}
 	if !maps.Equal(parameters, s.parameters) {
 		return "", fmt.Errorf("go-images release parameters are not allowlisted: %#v", parameters)
@@ -276,8 +266,8 @@ func templateParameterString(value any) (string, bool) {
 	return valueString, ok
 }
 
-// PollPipelineComplete waits for the correlated release run using read-only GET requests.
-func (s *Service) PollPipelineComplete(ctx context.Context, buildID string, _ *releasesteps.Secret) error {
+// PollPipeline waits for the correlated release run using read-only GET requests.
+func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 	id, err := strconv.Atoi(buildID)
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid go-images release build ID %q", buildID)
@@ -476,4 +466,4 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-var _ releasesteps.GoImagesReleaseService = (*Service)(nil)
+var _ goimagesworkflow.Service = (*Service)(nil)

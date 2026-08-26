@@ -151,6 +151,37 @@ func TestGoInfraPreflightDisabled(t *testing.T) {
 	}
 }
 
+func TestGoInfraPlanningDoesNotRequireExecutionReadiness(t *testing.T) {
+	github := &fakeGoInfraGitHub{preflightErr: errors.New("workflow contract is not ready")}
+	ui := newTestUI(t, testGoInfraOptions(t, github)...)
+	response, err := ui.client.Get(ui.http.URL + "/api/processes/go-infra/preflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var preflight PreflightReport
+	decodeResponse(t, response, &preflight)
+	if response.StatusCode != http.StatusOK || !preflight.PlanningEnabled || preflight.ExternalExecutionEnabled {
+		t.Fatalf("preflight = %#v", preflight)
+	}
+
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	var plan goInfraTestPlanResponse
+	decodeResponse(t, response, &plan)
+	if response.StatusCode != http.StatusOK || len(plan.Execution.PlanDigest) != 64 || github.preflightCalls != 1 {
+		t.Fatalf("status = %d, plan = %#v, preflight calls = %d", response.StatusCode, plan, github.preflightCalls)
+	}
+
+	response = postJSON(t, ui, "/api/processes/go-infra/start", `{"planDigest":"`+plan.Execution.PlanDigest+`","confirmed":true}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("start status = %d", response.StatusCode)
+	}
+	waitForGoInfraAction(t, ui)
+	if github.preflightCalls != 2 || len(github.dispatches) != 0 {
+		t.Fatalf("preflight calls = %d, dispatches = %v", github.preflightCalls, github.dispatches)
+	}
+}
+
 func TestGoInfraReleaseOnMergeRequiresExactConfirmation(t *testing.T) {
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 	options := append([]Option{WithExecutableLookup(func(string) (string, error) { return "/test/bin/gh", nil })}, testGoInfraOptions(t, github)...)
