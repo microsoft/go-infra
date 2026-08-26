@@ -49,9 +49,6 @@ ProcessDefinition{
 
     `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for custom lifecycles. Do not combine these handlers with `DurableAction`.
 
-With read-only Azure access enabled, **Track ongoing releases** discovers waiting and running pipeline `1023` builds and refreshes their status every 15 seconds.
-These live Azure entries are merged with the durable local session and link directly to their Azure run; tracking never queues or changes a run.
-
 ## Go-images release modes
 
 See the canonical [Golang toolset images release instructions](https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images).

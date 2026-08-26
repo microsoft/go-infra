@@ -31,25 +31,25 @@ func (disabledGoImagesService) PollPipeline(context.Context, string) error {
 
 var _ goimagesworkflow.Service = disabledGoImagesService{}
 
-type importedRunMonitor struct {
+type restoredRunMonitor struct {
 	buildID int
 	monitor func(context.Context, int) error
 }
 
-func (importedRunMonitor) PollMirror(context.Context, string, string) error {
-	return errors.New("an imported-run monitor cannot verify a source mirror")
+func (restoredRunMonitor) PollMirror(context.Context, string, string) error {
+	return errors.New("a restored-run monitor cannot verify a source mirror")
 }
 
-func (importedRunMonitor) QueuePipeline(context.Context, int, map[string]string) (string, error) {
-	return "", errors.New("an imported-run monitor cannot queue a pipeline")
+func (restoredRunMonitor) QueuePipeline(context.Context, int, map[string]string) (string, error) {
+	return "", errors.New("a restored-run monitor cannot queue a pipeline")
 }
 
-func (monitor importedRunMonitor) PollPipeline(ctx context.Context, buildID string) error {
+func (monitor restoredRunMonitor) PollPipeline(ctx context.Context, buildID string) error {
 	id, err := strconv.Atoi(buildID)
 	if err != nil || id != monitor.buildID {
-		return fmt.Errorf("monitor build ID %q does not match imported build %d", buildID, monitor.buildID)
+		return fmt.Errorf("monitor build ID %q does not match restored build %d", buildID, monitor.buildID)
 	}
 	return monitor.monitor(ctx, id)
 }
 
-var _ goimagesworkflow.Service = importedRunMonitor{}
+var _ goimagesworkflow.Service = restoredRunMonitor{}

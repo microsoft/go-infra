@@ -182,27 +182,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 				SourceVersion: candidate.SourceVersion, Versions: versions,
 			}, nil
 		},
-		ListOngoing: func(ctx context.Context) ([]releaseui.GoImagesOngoingRun, error) {
-			builds, err := azureClient.ListRecent(ctx, 1023)
-			if err != nil {
-				return nil, err
-			}
-			result := make([]releaseui.GoImagesOngoingRun, 0)
-			for _, build := range builds {
-				state, err := build.State()
-				if err != nil {
-					return nil, fmt.Errorf("interpret pipeline 1023 build %d: %w", build.ID, err)
-				}
-				if state != azdopipeline.RunStateWaiting && state != azdopipeline.RunStateRunning {
-					continue
-				}
-				result = append(result, releaseui.GoImagesOngoingRun{
-					BuildID: build.ID, Mode: goImagesModeFromBuild(build), Status: string(state),
-					URL: build.WebURL, Queued: build.QueueTime,
-				})
-			}
-			return result, nil
-		},
 	}))
 	queueClient, err := goimagesexecution.NewHTTPQueueClient(
 		"https://dev.azure.com/dnceng",
@@ -318,26 +297,4 @@ func processRunStorePath(sessionPath string) (string, error) {
 		return "", fmt.Errorf("inspect legacy go-infra action journal: %w", err)
 	}
 	return sessionPath + ".process-run.json", nil
-}
-
-func goImagesModeFromBuild(build *azdopipeline.Build) goimagesworkflow.Mode {
-	if build == nil {
-		return goimagesworkflow.ModeNormal
-	}
-	switch mode := goimagesworkflow.Mode(build.Parameters["ReleaseUIGoImagesMode"]); mode {
-	case goimagesworkflow.ModeNormal,
-		goimagesworkflow.ModeRollback,
-		goimagesworkflow.ModeTest:
-
-		return mode
-	}
-	prefix, _ := build.TemplateParameters["publishRepoPrefix"].(string)
-	if prefix == "dev/" {
-		return goimagesworkflow.ModeTest
-	}
-	sourceBuild, _ := build.TemplateParameters["sourceBuildPipelineRunId"].(string)
-	if sourceBuild != "" && sourceBuild != "$(Build.BuildId)" {
-		return goimagesworkflow.ModeRollback
-	}
-	return goimagesworkflow.ModeNormal
 }
