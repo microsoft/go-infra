@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
@@ -38,12 +38,22 @@ const (
 	goImagesPipelineName    = "microsoft-go-images (official)"
 	goImagesPipelineOrg     = "dnceng"
 	goImagesPipelineProject = "internal"
-
-	legacyGoImagesWorkflowRevision5Digest = "7182e0900b9b575ad50962c2e3a7586ff4fb713ae749e4e8ca22e3de53358c40"
 )
 
 //go:embed web/*
 var webFiles embed.FS
+
+// goImagesRuntime owns the specialized go-images plan and session state. Other release processes,
+// including go-infra, use the generic ProcessRun lifecycle.
+type goImagesRuntime struct {
+	planInput      PlanInput
+	source         GoImagesSource
+	rollbackSource *GoImagesRollbackSource
+	workflowInput  *goimagesworkflow.Input
+	workflowState  *goimagesworkflow.State
+	document       *session.Document
+	restored       bool
+}
 
 // Server hosts a single local release session. Dashboard responses use slices so the storage model
 // can grow to multiple concurrent sessions without changing the browser contract.
@@ -62,19 +72,13 @@ type Server struct {
 	execution    *GoImagesExecutionIntegration
 
 	mu                sync.Mutex
+	goImages          goImagesRuntime
 	steps             []*coordinator.Step
-	input             PlanInput
-	source            GoImagesSource
-	rollbackSource    *GoImagesRollbackSource
-	releaseInput      *releasesteps.GoImagesInput
-	releaseState      *releasesteps.State
-	document          *session.Document
 	runner            *coordinator.StepRunner
 	simulationRunning bool
 	releaseRunning    bool
 	processRun        *ProcessRun
 	processRunning    bool
-	restoredFromDisk  bool
 }
 
 // GoImagesSource is the exact current microsoft/main source selected entirely by the server.
@@ -96,7 +100,7 @@ type GoImagesRollbackSource struct {
 // GoImagesOngoingRun is a read-only view of one currently waiting or running pipeline 1023 build.
 type GoImagesOngoingRun struct {
 	BuildID int
-	Mode    releasesteps.GoImagesReleaseMode
+	Mode    goimagesworkflow.Mode
 	Status  string
 	URL     string
 	Queued  time.Time
@@ -117,12 +121,12 @@ type GoImagesReadOnlyIntegration struct {
 type GoImagesExecutionIntegration struct {
 	DefinitionID int
 	Preflight    func(context.Context) (string, error)
-	NewService   func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error)
+	NewService   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error)
 }
 
 // GoImagesExecutionRequest binds one real run to a confirmed durable plan.
 type GoImagesExecutionRequest struct {
-	Mode                 releasesteps.GoImagesReleaseMode
+	Mode                 goimagesworkflow.Mode
 	SessionID            string
 	ExecutionDigest      string
 	Versions             []string
@@ -393,8 +397,8 @@ func (s *Server) handlePage(response http.ResponseWriter, request *http.Request)
 // PlanInput is the complete browser-controlled input surface for a go-images release. The server
 // resolves branch, commit, versions, definition, and prefix. Only rollback accepts a build ID.
 type PlanInput struct {
-	Mode          releasesteps.GoImagesReleaseMode `json:"mode"`
-	SourceBuildID string                           `json:"sourceBuildId,omitempty"`
+	Mode          goimagesworkflow.Mode `json:"mode"`
+	SourceBuildID string                `json:"sourceBuildId,omitempty"`
 }
 
 type planStep struct {
@@ -559,9 +563,9 @@ func (s *Server) handleDashboard(response http.ResponseWriter, _ *http.Request) 
 		Recent:    make([]releaseSummary, 0),
 		Processes: s.processes.summaries(),
 	}
-	if s.document != nil {
+	if s.goImages.document != nil {
 		summary := s.releaseSummaryLocked()
-		if s.document.State.Day.GoImagesReleaseComplete {
+		if s.goImages.document.State.Complete {
 			result.Recent = append(result.Recent, summary)
 		} else {
 			result.Ongoing = append(result.Ongoing, summary)
@@ -606,7 +610,7 @@ func (s *Server) handleOngoingReleases(response http.ResponseWriter, request *ht
 		}
 		mode := run.Mode
 		if mode == "" {
-			mode = releasesteps.GoImagesReleaseModeNormal
+			mode = goimagesworkflow.ModeNormal
 		}
 		releases = append(releases, releaseSummary{
 			ID: "azdo-" + strconv.Itoa(run.BuildID), ProcessID: goImagesProcessID, Name: "Go images",
@@ -618,23 +622,23 @@ func (s *Server) handleOngoingReleases(response http.ResponseWriter, request *ht
 }
 
 func (s *Server) releaseSummaryLocked() releaseSummary {
-	state := s.document.State.Day
+	state := s.goImages.document.State
 	status := "ready"
 	switch {
-	case state.GoImagesReleaseComplete:
-		status = state.GoImagesReleaseResult
+	case state.Complete:
+		status = state.Result
 		if status == "" {
 			status = "succeeded"
 		}
-	case state.GoImagesReleaseBuildID != "":
+	case state.BuildID != "":
 		status = "running"
-	case state.GoImagesReleaseQueueAttempted:
+	case state.QueueAttempted:
 		status = "reconciling"
 	}
 	return releaseSummary{
-		ID: s.document.ID, ProcessID: goImagesProcessID, Name: "Go images", Mode: string(state.GoImagesReleaseMode),
-		Status: status, RunID: state.GoImagesReleaseBuildID, RunLabel: "Azure build",
-		UpdatedAt: s.document.UpdatedAt, Href: "/go-images",
+		ID: s.goImages.document.ID, ProcessID: goImagesProcessID, Name: "Go images", Mode: string(s.goImages.document.Input.Mode),
+		Status: status, RunID: state.BuildID, RunLabel: "Azure build",
+		UpdatedAt: s.goImages.document.UpdatedAt, Href: "/go-images",
 	}
 }
 
@@ -670,7 +674,7 @@ func (s *Server) handleGetPlan(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusNoContent)
 		return
 	}
-	result := s.planResponseLocked(s.restoredFromDisk)
+	result := s.planResponseLocked(s.goImages.restored)
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
 }
@@ -728,7 +732,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 
 	versions := append([]string(nil), source.Versions...)
 	var rollbackSource *GoImagesRollbackSource
-	if normalized.Mode == releasesteps.GoImagesReleaseModeRollback {
+	if normalized.Mode == goimagesworkflow.ModeRollback {
 		buildID, _ := strconv.Atoi(normalized.SourceBuildID)
 		validated, err := validateRollback(request.Context(), buildID)
 		if err != nil {
@@ -748,24 +752,23 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	releaseInput := &releasesteps.GoImagesInput{
+	releaseInput := &goimagesworkflow.Input{
 		Versions:      versions,
 		Mode:          normalized.Mode,
 		SourceBranch:  source.Branch,
 		SourceVersion: source.Commit,
 		SourceBuildID: normalized.SourceBuildID,
-		MirrorTarget:  releasesteps.GoImagesInternalMirrorTarget,
+		MirrorTarget:  goimagesworkflow.InternalMirrorTarget,
 		PipelineID:    goImagesPipelineID,
 	}
-	steps, releaseState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
-		releaseInput, nil, nil, disabledServices{}, s.checkpointReleaseState,
+	steps, releaseState, err := goimagesworkflow.NewGraphWithCheckpoint(
+		releaseInput, nil, disabledGoImagesService{}, s.checkpointReleaseState,
 	)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create go-images plan: %v", err))
 		return
 	}
-	sessionInput := goImagesSessionInput(*releaseInput)
-	document, err := session.NewDocument(&sessionInput, releaseState, steps, time.Now())
+	document, err := session.NewDocument(releaseInput, releaseState, steps, time.Now())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create durable release session: %v", err))
 		return
@@ -788,14 +791,14 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	s.steps = steps
-	s.input = normalized
-	s.source = source
-	s.rollbackSource = rollbackSource
-	s.releaseInput = releaseInput
-	s.releaseState = releaseState
-	s.document = document
+	s.goImages.planInput = normalized
+	s.goImages.source = source
+	s.goImages.rollbackSource = rollbackSource
+	s.goImages.workflowInput = releaseInput
+	s.goImages.workflowState = releaseState
+	s.goImages.document = document
 	s.runner = &coordinator.StepRunner{}
-	s.restoredFromDisk = false
+	s.goImages.restored = false
 	result := s.planResponseLocked(false)
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
@@ -803,37 +806,37 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 
 func (s *Server) planResponseLocked(restored bool) planResponse {
 	parameters := map[string]string{}
-	if s.releaseInput != nil {
-		if derived, err := releasesteps.GoImagesPipelineParametersForMode(
-			s.releaseInput.Mode,
-			s.releaseInput.SourceBuildID,
+	if s.goImages.workflowInput != nil {
+		if derived, err := goimagesworkflow.PipelineParameters(
+			s.goImages.workflowInput.Mode,
+			s.goImages.workflowInput.SourceBuildID,
 		); err == nil {
 			parameters = derived
 		}
 	}
 	steps := describeSteps(s.steps)
-	if s.document != nil {
-		state := s.document.State.Day
-		if state.GoImagesReleaseComplete {
+	if s.goImages.document != nil {
+		state := s.goImages.document.State
+		if state.Complete {
 			for i := range steps {
 				steps[i].Status = "succeeded"
 			}
-		} else if state.GoImagesReleaseBuildID != "" {
+		} else if state.BuildID != "" {
 			setPlanStepStatus(steps, "Verify go-images commit is mirrored internally", "succeeded")
 			setPlanStepStatus(steps, "🚀 Queue go-images release", "succeeded")
 			setPlanStepStatus(steps, "⌚ Wait for go-images release", "running")
 		}
 	}
 	result := planResponse{
-		Input: s.input, Source: s.source, RollbackSource: s.rollbackSource, Steps: steps,
+		Input: s.goImages.planInput, Source: s.goImages.source, RollbackSource: s.goImages.rollbackSource, Steps: steps,
 		Pipeline: pipelinePreview{
 			DefinitionID: goImagesPipelineID, Organization: goImagesPipelineOrg, Project: goImagesPipelineProject,
 			Name: goImagesPipelineName, Parameters: parameters, Locked: true,
 		},
 		Restored: restored,
 	}
-	if s.document != nil {
-		result.SessionID = s.document.ID
+	if s.goImages.document != nil {
+		result.SessionID = s.goImages.document.ID
 	}
 	result.Execution = s.executionResponseLocked()
 	result.View = goImagesPlanView(result)
@@ -873,13 +876,13 @@ func goImagesPlanView(plan planResponse) ProcessPlanView {
 		view.Request.Fields = append(view.Request.Fields, ProcessRequestField{Name: name, Value: plan.Pipeline.Parameters[name]})
 	}
 	switch plan.Input.Mode {
-	case releasesteps.GoImagesReleaseModeNormal:
+	case goimagesworkflow.ModeNormal:
 		view.IntentTitle = "Build current main and publish production images"
 		view.ExecutionTitle = "Run production release"
 		view.ExecutionWarning = "This builds current main, performs production signing, and publishes production images under public/."
 		view.ExecutionConfirmation = "Confirm run to build, sign, and publish current main to public/."
 		view.ExecutionButtonLabel = "Run production release"
-	case releasesteps.GoImagesReleaseModeRollback:
+	case goimagesworkflow.ModeRollback:
 		view.IntentTitle = "Republish artifacts from build " + plan.Input.SourceBuildID
 		view.ExecutionTitle = "Run rollback / republish"
 		view.ExecutionWarning = "This republishes artifacts from build " + plan.Input.SourceBuildID + " under public/. It does not rebuild those images."
@@ -891,7 +894,7 @@ func goImagesPlanView(plan planResponse) ProcessPlanView {
 				Href: plan.RollbackSource.URL,
 			})
 		}
-	case releasesteps.GoImagesReleaseModeTest:
+	case goimagesworkflow.ModeTest:
 		view.IntentTitle = "Build current main and publish a dev/ test release"
 		view.ExecutionTitle = "Run test release"
 		view.ExecutionWarning = "This queues a real build and may use production signing resources, but publication is fixed to dev/ rather than public/."
@@ -912,13 +915,13 @@ func sortedMapKeys(values map[string]string) []string {
 
 func (s *Server) executionResponseLocked() executionResponse {
 	result := executionResponse{Enabled: s.execution != nil}
-	if s.document == nil || s.releaseInput == nil || len(s.steps) == 0 {
+	if s.goImages.document == nil || s.goImages.workflowInput == nil || len(s.steps) == 0 {
 		return result
 	}
-	state := s.document.State.Day
+	state := s.goImages.document.State
 	result.Run = pipelineRun{
-		BuildID: state.GoImagesReleaseBuildID, Complete: state.GoImagesReleaseComplete,
-		Result: state.GoImagesReleaseResult,
+		BuildID: state.BuildID, Complete: state.Complete,
+		Result: state.Result,
 	}
 	if result.Run.BuildID != "" {
 		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
@@ -933,9 +936,9 @@ func (s *Server) executionResponseLocked() executionResponse {
 		result.UnavailableReason = "The release graph is invalid."
 		return result
 	}
-	parameters, err := releasesteps.GoImagesPipelineParametersForMode(
-		s.releaseInput.Mode,
-		s.releaseInput.SourceBuildID,
+	parameters, err := goimagesworkflow.PipelineParameters(
+		s.goImages.workflowInput.Mode,
+		s.goImages.workflowInput.SourceBuildID,
 	)
 	if err != nil {
 		result.UnavailableReason = err.Error()
@@ -944,7 +947,7 @@ func (s *Server) executionResponseLocked() executionResponse {
 	payload := struct {
 		SessionID        string
 		ExecutionDigest  string
-		Mode             releasesteps.GoImagesReleaseMode
+		Mode             goimagesworkflow.Mode
 		Versions         []string
 		SourceBranch     string
 		SourceVersion    string
@@ -954,10 +957,10 @@ func (s *Server) executionResponseLocked() executionResponse {
 		WorkflowRevision int
 		WorkflowDigest   string
 	}{
-		SessionID: s.document.ID, ExecutionDigest: s.document.ExecutionDigest,
-		Mode: s.releaseInput.Mode, Versions: append([]string(nil), s.releaseInput.Versions...),
-		SourceBranch: s.releaseInput.SourceBranch, SourceVersion: s.releaseInput.SourceVersion,
-		SourceBuildID: s.releaseInput.SourceBuildID, DefinitionID: goImagesPipelineID,
+		SessionID: s.goImages.document.ID, ExecutionDigest: s.goImages.document.ExecutionDigest,
+		Mode: s.goImages.workflowInput.Mode, Versions: append([]string(nil), s.goImages.workflowInput.Versions...),
+		SourceBranch: s.goImages.workflowInput.SourceBranch, SourceVersion: s.goImages.workflowInput.SourceVersion,
+		SourceBuildID: s.goImages.workflowInput.SourceBuildID, DefinitionID: goImagesPipelineID,
 		Parameters: parameters, WorkflowRevision: plan.WorkflowRevision, WorkflowDigest: plan.Digest,
 	}
 	data, err := json.Marshal(payload)
@@ -982,17 +985,10 @@ func (s *Server) restoreSession() error {
 	if err != nil {
 		return fmt.Errorf("load release session: %w", err)
 	}
-	if document.Plan.WorkflowRevision == session.MigratableWorkflowRevision {
-		document, err = s.migrateGoImagesWorkflowRevision5(document)
-		if err != nil {
-			return fmt.Errorf("migrate release session: %w", err)
-		}
-	}
-	sessionInput := document.Input
-	input := goImagesInputFromSession(sessionInput)
+	input := document.Input
 	state := document.State
-	steps, restoredState, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
-		&input, nil, &state, disabledServices{}, s.checkpointReleaseState,
+	steps, restoredState, err := goimagesworkflow.NewGraphWithCheckpoint(
+		&input, &state, disabledGoImagesService{}, s.checkpointReleaseState,
 	)
 	if err != nil {
 		return fmt.Errorf("reconstruct release session: %w", err)
@@ -1005,75 +1001,30 @@ func (s *Server) restoreSession() error {
 		return fmt.Errorf("restore release session: %w", err)
 	}
 	s.steps = steps
-	s.input = PlanInput{Mode: input.Mode, SourceBuildID: input.SourceBuildID}
-	s.source = GoImagesSource{
+	s.goImages.planInput = PlanInput{Mode: input.Mode, SourceBuildID: input.SourceBuildID}
+	s.goImages.source = GoImagesSource{
 		Branch: input.SourceBranch, Commit: input.SourceVersion,
 		Versions: append([]string(nil), input.Versions...),
 	}
-	if input.Mode == releasesteps.GoImagesReleaseModeRollback {
+	if input.Mode == goimagesworkflow.ModeRollback {
 		buildID, _ := strconv.Atoi(input.SourceBuildID)
-		s.rollbackSource = &GoImagesRollbackSource{BuildID: buildID, Versions: append([]string(nil), input.Versions...)}
+		s.goImages.rollbackSource = &GoImagesRollbackSource{BuildID: buildID, Versions: append([]string(nil), input.Versions...)}
 	}
-	s.releaseInput = &input
-	s.releaseState = restoredState
-	s.document = document
+	s.goImages.workflowInput = &input
+	s.goImages.workflowState = restoredState
+	s.goImages.document = document
 	s.runner = &coordinator.StepRunner{}
-	s.restoredFromDisk = true
+	s.goImages.restored = true
 	s.activeProcessID = goImagesProcessID
 	return nil
 }
 
-func (s *Server) migrateGoImagesWorkflowRevision5(document *session.Document) (*session.Document, error) {
-	if document.Plan.Digest != legacyGoImagesWorkflowRevision5Digest {
-		return nil, fmt.Errorf("revision-5 plan digest %q is not the known go-images workflow", document.Plan.Digest)
-	}
-	if document.Input.MicrosoftGoImagesPipeline != goImagesPipelineID {
-		return nil, fmt.Errorf("revision-5 session targets pipeline %d, expected %d", document.Input.MicrosoftGoImagesPipeline, goImagesPipelineID)
-	}
-	if document.Input.TargetAzDOGoImagesRepo != "" &&
-		document.Input.TargetAzDOGoImagesRepo != releasesteps.GoImagesInternalMirrorTarget {
-
-		return nil, fmt.Errorf("revision-5 session has unexpected mirror target %q", document.Input.TargetAzDOGoImagesRepo)
-	}
-	if !document.State.Day.GoImagesReleaseQueueAttempted {
-		return nil, errors.New("revision-5 session has no checkpointed queue attempt")
-	}
-	buildID, err := strconv.Atoi(document.State.Day.GoImagesReleaseBuildID)
-	if err != nil || buildID <= 0 {
-		return nil, fmt.Errorf(
-			"revision-5 session has no checkpointed build ID; refusing migration because queue status is uncertain",
-		)
-	}
-
-	sessionInput := document.Input
-	sessionInput.TargetAzDOGoImagesRepo = releasesteps.GoImagesInternalMirrorTarget
-	input := goImagesInputFromSession(sessionInput)
-	_, initializedState, err := releasesteps.CreateGoImagesPipelineGraph(&input, nil, nil, disabledServices{})
-	if err != nil {
-		return nil, fmt.Errorf("initialize revision-7 state: %w", err)
-	}
-	state := document.State
-	state.InputChecksum = initializedState.InputChecksum
-	steps, migratedState, err := releasesteps.CreateGoImagesPipelineGraph(&input, nil, &state, disabledServices{})
-	if err != nil {
-		return nil, fmt.Errorf("create revision-7 graph: %w", err)
-	}
-	upgraded, err := document.UpgradeWorkflow(&sessionInput, migratedState, steps, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("upgrade revision-5 document: %w", err)
-	}
-	if err := s.sessionStore.Save(s.ctx, upgraded); err != nil {
-		return nil, fmt.Errorf("persist revision-7 session: %w", err)
-	}
-	return upgraded, nil
-}
-
 func (s *Server) resumeRestoredMonitoring() error {
-	if s.execution == nil || s.document == nil || s.releaseInput == nil || s.releaseState == nil {
+	if s.execution == nil || s.goImages.document == nil || s.goImages.workflowInput == nil || s.goImages.workflowState == nil {
 		return nil
 	}
-	buildIDText := s.releaseState.Day.GoImagesReleaseBuildID
-	if buildIDText == "" || s.releaseState.Day.GoImagesReleaseComplete {
+	buildIDText := s.goImages.workflowState.BuildID
+	if buildIDText == "" || s.goImages.workflowState.Complete {
 		return nil
 	}
 	buildID, err := strconv.Atoi(buildIDText)
@@ -1085,10 +1036,10 @@ func (s *Server) resumeRestoredMonitoring() error {
 		return errors.New("restore go-images monitoring without an eligible execution plan")
 	}
 	service, err := s.execution.NewService(GoImagesExecutionRequest{
-		Mode: s.releaseInput.Mode, SessionID: s.document.ID, ExecutionDigest: intent.PlanDigest,
-		Versions: append([]string(nil), s.releaseInput.Versions...), SourceBuildID: s.releaseInput.SourceBuildID,
-		SourceVersion:        s.releaseInput.SourceVersion,
-		PreviousQueueAttempt: s.releaseState.Day.GoImagesReleaseQueueAttempted,
+		Mode: s.goImages.workflowInput.Mode, SessionID: s.goImages.document.ID, ExecutionDigest: intent.PlanDigest,
+		Versions: append([]string(nil), s.goImages.workflowInput.Versions...), SourceBuildID: s.goImages.workflowInput.SourceBuildID,
+		SourceVersion:        s.goImages.workflowInput.SourceVersion,
+		PreviousQueueAttempt: s.goImages.workflowState.QueueAttempted,
 	})
 	if err != nil {
 		return fmt.Errorf("restore go-images monitoring service: %w", err)
@@ -1096,24 +1047,24 @@ func (s *Server) resumeRestoredMonitoring() error {
 	monitor := importedRunMonitor{
 		buildID: buildID,
 		monitor: func(ctx context.Context, id int) error {
-			return service.PollPipelineComplete(ctx, strconv.Itoa(id), nil)
+			return service.PollPipeline(ctx, strconv.Itoa(id))
 		},
 	}
-	input := *s.releaseInput
-	steps, state, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
-		&input, nil, s.releaseState, monitor, s.checkpointReleaseState,
+	input := *s.goImages.workflowInput
+	steps, state, err := goimagesworkflow.NewGraphWithCheckpoint(
+		&input, s.goImages.workflowState, monitor, s.checkpointReleaseState,
 	)
 	if err != nil {
 		return fmt.Errorf("restore go-images monitoring graph: %w", err)
 	}
 	actualPlan, err := session.NewPlan(steps)
-	if err != nil || actualPlan.Digest != s.document.Plan.Digest ||
-		actualPlan.WorkflowRevision != s.document.Plan.WorkflowRevision {
+	if err != nil || actualPlan.Digest != s.goImages.document.Plan.Digest ||
+		actualPlan.WorkflowRevision != s.goImages.document.Plan.WorkflowRevision {
 
 		return errors.New("restored go-images monitoring graph no longer matches the persisted plan")
 	}
 	s.steps = steps
-	s.releaseState = state
+	s.goImages.workflowState = state
 	s.runner = &coordinator.StepRunner{}
 	s.releaseRunning = true
 	runner := s.runner
@@ -1124,49 +1075,24 @@ func (s *Server) resumeRestoredMonitoring() error {
 	return nil
 }
 
-func (s *Server) checkpointReleaseState(ctx context.Context, state *releasesteps.State) error {
+func (s *Server) checkpointReleaseState(ctx context.Context, state *goimagesworkflow.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sessionStore == nil {
 		return nil
 	}
-	if s.document == nil {
+	if s.goImages.document == nil {
 		return errors.New("cannot checkpoint release state before creating a session document")
 	}
-	document, err := s.document.WithState(state, time.Now())
+	document, err := s.goImages.document.WithState(state, time.Now())
 	if err != nil {
 		return fmt.Errorf("update release session document: %w", err)
 	}
 	if err := s.sessionStore.Save(ctx, document); err != nil {
 		return fmt.Errorf("persist release state checkpoint: %w", err)
 	}
-	s.document = document
+	s.goImages.document = document
 	return nil
-}
-
-func goImagesSessionInput(input releasesteps.GoImagesInput) releasesteps.Input {
-	return releasesteps.Input{
-		Versions:                  append([]string(nil), input.Versions...),
-		GoImagesReleaseMode:       input.Mode,
-		GoImagesSourceBranch:      input.SourceBranch,
-		GoImagesSourceVersion:     input.SourceVersion,
-		GoImagesSourceBuildID:     input.SourceBuildID,
-		RunnerGitHubUser:          "ghost",
-		TargetAzDOGoImagesRepo:    input.MirrorTarget,
-		MicrosoftGoImagesPipeline: input.PipelineID,
-	}
-}
-
-func goImagesInputFromSession(input releasesteps.Input) releasesteps.GoImagesInput {
-	return releasesteps.GoImagesInput{
-		Versions:      append([]string(nil), input.Versions...),
-		Mode:          input.GoImagesReleaseMode,
-		SourceBranch:  input.GoImagesSourceBranch,
-		SourceVersion: input.GoImagesSourceVersion,
-		SourceBuildID: input.GoImagesSourceBuildID,
-		MirrorTarget:  input.TargetAzDOGoImagesRepo,
-		PipelineID:    input.MicrosoftGoImagesPipeline,
-	}
 }
 
 func (s *Server) handlePreflight(response http.ResponseWriter, request *http.Request) {
@@ -1195,7 +1121,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusForbidden, "real go-images execution is not enabled")
 		return
 	}
-	if s.document == nil || s.releaseInput == nil || s.releaseState == nil {
+	if s.goImages.document == nil || s.goImages.workflowInput == nil || s.goImages.workflowState == nil {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "prepare a go-images release first")
 		return
@@ -1216,7 +1142,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusBadRequest, "confirm the release before starting it")
 		return
 	}
-	if s.releaseState.Day.GoImagesReleaseComplete {
+	if s.goImages.workflowState.Complete {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "the go-images release is already complete")
 		return
@@ -1230,12 +1156,12 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 	resolveSource := s.readOnly.ResolveCurrentSource
 	validateRollback := s.readOnly.ValidateRollback
 	newService := s.execution.NewService
-	input := *s.releaseInput
-	state := s.releaseState
-	previousQueueAttempt := state.Day.GoImagesReleaseQueueAttempted
-	sessionID := s.document.ID
-	expectedPlan := s.document.Plan
-	alreadyQueued := state.Day.GoImagesReleaseBuildID != ""
+	input := *s.goImages.workflowInput
+	state := s.goImages.workflowState
+	previousQueueAttempt := state.QueueAttempted
+	sessionID := s.goImages.document.ID
+	expectedPlan := s.goImages.document.Plan
+	alreadyQueued := state.BuildID != ""
 	s.releaseRunning = true
 	s.mu.Unlock()
 
@@ -1251,7 +1177,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 			writeError(response, http.StatusConflict, "microsoft/main changed after this plan was prepared; refresh the plan before queueing")
 			return
 		}
-		if input.Mode == releasesteps.GoImagesReleaseModeRollback {
+		if input.Mode == goimagesworkflow.ModeRollback {
 			buildID, _ := strconv.Atoi(input.SourceBuildID)
 			if _, err := validateRollback(request.Context(), buildID); err != nil {
 				s.finishRelease()
@@ -1275,8 +1201,8 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create go-images execution service: %v", err))
 		return
 	}
-	steps, state, err := releasesteps.CreateGoImagesPipelineGraphWithCheckpoint(
-		&input, nil, state, service, s.checkpointReleaseState,
+	steps, state, err := goimagesworkflow.NewGraphWithCheckpoint(
+		&input, state, service, s.checkpointReleaseState,
 	)
 	if err != nil {
 		s.finishRelease()
@@ -1292,7 +1218,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 
 	s.mu.Lock()
 	s.steps = steps
-	s.releaseState = state
+	s.goImages.workflowState = state
 	s.runner = &coordinator.StepRunner{}
 	runner := s.runner
 	s.mu.Unlock()
@@ -1312,11 +1238,11 @@ func (s *Server) finishRelease() {
 func normalizePlanInput(input PlanInput) (PlanInput, error) {
 	input.SourceBuildID = strings.TrimSpace(input.SourceBuildID)
 	switch input.Mode {
-	case releasesteps.GoImagesReleaseModeNormal, releasesteps.GoImagesReleaseModeTest:
+	case goimagesworkflow.ModeNormal, goimagesworkflow.ModeTest:
 		if input.SourceBuildID != "" {
 			return PlanInput{}, fmt.Errorf("%s release does not accept a source build ID", input.Mode)
 		}
-	case releasesteps.GoImagesReleaseModeRollback:
+	case goimagesworkflow.ModeRollback:
 		buildID, err := strconv.Atoi(input.SourceBuildID)
 		if err != nil || buildID <= 0 {
 			return PlanInput{}, errors.New("rollback source build ID must be a positive integer")

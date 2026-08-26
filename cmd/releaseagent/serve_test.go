@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 func TestProcessRunStorePathRejectsLegacyJournal(t *testing.T) {
@@ -35,21 +35,21 @@ func TestGoImagesModeFromBuild(t *testing.T) {
 	tests := []struct {
 		name  string
 		build *azdopipeline.Build
-		want  releasesteps.GoImagesReleaseMode
+		want  goimagesworkflow.Mode
 	}{
 		{name: "correlated test", build: &azdopipeline.Build{
 			Parameters: map[string]string{"ReleaseUIGoImagesMode": "test"},
-		}, want: releasesteps.GoImagesReleaseModeTest},
+		}, want: goimagesworkflow.ModeTest},
 		{name: "dev prefix", build: &azdopipeline.Build{
 			TemplateParameters: map[string]any{"publishRepoPrefix": "dev/"},
-		}, want: releasesteps.GoImagesReleaseModeTest},
+		}, want: goimagesworkflow.ModeTest},
 		{name: "old artifacts", build: &azdopipeline.Build{
 			TemplateParameters: map[string]any{"sourceBuildPipelineRunId": "3019035"},
-		}, want: releasesteps.GoImagesReleaseModeRollback},
+		}, want: goimagesworkflow.ModeRollback},
 		{name: "current build", build: &azdopipeline.Build{
 			TemplateParameters: map[string]any{"sourceBuildPipelineRunId": "$(Build.BuildId)"},
-		}, want: releasesteps.GoImagesReleaseModeNormal},
-		{name: "defaults omitted", build: &azdopipeline.Build{}, want: releasesteps.GoImagesReleaseModeNormal},
+		}, want: goimagesworkflow.ModeNormal},
+		{name: "defaults omitted", build: &azdopipeline.Build{}, want: goimagesworkflow.ModeNormal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

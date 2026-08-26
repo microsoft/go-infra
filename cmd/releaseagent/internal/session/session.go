@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package session defines the durable, non-secret state of a release UI session.
+// Package session persists the durable, non-secret state of the standalone go-images workflow.
 package session
 
 import (
@@ -15,32 +15,29 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 const (
 	// CurrentSchemaVersion is the only session document schema understood by this version.
-	CurrentSchemaVersion = 6
+	CurrentSchemaVersion = 7
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
 	// even if step names and dependencies have not changed.
 	CurrentWorkflowRevision = 7
-	// MigratableWorkflowRevision is accepted only while loading an integrity-checked document for
-	// explicit migration. It cannot be saved or used as a current execution plan.
-	MigratableWorkflowRevision = 5
 )
 
 // Document is the durable, non-secret state needed to reconstruct a release plan.
 //
 // Credentials are deliberately excluded. They must be reacquired when the application starts.
 type Document struct {
-	SchemaVersion   int                `json:"schemaVersion"`
-	ID              string             `json:"id"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
-	Input           releasesteps.Input `json:"input"`
-	State           releasesteps.State `json:"state"`
-	Plan            Plan               `json:"plan"`
-	ExecutionDigest string             `json:"executionDigest"`
+	SchemaVersion   int                    `json:"schemaVersion"`
+	ID              string                 `json:"id"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	UpdatedAt       time.Time              `json:"updatedAt"`
+	Input           goimagesworkflow.Input `json:"input"`
+	State           goimagesworkflow.State `json:"state"`
+	Plan            Plan                   `json:"plan"`
+	ExecutionDigest string                 `json:"executionDigest"`
 }
 
 // Plan is the persisted structural identity of a release DAG.
@@ -58,31 +55,8 @@ type PlanStep struct {
 	TimeoutNanos int64    `json:"timeoutNanos"`
 }
 
-// UnmarshalJSON accepts the ID field used by the one explicitly migratable workflow revision.
-func (s *PlanStep) UnmarshalJSON(data []byte) error {
-	var encoded struct {
-		Name         string   `json:"name"`
-		ID           string   `json:"id"`
-		DependsOn    []string `json:"dependsOn,omitempty"`
-		TimeoutNanos int64    `json:"timeoutNanos"`
-	}
-	if err := json.Unmarshal(data, &encoded); err != nil {
-		return err
-	}
-	if encoded.Name != "" && encoded.ID != "" {
-		return errors.New("session plan step contains both name and legacy ID")
-	}
-	s.Name = encoded.Name
-	if s.Name == "" {
-		s.Name = encoded.ID
-	}
-	s.DependsOn = encoded.DependsOn
-	s.TimeoutNanos = encoded.TimeoutNanos
-	return nil
-}
-
 // NewDocument creates and validates a new durable session document.
-func NewDocument(input *releasesteps.Input, state *releasesteps.State, steps []*coordinator.Step, now time.Time) (*Document, error) {
+func NewDocument(input *goimagesworkflow.Input, state *goimagesworkflow.State, steps []*coordinator.Step, now time.Time) (*Document, error) {
 	if input == nil {
 		return nil, errors.New("session input is nil")
 	}
@@ -160,16 +134,6 @@ func NewPlan(steps []*coordinator.Step) (Plan, error) {
 
 // Validate checks the document schema and internal structural fingerprint.
 func (d *Document) Validate() error {
-	return d.validate(false)
-}
-
-// ValidateLoadable checks current documents and the one explicitly migratable workflow revision.
-// Callers must upgrade a migratable document before saving or executing it.
-func (d *Document) ValidateLoadable() error {
-	return d.validate(true)
-}
-
-func (d *Document) validate(allowMigration bool) error {
 	if d == nil {
 		return errors.New("session document is nil")
 	}
@@ -188,22 +152,22 @@ func (d *Document) validate(allowMigration bool) error {
 	if len(d.Input.Versions) == 0 {
 		return errors.New("session has no release versions")
 	}
+	if _, err := goimagesworkflow.NewState(&d.Input); err != nil {
+		return fmt.Errorf("validate session input: %w", err)
+	}
+	if d.State.InputChecksum == 0 {
+		return errors.New("session state has no input checksum")
+	}
 	if len(d.Plan.Steps) == 0 {
 		return errors.New("session plan has no steps")
 	}
-	if d.Plan.WorkflowRevision != CurrentWorkflowRevision &&
-		(!allowMigration || d.Plan.WorkflowRevision != MigratableWorkflowRevision) {
-
+	if d.Plan.WorkflowRevision != CurrentWorkflowRevision {
 		return fmt.Errorf("unsupported workflow revision %d, expected %d", d.Plan.WorkflowRevision, CurrentWorkflowRevision)
 	}
 	if err := validatePlanSteps(d.Plan.Steps); err != nil {
 		return err
 	}
-	digestPlan := planDigest
-	if d.Plan.WorkflowRevision == MigratableWorkflowRevision {
-		digestPlan = legacyPlanDigest
-	}
-	digest, err := digestPlan(d.Plan.Steps)
+	digest, err := planDigest(d.Plan.Steps)
 	if err != nil {
 		return err
 	}
@@ -218,56 +182,6 @@ func (d *Document) validate(allowMigration bool) error {
 		return fmt.Errorf("session execution digest mismatch: stored %q, calculated %q", d.ExecutionDigest, executionDigest)
 	}
 	return nil
-}
-
-// UpgradeWorkflow returns a current document with replacement immutable input, state, and graph.
-// The original session identity and creation time are preserved.
-func (d *Document) UpgradeWorkflow(
-	input *releasesteps.Input,
-	state *releasesteps.State,
-	steps []*coordinator.Step,
-	now time.Time,
-) (*Document, error) {
-	if err := d.ValidateLoadable(); err != nil {
-		return nil, err
-	}
-	if d.Plan.WorkflowRevision != MigratableWorkflowRevision {
-		return nil, fmt.Errorf("workflow revision %d does not require migration", d.Plan.WorkflowRevision)
-	}
-	if input == nil || state == nil {
-		return nil, errors.New("migrated session input and state are required")
-	}
-	if now.IsZero() {
-		return nil, errors.New("session migration time is zero")
-	}
-	plan, err := NewPlan(steps)
-	if err != nil {
-		return nil, err
-	}
-	document, err := cloneJSON(*d)
-	if err != nil {
-		return nil, fmt.Errorf("copy session document for migration: %w", err)
-	}
-	inputCopy, err := cloneJSON(*input)
-	if err != nil {
-		return nil, fmt.Errorf("copy migrated session input: %w", err)
-	}
-	stateCopy, err := cloneJSON(*state)
-	if err != nil {
-		return nil, fmt.Errorf("copy migrated session state: %w", err)
-	}
-	document.Input = inputCopy
-	document.State = stateCopy
-	document.Plan = plan
-	document.UpdatedAt = now.UTC()
-	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
-	if err != nil {
-		return nil, err
-	}
-	if err := document.Validate(); err != nil {
-		return nil, err
-	}
-	return &document, nil
 }
 
 func validatePlanSteps(steps []PlanStep) error {
@@ -357,7 +271,7 @@ func (d *Document) MatchesPlan(current Plan) error {
 
 // WithState returns a detached document containing the latest release domain state. The original
 // document is unchanged, allowing callers to replace it only after durable storage succeeds.
-func (d *Document) WithState(state *releasesteps.State, now time.Time) (*Document, error) {
+func (d *Document) WithState(state *goimagesworkflow.State, now time.Time) (*Document, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
@@ -392,30 +306,11 @@ func planDigest(steps []PlanStep) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func legacyPlanDigest(steps []PlanStep) (string, error) {
-	legacy := make([]struct {
-		ID           string   `json:"id"`
-		DependsOn    []string `json:"dependsOn,omitempty"`
-		TimeoutNanos int64    `json:"timeoutNanos"`
-	}, len(steps))
-	for i, step := range steps {
-		legacy[i].ID = step.Name
-		legacy[i].DependsOn = step.DependsOn
-		legacy[i].TimeoutNanos = step.TimeoutNanos
-	}
-	data, err := json.Marshal(legacy)
-	if err != nil {
-		return "", fmt.Errorf("marshal legacy session plan: %w", err)
-	}
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:]), nil
-}
-
-func executionDigest(input releasesteps.Input, plan Plan) (string, error) {
+func executionDigest(input goimagesworkflow.Input, plan Plan) (string, error) {
 	data, err := json.Marshal(struct {
-		Input            releasesteps.Input `json:"input"`
-		PlanDigest       string             `json:"planDigest"`
-		WorkflowRevision int                `json:"workflowRevision"`
+		Input            goimagesworkflow.Input `json:"input"`
+		PlanDigest       string                 `json:"planDigest"`
+		WorkflowRevision int                    `json:"workflowRevision"`
 	}{
 		Input:            input,
 		PlanDigest:       plan.Digest,

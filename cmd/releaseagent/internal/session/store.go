@@ -88,7 +88,7 @@ func (s *FileStore) Load(ctx context.Context) (*Document, error) {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("session file must contain exactly one JSON value")
 	}
-	if err := document.ValidateLoadable(); err != nil {
+	if err := document.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session file: %w", err)
 	}
 	return &document, nil
