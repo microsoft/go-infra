@@ -6,24 +6,20 @@ package releaseui
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"hash/crc32"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
@@ -241,14 +237,14 @@ func TestProcessRoutesIsolatePreparedPlans(t *testing.T) {
 		t.Fatalf("prepare one status = %d", response.StatusCode)
 	}
 	assertPreparedProcess(t, ui, "one", http.StatusOK)
-	assertPreparedProcess(t, ui, "two", http.StatusConflict)
+	assertPreparedProcess(t, ui, "two", http.StatusNoContent)
 
 	response = postJSON(t, ui, "/api/processes/two/plan", `{}`)
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("prepare two status = %d", response.StatusCode)
 	}
-	assertPreparedProcess(t, ui, "one", http.StatusConflict)
+	assertPreparedProcess(t, ui, "one", http.StatusNoContent)
 	assertPreparedProcess(t, ui, "two", http.StatusOK)
 }
 
@@ -284,7 +280,7 @@ func TestTrackOngoingReleases(t *testing.T) {
 	queued := time.Date(2026, 8, 6, 12, 30, 0, 0, time.UTC)
 	readOnly.ListOngoing = func(context.Context) ([]GoImagesOngoingRun, error) {
 		return []GoImagesOngoingRun{{
-			BuildID: 3035000, Mode: releasesteps.GoImagesReleaseModeTest,
+			BuildID: 3035000, Mode: goimagesworkflow.ModeTest,
 			Status: "running", URL: "https://example/build/3035000", Queued: queued,
 		}}, nil
 	}
@@ -298,7 +294,7 @@ func TestTrackOngoingReleases(t *testing.T) {
 	}
 	decodeResponse(t, response, &result)
 	if response.StatusCode != http.StatusOK || len(result.Releases) != 1 ||
-		result.Releases[0].RunID != "3035000" || result.Releases[0].Mode != string(releasesteps.GoImagesReleaseModeTest) ||
+		result.Releases[0].RunID != "3035000" || result.Releases[0].Mode != string(goimagesworkflow.ModeTest) ||
 		result.Releases[0].Href != "https://example/build/3035000" {
 
 		t.Fatalf("ongoing releases = %#v", result.Releases)
@@ -333,7 +329,7 @@ func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
 	execution := GoImagesExecutionIntegration{
 		DefinitionID: goImagesPipelineID,
 		Preflight:    func(context.Context) (string, error) { return "ok", nil },
-		NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+		NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 			return &fakeExecutionService{}, nil
 		},
 	}
@@ -346,14 +342,14 @@ func TestPrepareReleaseModes(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		body         string
-		wantMode     releasesteps.GoImagesReleaseMode
+		wantMode     goimagesworkflow.Mode
 		wantSource   string
 		wantPrefix   string
 		wantRollback bool
 	}{
-		{name: "normal", body: `{"mode":"normal"}`, wantMode: releasesteps.GoImagesReleaseModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
-		{name: "rollback", body: `{"mode":"rollback","sourceBuildId":"3019035"}`, wantMode: releasesteps.GoImagesReleaseModeRollback, wantSource: "3019035", wantPrefix: "public/", wantRollback: true},
-		{name: "test", body: `{"mode":"test"}`, wantMode: releasesteps.GoImagesReleaseModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+		{name: "normal", body: `{"mode":"normal"}`, wantMode: goimagesworkflow.ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{name: "rollback", body: `{"mode":"rollback","sourceBuildId":"3019035"}`, wantMode: goimagesworkflow.ModeRollback, wantSource: "3019035", wantPrefix: "public/", wantRollback: true},
+		{name: "test", body: `{"mode":"test"}`, wantMode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
@@ -383,7 +379,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if persisted.Input.GoImagesReleaseMode != test.wantMode || persisted.Input.GoImagesSourceVersion != testSourceCommit {
+			if persisted.Input.Mode != test.wantMode || persisted.Input.SourceVersion != testSourceCommit {
 				t.Fatalf("persisted input = %#v", persisted.Input)
 			}
 		})
@@ -429,7 +425,7 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 	}
 	var restored planResponse
 	decodeResponse(t, response, &restored)
-	if !restored.Restored || restored.SessionID != created.SessionID || restored.Input.Mode != releasesteps.GoImagesReleaseModeTest {
+	if !restored.Restored || restored.SessionID != created.SessionID || restored.Input.Mode != goimagesworkflow.ModeTest {
 		t.Fatalf("restored = %#v", restored)
 	}
 	response, err = second.client.Get(second.http.URL + "/api/dashboard")
@@ -456,8 +452,8 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := document.State
-	state.Day.GoImagesReleaseQueueAttempted = true
-	state.Day.GoImagesReleaseBuildID = "888"
+	state.QueueAttempted = true
+	state.BuildID = "888"
 	document, err = document.WithState(&state, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -466,14 +462,14 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	second := newTestUI(t,
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
 			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
-			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
 		}),
@@ -486,129 +482,8 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
-		t.Fatalf("persisted state = %#v", persisted.State.Day)
-	}
-}
-
-func TestRevision5QueuedReleaseMigratesAndResumesMonitoring(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "release-session.json")
-	store, err := session.NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
-	createTestPlan(t, first, `{"mode":"test"}`)
-	document, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalID := document.ID
-	writeRevision5Session(t, path, document, "888")
-
-	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
-	second := newTestUI(t,
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
-		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
-			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
-				return service, nil
-			},
-		}),
-	)
-	waitForRelease(t, second)
-	if service.mirrors != 0 || service.queued != 0 || service.polled != 1 {
-		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
-	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if persisted.ID != originalID || persisted.Plan.WorkflowRevision != session.CurrentWorkflowRevision ||
-		persisted.Input.TargetAzDOGoImagesRepo != releasesteps.GoImagesInternalMirrorTarget ||
-		!persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
-
-		t.Fatalf("persisted migrated session = %#v", persisted)
-	}
-}
-
-func TestRevision5ReleaseWithoutBuildIDFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "release-session.json")
-	store, err := session.NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
-	createTestPlan(t, first, `{"mode":"test"}`)
-	document, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeRevision5Session(t, path, document, "")
-
-	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
-	_, err = New(
-		context.Background(),
-		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
-		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
-			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
-				return service, nil
-			},
-		}),
-	)
-	if err == nil || !strings.Contains(err.Error(), "queue status is uncertain") {
-		t.Fatalf("error = %v", err)
-	}
-	if service.mirrors != 0 || service.queued != 0 || service.polled != 0 {
-		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
-	}
-}
-
-func writeRevision5Session(t *testing.T, path string, document *session.Document, buildID string) {
-	t.Helper()
-	document.Input.TargetAzDOGoImagesRepo = ""
-	inputData, err := json.Marshal(document.Input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	document.State.InputChecksum = crc32.ChecksumIEEE(inputData)
-	document.State.Day.GoImagesReleaseQueueAttempted = true
-	document.State.Day.GoImagesReleaseBuildID = buildID
-	document.Plan = session.Plan{
-		WorkflowRevision: session.MigratableWorkflowRevision,
-		Digest:           legacyGoImagesWorkflowRevision5Digest,
-		Steps: []session.PlanStep{
-			{Name: "go-images.release.queue", TimeoutNanos: int64(10 * time.Minute)},
-			{Name: "go-images.release.wait", DependsOn: []string{"go-images.release.queue"}, TimeoutNanos: int64(2 * time.Hour)},
-			{Name: "go-images.release.complete", DependsOn: []string{"go-images.release.wait"}},
-		},
-	}
-	executionData, err := json.Marshal(struct {
-		Input            releasesteps.Input `json:"input"`
-		PlanDigest       string             `json:"planDigest"`
-		WorkflowRevision int                `json:"workflowRevision"`
-	}{
-		Input: document.Input, PlanDigest: document.Plan.Digest,
-		WorkflowRevision: document.Plan.WorkflowRevision,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	executionDigest := sha256.Sum256(executionData)
-	document.ExecutionDigest = hex.EncodeToString(executionDigest[:])
-	legacyData, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, legacyData, 0o600); err != nil {
-		t.Fatal(err)
+	if !persisted.State.Complete || persisted.State.Result != "succeeded" {
+		t.Fatalf("persisted state = %#v", persisted.State)
 	}
 }
 
@@ -616,36 +491,25 @@ type fakeExecutionService struct {
 	mirrors     int
 	queued      int
 	polled      int
-	mode        releasesteps.GoImagesReleaseMode
+	mode        goimagesworkflow.Mode
 	sourceBuild string
 	mirrorErr   error
 }
 
-func (s *fakeExecutionService) PollAzDOMirror(
-	_ context.Context,
-	target,
-	commit string,
-	_ *releasesteps.Secret,
-) error {
+func (s *fakeExecutionService) PollMirror(_ context.Context, target, commit string) error {
 	s.mirrors++
-	if target != releasesteps.GoImagesInternalMirrorTarget || commit != testSourceCommit {
+	if target != goimagesworkflow.InternalMirrorTarget || commit != testSourceCommit {
 		return errors.New("unexpected mirror source")
 	}
 	return s.mirrorErr
 }
 
-func (s *fakeExecutionService) TriggerBuildPipeline(
-	_ context.Context,
-	pipelineID int,
-	parameters,
-	optionalParameters map[string]string,
-	_ *releasesteps.Secret,
-) (string, error) {
+func (s *fakeExecutionService) QueuePipeline(_ context.Context, pipelineID int, parameters map[string]string) (string, error) {
 	s.queued++
-	if pipelineID != goImagesPipelineID || len(optionalParameters) != 0 {
+	if pipelineID != goImagesPipelineID {
 		return "", errors.New("unsafe execution request")
 	}
-	want, err := releasesteps.GoImagesPipelineParametersForMode(s.mode, s.sourceBuild)
+	want, err := goimagesworkflow.PipelineParameters(s.mode, s.sourceBuild)
 	if err != nil {
 		return "", err
 	}
@@ -655,7 +519,7 @@ func (s *fakeExecutionService) TriggerBuildPipeline(
 	return "888", nil
 }
 
-func (s *fakeExecutionService) PollPipelineComplete(_ context.Context, buildID string, _ *releasesteps.Secret) error {
+func (s *fakeExecutionService) PollPipeline(_ context.Context, buildID string) error {
 	s.polled++
 	if buildID != "888" {
 		return errors.New("unexpected build ID")
@@ -669,15 +533,15 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeNormal}
+	service := &fakeExecutionService{mode: goimagesworkflow.ModeNormal}
 	ui := newTestUI(t,
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
 			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
-			NewService: func(request GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
-				if request.Mode != releasesteps.GoImagesReleaseModeNormal || request.SourceVersion != testSourceCommit ||
+			NewService: func(request GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
+				if request.Mode != goimagesworkflow.ModeNormal || request.SourceVersion != testSourceCommit ||
 					len(request.ExecutionDigest) != 64 || request.SourceBuildID != "" {
 
 					t.Fatalf("request = %#v", request)
@@ -722,10 +586,10 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !persisted.State.Day.GoImagesReleaseQueueAttempted || persisted.State.Day.GoImagesReleaseBuildID != "888" ||
-		!persisted.State.Day.GoImagesReleaseComplete || persisted.State.Day.GoImagesReleaseResult != "succeeded" {
+	if !persisted.State.QueueAttempted || persisted.State.BuildID != "888" ||
+		!persisted.State.Complete || persisted.State.Result != "succeeded" {
 
-		t.Fatalf("persisted state = %#v", persisted.State.Day)
+		t.Fatalf("persisted state = %#v", persisted.State)
 	}
 	response, err = ui.client.Get(ui.http.URL + "/api/dashboard")
 	if err != nil {
@@ -745,7 +609,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 	}
 	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{
-		mode:      releasesteps.GoImagesReleaseModeNormal,
+		mode:      goimagesworkflow.ModeNormal,
 		mirrorErr: errors.New("commit is not available in the internal mirror"),
 	}
 	ui := newTestUI(t,
@@ -754,7 +618,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
 			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			NewService: func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
 		}),
@@ -778,14 +642,14 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	service := &fakeExecutionService{mode: releasesteps.GoImagesReleaseModeTest}
+	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	ui := newTestUI(t,
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
 			Preflight:    func(context.Context) (string, error) { return "ok", nil },
-			NewService:   func(GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) { return service, nil },
+			NewService:   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) { return service, nil },
 		}),
 	)
 	plan := createTestPlan(t, ui, `{"mode":"test"}`)
@@ -951,7 +815,7 @@ func waitForRelease(t *testing.T, ui *testUI) {
 	defer deadline.Stop()
 	for {
 		ui.server.mu.Lock()
-		complete := ui.server.document.State.Day.GoImagesReleaseComplete
+		complete := ui.server.goImages.document.State.Complete
 		active := ui.server.releaseRunning
 		ui.server.mu.Unlock()
 		if complete && !active {

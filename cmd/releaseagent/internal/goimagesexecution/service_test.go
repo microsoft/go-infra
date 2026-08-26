@@ -13,7 +13,7 @@ import (
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 type fakeReader struct {
@@ -71,25 +71,25 @@ func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) 
 
 func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 	for _, test := range []struct {
-		mode          releasesteps.GoImagesReleaseMode
+		mode          goimagesworkflow.Mode
 		sourceBuildID string
 		wantSource    string
 		wantPrefix    string
 	}{
-		{mode: releasesteps.GoImagesReleaseModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
-		{mode: releasesteps.GoImagesReleaseModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
-		{mode: releasesteps.GoImagesReleaseModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+		{mode: goimagesworkflow.ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{mode: goimagesworkflow.ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
+		{mode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(string(test.mode), func(t *testing.T) {
 			queue := &fakeQueueClient{}
 			service := newTestService(t, &fakeReader{}, queue, Config{
 				Mode: test.mode, SourceBuildID: test.sourceBuildID,
 			})
-			parameters, err := releasesteps.GoImagesPipelineParametersForMode(test.mode, test.sourceBuildID)
+			parameters, err := goimagesworkflow.PipelineParameters(test.mode, test.sourceBuildID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			buildID, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, parameters, nil, nil)
+			buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,11 +103,11 @@ func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 	}
 }
 
-func TestPollAzDOMirrorWaitsForPlannedCommit(t *testing.T) {
+func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	checks := 0
 	sleeps := 0
 	config := completeConfig(Config{
-		Mode: releasesteps.GoImagesReleaseModeNormal,
+		Mode: goimagesworkflow.ModeNormal,
 		VerifyMirrorCommit: func(_ context.Context, commit string) error {
 			checks++
 			if commit != testCommit {
@@ -126,8 +126,8 @@ func TestPollAzDOMirrorWaitsForPlannedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollAzDOMirror(
-		context.Background(), releasesteps.GoImagesInternalMirrorTarget, testCommit, nil,
+	if err := service.PollMirror(
+		context.Background(), goimagesworkflow.InternalMirrorTarget, testCommit,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -136,35 +136,34 @@ func TestPollAzDOMirrorWaitsForPlannedCommit(t *testing.T) {
 	}
 }
 
-func TestPollAzDOMirrorRejectsUnplannedSource(t *testing.T) {
-	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: releasesteps.GoImagesReleaseModeNormal})
-	if err := service.PollAzDOMirror(context.Background(), "other/repo", testCommit, nil); err == nil {
+func TestPollMirrorRejectsUnplannedSource(t *testing.T) {
+	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	if err := service.PollMirror(context.Background(), "other/repo", testCommit); err == nil {
 		t.Fatal("service accepted a different mirror target")
 	}
-	if err := service.PollAzDOMirror(
+	if err := service.PollMirror(
 		context.Background(),
-		releasesteps.GoImagesInternalMirrorTarget,
+		goimagesworkflow.InternalMirrorTarget,
 		"2ef65db89e42942c24e3d8f0b8a8eb52bc86857a",
-		nil,
 	); err == nil {
 		t.Fatal("service accepted a different mirror commit")
 	}
 }
 
 func TestTriggerRejectsMutatedExecution(t *testing.T) {
-	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: releasesteps.GoImagesReleaseModeNormal})
-	parameters, _ := releasesteps.GoImagesPipelineParametersForMode(releasesteps.GoImagesReleaseModeNormal, "")
-	if _, err := service.TriggerBuildPipeline(context.Background(), 1492, parameters, nil, nil); err == nil {
+	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeNormal, "")
+	if _, err := service.QueuePipeline(context.Background(), 1492, parameters); err == nil {
 		t.Fatal("service accepted the deprecated definition")
 	}
 	parameters["publishRepoPrefix"] = "dev/"
-	if _, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, parameters, nil, nil); err == nil {
+	if _, err := service.QueuePipeline(context.Background(), DefinitionID, parameters); err == nil {
 		t.Fatal("normal service accepted test parameters")
 	}
 }
 
 func TestTriggerReconcilesExistingRelease(t *testing.T) {
-	parameters, _ := releasesteps.GoImagesPipelineParametersForMode(releasesteps.GoImagesReleaseModeRollback, "3019035")
+	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeRollback, "3019035")
 	variables := map[string]string{
 		correlationVariable: "session", executionDigestVariable: testDigest,
 		modeVariable: "rollback", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "3019035",
@@ -179,9 +178,9 @@ func TestTriggerReconcilesExistingRelease(t *testing.T) {
 	}}}}
 	queue := &fakeQueueClient{}
 	service := newTestService(t, reader, queue, Config{
-		Mode: releasesteps.GoImagesReleaseModeRollback, SourceBuildID: "3019035", PreviousQueueAttempt: true,
+		Mode: goimagesworkflow.ModeRollback, SourceBuildID: "3019035", PreviousQueueAttempt: true,
 	})
-	buildID, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, parameters, nil, nil)
+	buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +190,7 @@ func TestTriggerReconcilesExistingRelease(t *testing.T) {
 }
 
 func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
-	parameters, _ := releasesteps.GoImagesPipelineParametersForMode(releasesteps.GoImagesReleaseModeTest, "")
+	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeTest, "")
 	variables := map[string]string{
 		correlationVariable: "session", executionDigestVariable: testDigest,
 		modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
@@ -210,7 +209,7 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 	queue := &fakeQueueClient{}
 	sleeps := 0
 	service, err := New(reader, queue, completeConfig(Config{
-		Mode: releasesteps.GoImagesReleaseModeTest, PreviousQueueAttempt: true, ReconcileAttempts: 3,
+		Mode: goimagesworkflow.ModeTest, PreviousQueueAttempt: true, ReconcileAttempts: 3,
 	}), func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -218,7 +217,7 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildID, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, parameters, nil, nil)
+	buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +227,7 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 }
 
 func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
-	parameters, _ := releasesteps.GoImagesPipelineParametersForMode(releasesteps.GoImagesReleaseModeNormal, "")
+	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeNormal, "")
 	template := make(map[string]any, len(parameters))
 	for name, value := range parameters {
 		template[name] = value
@@ -242,15 +241,15 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 		TemplateParameters: template,
 	}}}}
 	service := newTestService(t, reader, &fakeQueueClient{}, Config{
-		Mode: releasesteps.GoImagesReleaseModeNormal, PreviousQueueAttempt: true,
+		Mode: goimagesworkflow.ModeNormal, PreviousQueueAttempt: true,
 	})
-	_, err := service.TriggerBuildPipeline(context.Background(), DefinitionID, parameters, nil, nil)
+	_, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
 	if err == nil || !strings.Contains(err.Error(), modeVariable) {
 		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestPollPipelineComplete(t *testing.T) {
+func TestPollPipeline(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{
 		{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"},
 		{ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded"},
@@ -261,7 +260,7 @@ func TestPollPipelineComplete(t *testing.T) {
 	}}}}
 	sleeps := 0
 	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
-		Mode: releasesteps.GoImagesReleaseModeNormal,
+		Mode: goimagesworkflow.ModeNormal,
 	}), func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -270,7 +269,7 @@ func TestPollPipelineComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	step := coordinator.NewRootStep("Wait", coordinator.NoTimeout, func(ctx context.Context) error {
-		return service.PollPipelineComplete(ctx, "888", nil)
+		return service.PollPipeline(ctx, "888")
 	})
 	var runner coordinator.StepRunner
 	_, updates, unsubscribe := runner.Subscribe(32)
@@ -331,14 +330,14 @@ func TestTimelinePollingIsThrottled(t *testing.T) {
 	reader.builds = append(reader.builds, &azdopipeline.Build{
 		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded",
 	})
-	config := completeConfig(Config{Mode: releasesteps.GoImagesReleaseModeNormal})
+	config := completeConfig(Config{Mode: goimagesworkflow.ModeNormal})
 	config.PollInterval = time.Millisecond
 	config.TimelinePollInterval = 3 * time.Millisecond
 	service, err := New(reader, &fakeQueueClient{}, config, func(context.Context, time.Duration) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollPipelineComplete(context.Background(), "888", nil); err != nil {
+	if err := service.PollPipeline(context.Background(), "888"); err != nil {
 		t.Fatal(err)
 	}
 	if reader.gets != 8 || reader.timelineGets != 3 {
@@ -346,12 +345,12 @@ func TestTimelinePollingIsThrottled(t *testing.T) {
 	}
 }
 
-func TestPollPipelineCompleteReportsFailure(t *testing.T) {
+func TestPollPipelineReportsFailure(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
 		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
 	}}}
-	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: releasesteps.GoImagesReleaseModeNormal})
-	err := service.PollPipelineComplete(context.Background(), strconv.Itoa(888), nil)
+	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
 	if err == nil || !strings.Contains(err.Error(), "failed") || !strings.Contains(err.Error(), "https://example/build/888") {
 		t.Fatalf("error = %v", err)
 	}
@@ -359,7 +358,7 @@ func TestPollPipelineCompleteReportsFailure(t *testing.T) {
 
 func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
 	_, err := New(&fakeReader{}, &fakeQueueClient{}, completeConfig(Config{
-		Mode: releasesteps.GoImagesReleaseModeRollback, SourceBuildID: "bad",
+		Mode: goimagesworkflow.ModeRollback, SourceBuildID: "bad",
 	}), nil)
 	if err == nil {
 		t.Fatal("invalid rollback build was accepted")
@@ -369,14 +368,14 @@ func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
 func TestPollHonorsCancellation(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, Status: "inProgress"}}}
 	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
-		Mode: releasesteps.GoImagesReleaseModeNormal,
+		Mode: goimagesworkflow.ModeNormal,
 	}), func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := service.PollPipelineComplete(ctx, "888", nil); !errors.Is(err, context.Canceled) {
+	if err := service.PollPipeline(ctx, "888"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
 }

@@ -23,8 +23,8 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goinfragithub"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 	"github.com/microsoft/go-infra/subcmd"
@@ -231,7 +231,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 				}
 				return "Verified pipeline 1023. Normal and rollback publish to public/; test publishes to dev/.", nil
 			},
-			NewService: func(request releaseui.GoImagesExecutionRequest) (releasesteps.GoImagesReleaseService, error) {
+			NewService: func(request releaseui.GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return goimagesexecution.New(azureClient, queueClient, goimagesexecution.Config{
 					Mode:                 request.Mode,
 					SessionID:            request.SessionID,
@@ -320,24 +320,24 @@ func processRunStorePath(sessionPath string) (string, error) {
 	return sessionPath + ".process-run.json", nil
 }
 
-func goImagesModeFromBuild(build *azdopipeline.Build) releasesteps.GoImagesReleaseMode {
+func goImagesModeFromBuild(build *azdopipeline.Build) goimagesworkflow.Mode {
 	if build == nil {
-		return releasesteps.GoImagesReleaseModeNormal
+		return goimagesworkflow.ModeNormal
 	}
-	switch mode := releasesteps.GoImagesReleaseMode(build.Parameters["ReleaseUIGoImagesMode"]); mode {
-	case releasesteps.GoImagesReleaseModeNormal,
-		releasesteps.GoImagesReleaseModeRollback,
-		releasesteps.GoImagesReleaseModeTest:
+	switch mode := goimagesworkflow.Mode(build.Parameters["ReleaseUIGoImagesMode"]); mode {
+	case goimagesworkflow.ModeNormal,
+		goimagesworkflow.ModeRollback,
+		goimagesworkflow.ModeTest:
 
 		return mode
 	}
 	prefix, _ := build.TemplateParameters["publishRepoPrefix"].(string)
 	if prefix == "dev/" {
-		return releasesteps.GoImagesReleaseModeTest
+		return goimagesworkflow.ModeTest
 	}
 	sourceBuild, _ := build.TemplateParameters["sourceBuildPipelineRunId"].(string)
 	if sourceBuild != "" && sourceBuild != "$(Build.BuildId)" {
-		return releasesteps.GoImagesReleaseModeRollback
+		return goimagesworkflow.ModeRollback
 	}
-	return releasesteps.GoImagesReleaseModeNormal
+	return goimagesworkflow.ModeNormal
 }

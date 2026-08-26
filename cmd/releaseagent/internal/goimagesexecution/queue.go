@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 const maxResponseSize = 4 << 20
@@ -61,7 +61,7 @@ func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest
 	if request.SessionID == "" || !digestPattern.MatchString(request.ExecutionDigest) {
 		return 0, errors.New("go-images release session ID and 64-character execution digest are required")
 	}
-	parameters, err := releasesteps.GoImagesPipelineParametersForMode(request.Mode, request.SourceBuildID)
+	parameters, err := goimagesworkflow.PipelineParameters(request.Mode, request.SourceBuildID)
 	if err != nil {
 		return 0, err
 	}

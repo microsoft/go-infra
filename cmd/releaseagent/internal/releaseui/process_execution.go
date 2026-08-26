@@ -424,7 +424,7 @@ func (s *Server) restoreProcessRun() error {
 		}
 	}
 	s.processRun = run
-	if s.document != nil {
+	if s.goImages.document != nil {
 		if run.Result == "uncertain" || run.Started && !run.Complete {
 			return errors.New("both a go-images session and an active or uncertain process run exist; inspect the process run journal before restarting")
 		}

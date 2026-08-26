@@ -174,13 +174,12 @@ If the process restarts in the queue-response crash window, it reconciles recent
 When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
-The session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
+The go-images session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
 It contains no credentials.
-Schema version 6 intentionally rejects the earlier import-first production-demo sessions.
-Workflow revision 7 uses unique step names as graph identity and rejects revision-6 plans.
-It automatically migrates the exact revision-5 go-images plan only when it already contains a checkpointed build ID; the restored path can then monitor that run without queue authority.
-A revision-5 queue attempt with no build ID remains rejected because its queue status is uncertain.
-Start a new session file for any other earlier workflow.
+Schema version 7 stores only standalone go-images input and state. It intentionally rejects the
+older full-release-shaped prototype documents rather than retaining a second domain model and
+migration path. Workflow revision 7 uses unique step names as graph identity. Start with a new
+session file when either version is unsupported.
 
 The current session and process-run stores together own one active durable release at a time.
 Dashboard responses include both go-images sessions and durable process runs as process-neutral
