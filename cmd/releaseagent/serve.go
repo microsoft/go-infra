@@ -23,10 +23,10 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goinfragithub"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -56,7 +56,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}
 
 	var options []releaseui.Option
-	store, err := session.NewFileStore(*sessionFile)
+	store, err := goimagessession.NewFileStore(*sessionFile)
 	if err != nil {
 		return err
 	}

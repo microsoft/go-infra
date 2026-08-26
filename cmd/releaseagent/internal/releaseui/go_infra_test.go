@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 )
 
 const testGoInfraHeadSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -407,7 +407,7 @@ func TestGoInfraPlanRejectsUnsafeInputs(t *testing.T) {
 }
 
 func TestGoInfraPlanDoesNotUseGoImagesSessionStore(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +419,7 @@ func TestGoInfraPlanDoesNotUseGoImagesSessionStore(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("plan status = %d", response.StatusCode)
 	}
-	if _, err := store.Load(context.Background()); !errors.Is(err, session.ErrNotFound) {
+	if _, err := store.Load(context.Background()); !errors.Is(err, goimagessession.ErrNotFound) {
 		t.Fatalf("go-images session store was modified: %v", err)
 	}
 }

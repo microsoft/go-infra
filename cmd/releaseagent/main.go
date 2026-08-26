@@ -9,7 +9,7 @@ import (
 	"log"
 	"slices"
 
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releasesteps"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/fullrelease"
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -27,8 +27,8 @@ func main() {
 	}
 }
 
-func BindInputFlags() *releasesteps.Input {
-	var i releasesteps.Input
+func BindInputFlags() *fullrelease.Input {
+	var i fullrelease.Input
 
 	flag.Func(
 		"version",
@@ -59,8 +59,8 @@ func BindInputFlags() *releasesteps.Input {
 	return &i
 }
 
-func BindSecretFlags() *releasesteps.Secret {
-	var s releasesteps.Secret
+func BindSecretFlags() *fullrelease.Secret {
+	var s fullrelease.Secret
 	flag.StringVar(&s.GitHubPAT, "github-pat", "", "GitHub PAT with write access to microsoft/go")
 	flag.StringVar(&s.GitHubReviewerPAT, "github-reviewer-pat", "", "GitHub PAT for microsoft/go approver account")
 	flag.StringVar(&s.AzDOPAT, "azdo-pat", "", "Azure DevOps Personal Access Token (typically System.AccessToken)")

@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
 )
 
 const (
@@ -271,7 +271,7 @@ func assertPreparedProcess(t *testing.T, ui *testUI, processID string, wantStatu
 }
 
 func TestTrackOngoingReleases(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestPreflightIsLocalAndExecutionDisabled(t *testing.T) {
 }
 
 func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 		{name: "test", body: `{"mode":"test"}`, wantMode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+			store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -387,7 +387,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 }
 
 func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
 }
 
 func TestPersistAndRestoreModePlan(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 }
 
 func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func (s *fakeExecutionService) PollPipeline(_ context.Context, buildID string) e
 }
 
 func TestRealReleaseRequiresExactIntent(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -603,7 +603,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 }
 
 func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 }
 
 func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,7 +663,7 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 }
 
 func TestCreatePlanAndRunSimulation(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +704,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 }
 
 func TestEventsSendInitialSnapshot(t *testing.T) {
-	store, err := session.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
+	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/session"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 )
 
 func TestGoInfraDispatchSuccessWithoutExternalRunFailsPolicyValidation(t *testing.T) {
@@ -132,7 +132,7 @@ func TestUncertainGoInfraRunDoesNotHideBehindGoImagesSession(t *testing.T) {
 	if err := runStore.Save(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
-	sessionStore, err := session.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
+	sessionStore, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
