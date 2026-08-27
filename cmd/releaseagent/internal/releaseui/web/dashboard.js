@@ -4,37 +4,17 @@ const ongoingReleases = document.querySelector("#ongoing-releases");
 const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
 const processGrid = document.querySelector("#process-grid");
-const preflightList = document.querySelector("#preflight-list");
 const availableCount = document.querySelector("#available-count");
-const toast = document.querySelector("#toast");
-let toastTimer = null;
-let dashboardState = null;
 
 loadDashboard();
-loadPreflight();
 
 async function loadDashboard() {
-  dashboardState = await requestJSON("/api/dashboard");
+  const dashboardState = await requestJSON("/api/dashboard");
   availableCount.textContent = String(dashboardState.processes.filter((process) => process.available).length);
   renderReleases(ongoingReleases, dashboardState.ongoing, "No release is currently being tracked in this local session.");
   processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
   recentSection.hidden = dashboardState.recent.length === 0;
   renderReleases(recentReleases, dashboardState.recent, "");
-}
-
-async function loadPreflight() {
-  try {
-    const preflight = await requestJSON("/api/processes/go-images/preflight");
-    preflightList.replaceChildren(...preflight.checks.map((check) => {
-      const item = document.createElement("li");
-      item.dataset.status = check.status;
-      item.title = check.details;
-      item.textContent = check.name;
-      return item;
-    }));
-  } catch (error) {
-    showError(`Unable to check local readiness: ${error.message}`);
-  }
 }
 
 function renderReleases(container, releases, emptyText) {
@@ -121,16 +101,9 @@ function statusText(status) {
   return status === "running" ? "in progress" : status;
 }
 
-async function requestJSON(path, options = {}) {
-  const response = await fetch(path, options);
+async function requestJSON(path) {
+  const response = await fetch(path);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
   return data;
-}
-
-function showError(message) {
-  toast.textContent = message;
-  toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toast.hidden = true; }, 8000);
 }

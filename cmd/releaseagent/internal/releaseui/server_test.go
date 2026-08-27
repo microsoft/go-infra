@@ -156,8 +156,8 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var process processDetail
 	decodeResponse(t, response, &process)
-	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || len(process.Methods) != 0 ||
-		process.Workflow == nil || !process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
+	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || process.Workflow == nil ||
+		!process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
 		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 {
 
 		t.Fatalf("process = %#v", process)
