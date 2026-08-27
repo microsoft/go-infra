@@ -97,15 +97,6 @@ type GoImagesRollbackSource struct {
 	Versions      []string `json:"versions"`
 }
 
-// GoImagesOngoingRun is a read-only view of one currently waiting or running pipeline 1023 build.
-type GoImagesOngoingRun struct {
-	BuildID int
-	Mode    goimagesworkflow.Mode
-	Status  string
-	URL     string
-	Queued  time.Time
-}
-
 // GoImagesReadOnlyIntegration is the explicitly enabled Azure read boundary. It resolves current
 // main and validates rollback builds but cannot queue, cancel, approve, or otherwise mutate a run.
 type GoImagesReadOnlyIntegration struct {
@@ -113,7 +104,6 @@ type GoImagesReadOnlyIntegration struct {
 	Preflight            func(context.Context) (string, error)
 	ResolveCurrentSource func(context.Context) (GoImagesSource, error)
 	ValidateRollback     func(context.Context, int) (GoImagesRollbackSource, error)
-	ListOngoing          func(context.Context) ([]GoImagesOngoingRun, error)
 }
 
 // GoImagesExecutionIntegration is the only real execution boundary. Its implementation must
@@ -213,7 +203,7 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 			return nil, fmt.Errorf("go-images definition %d is not allowlisted", server.readOnly.DefinitionID)
 		}
 		if server.readOnly.Preflight == nil || server.readOnly.ResolveCurrentSource == nil ||
-			server.readOnly.ValidateRollback == nil || server.readOnly.ListOngoing == nil {
+			server.readOnly.ValidateRollback == nil {
 
 			return nil, errors.New("go-images read-only integration is incomplete")
 		}
@@ -325,7 +315,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
-	mux.HandleFunc("GET /api/releases/ongoing", s.handleOngoingReleases)
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
 
@@ -592,44 +581,6 @@ func (s *Server) handleDashboard(response http.ResponseWriter, _ *http.Request) 
 	}
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
-}
-
-func (s *Server) handleOngoingReleases(response http.ResponseWriter, request *http.Request) {
-	s.mu.Lock()
-	if s.readOnly == nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusForbidden, "live release tracking is not enabled")
-		return
-	}
-	preflight := s.readOnly.Preflight
-	listOngoing := s.readOnly.ListOngoing
-	s.mu.Unlock()
-	if _, err := preflight(request.Context()); err != nil {
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("Azure preflight failed: %v", err))
-		return
-	}
-	runs, err := listOngoing(request.Context())
-	if err != nil {
-		writeError(response, http.StatusBadGateway, fmt.Sprintf("list ongoing go-images releases: %v", err))
-		return
-	}
-	releases := make([]releaseSummary, 0, len(runs))
-	for _, run := range runs {
-		if run.BuildID <= 0 || run.Status == "" {
-			writeError(response, http.StatusBadGateway, "ongoing release discovery returned invalid run metadata")
-			return
-		}
-		mode := run.Mode
-		if mode == "" {
-			mode = goimagesworkflow.ModeNormal
-		}
-		releases = append(releases, releaseSummary{
-			ID: "azdo-" + strconv.Itoa(run.BuildID), ProcessID: goImagesProcessID, Name: "Go images",
-			Mode: string(mode), Status: run.Status, RunID: strconv.Itoa(run.BuildID), RunLabel: "Azure build",
-			UpdatedAt: run.Queued, Href: run.URL,
-		})
-	}
-	writeJSON(response, http.StatusOK, map[string]any{"releases": releases})
 }
 
 func (s *Server) releaseSummaryLocked() releaseSummary {
@@ -1055,7 +1006,7 @@ func (s *Server) resumeRestoredMonitoring() error {
 	if err != nil {
 		return fmt.Errorf("restore go-images monitoring service: %w", err)
 	}
-	monitor := importedRunMonitor{
+	monitor := restoredRunMonitor{
 		buildID: buildID,
 		monitor: func(ctx context.Context, id int) error {
 			return service.PollPipeline(ctx, strconv.Itoa(id))

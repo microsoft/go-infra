@@ -4,36 +4,14 @@ const ongoingReleases = document.querySelector("#ongoing-releases");
 const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
 const processGrid = document.querySelector("#process-grid");
-const trackButton = document.querySelector("#track-releases");
 const preflightList = document.querySelector("#preflight-list");
 const availableCount = document.querySelector("#available-count");
 const toast = document.querySelector("#toast");
-const trackingPreflightPath = "/api/processes/go-images/preflight";
 let toastTimer = null;
 let dashboardState = null;
-let preflight = null;
-let trackingTimer = null;
 
 loadDashboard();
 loadPreflight();
-
-trackButton.addEventListener("click", async () => {
-  setBusy(trackButton, true, "Refreshing…");
-  try {
-    await refreshTrackedReleases();
-    if (!trackingTimer) {
-      trackingTimer = setInterval(() => {
-        refreshTrackedReleases().catch((error) => showError(error.message));
-      }, 15000);
-    }
-    trackButton.textContent = "Refresh tracked releases";
-  } catch (error) {
-    showError(error.message);
-  } finally {
-    trackButton.disabled = false;
-    if (!trackingTimer) trackButton.textContent = "Track ongoing releases";
-  }
-});
 
 async function loadDashboard() {
   dashboardState = await requestJSON("/api/dashboard");
@@ -46,7 +24,7 @@ async function loadDashboard() {
 
 async function loadPreflight() {
   try {
-    preflight = await requestJSON(trackingPreflightPath);
+    const preflight = await requestJSON("/api/processes/go-images/preflight");
     preflightList.replaceChildren(...preflight.checks.map((check) => {
       const item = document.createElement("li");
       item.dataset.status = check.status;
@@ -54,29 +32,9 @@ async function loadPreflight() {
       item.textContent = check.name;
       return item;
     }));
-    trackButton.title = preflight.azureReadOnlyEnabled
-      ? "Discover pipeline 1023 releases that are queued or in progress and refresh them every 15 seconds"
-      : "Live Azure tracking requires read-only access";
   } catch (error) {
     showError(`Unable to check local readiness: ${error.message}`);
   }
-}
-
-async function refreshTrackedReleases() {
-  await loadDashboard();
-  if (!preflight) preflight = await requestJSON(trackingPreflightPath);
-  if (!preflight.azureReadOnlyEnabled) {
-    throw new Error("Live release tracking is unavailable.");
-  }
-  const live = await requestJSON("/api/releases/ongoing");
-  const merged = new Map();
-  for (const release of live.releases) merged.set(releaseKey(release), release);
-  for (const release of dashboardState.ongoing) merged.set(releaseKey(release), release);
-  renderReleases(ongoingReleases, Array.from(merged.values()), "No ongoing pipeline 1023 releases were found.");
-}
-
-function releaseKey(release) {
-  return `${release.processId}:${release.runId || release.id}`;
 }
 
 function renderReleases(container, releases, emptyText) {
@@ -168,11 +126,6 @@ async function requestJSON(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
   return data;
-}
-
-function setBusy(button, busy, label) {
-  button.disabled = busy;
-  button.textContent = label;
 }
 
 function showError(message) {

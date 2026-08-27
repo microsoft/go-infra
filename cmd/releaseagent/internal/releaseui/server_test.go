@@ -90,7 +90,6 @@ func testReadOnly(source *GoImagesSource, rollbackCalls *int) GoImagesReadOnlyIn
 				SourceVersion: testSourceCommit, Versions: []string{"1.25.12-1", "1.26.5-2"},
 			}, nil
 		},
-		ListOngoing: func(context.Context) ([]GoImagesOngoingRun, error) { return nil, nil },
 	}
 }
 
@@ -267,37 +266,6 @@ func assertPreparedProcess(t *testing.T, ui *testUI, processID string, wantStatu
 	}
 	if plan["process"] != processID {
 		t.Fatalf("process %s plan = %#v", processID, plan)
-	}
-}
-
-func TestTrackOngoingReleases(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	readOnly := testReadOnly(&source, nil)
-	queued := time.Date(2026, 8, 6, 12, 30, 0, 0, time.UTC)
-	readOnly.ListOngoing = func(context.Context) ([]GoImagesOngoingRun, error) {
-		return []GoImagesOngoingRun{{
-			BuildID: 3035000, Mode: goimagesworkflow.ModeTest,
-			Status: "running", URL: "https://example/build/3035000", Queued: queued,
-		}}, nil
-	}
-	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(readOnly))
-	response, err := ui.client.Get(ui.http.URL + "/api/releases/ongoing")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result struct {
-		Releases []releaseSummary `json:"releases"`
-	}
-	decodeResponse(t, response, &result)
-	if response.StatusCode != http.StatusOK || len(result.Releases) != 1 ||
-		result.Releases[0].RunID != "3035000" || result.Releases[0].Mode != string(goimagesworkflow.ModeTest) ||
-		result.Releases[0].Href != "https://example/build/3035000" {
-
-		t.Fatalf("ongoing releases = %#v", result.Releases)
 	}
 }
 
