@@ -50,7 +50,6 @@ type ProcessWorkflow struct {
 	Description   string         `json:"description,omitempty"`
 	SubmitLabel   string         `json:"submitLabel,omitempty"`
 	Inputs        []ProcessInput `json:"inputs,omitempty"`
-	Steps         []ProcessStep  `json:"steps,omitempty"`
 	DurableAction bool           `json:"-"`
 	Preflight     ProcessHandler `json:"-"`
 	GetPlan       ProcessHandler `json:"-"`
@@ -89,12 +88,6 @@ type ProcessInputOption struct {
 type ProcessCondition struct {
 	InputID string `json:"inputId"`
 	Equals  string `json:"equals"`
-}
-
-// ProcessStep describes the initial dependency graph shown before a process-specific plan is prepared.
-type ProcessStep struct {
-	Name      string   `json:"name"`
-	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
 type processRegistry struct {
@@ -184,12 +177,6 @@ func defaultProcessRegistry() (*processRegistry, error) {
 						VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"},
 					},
 				},
-				Steps: []ProcessStep{
-					{Name: "Verify go-images commit is mirrored internally"},
-					{Name: "🚀 Queue go-images release", DependsOn: []string{"Verify go-images commit is mirrored internally"}},
-					{Name: "⌚ Wait for go-images release", DependsOn: []string{"🚀 Queue go-images release"}},
-					{Name: "✅ Go-images release complete", DependsOn: []string{"⌚ Wait for go-images release"}},
-				},
 				Preflight: (*Server).handlePreflight,
 				GetPlan:   (*Server).handleGetPlan,
 				Prepare:   (*Server).handlePlan,
@@ -237,7 +224,6 @@ func defaultProcessRegistry() (*processRegistry, error) {
 						},
 					},
 				},
-				Steps:         []ProcessStep{{Name: "Apply selected GitHub action"}},
 				DurableAction: true,
 			},
 		},
@@ -322,58 +308,6 @@ func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error 
 		}
 		if !matched {
 			return fmt.Errorf("release process %q input %q has an invalid condition value", processID, input.ID)
-		}
-	}
-	steps := make(map[string]ProcessStep, len(workflow.Steps))
-	for _, step := range workflow.Steps {
-		if strings.TrimSpace(step.Name) == "" {
-			return fmt.Errorf("release process %q has a step with an empty name", processID)
-		}
-		if _, exists := steps[step.Name]; exists {
-			return fmt.Errorf("release process %q repeats step %q", processID, step.Name)
-		}
-		steps[step.Name] = step
-	}
-	for _, step := range workflow.Steps {
-		for _, dependency := range step.DependsOn {
-			if dependency == step.Name {
-				return fmt.Errorf("release process %q step %q depends on itself", processID, step.Name)
-			}
-			if _, exists := steps[dependency]; !exists {
-				return fmt.Errorf("release process %q step %q has unknown dependency %q", processID, step.Name, dependency)
-			}
-		}
-	}
-	return validateProcessStepDependencies(processID, steps)
-}
-
-func validateProcessStepDependencies(processID string, steps map[string]ProcessStep) error {
-	const (
-		unvisited = iota
-		visiting
-		visited
-	)
-	states := make(map[string]int, len(steps))
-	var visit func(string) error
-	visit = func(id string) error {
-		switch states[id] {
-		case visiting:
-			return fmt.Errorf("release process %q has a workflow dependency cycle at step %q", processID, id)
-		case visited:
-			return nil
-		}
-		states[id] = visiting
-		for _, dependency := range steps[id].DependsOn {
-			if err := visit(dependency); err != nil {
-				return err
-			}
-		}
-		states[id] = visited
-		return nil
-	}
-	for id := range steps {
-		if err := visit(id); err != nil {
-			return err
 		}
 	}
 	return nil

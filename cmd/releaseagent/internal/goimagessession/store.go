@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
+
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/atomicfile"
 )
 
 const maxDocumentSize = 4 << 20
@@ -63,30 +63,11 @@ func (s *FileStore) Load(ctx context.Context) (*Document, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	file, err := os.Open(s.path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("open session file: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat session file: %w", err)
-	}
-	if info.Size() > maxDocumentSize {
-		return nil, fmt.Errorf("session file is %d bytes, maximum is %d", info.Size(), maxDocumentSize)
-	}
-
-	decoder := json.NewDecoder(io.LimitReader(file, maxDocumentSize))
-	decoder.DisallowUnknownFields()
 	var document Document
-	if err := decoder.Decode(&document); err != nil {
-		return nil, fmt.Errorf("decode session file: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("session file must contain exactly one JSON value")
+	if err := atomicfile.ReadJSON(s.path, maxDocumentSize, &document); errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("read session file: %w", err)
 	}
 	if err := document.Validate(); err != nil {
 		return nil, fmt.Errorf("validate session file: %w", err)
@@ -105,57 +86,8 @@ func (s *FileStore) Save(ctx context.Context, document *Document) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return fmt.Errorf("create session directory: %w", err)
-	}
-
-	temporary, err := os.CreateTemp(filepath.Dir(s.path), ".release-session-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary session file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	keepTemporary := false
-	defer func() {
-		if !keepTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("restrict temporary session permissions: %w", err)
-	}
-	encoder := json.NewEncoder(temporary)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(document); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("encode session file: %w", err)
-	}
-	info, err := temporary.Stat()
-	if err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("stat temporary session file: %w", err)
-	}
-	if info.Size() > maxDocumentSize {
-		_ = temporary.Close()
-		return fmt.Errorf("encoded session is %d bytes, maximum is %d", info.Size(), maxDocumentSize)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync temporary session file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary session file: %w", err)
-	}
-	if err := os.Rename(temporaryPath, s.path); err != nil {
-		return fmt.Errorf("replace session file: %w", err)
-	}
-	keepTemporary = true
-	if err := os.Chmod(s.path, 0o600); err != nil {
-		return fmt.Errorf("restrict session file permissions: %w", err)
-	}
-	if err := syncDirectory(filepath.Dir(s.path)); err != nil {
-		return err
+	if err := atomicfile.WriteJSON(s.path, ".release-session-*.tmp", maxDocumentSize, document); err != nil {
+		return fmt.Errorf("write session file: %w", err)
 	}
 	return nil
 }
@@ -211,21 +143,4 @@ func (l *Lease) Release() error {
 		l.err = errors.Join(closeErr, removeErr)
 	})
 	return l.err
-}
-
-func syncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		// Windows does not support syncing directory handles. The file itself was synced before
-		// replacement, which is the strongest portable guarantee available here.
-		return nil
-	}
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open session directory for sync: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync session directory: %w", err)
-	}
-	return nil
 }

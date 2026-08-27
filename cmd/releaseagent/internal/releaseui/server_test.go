@@ -147,7 +147,7 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	var goImages processDetail
 	decodeResponse(t, response, &goImages)
 	if response.StatusCode != http.StatusOK || goImages.Workflow == nil || !goImages.Workflow.CanPrepare ||
-		!goImages.Workflow.CanStart || len(goImages.Workflow.Inputs) != 2 || len(goImages.Workflow.Steps) != 4 {
+		!goImages.Workflow.CanStart || len(goImages.Workflow.Inputs) != 2 {
 
 		t.Fatalf("go-images process = %#v", goImages)
 	}
@@ -159,7 +159,7 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	decodeResponse(t, response, &process)
 	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || len(process.Methods) != 0 ||
 		process.Workflow == nil || !process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
-		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 || len(process.Workflow.Steps) != 1 {
+		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 {
 
 		t.Fatalf("process = %#v", process)
 	}

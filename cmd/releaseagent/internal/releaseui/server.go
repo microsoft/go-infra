@@ -536,7 +536,6 @@ type workflowDetail struct {
 	Description  string         `json:"description,omitempty"`
 	SubmitLabel  string         `json:"submitLabel,omitempty"`
 	Inputs       []ProcessInput `json:"inputs,omitempty"`
-	Steps        []ProcessStep  `json:"steps,omitempty"`
 	HasPreflight bool           `json:"hasPreflight"`
 	CanPrepare   bool           `json:"canPrepare"`
 	CanSimulate  bool           `json:"canSimulate"`
@@ -559,7 +558,6 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
 			SubmitLabel:  definition.Workflow.SubmitLabel,
 			Inputs:       append([]ProcessInput(nil), definition.Workflow.Inputs...),
-			Steps:        append([]ProcessStep(nil), definition.Workflow.Steps...),
 			HasPreflight: definition.Workflow.Preflight != nil || definition.Workflow.DurableAction,
 			CanPrepare:   definition.Workflow.Prepare != nil || definition.Workflow.DurableAction,
 			CanSimulate:  definition.Workflow.Simulate != nil,

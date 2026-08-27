@@ -69,7 +69,7 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-func TestProcessRegistryValidatesWorkflowDependencies(t *testing.T) {
+func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
 	prepare := func(*Server, http.ResponseWriter, *http.Request) {}
 	definition := ProcessDefinition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available", Available: true,
@@ -79,24 +79,11 @@ func TestProcessRegistryValidatesWorkflowDependencies(t *testing.T) {
 				ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
 				Options: []ProcessInputOption{{Value: "normal", Name: "Normal", Description: "Run normally"}},
 			}},
-			Steps: []ProcessStep{{Name: "Prepare"}, {Name: "Run", DependsOn: []string{"Prepare"}}},
 		},
 	}
 	if _, err := newProcessRegistry(definition); err != nil {
 		t.Fatal(err)
 	}
-	definition.Workflow.Steps[1].DependsOn = []string{"Missing"}
-	if _, err := newProcessRegistry(definition); err == nil {
-		t.Fatal("unknown workflow dependency was accepted")
-	}
-	definition.Workflow.Steps = []ProcessStep{
-		{Name: "Prepare", DependsOn: []string{"Run"}},
-		{Name: "Run", DependsOn: []string{"Prepare"}},
-	}
-	if _, err := newProcessRegistry(definition); err == nil {
-		t.Fatal("workflow dependency cycle was accepted")
-	}
-	definition.Workflow.Steps = nil
 	definition.Workflow.Inputs = []ProcessInput{{ID: "count", Type: "number", Label: "Count", Default: "many"}}
 	if _, err := newProcessRegistry(definition); err == nil {
 		t.Fatal("invalid numeric default was accepted")
@@ -115,7 +102,6 @@ func TestProcessRegistryValidatesDurableAction(t *testing.T) {
 		Workflow: &ProcessWorkflow{
 			Heading: "Configure", SubmitLabel: "Review", DurableAction: true,
 			Inputs: []ProcessInput{{ID: "mode", Type: "text", Label: "Mode", Required: true}},
-			Steps:  []ProcessStep{{Name: "Run"}},
 		},
 	}
 	if _, err := newProcessRegistry(definition); err != nil {
