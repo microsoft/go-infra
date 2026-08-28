@@ -14,10 +14,6 @@ func TestProcessRegistry(t *testing.T) {
 			ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available",
 			Available:        true,
 			DocumentationURL: "https://example.com/docs",
-			Methods: []ProcessMethod{{
-				ID: "manual", Name: "Manual", Description: "Run it manually", Steps: []string{"Open it"},
-				ActionLabel: "Open", ActionHref: "https://example.com/run",
-			}},
 		},
 		ProcessDefinition{
 			ID: "two", Name: "Two", Mark: "T", Description: "Second process", Status: "Future",
@@ -32,7 +28,7 @@ func TestProcessRegistry(t *testing.T) {
 	if _, ok := registry.page("/two"); ok {
 		t.Fatal("unavailable process has a page")
 	}
-	if process, ok := registry.process("one"); !ok || len(process.Methods) != 1 {
+	if process, ok := registry.process("one"); !ok || process.Name != "One" {
 		t.Fatalf("process = %#v, ok = %v", process, ok)
 	}
 	summaries := registry.summaries()
@@ -54,11 +50,6 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 		{name: "duplicate ID", definitions: []ProcessDefinition{valid, valid}},
 		{name: "invalid ID", definitions: []ProcessDefinition{{
 			ID: "One", Name: "One", Mark: "O", Description: "First", Status: "Future",
-		}}},
-		{name: "invalid method", definitions: []ProcessDefinition{{
-			ID: "one", Name: "One", Mark: "O", Description: "First", Status: "Available",
-			Available: true,
-			Methods:   []ProcessMethod{{ID: "manual", Name: "Manual"}},
 		}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -516,7 +516,6 @@ type processDetail struct {
 	Mark             string          `json:"mark"`
 	Description      string          `json:"description"`
 	DocumentationURL string          `json:"documentationUrl"`
-	Methods          []ProcessMethod `json:"methods"`
 	Workflow         *workflowDetail `json:"workflow,omitempty"`
 }
 
@@ -540,7 +539,6 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 	detail := processDetail{
 		ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
 		Description: definition.Description, DocumentationURL: definition.DocumentationURL,
-		Methods: append([]ProcessMethod(nil), definition.Methods...),
 	}
 	if definition.Workflow != nil {
 		detail.Workflow = &workflowDetail{

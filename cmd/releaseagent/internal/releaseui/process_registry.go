@@ -28,19 +28,7 @@ type ProcessDefinition struct {
 	Status           string
 	DocumentationURL string
 	Available        bool
-	Methods          []ProcessMethod
 	Workflow         *ProcessWorkflow
-}
-
-// ProcessMethod is one documented way to complete a release process.
-type ProcessMethod struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Badge       string   `json:"badge,omitempty"`
-	Description string   `json:"description"`
-	Steps       []string `json:"steps"`
-	ActionLabel string   `json:"actionLabel"`
-	ActionHref  string   `json:"actionHref"`
 }
 
 // ProcessWorkflow describes an in-UI workflow. DurableAction uses the shared confirmed execution
@@ -125,24 +113,6 @@ func newProcessRegistry(definitions ...ProcessDefinition) (*processRegistry, err
 		}
 		if definition.DocumentationURL != "" && !strings.HasPrefix(definition.DocumentationURL, "https://") {
 			return nil, fmt.Errorf("release process %q has an invalid documentation URL", definition.ID)
-		}
-		methodIDs := make(map[string]struct{}, len(definition.Methods))
-		for _, method := range definition.Methods {
-			if !processIDPattern.MatchString(method.ID) || strings.TrimSpace(method.Name) == "" ||
-				strings.TrimSpace(method.Description) == "" || len(method.Steps) == 0 ||
-				strings.TrimSpace(method.ActionLabel) == "" || !strings.HasPrefix(method.ActionHref, "https://") {
-
-				return nil, fmt.Errorf("release process %q has an invalid method %q", definition.ID, method.ID)
-			}
-			if _, exists := methodIDs[method.ID]; exists {
-				return nil, fmt.Errorf("release process %q repeats method %q", definition.ID, method.ID)
-			}
-			methodIDs[method.ID] = struct{}{}
-			for _, step := range method.Steps {
-				if strings.TrimSpace(step) == "" {
-					return nil, fmt.Errorf("release process %q method %q has an empty step", definition.ID, method.ID)
-				}
-			}
 		}
 		if err := validateProcessWorkflow(definition.ID, definition.Workflow); err != nil {
 			return nil, err

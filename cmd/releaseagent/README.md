@@ -10,7 +10,7 @@ Subcommands:
 
 The landing page is a release dashboard. It lists work tracked by the current durable session and a validated registry of release processes. Go images provides local planning, execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two GitHub-owned patch release paths documented by the team. The complete Microsoft Build of Go release process remains a future addition rather than being mixed into either focused workflow.
 
-Each registry entry owns its dashboard metadata, documented release methods, inputs, and optional server callbacks. The server derives `/{ID}` and every process API route from that entry. A single `process.html` template and its generic JavaScript render every process. Runtime dependency graphs come only from `coordinator` steps after a plan is prepared.
+Each registry entry owns its dashboard metadata, inputs, and optional server callbacks. The server derives `/{ID}` and every process API route from that entry. A single `process.html` template and its generic JavaScript render every process. Runtime dependency graphs come only from `coordinator` steps after a plan is prepared.
 
 ## Adding a release process
 
@@ -26,10 +26,9 @@ Add one `ProcessDefinition` to `defaultProcessRegistry` in
 | `Status` | User-facing badge text, such as `Available`, `Planned`, or `Future`. This is display-only; `Available` controls whether the process can be opened. |
 | `Available` | Whether the dashboard card links to the process page. |
 | `DocumentationURL` | Canonical HTTPS release instructions linked from the process page. |
-| `Methods` | Documented external release paths. Use these when GitHub or another authenticated UI owns execution. |
 | `Workflow` | Optional in-UI inputs, dependency steps, and execution behavior. |
 
-For an external process, fill `Methods` and stop. For a reviewed, durable external action, describe the form with `ProcessInput`, then set `DurableAction`:
+For a reviewed, durable external action, describe the form with `ProcessInput`, then set `DurableAction`:
 
 ```go
 ProcessDefinition{
