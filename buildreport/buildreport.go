@@ -302,7 +302,7 @@ func (s *State) notificationPreamble() string {
 
 		case releaseImagesPipelineName:
 			return "Completed building all images!\n\n" +
-				"Next, [announce the release](https://github.com/microsoft/go-infra/blob/main/docs/release-process/instructions.md#making-the-internal-announcement).\n"
+				"Next, [announce the release](https://github.com/microsoft/go-lab/blob/main/docs/release/toolset/release-toolset.md#making-the-announcement).\n"
 
 		case releaseUpdateAzureLinuxPipelineName:
 			return "Completed submitting Azure Linux update PR! Make sure to:\n\n" +
