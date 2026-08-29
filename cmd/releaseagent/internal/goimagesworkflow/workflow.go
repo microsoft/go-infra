@@ -147,11 +147,6 @@ func PipelineParameters(mode Mode, sourceBuildID string) (map[string]string, err
 	return parameters, nil
 }
 
-// NewGraph creates the standalone go-images workflow and initializes or resumes its state.
-func NewGraph(input *Input, state *State, service Service) ([]*coordinator.Step, *State, error) {
-	return NewGraphWithCheckpoint(input, state, service, nil)
-}
-
 // NewGraphWithCheckpoint creates the workflow and checkpoints mutation intent and results.
 func NewGraphWithCheckpoint(
 	input *Input,

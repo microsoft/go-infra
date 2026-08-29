@@ -120,7 +120,7 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 func TestGraphBlocksQueueUntilMirrorAvailable(t *testing.T) {
 	mirrorErr := errors.New("not mirrored")
 	service := &fakeService{mirrorErr: mirrorErr}
-	steps, _, err := NewGraph(testInput, nil, service)
+	steps, _, err := NewGraphWithCheckpoint(testInput, nil, service, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 	state.BuildID = "888"
 	service := &fakeService{}
-	steps, state, err := NewGraph(testInput, state, service)
+	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

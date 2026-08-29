@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -169,17 +168,13 @@ func handleServe(parse subcmd.ParseFunc) error {
 		},
 		ResolveCurrentSource: resolveCurrentSource,
 		ValidateRollback: func(ctx context.Context, buildID int) (releaseui.GoImagesRollbackSource, error) {
-			candidate, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, 1023, buildID)
+			source, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, 1023, buildID)
 			if err != nil {
 				return releaseui.GoImagesRollbackSource{}, err
 			}
-			var versions []string
-			if err := json.Unmarshal([]byte(candidate.VersionSet), &versions); err != nil {
-				return releaseui.GoImagesRollbackSource{}, fmt.Errorf("decode rollback version set: %w", err)
-			}
 			return releaseui.GoImagesRollbackSource{
-				BuildID: candidate.BuildID, URL: candidate.URL, SourceBranch: candidate.SourceBranch,
-				SourceVersion: candidate.SourceVersion, Versions: versions,
+				BuildID: source.BuildID, URL: source.URL, SourceBranch: source.SourceBranch,
+				SourceVersion: source.SourceVersion, Versions: source.Versions,
 			}, nil
 		},
 	}))
