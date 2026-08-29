@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"strconv"
 	"strings"
 )
@@ -73,11 +72,10 @@ func normalizeProcessInputs(inputs []ProcessInput, data json.RawMessage) (json.R
 				return nil, fmt.Errorf("process input %q has unsupported value %q", input.ID, value)
 			}
 		case "number":
-			number, err := strconv.ParseFloat(value, 64)
-			if err != nil || math.IsInf(number, 0) || math.IsNaN(number) {
-				return nil, fmt.Errorf("process input %q must be a finite number", input.ID)
+			number, err := strconv.ParseUint(value, 10, 64)
+			if err != nil || number == 0 {
+				return nil, fmt.Errorf("process input %q must be a positive integer", input.ID)
 			}
-		case "text":
 		default:
 			return nil, fmt.Errorf("process input %q has unsupported type %q", input.ID, input.Type)
 		}

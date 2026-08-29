@@ -11,12 +11,13 @@ import (
 func TestProcessRegistry(t *testing.T) {
 	registry, err := newProcessRegistry(
 		ProcessDefinition{
-			ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available",
-			Available:        true,
+			ID: "one", Name: "One", Mark: "O", Description: "First process",
 			DocumentationURL: "https://example.com/docs",
+			Workflow:         &ProcessWorkflow{Heading: "Configure one"},
 		},
 		ProcessDefinition{
-			ID: "two", Name: "Two", Mark: "T", Description: "Second process", Status: "Future",
+			ID: "two", Name: "Two", Mark: "T", Description: "Second process",
+			Workflow: &ProcessWorkflow{Heading: "Configure two"},
 		},
 	)
 	if err != nil {
@@ -25,22 +26,22 @@ func TestProcessRegistry(t *testing.T) {
 	if page, ok := registry.page("/one"); !ok || page != "process.html" {
 		t.Fatalf("page = %q, ok = %v", page, ok)
 	}
-	if _, ok := registry.page("/two"); ok {
-		t.Fatal("unavailable process has a page")
+	if page, ok := registry.page("/two"); !ok || page != "process.html" {
+		t.Fatalf("page = %q, ok = %v", page, ok)
 	}
 	if process, ok := registry.process("one"); !ok || process.Name != "One" {
 		t.Fatalf("process = %#v, ok = %v", process, ok)
 	}
 	summaries := registry.summaries()
-	if len(summaries) != 2 || summaries[0].Mark != "O" || summaries[1].Available {
+	if len(summaries) != 2 || summaries[0].Mark != "O" || summaries[1].Href != "/two" {
 		t.Fatalf("summaries = %#v", summaries)
 	}
 }
 
 func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 	valid := ProcessDefinition{
-		ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available",
-		Available: true,
+		ID: "one", Name: "One", Mark: "O", Description: "First process",
+		Workflow: &ProcessWorkflow{Heading: "Configure"},
 	}
 	for _, test := range []struct {
 		name        string
@@ -49,7 +50,10 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 		{name: "empty"},
 		{name: "duplicate ID", definitions: []ProcessDefinition{valid, valid}},
 		{name: "invalid ID", definitions: []ProcessDefinition{{
-			ID: "One", Name: "One", Mark: "O", Description: "First", Status: "Future",
+			ID: "One", Name: "One", Mark: "O", Description: "First", Workflow: &ProcessWorkflow{Heading: "Configure"},
+		}}},
+		{name: "missing workflow", definitions: []ProcessDefinition{{
+			ID: "one", Name: "One", Mark: "O", Description: "First",
 		}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -63,7 +67,7 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
 	prepare := func(*Server, http.ResponseWriter, *http.Request) {}
 	definition := ProcessDefinition{
-		ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available", Available: true,
+		ID: "one", Name: "One", Mark: "O", Description: "First process",
 		Workflow: &ProcessWorkflow{
 			Heading: "Configure", SubmitLabel: "Prepare", GetPlan: prepare, Prepare: prepare,
 			Inputs: []ProcessInput{{
@@ -89,10 +93,13 @@ func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
 func TestProcessRegistryValidatesDurableAction(t *testing.T) {
 	handler := func(*Server, http.ResponseWriter, *http.Request) {}
 	definition := ProcessDefinition{
-		ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available", Available: true,
+		ID: "one", Name: "One", Mark: "O", Description: "First process",
 		Workflow: &ProcessWorkflow{
 			Heading: "Configure", SubmitLabel: "Review", DurableAction: true,
-			Inputs: []ProcessInput{{ID: "mode", Type: "text", Label: "Mode", Required: true}},
+			Inputs: []ProcessInput{{
+				ID: "mode", Type: "choice", Label: "Mode", Required: true,
+				Options: []ProcessInputOption{{Value: "run", Name: "Run", Description: "Run now"}},
+			}},
 		},
 	}
 	if _, err := newProcessRegistry(definition); err != nil {

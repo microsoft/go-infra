@@ -275,18 +275,13 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .release-card-title strong { font-size: 15px; }
 .release-card-body p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .compact-button { min-height: 34px; padding: 0 12px; text-decoration: none; }
-.process-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.process-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .process-card { position: relative; min-height: 236px; padding: 21px; overflow: hidden; border: 1px solid var(--border); border-radius: 17px; background: linear-gradient(145deg, rgb(13 35 55 / 84%), rgb(6 19 33 / 78%)); color: inherit; text-decoration: none; transition: border-color .18s, transform .18s, background .18s; }
 a.process-card:hover { transform: translateY(-3px); border-color: rgb(57 213 255 / 46%); background: linear-gradient(145deg, rgb(19 51 73 / 90%), rgb(7 23 40 / 84%)); }
-.process-card[data-available="false"] { opacity: .52; }
 .process-mark { width: 48px; height: 48px; margin-bottom: 28px; font-size: 12px; }
-.process-card[data-available="false"] .process-mark { background: var(--surface-soft); color: var(--muted); }
-.process-status { position: absolute; top: 20px; right: 20px; padding: 6px 9px; border-radius: 99px; background: rgb(72 213 151 / 12%); color: var(--green); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: 0; }
-.process-card[data-available="false"] .process-status { background: rgb(146 169 190 / 10%); color: var(--muted); }
 .process-card h3 { margin: 0; font-size: 20px; }
 .process-card p { min-height: 52px; margin: 9px 0 24px; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .process-action { color: var(--cyan); font-size: 13px; font-weight: 800; }
-.process-card[data-available="false"] .process-action { color: var(--muted); }
 /* Executable release process */
 .release-main { width: min(1480px, 100%); }
 .release-hero { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(300px, 380px); align-items: center; gap: 24px; padding: 44px 0 34px; }

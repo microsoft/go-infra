@@ -3,14 +3,15 @@
 This command contains the release coordination prototype and the local release-management UI.
 The server runs on the release runner's machine and opens in their default browser.
 
-Subcommands:
+`releaseagent serve` starts the local release UI.
 
-* `releaseagent serve` starts the local release UI.
-* `releaseagent write-mermaid-diagram` writes a Mermaid diagram of the broader release process.
+The landing page lists work tracked by the current durable session and the two implemented release
+processes. Go images provides local planning, execution, and monitoring. Go infrastructure provides
+reviewed, confirmed actions for the two GitHub-owned patch release paths documented by the team.
 
-The landing page is a release dashboard. It lists work tracked by the current durable session and a validated registry of release processes. Go images provides local planning, execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two GitHub-owned patch release paths documented by the team. The complete Microsoft Build of Go release process remains a future addition rather than being mixed into either focused workflow.
-
-Each registry entry owns its dashboard metadata, inputs, and optional server callbacks. The server derives `/{ID}` and every process API route from that entry. A single `process.html` template and its generic JavaScript render every process. Runtime dependency graphs come only from `coordinator` steps after a plan is prepared.
+Each registry entry owns its dashboard metadata, inputs, and workflow callbacks. The server derives
+the process page and API routes from that entry. One HTML page and JavaScript implementation render
+both processes. Browser-editable inputs are limited to fixed choices and positive integer IDs.
 
 ## Adding a release process
 
@@ -23,30 +24,27 @@ Add one `ProcessDefinition` to `defaultProcessRegistry` in
 | `Name` | User-facing process name shown on the dashboard and process page. |
 | `Mark` | Short visual abbreviation shown on the dashboard card, such as `IN`. |
 | `Description` | Brief dashboard explanation of what the process releases. |
-| `Status` | User-facing badge text, such as `Available`, `Planned`, or `Future`. This is display-only; `Available` controls whether the process can be opened. |
-| `Available` | Whether the dashboard card links to the process page. |
 | `DocumentationURL` | Canonical HTTPS release instructions linked from the process page. |
-| `Workflow` | Optional in-UI inputs, dependency steps, and execution behavior. |
+| `Workflow` | Required in-UI inputs and execution behavior. |
 
 For a reviewed, durable external action, describe the form with `ProcessInput`, then set `DurableAction`:
 
 ```go
 ProcessDefinition{
     ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
-    Status: "Available", Available: true,
     Workflow: &ProcessWorkflow{
         Heading: "Configure release", SubmitLabel: "Prepare release",
-        Inputs: []ProcessInput{{ID: "version", Type: "text", Label: "Version", Required: true}},
+    Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID", Required: true}},
         DurableAction: true,
     },
 }
 ```
 
-    Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
+  Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
-    Before preparation, the shared lifecycle validates request keys, required and conditional fields, choice values, numeric syntax, defaults, and string values. Executors then apply process-specific semantic and fixed-target validation.
+  Before preparation, the shared lifecycle validates request keys, required and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
 
-    `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for custom lifecycles. Do not combine these handlers with `DurableAction`.
+  `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for custom lifecycles. Do not combine these handlers with `DurableAction`.
 
 ## Go-images release modes
 
