@@ -4,10 +4,7 @@
 package coordinator
 
 import (
-	"compress/zlib"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -174,88 +171,4 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 		return nil, err
 	}
 	return sortedSteps, nil
-}
-
-// CreateMermaidStepFlowchart creates a Mermaid flowchart from the given steps' dependencies.
-func CreateMermaidStepFlowchart(steps []*Step) string {
-	stepIndex := make(map[*Step]int, len(steps))
-	for i, step := range steps {
-		stepIndex[step] = i
-	}
-
-	var sb strings.Builder
-
-	fmt.Fprintf(&sb, "---\nconfig:\n  layout: elk\n---\n")
-	fmt.Fprintf(&sb, "flowchart RL\n")
-	for i, step := range steps {
-		fmt.Fprintf(&sb, "  %v(%v)", i, step.Name)
-		if len(step.DependsOn) != 0 {
-			fmt.Fprintf(&sb, " --> ")
-			for i, dep := range step.DependsOn {
-				if i > 0 {
-					fmt.Fprintf(&sb, " & ")
-				}
-				fmt.Fprintf(&sb, "%v", stepIndex[dep])
-			}
-		}
-		fmt.Fprintf(&sb, "\n")
-	}
-
-	return sb.String()
-}
-
-// MermaidLiveChartURL returns a URL to view or edit the given Mermaid chart on mermaid.live.
-//
-// The URL is based on observations about Mermaid Live Editor v11.4.0, not a published API.
-func MermaidLiveChartURL(chart string, edit bool) (string, error) {
-	// Including more data seems to make the diagram more likely to render without a refresh.
-	// Browsers that have already loaded a diagram before seem more likely to be able to
-	// immediately render a new diagram. Mermaid Live Editor is a client-side app using local
-	// storage, which may be related.
-	chartObject := struct {
-		Code          string `json:"code"`
-		Mermaid       string `json:"mermaid"`
-		UpdateDiagram bool   `json:"updateDiagram"`
-		AutoSync      bool   `json:"autoSync"`
-		Zoom          int    `json:"zoom"`
-		EditorMode    string `json:"editorMode"`
-		PanZoom       bool   `json:"panZoom"`
-	}{
-		Code:          chart,
-		Mermaid:       "{\n  \"theme\": \"dark\"\n}",
-		UpdateDiagram: true,
-		AutoSync:      true,
-		Zoom:          1,
-		EditorMode:    "code",
-		PanZoom:       true,
-	}
-	chartJSON, err := json.Marshal(&chartObject)
-	if err != nil {
-		return "", err
-	}
-
-	var sb strings.Builder
-	b64 := base64.NewEncoder(base64.StdEncoding, &sb)
-	zl, err := zlib.NewWriterLevel(b64, zlib.BestCompression)
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := zl.Write(chartJSON); err != nil {
-		return "", err
-	}
-
-	if err := zl.Close(); err != nil {
-		return "", err
-	}
-	if err := b64.Close(); err != nil {
-		return "", err
-	}
-
-	mode := "view"
-	if edit {
-		mode = "edit"
-	}
-
-	return "https://mermaid.live/" + mode + "#pako:" + sb.String(), nil
 }
