@@ -4,13 +4,11 @@ const ongoingReleases = document.querySelector("#ongoing-releases");
 const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
 const processGrid = document.querySelector("#process-grid");
-const availableCount = document.querySelector("#available-count");
 
 loadDashboard();
 
 async function loadDashboard() {
   const dashboardState = await requestJSON("/api/dashboard");
-  availableCount.textContent = String(dashboardState.processes.filter((process) => process.available).length);
   renderReleases(ongoingReleases, dashboardState.ongoing, "No release is currently being tracked in this local session.");
   processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
   recentSection.hidden = dashboardState.recent.length === 0;
@@ -68,18 +66,13 @@ function createReleaseCard(release) {
 }
 
 function createProcessCard(process) {
-  const card = document.createElement(process.available ? "a" : "article");
+  const card = document.createElement("a");
   card.className = "process-card";
-  card.dataset.available = String(process.available);
-  if (process.available) card.href = process.href;
+  card.href = process.href;
 
   const mark = document.createElement("span");
   mark.className = "process-mark";
   mark.textContent = process.mark;
-
-  const status = document.createElement("span");
-  status.className = "process-status";
-  status.textContent = process.status;
 
   const title = document.createElement("h3");
   title.textContent = process.name;
@@ -87,9 +80,9 @@ function createProcessCard(process) {
   description.textContent = process.description;
   const action = document.createElement("span");
   action.className = "process-action";
-  action.textContent = process.available ? "Open release process →" : "Not available yet";
+  action.textContent = "Open release process →";
 
-  card.append(mark, status, title, description, action);
+  card.append(mark, title, description, action);
   return card;
 }
 

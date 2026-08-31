@@ -149,7 +149,11 @@
       control.placeholder = input.placeholder || "";
       control.value = input.default || "";
       control.autocomplete = "off";
-      if (input.type === "number") control.inputMode = "numeric";
+      if (input.type === "number") {
+        control.inputMode = "numeric";
+        control.min = "1";
+        control.step = "1";
+      }
       wrapper.append(label, control);
       record.controls.push(control);
       if (input.description) {

@@ -85,7 +85,7 @@ func WithProcessRunStore(store ProcessRunStore) Option {
 func (s *Server) validateProcessExecutionConfiguration() error {
 	for processID, executor := range s.processExecutors {
 		definition, ok := s.processes.byID[processID]
-		if !ok || definition.Workflow == nil || !definition.Workflow.DurableAction {
+		if !ok || !definition.Workflow.DurableAction {
 			return fmt.Errorf("process executor %q has no durable workflow definition", processID)
 		}
 		if executor.Preflight == nil || executor.Prepare == nil || executor.Execute == nil ||
@@ -172,7 +172,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusForbidden, "external process execution is not enabled")
 		return
 	}
-	if !defined || definition.Workflow == nil || !definition.Workflow.DurableAction {
+	if !defined || !definition.Workflow.DurableAction {
 		s.mu.Unlock()
 		writeError(response, http.StatusInternalServerError, "durable process definition is unavailable")
 		return

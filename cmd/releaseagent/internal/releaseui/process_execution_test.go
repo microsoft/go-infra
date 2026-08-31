@@ -53,10 +53,13 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 		Validate: func(run *ProcessRun) error { return nil },
 	}
 	registry, err := newProcessRegistry(ProcessDefinition{
-		ID: "example", Name: "Example", Mark: "EX", Description: "Example process", Status: "Available", Available: true,
+		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
 		Workflow: &ProcessWorkflow{
 			Heading: "Run example", SubmitLabel: "Review", DurableAction: true,
-			Inputs: []ProcessInput{{ID: "mode", Type: "text", Label: "Mode", Required: true}},
+			Inputs: []ProcessInput{{
+				ID: "mode", Type: "choice", Label: "Mode", Required: true,
+				Options: []ProcessInputOption{{Value: "run", Name: "Run", Description: "Run example"}},
+			}},
 		},
 	})
 	if err != nil {
@@ -70,7 +73,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 		runner:           &coordinator.StepRunner{},
 	}
 	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"mode":"test"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"mode":"run"}`))
 	request.Header.Set("Origin", "http://localhost")
 	server.handlePrepareProcessRun("example", prepared, request)
 	if prepared.Code != http.StatusOK {

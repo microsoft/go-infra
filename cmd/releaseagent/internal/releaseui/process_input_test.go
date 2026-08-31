@@ -22,14 +22,13 @@ func TestNormalizeProcessInputs(t *testing.T) {
 			ID: "build", Type: "number", Label: "Build", Required: true,
 			VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"},
 		},
-		{ID: "note", Type: "text", Label: "Note"},
 	}
 	for _, test := range []struct {
 		name  string
 		input string
 		want  map[string]string
 	}{
-		{name: "defaults and trims", input: `{"note":"  hello  "}`, want: map[string]string{"mode": "normal", "note": "hello"}},
+		{name: "default choice", input: `{}`, want: map[string]string{"mode": "normal"}},
 		{name: "conditional number", input: `{"mode":"rollback","build":"42"}`, want: map[string]string{"mode": "rollback", "build": "42"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -64,6 +63,8 @@ func TestNormalizeProcessInputsRejectsSchemaViolations(t *testing.T) {
 		`{"mode":"other","build":"42"}`,
 		`{"mode":"normal"}`,
 		`{"mode":"normal","build":"NaN"}`,
+		`{"mode":"normal","build":"0"}`,
+		`{"mode":"normal","build":"1.5"}`,
 		`{"mode":"normal","build":42}`,
 		`{"mode":"normal","build":"42","extra":"value"}`,
 		`{"mode":"other","build":"42"}`,

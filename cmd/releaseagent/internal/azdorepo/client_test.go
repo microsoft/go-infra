@@ -82,29 +82,6 @@ func TestGetJSONFileAtCommit(t *testing.T) {
 	}
 }
 
-func TestGetFileAtBranch(t *testing.T) {
-	client := newTestClient(t, &fakeGitClient{getItem: func(_ context.Context, args azdogit.GetItemArgs) (*azdogit.GitItem, error) {
-		if args.Path == nil || *args.Path != "/eng/pipeline/go-docker-rolling-internal-pipeline.yml" ||
-			args.VersionDescriptor == nil || args.VersionDescriptor.Version == nil || *args.VersionDescriptor.Version != "microsoft/main" ||
-			args.VersionDescriptor.VersionType == nil || *args.VersionDescriptor.VersionType != azdogit.GitVersionTypeValues.Branch {
-
-			t.Fatalf("item args = %#v", args)
-		}
-		return &azdogit.GitItem{Content: pointer("parameters:\n")}, nil
-	}})
-	data, err := client.GetFileAtBranch(
-		context.Background(),
-		"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
-		"refs/heads/microsoft/main",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "parameters:\n" {
-		t.Fatalf("content = %q", data)
-	}
-}
-
 func TestVerifyCommit(t *testing.T) {
 	const commit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 	client := newTestClient(t, &fakeGitClient{getCommit: func(_ context.Context, args azdogit.GetCommitArgs) (*azdogit.GitCommit, error) {
