@@ -6,7 +6,6 @@ package releaseui
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -18,16 +17,13 @@ var (
 	inputIDPattern   = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 )
 
-// ProcessDefinition describes one release process. Available processes are served at /{ID}
-// through the shared process page.
+// ProcessDefinition describes one release process served at /{ID} through the shared process page.
 type ProcessDefinition struct {
 	ID               string
 	Name             string
 	Mark             string
 	Description      string
-	Status           string
 	DocumentationURL string
-	Available        bool
 	Workflow         *ProcessWorkflow
 }
 
@@ -80,7 +76,6 @@ type ProcessCondition struct {
 
 type processRegistry struct {
 	ordered []ProcessDefinition
-	byPath  map[string]ProcessDefinition
 	byID    map[string]ProcessDefinition
 }
 
@@ -90,7 +85,6 @@ func newProcessRegistry(definitions ...ProcessDefinition) (*processRegistry, err
 	}
 	registry := &processRegistry{
 		ordered: make([]ProcessDefinition, 0, len(definitions)),
-		byPath:  make(map[string]ProcessDefinition),
 		byID:    make(map[string]ProcessDefinition),
 	}
 	ids := make(map[string]struct{}, len(definitions))
@@ -102,14 +96,10 @@ func newProcessRegistry(definitions ...ProcessDefinition) (*processRegistry, err
 			return nil, fmt.Errorf("duplicate release process ID %q", definition.ID)
 		}
 		ids[definition.ID] = struct{}{}
-		registry.byID[definition.ID] = definition
 		if strings.TrimSpace(definition.Name) == "" || strings.TrimSpace(definition.Mark) == "" ||
-			strings.TrimSpace(definition.Description) == "" || strings.TrimSpace(definition.Status) == "" {
+			strings.TrimSpace(definition.Description) == "" {
 
 			return nil, fmt.Errorf("release process %q has incomplete catalog metadata", definition.ID)
-		}
-		if definition.Available {
-			registry.byPath[processPath(definition.ID)] = definition
 		}
 		if definition.DocumentationURL != "" && !strings.HasPrefix(definition.DocumentationURL, "https://") {
 			return nil, fmt.Errorf("release process %q has an invalid documentation URL", definition.ID)
@@ -117,6 +107,7 @@ func newProcessRegistry(definitions ...ProcessDefinition) (*processRegistry, err
 		if err := validateProcessWorkflow(definition.ID, definition.Workflow); err != nil {
 			return nil, err
 		}
+		registry.byID[definition.ID] = definition
 		registry.ordered = append(registry.ordered, definition)
 	}
 	return registry, nil
@@ -125,7 +116,7 @@ func newProcessRegistry(definitions ...ProcessDefinition) (*processRegistry, err
 func defaultProcessRegistry() (*processRegistry, error) {
 	return newProcessRegistry(
 		ProcessDefinition{
-			ID: "go-images", Name: "Go images", Mark: "GI", Available: true, Status: "Available",
+			ID: "go-images", Name: "Go images", Mark: "GI",
 			Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
 			DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images",
 			Workflow: &ProcessWorkflow{
@@ -155,7 +146,7 @@ func defaultProcessRegistry() (*processRegistry, error) {
 			},
 		},
 		ProcessDefinition{
-			ID: "go-infra", Name: "Go infrastructure", Mark: "IN", Status: "Available", Available: true,
+			ID: "go-infra", Name: "Go infrastructure", Mark: "IN",
 			Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 			DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
 			Workflow: &ProcessWorkflow{
@@ -197,16 +188,12 @@ func defaultProcessRegistry() (*processRegistry, error) {
 				DurableAction: true,
 			},
 		},
-		ProcessDefinition{
-			ID: "microsoft-go", Name: "Microsoft Build of Go", Mark: "MS", Status: "Future",
-			Description: "The complete Microsoft Build of Go release process is intentionally out of scope for now.",
-		},
 	)
 }
 
 func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error {
 	if workflow == nil {
-		return nil
+		return fmt.Errorf("release process %q has no workflow", processID)
 	}
 	if strings.TrimSpace(workflow.Heading) == "" {
 		return fmt.Errorf("release process %q has an incomplete workflow", processID)
@@ -229,7 +216,7 @@ func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error 
 	inputs := make(map[string]ProcessInput, len(workflow.Inputs))
 	for _, input := range workflow.Inputs {
 		if !inputIDPattern.MatchString(input.ID) || strings.TrimSpace(input.Label) == "" ||
-			input.Type != "choice" && input.Type != "number" && input.Type != "text" {
+			input.Type != "choice" && input.Type != "number" {
 
 			return fmt.Errorf("release process %q has an invalid input %q", processID, input.ID)
 		}
@@ -257,8 +244,8 @@ func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error 
 			}
 		}
 		if input.Default != "" && input.Type == "number" {
-			value, err := strconv.ParseFloat(input.Default, 64)
-			if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+			value, err := strconv.ParseUint(input.Default, 10, 64)
+			if err != nil || value == 0 {
 				return fmt.Errorf("release process %q input %q has an invalid default", processID, input.ID)
 			}
 		}
@@ -288,30 +275,23 @@ func processPath(id string) string {
 }
 
 func (r *processRegistry) page(path string) (string, bool) {
-	_, ok := r.byPath[path]
+	id := strings.TrimPrefix(path, "/")
+	_, ok := r.byID[id]
+	ok = ok && path == processPath(id)
 	return "process.html", ok
 }
 
 func (r *processRegistry) process(id string) (ProcessDefinition, bool) {
-	for _, definition := range r.ordered {
-		if definition.ID == id {
-			return definition, true
-		}
-	}
-	return ProcessDefinition{}, false
+	definition, ok := r.byID[id]
+	return definition, ok
 }
 
 func (r *processRegistry) summaries() []processSummary {
 	summaries := make([]processSummary, 0, len(r.ordered))
 	for _, definition := range r.ordered {
-		href := ""
-		if definition.Available {
-			href = processPath(definition.ID)
-		}
 		summaries = append(summaries, processSummary{
 			ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
-			Description: definition.Description, Href: href,
-			Available: definition.Available, Status: definition.Status,
+			Description: definition.Description, Href: processPath(definition.ID),
 		})
 	}
 	return summaries

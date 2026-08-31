@@ -101,11 +101,11 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var dashboard dashboardResponse
 	decodeResponse(t, response, &dashboard)
-	if response.StatusCode != http.StatusOK || len(dashboard.Processes) != 3 {
+	if response.StatusCode != http.StatusOK || len(dashboard.Processes) != 2 {
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
-	if !dashboard.Processes[0].Available || dashboard.Processes[0].ID != goImagesProcessID ||
-		!dashboard.Processes[1].Available || dashboard.Processes[1].ID != "go-infra" {
+	if dashboard.Processes[0].ID != goImagesProcessID || dashboard.Processes[0].Href != "/go-images" ||
+		dashboard.Processes[1].ID != "go-infra" || dashboard.Processes[1].Href != "/go-infra" {
 
 		t.Fatalf("processes = %#v", dashboard.Processes)
 	}
@@ -167,7 +167,8 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 func TestDashboardShowsDurableProcessRun(t *testing.T) {
 	ui := newTestUI(t)
 	registry, err := newProcessRegistry(ProcessDefinition{
-		ID: "example", Name: "Example", Mark: "EX", Description: "Example process", Status: "Available", Available: true,
+		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
+		Workflow: &ProcessWorkflow{Heading: "Run example"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -215,12 +216,10 @@ func TestProcessRoutesIsolatePreparedPlans(t *testing.T) {
 	}
 	registry, err := newProcessRegistry(
 		ProcessDefinition{
-			ID: "one", Name: "One", Mark: "O", Description: "First process", Status: "Available",
-			Available: true, Workflow: workflow("one"),
+			ID: "one", Name: "One", Mark: "O", Description: "First process", Workflow: workflow("one"),
 		},
 		ProcessDefinition{
-			ID: "two", Name: "Two", Mark: "T", Description: "Second process", Status: "Available",
-			Available: true, Workflow: workflow("two"),
+			ID: "two", Name: "Two", Mark: "T", Description: "Second process", Workflow: workflow("two"),
 		},
 	)
 	if err != nil {

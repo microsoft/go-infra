@@ -259,15 +259,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handlePage)
 	for _, definition := range s.processes.ordered {
-		if !definition.Available {
-			continue
-		}
 		processID := definition.ID
 		mux.HandleFunc("GET "+processPath(processID), s.handlePage)
 		workflow := definition.Workflow
-		if workflow == nil {
-			continue
-		}
 		prefix := "/api/processes/" + processID
 		preflight := workflow.Preflight
 		if workflow.DurableAction {
@@ -505,9 +499,7 @@ type processSummary struct {
 	Name        string `json:"name"`
 	Mark        string `json:"mark"`
 	Description string `json:"description"`
-	Href        string `json:"href,omitempty"`
-	Available   bool   `json:"available"`
-	Status      string `json:"status"`
+	Href        string `json:"href"`
 }
 
 type processDetail struct {
@@ -532,16 +524,14 @@ type workflowDetail struct {
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
 	definition, ok := s.processes.process(request.PathValue("id"))
-	if !ok || !definition.Available {
+	if !ok {
 		http.NotFound(response, request)
 		return
 	}
 	detail := processDetail{
 		ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
 		Description: definition.Description, DocumentationURL: definition.DocumentationURL,
-	}
-	if definition.Workflow != nil {
-		detail.Workflow = &workflowDetail{
+		Workflow: &workflowDetail{
 			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
 			SubmitLabel:  definition.Workflow.SubmitLabel,
 			Inputs:       append([]ProcessInput(nil), definition.Workflow.Inputs...),
@@ -549,7 +539,7 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 			CanPrepare:   definition.Workflow.Prepare != nil || definition.Workflow.DurableAction,
 			CanSimulate:  definition.Workflow.Simulate != nil,
 			CanStart:     definition.Workflow.Start != nil || definition.Workflow.DurableAction,
-		}
+		},
 	}
 	writeJSON(response, http.StatusOK, detail)
 }
