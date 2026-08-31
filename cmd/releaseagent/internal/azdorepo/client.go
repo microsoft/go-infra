@@ -105,15 +105,6 @@ func (c *Client) VerifyCommit(ctx context.Context, commit string) error {
 	return nil
 }
 
-// GetFileAtBranch returns a file from the current tip of a repository branch.
-func (c *Client) GetFileAtBranch(ctx context.Context, path, branch string) ([]byte, error) {
-	branch = strings.TrimPrefix(strings.TrimSpace(branch), "refs/heads/")
-	if branch == "" || strings.ContainsAny(branch, "\x00\r\n") {
-		return nil, fmt.Errorf("invalid repository branch %q", branch)
-	}
-	return c.getFile(ctx, path, branch, "branch")
-}
-
 // GetBranchTip resolves a branch to one exact commit. The full refs/heads/ name is returned so
 // callers can bind an execution plan to both the ref and object ID.
 func (c *Client) GetBranchTip(ctx context.Context, branch string) (BranchTip, error) {
