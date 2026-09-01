@@ -75,11 +75,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	processRunPath, err := processRunStorePath(sessionPath)
-	if err != nil {
-		return err
-	}
-	processRunStore, err := releaseui.NewProcessRunFileStore(processRunPath)
+	processRunStore, err := releaseui.NewProcessRunFileStore(sessionPath + ".process-run.json")
 	if err != nil {
 		return err
 	}
@@ -164,7 +160,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 
 				return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
 			}
-			return "Authenticated and verified direct go-images pipeline 1023. Source resolution and rollback validation are read-only.", nil
+			return "Authenticated and verified direct go-images pipeline 1023. Planning is read-only; confirmed execution can queue only this target.", nil
 		},
 		ResolveCurrentSource: resolveCurrentSource,
 		ValidateRollback: func(ctx context.Context, buildID int) (releaseui.GoImagesRollbackSource, error) {
@@ -190,21 +186,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 	options = append(options, releaseui.WithGoImagesExecutionIntegration(
 		releaseui.GoImagesExecutionIntegration{
 			DefinitionID: goimagesexecution.DefinitionID,
-			Preflight: func(ctx context.Context) (string, error) {
-				definition, err := azureClient.GetDefinition(ctx, goimagesexecution.DefinitionID)
-				if err != nil {
-					return "", err
-				}
-				if definition.Name != "microsoft-go-images (official)" ||
-					definition.QueueStatus != "enabled" ||
-					definition.DefaultBranch != "refs/heads/microsoft/main" ||
-					definition.Repository != "microsoft-go-images" ||
-					definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
-
-					return "", fmt.Errorf("pipeline 1023 does not match the execution allowlist: %#v", definition)
-				}
-				return "Verified pipeline 1023. Normal and rollback publish to public/; test publishes to dev/.", nil
-			},
 			NewService: func(request releaseui.GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return goimagesexecution.New(azureClient, queueClient, goimagesexecution.Config{
 					Mode:                 request.Mode,
@@ -281,14 +262,4 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return fmt.Errorf("shut down release UI: %w", err)
 	}
 	return nil
-}
-
-func processRunStorePath(sessionPath string) (string, error) {
-	legacyPath := sessionPath + ".go-infra-action.json"
-	if _, err := os.Stat(legacyPath); err == nil {
-		return "", fmt.Errorf("legacy go-infra action journal exists at %s; inspect it before migrating to the process run journal", legacyPath)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("inspect legacy go-infra action journal: %w", err)
-	}
-	return sessionPath + ".process-run.json", nil
 }
