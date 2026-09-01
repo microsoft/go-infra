@@ -3,10 +3,10 @@
 
 package patch
 
-import "github.com/microsoft/go-infra/gitcmd"
+import "github.com/microsoft/go-infra/executil"
 
 // FormatPatch runs a deterministic "git format-patch" command with args appended and returns its
-// combined output, including when the command fails.
+// stdout. If the command fails, stderr is included in the error.
 func FormatPatch(dir string, args ...string) (string, error) {
 	args = append([]string{
 		"format-patch",
@@ -23,5 +23,5 @@ func FormatPatch(dir string, args ...string) (string, error) {
 		// number of patch files so earlier patch files don't change when a new one is appended.
 		"--no-numbered",
 	}, args...)
-	return gitcmd.CombinedOutput(dir, args...)
+	return executil.Output(executil.Dir(dir, "git", args...))
 }

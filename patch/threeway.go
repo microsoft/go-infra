@@ -143,7 +143,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 
 		formatted, err := FormatPatch(workDir, "--stdout", "-1", "HEAD")
 		if err != nil {
-			return nil, fmt.Errorf("failed to regenerate patch %q: %w\n%s", filepath.Base(patchPath), err, formatted)
+			return nil, fmt.Errorf("failed to regenerate patch %q: %w", filepath.Base(patchPath), err)
 		}
 		p, err := Read(strings.NewReader(formatted))
 		if err != nil {
