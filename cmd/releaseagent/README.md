@@ -121,12 +121,12 @@ Test runs are fixed to `dev/`.
 Do not confirm a real execution without authorization.
 
 The review page renders the coordinator DAG as a left-to-right dependency graph.
-Steps at the same dependency depth are grouped vertically and labeled as parallel work, so future release processes can expose fan-out and fan-in directly.
-During the pipeline wait step, the existing SSE stream also shows the active Azure stage/job/task paths, stage/job/task completion counts, and a stage progress bar.
-Lightweight build status is checked every five seconds; the much larger Azure timeline is refreshed every 30 seconds.
-Timeline detail is ephemeral UI state and is not written to the durable session file.
+The current go-images graph is a linear mirror, queue, and monitor sequence.
+During the pipeline wait step, the existing SSE stream reports whether the Azure build is queued,
+running, or complete. Build status is checked every five seconds, and the UI links to Azure DevOps
+for stage, job, and task details.
 
-Azure Pipeline definition metadata and timelines, plus Azure Repos reads, use the official Azure DevOps Go SDK.
+Azure Pipeline definition metadata and Azure Repos reads use the official Azure DevOps Go SDK.
 The generated SDK's `build.Build` model omits run-level `templateParameters`.
 Custom REST calls are therefore limited to build retrieval and listing, where those parameters are required, and parameterized queueing.
 The generated `Build.Parameters` field can carry the legacy correlation variables, but `QueueBuild` cannot emit the `templateParameters` required for the full queue payload.

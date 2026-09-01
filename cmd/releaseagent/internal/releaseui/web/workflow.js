@@ -423,9 +423,7 @@
     progressTrack.hidden = true;
     const progressFill = document.createElement("span");
     progressTrack.append(progressFill);
-    const progressItems = document.createElement("ul");
-    progressItems.className = "step-progress-items";
-    liveProgress.append(progressSummary, progressDetail, progressTrack, progressItems);
+    liveProgress.append(progressSummary, progressDetail, progressTrack);
     item.append(head, liveProgress);
     return item;
   }
@@ -570,13 +568,6 @@
     track.querySelector("span").style.width = progress.total > 0
       ? `${Math.max(0, Math.min(100, Math.round((progress.completed / progress.total) * 100)))}%`
       : "0";
-    const items = container.querySelector(".step-progress-items");
-    items.replaceChildren(...(progress.items || []).map((item) => {
-      const row = document.createElement("li");
-      row.textContent = item;
-      return row;
-    }));
-    items.hidden = !(progress.items || []).length;
   }
 
   function updateProgress(snapshot) {

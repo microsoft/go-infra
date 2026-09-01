@@ -43,15 +43,10 @@ type Client struct {
 	http                HTTPDoer
 	tokens              TokenProvider
 	newDefinitionClient func(context.Context) (definitionClient, string, error)
-	newTimelineClient   func(context.Context) (timelineClient, string, error)
 }
 
 type definitionClient interface {
 	GetDefinition(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
-}
-
-type timelineClient interface {
-	GetBuildTimeline(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
 }
 
 // Build is the release UI's stable view of an Azure Pipelines run.
@@ -76,23 +71,6 @@ type Definition struct {
 	DefaultBranch string
 	Repository    string
 	YAMLPath      string
-}
-
-// Timeline is the execution hierarchy of an Azure Pipelines build.
-type Timeline struct {
-	Records []TimelineRecord
-}
-
-// TimelineRecord is one stage, phase, job, task, or other timeline node. ParentID links records
-// into the hierarchy returned by Azure DevOps.
-type TimelineRecord struct {
-	ID       string
-	ParentID string
-	Type     string
-	Name     string
-	State    string
-	Result   string
-	Order    int
 }
 
 // RunState is the normalized lifecycle of an Azure Pipelines run.
@@ -140,7 +118,6 @@ func NewClient(baseURL, project string, httpClient HTTPDoer, tokens TokenProvide
 		tokens:  tokens,
 	}
 	client.newDefinitionClient = client.createDefinitionClient
-	client.newTimelineClient = client.createTimelineClient
 	return client, nil
 }
 
@@ -155,45 +132,6 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 		return nil, err
 	}
 	return response.build()
-}
-
-// GetTimeline returns the current stage, job, and task hierarchy for one pipeline run.
-func (c *Client) GetTimeline(ctx context.Context, buildID int) (*Timeline, error) {
-	if buildID <= 0 {
-		return nil, errors.New("build ID must be positive")
-	}
-	client, token, err := c.newTimelineClient(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
-	}
-	response, err := client.GetBuildTimeline(ctx, azdobuild.GetBuildTimelineArgs{
-		Project: &c.project, BuildId: &buildID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("get Azure DevOps build timeline: %w", redactError(err, token))
-	}
-	timeline := &Timeline{}
-	if response == nil || response.Records == nil {
-		return timeline, nil
-	}
-	timeline.Records = make([]TimelineRecord, 0, len(*response.Records))
-	for _, record := range *response.Records {
-		mapped := TimelineRecord{
-			Type: stringValue(record.Type), Name: stringValue(record.Name),
-			State: enumValue(record.State), Result: enumValue(record.Result),
-		}
-		if record.Id != nil {
-			mapped.ID = record.Id.String()
-		}
-		if record.ParentId != nil {
-			mapped.ParentID = record.ParentId.String()
-		}
-		if record.Order != nil {
-			mapped.Order = *record.Order
-		}
-		timeline.Records = append(timeline.Records, mapped)
-	}
-	return timeline, nil
 }
 
 // GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.
@@ -225,11 +163,6 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 }
 
 func (c *Client) createDefinitionClient(ctx context.Context) (definitionClient, string, error) {
-	client, token, err := c.createBuildClient(ctx)
-	return client, token, err
-}
-
-func (c *Client) createTimelineClient(ctx context.Context) (timelineClient, string, error) {
 	client, token, err := c.createBuildClient(ctx)
 	return client, token, err
 }

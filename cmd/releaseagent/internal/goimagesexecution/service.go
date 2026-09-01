@@ -12,9 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
@@ -41,7 +39,6 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // PipelineReader is the read-only Azure DevOps behavior required for reconciliation and polling.
 type PipelineReader interface {
 	Get(context.Context, int) (*azdopipeline.Build, error)
-	GetTimeline(context.Context, int) (*azdopipeline.Timeline, error)
 	ListRecent(context.Context, int) ([]*azdopipeline.Build, error)
 }
 
@@ -71,7 +68,6 @@ type Config struct {
 	VerifyMirrorCommit   func(context.Context, string) error
 	MirrorPollInterval   time.Duration
 	PollInterval         time.Duration
-	TimelinePollInterval time.Duration
 	PreviousQueueAttempt bool
 	ReconcileAttempts    int
 	ReconcileInterval    time.Duration
@@ -82,13 +78,12 @@ type Sleeper func(context.Context, time.Duration) error
 
 // Service implements only the queue-and-monitor surface required by the focused DAG.
 type Service struct {
-	reader            PipelineReader
-	queue             QueueClient
-	config            Config
-	parameters        map[string]string
-	versionSet        string
-	sleep             Sleeper
-	timelinePollEvery int
+	reader     PipelineReader
+	queue      QueueClient
+	config     Config
+	parameters map[string]string
+	versionSet string
+	sleep      Sleeper
 }
 
 // New validates and creates a go-images release service.
@@ -119,9 +114,6 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 	if config.MirrorPollInterval <= 0 {
 		config.MirrorPollInterval = 5 * time.Second
 	}
-	if config.TimelinePollInterval <= 0 {
-		config.TimelinePollInterval = 30 * time.Second
-	}
 	if config.ReconcileAttempts <= 0 {
 		config.ReconcileAttempts = 6
 	}
@@ -131,13 +123,9 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 	if sleeper == nil {
 		sleeper = sleepContext
 	}
-	timelinePollEvery := int((config.TimelinePollInterval + config.PollInterval - 1) / config.PollInterval)
-	if timelinePollEvery < 1 {
-		timelinePollEvery = 1
-	}
 	return &Service{
 		reader: reader, queue: queue, config: config, parameters: parameters, versionSet: versionSet,
-		sleep: sleeper, timelinePollEvery: timelinePollEvery,
+		sleep: sleeper,
 	}, nil
 }
 
@@ -272,7 +260,6 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid go-images release build ID %q", buildID)
 	}
-	pollsUntilTimeline := 0
 	for {
 		build, err := s.reader.Get(ctx, id)
 		if err != nil {
@@ -301,11 +288,7 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 			})
 			return fmt.Errorf("go-images release build %d finished with state %q and result %q: %s", id, state, build.Result, build.WebURL)
 		case azdopipeline.RunStateWaiting, azdopipeline.RunStateRunning:
-			if pollsUntilTimeline == 0 {
-				s.reportPipelineProgress(ctx, id, state)
-				pollsUntilTimeline = s.timelinePollEvery
-			}
-			pollsUntilTimeline--
+			s.reportPipelineProgress(ctx, id, state)
 			if err := s.sleep(ctx, s.config.PollInterval); err != nil {
 				return err
 			}
@@ -322,137 +305,9 @@ func (s *Service) reportPipelineProgress(ctx context.Context, buildID int, state
 	}
 	if state == azdopipeline.RunStateRunning {
 		progress.Summary = "Azure pipeline is running"
-		progress.Detail = fmt.Sprintf("Reading live stage details for build %d", buildID)
-	}
-	timeline, err := s.reader.GetTimeline(ctx, buildID)
-	if err == nil && timeline != nil {
-		progress = timelineStepProgress(buildID, state, timeline.Records)
-	} else if state == azdopipeline.RunStateRunning {
-		progress.Detail = "Detailed Azure stage status is not available yet"
+		progress.Detail = fmt.Sprintf("Build %d is in progress", buildID)
 	}
 	coordinator.ReportProgress(ctx, progress)
-}
-
-func timelineStepProgress(
-	buildID int,
-	state azdopipeline.RunState,
-	records []azdopipeline.TimelineRecord,
-) coordinator.StepProgress {
-	progress := coordinator.StepProgress{
-		Summary: "Azure pipeline is running",
-		Detail:  fmt.Sprintf("Build %d is running", buildID),
-	}
-	if state == azdopipeline.RunStateWaiting {
-		progress.Summary = "Azure pipeline is queued"
-		progress.Detail = fmt.Sprintf("Build %d is waiting to start", buildID)
-	}
-	byID := make(map[string]azdopipeline.TimelineRecord, len(records))
-	byType := make(map[string][]azdopipeline.TimelineRecord)
-	for _, record := range records {
-		byID[record.ID] = record
-		typeName := strings.ToLower(record.Type)
-		switch typeName {
-		case "stage", "job", "task":
-			byType[typeName] = append(byType[typeName], record)
-		}
-	}
-
-	var countDetails []string
-	for _, typeName := range []string{"stage", "job", "task"} {
-		total := len(byType[typeName])
-		if total == 0 {
-			continue
-		}
-		completed := 0
-		for _, record := range byType[typeName] {
-			if strings.EqualFold(record.State, "completed") {
-				completed++
-			}
-		}
-		countDetails = append(countDetails, fmt.Sprintf("%d/%d %ss", completed, total, typeName))
-		if typeName == "stage" {
-			progress.Completed = completed
-			progress.Total = total
-		}
-	}
-	if len(countDetails) != 0 {
-		progress.Detail = fmt.Sprintf("Build %d · %s complete", buildID, strings.Join(countDetails, " · "))
-	}
-
-	activeType := ""
-	var active []azdopipeline.TimelineRecord
-	for _, typeName := range []string{"task", "job", "stage"} {
-		for _, record := range byType[typeName] {
-			if strings.EqualFold(record.State, "inProgress") {
-				active = append(active, record)
-			}
-		}
-		if len(active) != 0 {
-			activeType = typeName
-			break
-		}
-	}
-	sort.SliceStable(active, func(left, right int) bool {
-		if active[left].Order != active[right].Order {
-			return active[left].Order < active[right].Order
-		}
-		return active[left].Name < active[right].Name
-	})
-
-	seen := make(map[string]struct{}, len(active))
-	const maxItems = 8
-	for _, record := range active {
-		path := timelineRecordPath(record, byID)
-		if path == "" {
-			continue
-		}
-		if _, exists := seen[path]; exists {
-			continue
-		}
-		seen[path] = struct{}{}
-		if len(progress.Items) < maxItems {
-			progress.Items = append(progress.Items, path)
-		}
-	}
-	if len(seen) == 1 && len(active) != 0 {
-		progress.Summary = "Running: " + active[0].Name
-	} else if len(seen) > 1 {
-		progress.Summary = fmt.Sprintf("Running %d pipeline %ss in parallel", len(seen), activeType)
-	}
-	if hidden := len(seen) - len(progress.Items); hidden > 0 {
-		progress.Items = append(progress.Items, fmt.Sprintf("… and %d more active %ss", hidden, activeType))
-	}
-	return progress
-}
-
-func timelineRecordPath(
-	record azdopipeline.TimelineRecord,
-	byID map[string]azdopipeline.TimelineRecord,
-) string {
-	var reversed []string
-	visited := make(map[string]struct{})
-	for current := record; current.ID != ""; {
-		if _, exists := visited[current.ID]; exists {
-			break
-		}
-		visited[current.ID] = struct{}{}
-		switch strings.ToLower(current.Type) {
-		case "stage", "job", "task":
-			if current.Name != "" {
-				reversed = append(reversed, current.Name)
-			}
-		}
-		parent, exists := byID[current.ParentID]
-		if !exists {
-			break
-		}
-		current = parent
-	}
-	path := make([]string, len(reversed))
-	for index := range reversed {
-		path[len(reversed)-1-index] = reversed[index]
-	}
-	return strings.Join(path, " › ")
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

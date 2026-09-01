@@ -216,7 +216,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 					VerifyMirrorCommit:   repoClient.VerifyCommit,
 					MirrorPollInterval:   5 * time.Second,
 					PollInterval:         5 * time.Second,
-					TimelinePollInterval: 30 * time.Second,
 					PreviousQueueAttempt: request.PreviousQueueAttempt,
 					ReconcileAttempts:    6,
 					ReconcileInterval:    5 * time.Second,
