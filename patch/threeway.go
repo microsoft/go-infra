@@ -17,6 +17,11 @@ import (
 // rootDir must be a Git repository containing baseCommit and the objects referenced by the patches;
 // submoduleDir is relative to rootDir.
 //
+// These conditions are met by automatic sync, where upstream commits are
+// fetched into the root Git repository instead of setting up a proper
+// submodule. They aren't met by "git go-patch ..." workflows, where upstream
+// commits are kept separately.
+//
 // If a clean apply fails, TryThreeWayRebase retries with "git am --3way". When that succeeds, it
 // regenerates only that patch, leaving clean patches untouched to avoid noisy diffs. If a three-way
 // merge conflicts, patch files are left unchanged. The returned paths are relative to rootDir.
