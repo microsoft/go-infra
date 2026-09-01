@@ -125,9 +125,6 @@ func Read(r io.Reader) (*Patch, error) {
 	var content strings.Builder
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, err
-		}
 		line := scanner.Text()
 		if line == "---" || content.Len() != 0 {
 			// Header is done: read the rest of the patch into Content. Technically, "---" could
@@ -149,6 +146,9 @@ func Read(r io.Reader) (*Patch, error) {
 			subject.WriteString(line)
 			subject.WriteString("\n")
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 	h.Subject = subject.String()
 	h.Content = content.String()
