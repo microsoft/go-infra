@@ -269,22 +269,15 @@ func assertPreparedProcess(t *testing.T, ui *testUI, processID string, wantStatu
 }
 
 func TestPreflightIsLocalAndExecutionDisabled(t *testing.T) {
-	var lookedUp []string
-	ui := newTestUI(t, WithExecutableLookup(func(name string) (string, error) {
-		lookedUp = append(lookedUp, name)
-		if name == "az" {
-			return "/test/bin/az", nil
-		}
-		return "", errors.New("not found")
-	}))
+	ui := newTestUI(t)
 	response, err := ui.client.Get(ui.http.URL + testGoImagesAPI + "/preflight")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var report PreflightReport
 	decodeResponse(t, response, &report)
-	if report.ExternalExecutionEnabled || report.GoImagesExecutionEnabled || strings.Join(lookedUp, ",") != "gh,az" {
-		t.Fatalf("report = %#v, looked up = %v", report, lookedUp)
+	if report.ExternalExecutionEnabled || report.PlanningEnabled {
+		t.Fatalf("report = %#v", report)
 	}
 }
 
@@ -295,7 +288,6 @@ func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
 	}
 	execution := GoImagesExecutionIntegration{
 		DefinitionID: goImagesPipelineID,
-		Preflight:    func(context.Context) (string, error) { return "ok", nil },
 		NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 			return &fakeExecutionService{}, nil
 		},
@@ -435,7 +427,6 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
@@ -501,12 +492,17 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	}
 	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeNormal}
+	preflightCalls := 0
+	readOnly := testReadOnly(&source, nil)
+	readOnly.Preflight = func(context.Context) (string, error) {
+		preflightCalls++
+		return "verified", nil
+	}
 	ui := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesReadOnlyIntegration(readOnly),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "execution verified", nil },
 			NewService: func(request GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				if request.Mode != goimagesworkflow.ModeNormal || request.SourceVersion != testSourceCommit ||
 					len(request.ExecutionDigest) != 64 || request.SourceBuildID != "" {
@@ -518,7 +514,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 		}),
 	)
 	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
-	if !plan.Execution.Eligible || len(plan.Execution.PlanDigest) != 64 {
+	if !plan.Execution.Eligible || len(plan.Execution.PlanDigest) != 64 || preflightCalls != 1 {
 		t.Fatalf("execution = %#v", plan.Execution)
 	}
 
@@ -546,8 +542,8 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 		t.Fatalf("start status = %d", response.StatusCode)
 	}
 	waitForRelease(t, ui)
-	if service.mirrors != 1 || service.queued != 1 || service.polled != 1 {
-		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
+	if preflightCalls != 2 || service.mirrors != 1 || service.queued != 1 || service.polled != 1 {
+		t.Fatalf("preflights = %d, mirrors = %d, queued = %d, polled = %d", preflightCalls, service.mirrors, service.queued, service.polled)
 	}
 	persisted, err := store.Load(context.Background())
 	if err != nil {
@@ -584,7 +580,6 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
@@ -615,7 +610,6 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			DefinitionID: goImagesPipelineID,
-			Preflight:    func(context.Context) (string, error) { return "ok", nil },
 			NewService:   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) { return service, nil },
 		}),
 	)
