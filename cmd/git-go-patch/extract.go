@@ -129,30 +129,9 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 		return fmt.Errorf("unable to create temp dir for patch renames: %v", err)
 	}
 
-	cmd := exec.Command(
-		"git",
-		"format-patch",
-
-		// Set the minimum abbreviation level to a certain value to avoid user-specific defaults,
-		// which may change due to Git version or user configuration.
-		"--abbrev=14",
-		// Remove default signature, which includes the Git version.
-		"--signature=",
-		// Use "From 0000000" instead of "From abc123f" in the patch file. A new commit hash is
-		// generated each time the patches are applied, and including it in the patch text would
-		// make the process less repeatable.
-		"--zero-commit",
-		// Remove "[PATCH 1/3]" from the patch file content. Avoid the reference to the total
-		// number of patch files so earlier patch files don't change when a new one is appended.
-		"--no-numbered",
-		// Emit the patch files in the working directory.
-		"-o", tmpRawDir,
-
-		since,
-	)
-	cmd.Dir = goDir
-
-	if err := executil.Run(cmd); err != nil {
+	formatOutput, err := patch.FormatPatch(goDir, "-o", tmpRawDir, since)
+	fmt.Print(formatOutput)
+	if err != nil {
 		return err
 	}
 

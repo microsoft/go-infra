@@ -29,23 +29,31 @@ func RunQuiet(c *exec.Cmd) error {
 	return c.Run()
 }
 
-// CombinedOutput runs a command and returns the output string of c.CombinedOutput.
+// CombinedOutput runs a command and returns the output string of c.CombinedOutput, including when
+// the command fails.
 func CombinedOutput(c *exec.Cmd) (string, error) {
 	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
 	out, err := c.CombinedOutput()
-	if err != nil {
-		return "", err
+	return string(out), err
+}
+
+// Output runs a command and returns stdout without mixing in stderr. If the command fails, stderr
+// is included in the returned error for diagnostics.
+func Output(c *exec.Cmd) (string, error) {
+	var stderr strings.Builder
+	c.Stderr = &stderr
+	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
+	out, err := c.Output()
+	if err != nil && stderr.Len() > 0 {
+		err = fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
-	return string(out), nil
+	return string(out), err
 }
 
 // SpaceTrimmedCombinedOutput runs CombinedOutput and trims leading/trailing spaces from the result.
 func SpaceTrimmedCombinedOutput(c *exec.Cmd) (string, error) {
 	out, err := CombinedOutput(c)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(out), err
 }
 
 // Dir returns a command that runs in the given dir. The command can be passed to one of the other

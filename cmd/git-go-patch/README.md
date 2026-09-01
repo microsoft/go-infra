@@ -166,7 +166,12 @@ For more control over each part of the process, or to review changes that aren't
 
 Every so often, you need to update your submodule to the latest version of the upstream repo.
 Just like a `rebase` or `merge`, this can generate conflicts when the patches no longer apply cleanly.
-The error may look like this:
+
+The Microsoft build of Go and related repositories use an [automated sync process](/docs/automation/sync.md).
+It uses a 3-way merge to automatically fix simple conflicts.
+Some conflicts can't be fixed automatically, and a dev has to investigate and manually fix them.
+
+A patch conflict error may look like this:
 
 ```
 error: patch failed: src/[...].go:329
