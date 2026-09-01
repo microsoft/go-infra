@@ -279,6 +279,79 @@ func TestTryThreeWayRebaseNoMatchingConfig(t *testing.T) {
 	}
 }
 
+func TestWritePatchReplacements(t *testing.T) {
+	t.Run("preparation failure leaves originals unchanged", func(t *testing.T) {
+		rootDir := t.TempDir()
+		patchPath := filepath.Join(rootDir, "first.patch")
+		writeThreeWayTestFile(t, patchPath, "original")
+
+		_, err := writePatchReplacements(rootDir, []patchReplacement{
+			{path: patchPath, content: []byte("replacement")},
+			{path: filepath.Join(rootDir, "missing.patch"), content: []byte("replacement")},
+		})
+		if err == nil {
+			t.Fatal("writePatchReplacements succeeded, want error")
+		}
+		content, err := os.ReadFile(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "original" {
+			t.Errorf("first patch content = %q, want original", content)
+		}
+		assertNoPatchReplacementTemps(t, rootDir)
+	})
+
+	t.Run("replaces atomically and preserves permissions", func(t *testing.T) {
+		rootDir := t.TempDir()
+		patchPath := filepath.Join(rootDir, "first.patch")
+		writeThreeWayTestFile(t, patchPath, "original")
+		if err := os.Chmod(patchPath, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.Stat(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		updatedFiles, err := writePatchReplacements(rootDir, []patchReplacement{
+			{path: patchPath, content: []byte("replacement")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"first.patch"}; !slices.Equal(updatedFiles, want) {
+			t.Errorf("updated files = %v, want %v", updatedFiles, want)
+		}
+		content, err := os.ReadFile(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "replacement" {
+			t.Errorf("patch content = %q, want replacement", content)
+		}
+		after, err := os.Stat(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.Mode().Perm() != before.Mode().Perm() {
+			t.Errorf("patch permissions = %v, want %v", after.Mode().Perm(), before.Mode().Perm())
+		}
+		assertNoPatchReplacementTemps(t, rootDir)
+	})
+}
+
+func assertNoPatchReplacementTemps(t *testing.T, dir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".*.patch-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("temporary patch files remain: %v", matches)
+	}
+}
+
 func TestReadRejectsOversizedLine(t *testing.T) {
 	if _, err := Read(strings.NewReader(strings.Repeat("x", bufio.MaxScanTokenSize+1))); err == nil {
 		t.Fatal("Read succeeded with an oversized line, want scanner error")

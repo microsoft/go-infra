@@ -36,6 +36,69 @@ func TryThreeWayRebase(rootDir, submoduleDir, baseCommit string) ([]string, erro
 	return tryThreeWayRebase(config, rootDir, baseCommit)
 }
 
+type patchReplacement struct {
+	path    string
+	content []byte
+}
+
+func writePatchReplacements(rootDir string, replacements []patchReplacement) ([]string, error) {
+	type preparedReplacement struct {
+		path         string
+		tempPath     string
+		relativePath string
+	}
+	prepared := make([]preparedReplacement, 0, len(replacements))
+	defer func() {
+		for _, replacement := range prepared {
+			_ = os.Remove(replacement.tempPath)
+		}
+	}()
+
+	for _, replacement := range replacements {
+		relativePath, err := filepath.Rel(rootDir, replacement.path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine regenerated patch path: %w", err)
+		}
+		info, err := os.Stat(replacement.path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect patch %q: %w", replacement.path, err)
+		}
+		temp, err := os.CreateTemp(filepath.Dir(replacement.path), "."+filepath.Base(replacement.path)+"-*")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temporary patch for %q: %w", replacement.path, err)
+		}
+		tempPath := temp.Name()
+		if _, err := temp.Write(replacement.content); err != nil {
+			_ = temp.Close()
+			_ = os.Remove(tempPath)
+			return nil, fmt.Errorf("failed to write temporary patch for %q: %w", replacement.path, err)
+		}
+		if err := temp.Chmod(info.Mode().Perm()); err != nil {
+			_ = temp.Close()
+			_ = os.Remove(tempPath)
+			return nil, fmt.Errorf("failed to preserve permissions for patch %q: %w", replacement.path, err)
+		}
+		if err := temp.Close(); err != nil {
+			_ = os.Remove(tempPath)
+			return nil, fmt.Errorf("failed to close temporary patch for %q: %w", replacement.path, err)
+		}
+		prepared = append(prepared, preparedReplacement{
+			path:         replacement.path,
+			tempPath:     tempPath,
+			relativePath: relativePath,
+		})
+	}
+
+	updatedFiles := make([]string, 0, len(prepared))
+	for _, replacement := range prepared {
+		if err := os.Rename(replacement.tempPath, replacement.path); err != nil {
+			return nil, fmt.Errorf("failed to replace regenerated patch %q: %w", replacement.path, err)
+		}
+		updatedFiles = append(updatedFiles, replacement.relativePath)
+	}
+	return updatedFiles, nil
+}
+
 func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]string, error) {
 	var patchPaths []string
 	if err := WalkGoPatches(config, func(path string) error {
@@ -58,11 +121,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		return nil, fmt.Errorf("failed to check out patch base commit %q: %w", baseCommit, err)
 	}
 
-	type replacement struct {
-		path    string
-		content []byte
-	}
-	var replacements []replacement
+	var replacements []patchReplacement
 
 	for _, patchPath := range patchPaths {
 		if err := gitcmd.Am(workDir, "--quiet", patchPath); err == nil {
@@ -93,22 +152,11 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		if config.ExtractAsAuthor != "" {
 			p.FromAuthor = config.ExtractAsAuthor
 		}
-		replacements = append(replacements, replacement{
+		replacements = append(replacements, patchReplacement{
 			path:    patchPath,
 			content: []byte(p.String()),
 		})
 	}
 
-	updatedFiles := make([]string, 0, len(replacements))
-	for _, replacement := range replacements {
-		if err := os.WriteFile(replacement.path, replacement.content, 0o666); err != nil {
-			return nil, fmt.Errorf("failed to write regenerated patch %q: %w", replacement.path, err)
-		}
-		relativePath, err := filepath.Rel(config.RootDir, replacement.path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to determine regenerated patch path: %w", err)
-		}
-		updatedFiles = append(updatedFiles, relativePath)
-	}
-	return updatedFiles, nil
+	return writePatchReplacements(config.RootDir, replacements)
 }
