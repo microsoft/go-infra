@@ -34,7 +34,7 @@ ProcessDefinition{
     ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
     Workflow: ProcessWorkflow{
         Heading: "Configure release", SubmitLabel: "Prepare release",
-      Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID"}},
+        Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID"}},
         DurableAction: true,
     },
 }
