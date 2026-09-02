@@ -142,7 +142,7 @@ The restored path wraps the execution service in a queue-denying adapter, so it 
 
 The go-images session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
 It contains no credentials.
-Schema version 7 stores only standalone go-images input and state. It intentionally rejects the
+Schema version 8 stores only standalone go-images input and state. It intentionally rejects the
 older full-release-shaped prototype documents rather than retaining a second domain model and
 migration path. Workflow revision 7 uses unique step names as graph identity. Start with a new
 session file when either version is unsupported.

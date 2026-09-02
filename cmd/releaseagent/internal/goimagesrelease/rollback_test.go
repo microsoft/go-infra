@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 const testCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
@@ -23,9 +24,9 @@ func (c *fakePipelineClient) Get(context.Context, int) (*azdopipeline.Build, err
 
 func TestValidateRollbackSource(t *testing.T) {
 	client := &fakePipelineClient{build: &azdopipeline.Build{
-		ID: 3019035, DefinitionID: 1023, Status: "completed", Result: "succeeded",
+		ID: 3019035, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "succeeded",
 		WebURL:       "https://example/build/3019035",
-		SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+		SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 		TemplateParameters: map[string]any{
 			"sourceBuildPipelineRunId": "$(Build.BuildId)",
 			"publishRepoPrefix":        "public/",
@@ -37,7 +38,6 @@ func TestValidateRollbackSource(t *testing.T) {
 		VersionResolverFunc(func(context.Context, string) ([]string, error) {
 			return []string{"1.26.5-2", "1.25.12-1"}, nil
 		}),
-		1023,
 		3019035,
 	)
 	if err != nil {
@@ -57,19 +57,19 @@ func TestValidateRollbackSourceRejectsUnsafeBuilds(t *testing.T) {
 	}{
 		{name: "wrong definition", build: &azdopipeline.Build{
 			ID: 1, DefinitionID: 1492, Status: "completed", Result: "succeeded",
-			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+			SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 		}},
 		{name: "failed", build: &azdopipeline.Build{
-			ID: 1, DefinitionID: 1023, Status: "completed", Result: "failed",
-			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+			ID: 1, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed",
+			SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 		}},
 		{name: "wrong branch", build: &azdopipeline.Build{
-			ID: 1, DefinitionID: 1023, Status: "completed", Result: "succeeded",
+			ID: 1, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "succeeded",
 			SourceBranch: "refs/heads/feature", SourceVersion: testCommit,
 		}},
 		{name: "already republished", build: &azdopipeline.Build{
-			ID: 1, DefinitionID: 1023, Status: "completed", Result: "succeeded",
-			SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
+			ID: 1, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "succeeded",
+			SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 			TemplateParameters: map[string]any{"sourceBuildPipelineRunId": "123"},
 		}},
 	} {
@@ -80,7 +80,6 @@ func TestValidateRollbackSourceRejectsUnsafeBuilds(t *testing.T) {
 				VersionResolverFunc(func(context.Context, string) ([]string, error) {
 					return []string{"1.26.5-2"}, nil
 				}),
-				1023,
 				test.build.ID,
 			)
 			if err == nil {

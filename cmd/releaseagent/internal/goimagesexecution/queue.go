@@ -80,8 +80,8 @@ func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest
 		return 0, fmt.Errorf("marshal go-images release variables: %w", err)
 	}
 	body, err := json.Marshal(map[string]any{
-		"definition":         map[string]int{"id": DefinitionID},
-		"sourceBranch":       SourceBranch,
+		"definition":         map[string]int{"id": goimagesworkflow.DefinitionID},
+		"sourceBranch":       goimagesworkflow.SourceBranch,
 		"sourceVersion":      request.SourceVersion,
 		"templateParameters": parameters,
 		// The Build API's legacy parameters field carries pipeline variables as a JSON string.
@@ -91,7 +91,7 @@ func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest
 		return 0, fmt.Errorf("marshal go-images release request: %w", err)
 	}
 	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/build/builds?" + url.Values{
-		"definitionId": {strconv.Itoa(DefinitionID)},
+		"definitionId": {strconv.Itoa(goimagesworkflow.DefinitionID)},
 		"api-version":  {"7.1-preview.7"},
 	}.Encode()
 	token, err := c.tokens.Token(ctx)

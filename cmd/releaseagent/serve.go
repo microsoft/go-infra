@@ -146,9 +146,8 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return releaseui.GoImagesSource{Branch: tip.Name, Commit: tip.ObjectID, Versions: versions}, nil
 	}
 	options = append(options, releaseui.WithGoImagesReadOnlyIntegration(releaseui.GoImagesReadOnlyIntegration{
-		DefinitionID: 1023,
 		Preflight: func(ctx context.Context) (string, error) {
-			definition, err := azureClient.GetDefinition(ctx, 1023)
+			definition, err := azureClient.GetDefinition(ctx, goimagesworkflow.DefinitionID)
 			if err != nil {
 				return "", err
 			}
@@ -164,7 +163,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 		},
 		ResolveCurrentSource: resolveCurrentSource,
 		ValidateRollback: func(ctx context.Context, buildID int) (releaseui.GoImagesRollbackSource, error) {
-			source, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, 1023, buildID)
+			source, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, buildID)
 			if err != nil {
 				return releaseui.GoImagesRollbackSource{}, err
 			}
@@ -184,7 +183,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 	}
 	options = append(options, releaseui.WithGoImagesExecutionIntegration(
 		releaseui.GoImagesExecutionIntegration{
-			DefinitionID: goimagesexecution.DefinitionID,
 			NewService: func(request releaseui.GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return goimagesexecution.New(azureClient, queueClient, goimagesexecution.Config{
 					Mode:                 request.Mode,

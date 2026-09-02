@@ -195,9 +195,7 @@ func testDocument(t *testing.T) *Document {
 	t.Helper()
 	input := &goimagesworkflow.Input{
 		Versions: []string{"1.26.1-1"}, Mode: goimagesworkflow.ModeNormal,
-		SourceBranch:  "refs/heads/microsoft/main",
 		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
-		MirrorTarget:  goimagesworkflow.InternalMirrorTarget, PipelineID: 1023,
 	}
 	state, err := goimagesworkflow.NewState(input)
 	if err != nil {

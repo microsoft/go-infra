@@ -21,8 +21,10 @@ import (
 type Mode string
 
 const (
-	// InternalMirrorTarget is the only Azure Repos mirror accepted by this workflow.
-	InternalMirrorTarget = "dnceng/internal/_git/microsoft-go-images"
+	// DefinitionID is the only Azure pipeline this workflow can queue.
+	DefinitionID = 1023
+	// SourceBranch is the only source branch this workflow can release.
+	SourceBranch = "refs/heads/microsoft/main"
 	// ModeNormal builds current microsoft/main and publishes to public/.
 	ModeNormal Mode = "normal"
 	// ModeRollback republishes artifacts from one prior successful build to public/.
@@ -37,11 +39,8 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 type Input struct {
 	Versions      []string
 	Mode          Mode
-	SourceBranch  string
 	SourceVersion string
 	SourceBuildID string
-	MirrorTarget  string
-	PipelineID    int
 }
 
 func (input Input) checksum() (uint32, error) {
@@ -63,8 +62,8 @@ type State struct {
 
 // Service is the complete external surface available to the standalone go-images workflow.
 type Service interface {
-	PollMirror(context.Context, string, string) error
-	QueuePipeline(context.Context, int, map[string]string) (string, error)
+	PollMirror(context.Context, string) error
+	QueuePipeline(context.Context, map[string]string) (string, error)
 	PollPipeline(context.Context, string) error
 }
 
@@ -153,14 +152,8 @@ func NewGraphWithCheckpoint(
 	service Service,
 	checkpoint CheckpointFunc,
 ) ([]*coordinator.Step, *State, error) {
-	if input == nil || input.PipelineID == 0 {
-		return nil, nil, fmt.Errorf("no go-images pipeline specified")
-	}
-	if input.SourceBranch != "refs/heads/microsoft/main" {
-		return nil, nil, fmt.Errorf("go-images source branch %q is not allowlisted", input.SourceBranch)
-	}
-	if input.MirrorTarget != InternalMirrorTarget {
-		return nil, nil, fmt.Errorf("go-images mirror target %q is not allowlisted", input.MirrorTarget)
+	if input == nil {
+		return nil, nil, fmt.Errorf("go-images input is nil")
 	}
 	if !commitPattern.MatchString(input.SourceVersion) {
 		return nil, nil, fmt.Errorf("invalid go-images source commit %q", input.SourceVersion)
@@ -186,7 +179,7 @@ func NewGraphWithCheckpoint(
 			if stateValue(access, func(state *State) string { return state.BuildID }) != "" {
 				return nil
 			}
-			return service.PollMirror(ctx, input.MirrorTarget, input.SourceVersion)
+			return service.PollMirror(ctx, input.SourceVersion)
 		},
 	)
 	queue := verifyMirror.Then(
@@ -201,7 +194,7 @@ func NewGraphWithCheckpoint(
 					return err
 				}
 			}
-			buildID, err := service.QueuePipeline(ctx, input.PipelineID, parameters)
+			buildID, err := service.QueuePipeline(ctx, parameters)
 			if err != nil {
 				return err
 			}

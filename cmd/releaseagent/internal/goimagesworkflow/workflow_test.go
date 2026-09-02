@@ -16,8 +16,7 @@ const testCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 
 var testInput = &Input{
 	Versions: []string{"1.25.12-1", "1.26.5-2"}, Mode: ModeNormal,
-	SourceBranch: "refs/heads/microsoft/main", SourceVersion: testCommit,
-	MirrorTarget: InternalMirrorTarget, PipelineID: 1023,
+	SourceVersion: testCommit,
 }
 
 type fakeService struct {
@@ -27,17 +26,17 @@ type fakeService struct {
 	polls     int
 }
 
-func (service *fakeService) PollMirror(_ context.Context, target, commit string) error {
+func (service *fakeService) PollMirror(_ context.Context, commit string) error {
 	service.mirrors++
-	if target != InternalMirrorTarget || commit != testCommit {
-		return errors.New("unexpected mirror target")
+	if commit != testCommit {
+		return errors.New("unexpected mirror commit")
 	}
 	return service.mirrorErr
 }
 
-func (service *fakeService) QueuePipeline(_ context.Context, pipelineID int, parameters map[string]string) (string, error) {
+func (service *fakeService) QueuePipeline(_ context.Context, parameters map[string]string) (string, error) {
 	service.queues++
-	if pipelineID != 1023 || parameters["publishRepoPrefix"] != "public/" {
+	if parameters["publishRepoPrefix"] != "public/" {
 		return "", errors.New("unexpected queue request")
 	}
 	return "888", nil

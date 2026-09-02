@@ -138,7 +138,7 @@ func TestUncertainGoInfraRunDoesNotHideBehindGoImagesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(sessionStore), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, first, `{"mode":"normal"}`)
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}

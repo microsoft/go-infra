@@ -74,7 +74,7 @@ func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
+			buildID, err := service.QueuePipeline(context.Background(), parameters)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,9 +111,7 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollMirror(
-		context.Background(), goimagesworkflow.InternalMirrorTarget, testCommit,
-	); err != nil {
+	if err := service.PollMirror(context.Background(), testCommit); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 3 || sleeps != 2 {
@@ -121,16 +119,9 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	}
 }
 
-func TestPollMirrorRejectsUnplannedSource(t *testing.T) {
+func TestPollMirrorRejectsUnplannedCommit(t *testing.T) {
 	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
-	if err := service.PollMirror(context.Background(), "other/repo", testCommit); err == nil {
-		t.Fatal("service accepted a different mirror target")
-	}
-	if err := service.PollMirror(
-		context.Background(),
-		goimagesworkflow.InternalMirrorTarget,
-		"2ef65db89e42942c24e3d8f0b8a8eb52bc86857a",
-	); err == nil {
+	if err := service.PollMirror(context.Background(), "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"); err == nil {
 		t.Fatal("service accepted a different mirror commit")
 	}
 }
@@ -138,11 +129,8 @@ func TestPollMirrorRejectsUnplannedSource(t *testing.T) {
 func TestTriggerRejectsMutatedExecution(t *testing.T) {
 	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
 	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeNormal, "")
-	if _, err := service.QueuePipeline(context.Background(), 1492, parameters); err == nil {
-		t.Fatal("service accepted the deprecated definition")
-	}
 	parameters["publishRepoPrefix"] = "dev/"
-	if _, err := service.QueuePipeline(context.Background(), DefinitionID, parameters); err == nil {
+	if _, err := service.QueuePipeline(context.Background(), parameters); err == nil {
 		t.Fatal("normal service accepted test parameters")
 	}
 }
@@ -158,14 +146,14 @@ func TestTriggerReconcilesExistingRelease(t *testing.T) {
 		template[name] = value
 	}
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{{{
-		ID: 777, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: testCommit,
+		ID: 777, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 		Parameters: variables, TemplateParameters: template,
 	}}}}
 	queue := &fakeQueueClient{}
 	service := newTestService(t, reader, queue, Config{
 		Mode: goimagesworkflow.ModeRollback, SourceBuildID: "3019035", PreviousQueueAttempt: true,
 	})
-	buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
+	buildID, err := service.QueuePipeline(context.Background(), parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +175,7 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{
 		nil,
 		{{
-			ID: 778, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: testCommit,
+			ID: 778, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 			Parameters: variables, TemplateParameters: template,
 		}},
 	}}
@@ -202,7 +190,7 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	buildID, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
+	buildID, err := service.QueuePipeline(context.Background(), parameters)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +206,7 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 		template[name] = value
 	}
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{{{
-		ID: 777, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: testCommit,
+		ID: 777, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
 		Parameters: map[string]string{
 			correlationVariable: "session", executionDigestVariable: testDigest,
 			modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
@@ -228,7 +216,7 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 	service := newTestService(t, reader, &fakeQueueClient{}, Config{
 		Mode: goimagesworkflow.ModeNormal, PreviousQueueAttempt: true,
 	})
-	_, err := service.QueuePipeline(context.Background(), DefinitionID, parameters)
+	_, err := service.QueuePipeline(context.Background(), parameters)
 	if err == nil || !strings.Contains(err.Error(), modeVariable) {
 		t.Fatalf("error = %v", err)
 	}
@@ -236,8 +224,8 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 
 func TestPollPipeline(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{
-		{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"},
-		{ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded"},
+		{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "inProgress"},
+		{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "succeeded"},
 	}}
 	sleeps := 0
 	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
@@ -259,7 +247,7 @@ func TestPollPipeline(t *testing.T) {
 
 func TestPollPipelineReportsFailure(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
+		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
 	}}}
 	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
 	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
@@ -278,7 +266,7 @@ func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
 }
 
 func TestPollHonorsCancellation(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, Status: "inProgress"}}}
+	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "inProgress"}}}
 	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
 		Mode: goimagesworkflow.ModeNormal,
 	}), func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
