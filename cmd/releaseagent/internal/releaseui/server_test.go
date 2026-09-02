@@ -145,8 +145,7 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var goImages processDetail
 	decodeResponse(t, response, &goImages)
-	if response.StatusCode != http.StatusOK || goImages.Workflow == nil || !goImages.Workflow.CanPrepare ||
-		!goImages.Workflow.CanStart || len(goImages.Workflow.Inputs) != 2 {
+	if response.StatusCode != http.StatusOK || !goImages.Workflow.CanSimulate || len(goImages.Workflow.Inputs) != 2 {
 
 		t.Fatalf("go-images process = %#v", goImages)
 	}
@@ -156,9 +155,8 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var process processDetail
 	decodeResponse(t, response, &process)
-	if response.StatusCode != http.StatusOK || process.ID != "go-infra" || process.Workflow == nil ||
-		!process.Workflow.HasPreflight || !process.Workflow.CanPrepare ||
-		!process.Workflow.CanStart || len(process.Workflow.Inputs) != 3 {
+	if response.StatusCode != http.StatusOK || process.ID != "go-infra" ||
+		process.Workflow.CanSimulate || len(process.Workflow.Inputs) != 3 {
 
 		t.Fatalf("process = %#v", process)
 	}
@@ -168,7 +166,7 @@ func TestDashboardShowsDurableProcessRun(t *testing.T) {
 	ui := newTestUI(t)
 	registry, err := newProcessRegistry(ProcessDefinition{
 		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
-		Workflow: &ProcessWorkflow{Heading: "Run example"},
+		Workflow: testDurableWorkflow("Run example"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,14 +201,20 @@ func TestDashboardShowsDurableProcessRun(t *testing.T) {
 }
 
 func TestProcessRoutesIsolatePreparedPlans(t *testing.T) {
-	workflow := func(processID string) *ProcessWorkflow {
-		return &ProcessWorkflow{
+	workflow := func(processID string) ProcessWorkflow {
+		return ProcessWorkflow{
 			Heading: "Configure", SubmitLabel: "Prepare",
+			Preflight: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
+				writeJSON(response, http.StatusOK, PreflightReport{PlanningEnabled: true})
+			},
 			GetPlan: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
 				writeJSON(response, http.StatusOK, map[string]string{"process": processID})
 			},
 			Prepare: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
 				writeJSON(response, http.StatusOK, map[string]string{"prepared": processID})
+			},
+			Start: func(_ *Server, response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusAccepted)
 			},
 		}
 	}

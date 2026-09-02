@@ -12,14 +12,14 @@ import (
 func TestNormalizeProcessInputs(t *testing.T) {
 	inputs := []ProcessInput{
 		{
-			ID: "mode", Type: "choice", Label: "Mode", Default: "normal", Required: true,
+			ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
 			Options: []ProcessInputOption{
 				{Value: "normal", Name: "Normal", Description: "Normal mode"},
 				{Value: "rollback", Name: "Rollback", Description: "Rollback mode"},
 			},
 		},
 		{
-			ID: "build", Type: "number", Label: "Build", Required: true,
+			ID: "build", Type: "number", Label: "Build",
 			VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"},
 		},
 	}
@@ -50,11 +50,11 @@ func TestNormalizeProcessInputs(t *testing.T) {
 func TestNormalizeProcessInputsRejectsSchemaViolations(t *testing.T) {
 	inputs := []ProcessInput{
 		{
-			ID: "mode", Type: "choice", Label: "Mode", Required: true,
+			ID: "mode", Type: "choice", Label: "Mode",
 			Options: []ProcessInputOption{{Value: "normal", Name: "Normal", Description: "Normal mode"}},
 		},
 		{
-			ID: "build", Type: "number", Label: "Build", Required: true,
+			ID: "build", Type: "number", Label: "Build",
 			VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "normal"},
 		},
 	}
@@ -75,7 +75,7 @@ func TestNormalizeProcessInputsRejectsSchemaViolations(t *testing.T) {
 	}
 	hidden := []ProcessInput{
 		{
-			ID: "mode", Type: "choice", Label: "Mode", Default: "normal", Required: true,
+			ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
 			Options: []ProcessInputOption{
 				{Value: "normal", Name: "Normal", Description: "Normal mode"},
 				{Value: "rollback", Name: "Rollback", Description: "Rollback mode"},
