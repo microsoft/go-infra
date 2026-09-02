@@ -210,6 +210,6 @@ func testDocument(t *testing.T) *Document {
 
 func testSteps() []*coordinator.Step {
 	root := coordinator.NewRootStep("Root", coordinator.NoTimeout, func(context.Context) error { return nil })
-	leaf := coordinator.NewStep("Leaf", time.Minute, func(context.Context) error { return nil }, root)
+	leaf := root.Then("Leaf", time.Minute, func(context.Context) error { return nil })
 	return []*coordinator.Step{root, leaf}
 }

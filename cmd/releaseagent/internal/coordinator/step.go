@@ -40,35 +40,6 @@ func NewRootStep(name string, timeout time.Duration, f StepFunc) *Step {
 	}
 }
 
-// NewStep creates a new step with the given name, implementation, and dependencies. dependsOn must
-// contain at least one step or NewStep will panic.
-//
-// If there are no dependencies, use NewRootStep instead. These funcs are separate to prevent
-// accidentally creating a root step by omitting dependencies.
-func NewStep(name string, timeout time.Duration, f StepFunc, dependsOn ...*Step) *Step {
-	if len(dependsOn) < 1 {
-		panic("at least one dependency required to create " + name)
-	}
-	return &Step{
-		Name:      name,
-		Timeout:   timeout,
-		Func:      f,
-		DependsOn: dependsOn,
-	}
-}
-
-// NewIndicatorStep creates a new step with the given name and no implementation. An indicator step
-// generally helps a release runner understand the step graph more easily by indicating what it
-// means for a set of steps to complete, and clarify what other steps take a dependency on.
-func NewIndicatorStep(name string, dependsOnAdditional ...*Step) *Step {
-	return NewStep(
-		name,
-		NoTimeout,
-		func(context.Context) error { return nil },
-		dependsOnAdditional...,
-	)
-}
-
 // Then creates a new step that depends on s and returns the new step. This can be used when
 // defining a step graph to chain a sequence of steps together without as much syntactic clutter.
 func (s *Step) Then(name string, timeout time.Duration, f StepFunc, dependsOnAdditional ...*Step) *Step {

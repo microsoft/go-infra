@@ -144,7 +144,7 @@ The go-images session document is schema-versioned, structurally fingerprinted, 
 It contains no credentials.
 Schema version 8 stores only standalone go-images input and state. It intentionally rejects the
 older full-release-shaped prototype documents rather than retaining a second domain model and
-migration path. Workflow revision 7 uses unique step names as graph identity. Start with a new
+migration path. Workflow revision 8 uses unique step names as graph identity. Start with a new
 session file when either version is unsupported.
 
 The current session and process-run stores together own one active durable release at a time.
