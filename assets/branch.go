@@ -51,10 +51,10 @@ type LatestLink struct {
 	Filename string `json:"filename"`
 
 	// OS is the target operating system, if the artifact is platform-specific.
-	OS string `json:"os"`
+	OS string `json:"os,omitempty"`
 
 	// Arch is the target architecture, if the artifact is platform-specific.
-	Arch string `json:"arch"`
+	Arch string `json:"arch,omitempty"`
 
 	// Version is the full Go version available through URL.
 	Version string `json:"version"`

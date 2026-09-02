@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+// Package assets defines JSON contracts for Microsoft build of Go artifacts.
 package assets
 
 // ToolsetBuild describes the artifacts produced by a toolset build of the Microsoft build of Go.
