@@ -50,8 +50,7 @@ type goImagesRuntime struct {
 	restored       bool
 }
 
-// Server hosts a single local release session. Dashboard responses use slices so the storage model
-// can grow to multiple concurrent sessions without changing the browser contract.
+// Server hosts a single local release session.
 type Server struct {
 	ctx              context.Context
 	token            string
