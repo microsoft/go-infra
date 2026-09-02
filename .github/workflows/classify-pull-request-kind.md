@@ -1,7 +1,6 @@
 ---
 description: Classifies a pull request by every substantive change kind
 tracker-id: classify-pull-request-kind
-model: "gpt-5.4"
 on:
    workflow_call:
       inputs:
