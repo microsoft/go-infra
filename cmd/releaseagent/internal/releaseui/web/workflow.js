@@ -61,7 +61,6 @@
   async function initialize() {
     processDefinition = await globalThis.releaseProcessReady;
     workflow = processDefinition.workflow;
-    if (!workflow) return;
 
     endpointBase = `/api/processes/${encodeURIComponent(processDefinition.id)}`;
     workflowSection.hidden = false;
@@ -69,9 +68,8 @@
     workflowDescription.textContent = workflow.description || "";
     workflowDescription.hidden = !workflow.description;
     planButton.querySelector("span:first-child").textContent = workflow.submitLabel || "Prepare release";
-    form.hidden = !workflow.canPrepare;
     demoButton.hidden = !workflow.canSimulate;
-    if (workflow.hasPreflight) planButton.disabled = true;
+    planButton.disabled = true;
 
     processInputs.replaceChildren(...(workflow.inputs || []).map(createInput));
     updateInputState();
@@ -188,7 +186,7 @@
       const condition = record.schema.visibleWhen;
       const visible = !condition || inputValue(condition.inputId) === condition.equals;
       record.wrapper.hidden = !visible;
-      for (const control of record.controls) control.required = visible && Boolean(record.schema.required);
+      for (const control of record.controls) control.required = visible;
     }
     for (const record of inputRecords.values()) {
       if (record.schema.type !== "choice") continue;
@@ -217,7 +215,7 @@
     for (const [id, record] of inputRecords) {
       if (record.wrapper.hidden) continue;
       const value = inputValue(id);
-      if (value !== "" || record.schema.required) result[id] = value;
+      result[id] = value;
     }
     return result;
   }
@@ -250,7 +248,7 @@
       showError(error.message);
     } finally {
       setBusy(planButton, false, workflow.submitLabel || "Prepare release");
-      if (workflow.hasPreflight && !preflight?.planningEnabled) planButton.disabled = true;
+      if (!preflight?.planningEnabled) planButton.disabled = true;
     }
   }
 
@@ -349,16 +347,15 @@
   }
 
   function renderExecution(execution, view) {
-    const preflightReady = !workflow.hasPreflight || Boolean(preflight?.externalExecutionEnabled);
-    const visible = Boolean(workflow.canStart && execution?.enabled && execution?.eligible && preflightReady);
+    const preflightReady = Boolean(preflight?.externalExecutionEnabled);
+    const visible = Boolean(execution?.enabled && execution?.eligible && preflightReady);
     executionControls.hidden = !visible;
     const unavailableReason = execution?.unavailableReason ||
-      (workflow.canStart && execution?.enabled && !preflightReady
+      (execution?.enabled && !preflightReady
         ? "External execution is not ready. Review the preflight checks."
         : "");
     executionUnavailable.hidden = visible || !unavailableReason;
     executionUnavailable.textContent = unavailableReason;
-    if (!workflow.canStart) return;
 
     if (executionControls.dataset.planDigest !== execution?.planDigest) {
       runConfirmationPending = false;
@@ -616,8 +613,8 @@
 
   function updateExecutionButton() {
     const execution = plan?.execution;
-    const preflightReady = !workflow?.hasPreflight || Boolean(preflight?.externalExecutionEnabled);
-    const enabled = Boolean(workflow?.canStart && execution?.enabled && execution?.eligible && preflightReady);
+    const preflightReady = Boolean(preflight?.externalExecutionEnabled);
+    const enabled = Boolean(execution?.enabled && execution?.eligible && preflightReady);
     const complete = Boolean(execution?.run?.complete);
     runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;
@@ -672,7 +669,6 @@
   }
 
   async function loadExistingPlan() {
-    if (!workflow.canPrepare) return;
     try {
       const response = await fetch(`${endpointBase}/plan`);
       if (response.status === 204) return;
@@ -686,7 +682,6 @@
   }
 
   async function loadPreflight() {
-    if (!workflow.hasPreflight) return;
     processSafety.hidden = false;
     try {
       preflight = await requestJSON(`${endpointBase}/preflight`);

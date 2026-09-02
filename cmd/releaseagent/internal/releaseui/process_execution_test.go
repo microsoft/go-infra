@@ -54,10 +54,10 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 	}
 	registry, err := newProcessRegistry(ProcessDefinition{
 		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
-		Workflow: &ProcessWorkflow{
+		Workflow: ProcessWorkflow{
 			Heading: "Run example", SubmitLabel: "Review", DurableAction: true,
 			Inputs: []ProcessInput{{
-				ID: "mode", Type: "choice", Label: "Mode", Required: true,
+				ID: "mode", Type: "choice", Label: "Mode",
 				Options: []ProcessInputOption{{Value: "run", Name: "Run", Description: "Run example"}},
 			}},
 		},

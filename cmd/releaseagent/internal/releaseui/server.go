@@ -257,11 +257,9 @@ func (s *Server) Handler() http.Handler {
 				server.handleProcessRunPreflight(processID, processName, response, request)
 			}
 		}
-		if preflight != nil {
-			mux.HandleFunc("GET "+prefix+"/preflight", func(response http.ResponseWriter, request *http.Request) {
-				preflight(s, response, request)
-			})
-		}
+		mux.HandleFunc("GET "+prefix+"/preflight", func(response http.ResponseWriter, request *http.Request) {
+			preflight(s, response, request)
+		})
 		getPlan := workflow.GetPlan
 		prepare := workflow.Prepare
 		start := workflow.Start
@@ -276,22 +274,14 @@ func (s *Server) Handler() http.Handler {
 				server.handleStartProcessRun(processID, response, request)
 			}
 		}
-		if getPlan != nil {
-			mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID, getPlan))
-		}
-		if prepare != nil {
-			mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID, prepare))
-		}
+		mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID, getPlan))
+		mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID, prepare))
 		if workflow.Simulate != nil {
 			mux.HandleFunc("POST "+prefix+"/simulate", s.requireActiveProcess(processID, workflow.Simulate))
 		}
-		if start != nil {
-			mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, start))
-		}
-		if getPlan != nil {
-			mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, (*Server).handleState))
-			mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, (*Server).handleEvents))
-		}
+		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, start))
+		mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, (*Server).handleState))
+		mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, (*Server).handleEvents))
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
@@ -490,23 +480,20 @@ type processSummary struct {
 }
 
 type processDetail struct {
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Mark             string          `json:"mark"`
-	Description      string          `json:"description"`
-	DocumentationURL string          `json:"documentationUrl"`
-	Workflow         *workflowDetail `json:"workflow,omitempty"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name"`
+	Mark             string         `json:"mark"`
+	Description      string         `json:"description"`
+	DocumentationURL string         `json:"documentationUrl"`
+	Workflow         workflowDetail `json:"workflow"`
 }
 
 type workflowDetail struct {
-	Heading      string         `json:"heading"`
-	Description  string         `json:"description,omitempty"`
-	SubmitLabel  string         `json:"submitLabel,omitempty"`
-	Inputs       []ProcessInput `json:"inputs,omitempty"`
-	HasPreflight bool           `json:"hasPreflight"`
-	CanPrepare   bool           `json:"canPrepare"`
-	CanSimulate  bool           `json:"canSimulate"`
-	CanStart     bool           `json:"canStart"`
+	Heading     string         `json:"heading"`
+	Description string         `json:"description,omitempty"`
+	SubmitLabel string         `json:"submitLabel"`
+	Inputs      []ProcessInput `json:"inputs"`
+	CanSimulate bool           `json:"canSimulate"`
 }
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
@@ -518,14 +505,11 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 	detail := processDetail{
 		ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
 		Description: definition.Description, DocumentationURL: definition.DocumentationURL,
-		Workflow: &workflowDetail{
+		Workflow: workflowDetail{
 			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
-			SubmitLabel:  definition.Workflow.SubmitLabel,
-			Inputs:       append([]ProcessInput(nil), definition.Workflow.Inputs...),
-			HasPreflight: definition.Workflow.Preflight != nil || definition.Workflow.DurableAction,
-			CanPrepare:   definition.Workflow.Prepare != nil || definition.Workflow.DurableAction,
-			CanSimulate:  definition.Workflow.Simulate != nil,
-			CanStart:     definition.Workflow.Start != nil || definition.Workflow.DurableAction,
+			SubmitLabel: definition.Workflow.SubmitLabel,
+			Inputs:      append([]ProcessInput(nil), definition.Workflow.Inputs...),
+			CanSimulate: definition.Workflow.Simulate != nil,
 		},
 	}
 	writeJSON(response, http.StatusOK, detail)
