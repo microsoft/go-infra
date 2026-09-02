@@ -41,7 +41,9 @@ func TestInterruptedGoInfraRunRestoresUncertain(t *testing.T) {
 	}
 	var restored processRunResponse
 	decodeResponse(t, response, &restored)
-	if response.StatusCode != http.StatusOK || !restored.Execution.Run.Complete || restored.Execution.Run.Result != "uncertain" {
+	if response.StatusCode != http.StatusOK || !restored.Execution.Run.Complete || len(restored.Steps) != 1 ||
+		restored.Steps[0].Status != "failed" {
+
 		t.Fatalf("restored = %#v", restored)
 	}
 	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)

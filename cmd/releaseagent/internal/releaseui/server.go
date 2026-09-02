@@ -89,11 +89,9 @@ type GoImagesSource struct {
 
 // GoImagesRollbackSource describes a validated successful build whose artifacts may be republished.
 type GoImagesRollbackSource struct {
-	BuildID       int      `json:"buildId"`
-	URL           string   `json:"url,omitempty"`
-	SourceBranch  string   `json:"sourceBranch"`
-	SourceVersion string   `json:"sourceVersion"`
-	Versions      []string `json:"versions"`
+	BuildID  int
+	URL      string
+	Versions []string
 }
 
 // GoImagesReadOnlyIntegration is the explicitly enabled Azure read boundary. It resolves current
@@ -377,20 +375,15 @@ type PlanInput struct {
 type planStep struct {
 	Name      string   `json:"name"`
 	DependsOn []string `json:"dependsOn,omitempty"`
-	Timeout   string   `json:"timeout,omitempty"`
 	Status    string   `json:"status,omitempty"`
 }
 
 type planResponse struct {
-	Input          PlanInput               `json:"input"`
-	Source         GoImagesSource          `json:"source"`
-	RollbackSource *GoImagesRollbackSource `json:"rollbackSource,omitempty"`
-	Steps          []planStep              `json:"steps"`
-	Pipeline       pipelinePreview         `json:"pipeline"`
-	SessionID      string                  `json:"sessionId,omitempty"`
-	Restored       bool                    `json:"restored"`
-	Execution      executionResponse       `json:"execution"`
-	View           ProcessPlanView         `json:"view"`
+	Input     PlanInput         `json:"input"`
+	Steps     []planStep        `json:"steps"`
+	SessionID string            `json:"sessionId"`
+	Execution executionResponse `json:"execution"`
+	View      ProcessPlanView   `json:"view"`
 }
 
 // ProcessPlanView contains process-neutral display data for the shared release page.
@@ -428,21 +421,11 @@ type ProcessRequestField struct {
 	Value string `json:"value"`
 }
 
-type pipelinePreview struct {
-	DefinitionID int               `json:"definitionId"`
-	Organization string            `json:"organization"`
-	Project      string            `json:"project"`
-	Name         string            `json:"name"`
-	Parameters   map[string]string `json:"parameters"`
-	Locked       bool              `json:"locked"`
-}
-
 type pipelineRun struct {
 	BuildID   string `json:"buildId,omitempty"`
 	URL       string `json:"url,omitempty"`
 	LinkLabel string `json:"linkLabel,omitempty"`
 	Complete  bool   `json:"complete"`
-	Result    string `json:"result,omitempty"`
 }
 
 type executionResponse struct {
@@ -460,8 +443,7 @@ type dashboardResponse struct {
 }
 
 type releaseSummary struct {
-	ID        string    `json:"id"`
-	ProcessID string    `json:"processId"`
+	Mark      string    `json:"mark"`
 	Name      string    `json:"name"`
 	Mode      string    `json:"mode,omitempty"`
 	Status    string    `json:"status"`
@@ -557,7 +539,7 @@ func (s *Server) releaseSummaryLocked() releaseSummary {
 		status = "reconciling"
 	}
 	return releaseSummary{
-		ID: s.goImages.document.ID, ProcessID: goImagesProcessID, Name: "Go images", Mode: string(s.goImages.document.Input.Mode),
+		Mark: "GI", Name: "Go images", Mode: string(s.goImages.document.Input.Mode),
 		Status: status, RunID: state.BuildID, RunLabel: "Azure build",
 		UpdatedAt: s.goImages.document.UpdatedAt, Href: "/go-images",
 	}
@@ -583,7 +565,7 @@ func (s *Server) processRunSummaryLocked() releaseSummary {
 		status = run.Result
 	}
 	return releaseSummary{
-		ID: run.Digest, ProcessID: run.ProcessID, Name: definition.Name,
+		Mark: definition.Mark, Name: definition.Name,
 		Status: status, RunID: runID, RunLabel: "Target", UpdatedAt: run.UpdatedAt, Href: processPath(run.ProcessID),
 	}
 }
@@ -748,19 +730,19 @@ func (s *Server) planResponseLocked(restored bool) planResponse {
 			setPlanStepStatus(steps, "⌚ Wait for go-images release", "running")
 		}
 	}
-	result := planResponse{
-		Input: s.goImages.planInput, Source: s.goImages.source, RollbackSource: s.goImages.rollbackSource, Steps: steps,
-		Pipeline: pipelinePreview{
-			DefinitionID: goImagesPipelineID, Organization: goImagesPipelineOrg, Project: goImagesPipelineProject,
-			Name: goImagesPipelineName, Parameters: parameters, Locked: true,
-		},
-		Restored: restored,
-	}
+	result := planResponse{Input: s.goImages.planInput, Steps: steps}
 	if s.goImages.document != nil {
 		result.SessionID = s.goImages.document.ID
 	}
 	result.Execution = s.executionResponseLocked()
-	result.View = goImagesPlanView(result)
+	result.View = goImagesPlanView(
+		s.goImages.planInput,
+		s.goImages.source,
+		s.goImages.rollbackSource,
+		parameters,
+		len(steps),
+		restored,
+	)
 	return result
 }
 
@@ -773,30 +755,37 @@ func setPlanStepStatus(steps []planStep, name, status string) {
 	}
 }
 
-func goImagesPlanView(plan planResponse) ProcessPlanView {
-	modeName := string(plan.Input.Mode)
+func goImagesPlanView(
+	input PlanInput,
+	source GoImagesSource,
+	rollbackSource *GoImagesRollbackSource,
+	parameters map[string]string,
+	stepCount int,
+	restored bool,
+) ProcessPlanView {
+	modeName := string(input.Mode)
 	if modeName != "" {
 		modeName = strings.ToUpper(modeName[:1]) + modeName[1:]
 	}
 	view := ProcessPlanView{
-		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, plan.Pipeline.DefinitionID, len(plan.Steps)),
-		IntentBadge: plan.Pipeline.Parameters["publishRepoPrefix"],
+		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, goImagesPipelineID, stepCount),
+		IntentBadge: parameters["publishRepoPrefix"],
 		Facts: []ProcessPlanFact{{
-			Label: "Pipeline source", Value: plan.Source.Branch, Detail: plan.Source.Commit,
+			Label: "Pipeline source", Value: source.Branch, Detail: source.Commit,
 		}},
 		Request: &ProcessRequestPreview{
 			Eyebrow: "Azure DevOps request preview · not sent",
-			Title:   fmt.Sprintf("Pipeline %d · %s", plan.Pipeline.DefinitionID, plan.Pipeline.Name),
-			Target:  plan.Pipeline.Organization + "/" + plan.Pipeline.Project,
+			Title:   fmt.Sprintf("Pipeline %d · %s", goImagesPipelineID, goImagesPipelineName),
+			Target:  goImagesPipelineOrg + "/" + goImagesPipelineProject,
 		},
 	}
-	if plan.Restored {
+	if restored {
 		view.Subtitle += " · restored from disk"
 	}
-	for _, name := range sortedMapKeys(plan.Pipeline.Parameters) {
-		view.Request.Fields = append(view.Request.Fields, ProcessRequestField{Name: name, Value: plan.Pipeline.Parameters[name]})
+	for _, name := range sortedMapKeys(parameters) {
+		view.Request.Fields = append(view.Request.Fields, ProcessRequestField{Name: name, Value: parameters[name]})
 	}
-	switch plan.Input.Mode {
+	switch input.Mode {
 	case goimagesworkflow.ModeNormal:
 		view.IntentTitle = "Build current main and publish production images"
 		view.ExecutionTitle = "Run production release"
@@ -804,15 +793,15 @@ func goImagesPlanView(plan planResponse) ProcessPlanView {
 		view.ExecutionConfirmation = "Confirm run to build, sign, and publish current main to public/."
 		view.ExecutionButtonLabel = "Run production release"
 	case goimagesworkflow.ModeRollback:
-		view.IntentTitle = "Republish artifacts from build " + plan.Input.SourceBuildID
+		view.IntentTitle = "Republish artifacts from build " + input.SourceBuildID
 		view.ExecutionTitle = "Run rollback / republish"
-		view.ExecutionWarning = "This republishes artifacts from build " + plan.Input.SourceBuildID + " under public/. It does not rebuild those images."
-		view.ExecutionConfirmation = "Confirm run to republish artifacts from build " + plan.Input.SourceBuildID + " to public/."
+		view.ExecutionWarning = "This republishes artifacts from build " + input.SourceBuildID + " under public/. It does not rebuild those images."
+		view.ExecutionConfirmation = "Confirm run to republish artifacts from build " + input.SourceBuildID + " to public/."
 		view.ExecutionButtonLabel = "Run rollback"
-		if plan.RollbackSource != nil {
+		if rollbackSource != nil {
 			view.Facts = append(view.Facts, ProcessPlanFact{
-				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goImagesPipelineID, plan.RollbackSource.BuildID),
-				Href: plan.RollbackSource.URL,
+				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goImagesPipelineID, rollbackSource.BuildID),
+				Href: rollbackSource.URL,
 			})
 		}
 	case goimagesworkflow.ModeTest:
@@ -842,7 +831,6 @@ func (s *Server) executionResponseLocked() executionResponse {
 	state := s.goImages.document.State
 	result.Run = pipelineRun{
 		BuildID: state.BuildID, Complete: state.Complete,
-		Result: state.Result,
 	}
 	if result.Run.BuildID != "" {
 		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
@@ -1215,9 +1203,6 @@ func describeSteps(steps []*coordinator.Step) []planStep {
 	descriptions := make([]planStep, 0, len(steps))
 	for _, step := range steps {
 		description := planStep{Name: step.Name, DependsOn: make([]string, len(step.DependsOn)), Status: "waiting"}
-		if step.Timeout != coordinator.NoTimeout {
-			description.Timeout = step.Timeout.String()
-		}
 		for i, dependency := range step.DependsOn {
 			description.DependsOn[i] = dependency.Name
 		}

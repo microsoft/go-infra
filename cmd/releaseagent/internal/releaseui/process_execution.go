@@ -464,7 +464,7 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 		}
 		execution.Run = pipelineRun{
 			BuildID: reference.ID, URL: reference.URL, LinkLabel: reference.LinkLabel,
-			Complete: run.Complete, Result: run.Result,
+			Complete: run.Complete,
 		}
 	}
 	return processRunResponse{

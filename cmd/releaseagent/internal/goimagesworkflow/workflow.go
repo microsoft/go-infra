@@ -59,7 +59,6 @@ type State struct {
 	Result         string
 	Complete       bool
 	QueueAttempted bool
-	Parameters     map[string]string
 }
 
 // Service is the complete external surface available to the standalone go-images workflow.
@@ -178,9 +177,6 @@ func NewGraphWithCheckpoint(
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(state.Parameters) == 0 {
-		state.Parameters = cloneStringMap(parameters)
-	}
 	access := &stateAccess{state: state, checkpoint: checkpoint}
 
 	verifyMirror := coordinator.NewRootStep(
@@ -277,15 +273,4 @@ func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, chec
 			return run(ctx)
 		}
 	}
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if values == nil {
-		return nil
-	}
-	clone := make(map[string]string, len(values))
-	for key, value := range values {
-		clone[key] = value
-	}
-	return clone
 }

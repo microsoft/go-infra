@@ -36,11 +36,9 @@ func (f VersionResolverFunc) VersionsAtCommit(ctx context.Context, commit string
 
 // RollbackSource is a validated successful build whose artifacts may be republished.
 type RollbackSource struct {
-	BuildID       int
-	URL           string
-	SourceBranch  string
-	SourceVersion string
-	Versions      []string
+	BuildID  int
+	URL      string
+	Versions []string
 }
 
 var sourceCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -96,11 +94,9 @@ func ValidateRollbackSource(
 		return RollbackSource{}, fmt.Errorf("validate rollback source build %d versions: %w", buildID, err)
 	}
 	return RollbackSource{
-		BuildID:       build.ID,
-		URL:           build.WebURL,
-		SourceBranch:  build.SourceBranch,
-		SourceVersion: build.SourceVersion,
-		Versions:      versions,
+		BuildID:  build.ID,
+		URL:      build.WebURL,
+		Versions: versions,
 	}, nil
 }
 

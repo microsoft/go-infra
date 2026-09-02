@@ -32,7 +32,7 @@ function createReleaseCard(release) {
 
   const icon = document.createElement("span");
   icon.className = "release-icon";
-  icon.textContent = "GI";
+  icon.textContent = release.mark;
 
   const body = document.createElement("div");
   body.className = "release-card-body";

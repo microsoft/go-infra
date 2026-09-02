@@ -224,7 +224,9 @@ func TestGoInfraReleaseOnMergeRequiresExactConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodeResponse(t, response, &plan)
-	if !plan.Execution.Run.Complete || plan.Execution.Run.Result != "succeeded" || plan.Execution.Run.URL != github.pullRequest.URL {
+	if !plan.Execution.Run.Complete || plan.Execution.Run.URL != github.pullRequest.URL ||
+		len(plan.Steps) != 1 || plan.Steps[0].Status != "succeeded" {
+
 		t.Fatalf("completed plan = %#v", plan)
 	}
 }
@@ -260,7 +262,7 @@ func TestGoInfraWorkflowDispatchModes(t *testing.T) {
 				t.Fatal(err)
 			}
 			decodeResponse(t, response, &plan)
-			if !plan.Execution.Run.Complete || plan.Execution.Run.Result != "succeeded" ||
+			if !plan.Execution.Run.Complete || len(plan.Steps) != 1 || plan.Steps[0].Status != "succeeded" ||
 				plan.Execution.Run.URL != "https://github.com/microsoft/go-infra/actions/runs/123" {
 
 				t.Fatalf("completed plan = %#v", plan)
@@ -340,7 +342,7 @@ func TestGoInfraMutationFailureIsTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodeResponse(t, response, &plan)
-	if !plan.Execution.Run.Complete || plan.Execution.Run.Result != "uncertain" {
+	if !plan.Execution.Run.Complete || len(plan.Steps) != 1 || plan.Steps[0].Status != "failed" {
 		t.Fatalf("plan = %#v", plan)
 	}
 	response = postJSON(t, ui, "/api/processes/go-infra/start", `{"planDigest":"`+plan.Execution.PlanDigest+`","confirmed":true}`)
@@ -372,7 +374,7 @@ func TestGoInfraWorkflowFailureIsTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodeResponse(t, response, &plan)
-	if !plan.Execution.Run.Complete || plan.Execution.Run.Result != "failed" ||
+	if !plan.Execution.Run.Complete || len(plan.Steps) != 1 || plan.Steps[0].Status != "failed" ||
 		plan.Execution.Run.URL != "https://github.com/microsoft/go-infra/actions/runs/123" {
 
 		t.Fatalf("plan = %#v", plan)

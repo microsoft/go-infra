@@ -86,8 +86,8 @@ func testReadOnly(source *GoImagesSource, rollbackCalls *int) GoImagesReadOnlyIn
 				return GoImagesRollbackSource{}, errors.New("unexpected build")
 			}
 			return GoImagesRollbackSource{
-				BuildID: buildID, URL: "https://example/build/3019035", SourceBranch: goImagesSourceBranch,
-				SourceVersion: testSourceCommit, Versions: []string{"1.25.12-1", "1.26.5-2"},
+				BuildID: buildID, URL: "https://example/build/3019035",
+				Versions: []string{"1.25.12-1", "1.26.5-2"},
 			}, nil
 		},
 	}
@@ -145,7 +145,8 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var goImages processDetail
 	decodeResponse(t, response, &goImages)
-	if response.StatusCode != http.StatusOK || !goImages.Workflow.CanSimulate || len(goImages.Workflow.Inputs) != 2 {
+	if response.StatusCode != http.StatusOK || !goImages.Workflow.CanSimulate ||
+		len(goImages.Workflow.Inputs) != 2 {
 
 		t.Fatalf("go-images process = %#v", goImages)
 	}
@@ -193,7 +194,7 @@ func TestDashboardShowsDurableProcessRun(t *testing.T) {
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
 	summary := dashboard.Ongoing[0]
-	if summary.ProcessID != "example" || summary.Name != "Example" || summary.Status != "queued" ||
+	if summary.Mark != "EX" || summary.Name != "Example" || summary.Status != "queued" ||
 		summary.RunID != "7" || summary.Href != "/example" || summary.UpdatedAt.IsZero() {
 
 		t.Fatalf("summary = %#v", summary)
@@ -330,13 +331,15 @@ func TestPrepareReleaseModes(t *testing.T) {
 			if response.StatusCode != http.StatusOK || plan.Input.Mode != test.wantMode || len(plan.Steps) != 4 {
 				t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
 			}
-			if !plan.Pipeline.Locked || plan.Pipeline.Parameters["sourceBuildPipelineRunId"] != test.wantSource ||
-				plan.Pipeline.Parameters["publishRepoPrefix"] != test.wantPrefix {
-
-				t.Fatalf("pipeline = %#v", plan.Pipeline)
+			fields := make(map[string]string)
+			for _, field := range plan.View.Request.Fields {
+				fields[field.Name] = field.Value
 			}
-			if (plan.RollbackSource != nil) != test.wantRollback || rollbackCalls != boolInt(test.wantRollback) {
-				t.Fatalf("rollback = %#v, calls = %d", plan.RollbackSource, rollbackCalls)
+			if fields["sourceBuildPipelineRunId"] != test.wantSource || fields["publishRepoPrefix"] != test.wantPrefix {
+				t.Fatalf("request fields = %#v", fields)
+			}
+			if (len(plan.View.Facts) == 2) != test.wantRollback || rollbackCalls != boolInt(test.wantRollback) {
+				t.Fatalf("facts = %#v, rollback calls = %d", plan.View.Facts, rollbackCalls)
 			}
 			persisted, err := store.Load(context.Background())
 			if err != nil {
@@ -378,7 +381,7 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	created := createTestPlan(t, first, `{"mode":"test"}`)
-	if created.SessionID == "" || created.Restored {
+	if created.SessionID == "" || strings.Contains(created.View.Subtitle, "restored from disk") {
 		t.Fatalf("created = %#v", created)
 	}
 	second := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
@@ -388,7 +391,9 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 	}
 	var restored planResponse
 	decodeResponse(t, response, &restored)
-	if !restored.Restored || restored.SessionID != created.SessionID || restored.Input.Mode != goimagesworkflow.ModeTest {
+	if !strings.Contains(restored.View.Subtitle, "restored from disk") || restored.SessionID != created.SessionID ||
+		restored.Input.Mode != goimagesworkflow.ModeTest {
+
 		t.Fatalf("restored = %#v", restored)
 	}
 	response, err = second.client.Get(second.http.URL + "/api/dashboard")
