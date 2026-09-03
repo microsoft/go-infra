@@ -2,6 +2,7 @@
 description: Classifies a pull request by every substantive change kind
 tracker-id: classify-pull-request-kind
 on:
+   roles: all
    workflow_call:
       inputs:
          pr_number:
