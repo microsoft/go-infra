@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -144,7 +145,7 @@ func TestValidateExplicitAnswers(t *testing.T) {
 
 func TestPlanWorkItemClosuresNormalizesAndApprovesCurrentNode(t *testing.T) {
 	source := decodeSession(t, `{"id":"source","state":"complete","workItems":[{"itemType":"child","nodeId":"Activity existing","workItemId":"1","workItemState":{"state":"Completed","isCompletedCategory":true}}]}`)
-	target := decodeSession(t, `{"id":"target","state":"complete","serverUrl":"https://dev.azure.com/org/project","workItems":[{"itemType":"child","nodeId":"existing","workItemId":"2","workItemState":{"state":"Proposed"}},{"itemType":"child","nodeId":"new","workItemId":"3","workItemState":{"state":"Proposed"}}]}`)
+	target := decodeSession(t, `{"id":"target","state":"complete","serverUrl":"https://dev.azure.com/org/project","workItems":[{"itemType":"child","nodeId":"existing","workItemId":"2","workItemState":{"state":"Proposed"}},{"itemType":"child","nodeId":"Activity new","workItemId":"3","workItemState":{"state":"Proposed"}}]}`)
 
 	closures, err := planWorkItemClosures(source, target, map[string]struct{}{"new": {}})
 	if err != nil {
@@ -152,6 +153,16 @@ func TestPlanWorkItemClosuresNormalizesAndApprovesCurrentNode(t *testing.T) {
 	}
 	if len(closures) != 2 || closures[0].State != "Completed" || closures[1].State != "Completed" {
 		t.Fatalf("closures = %+v", closures)
+	}
+}
+
+func TestPlanWorkItemClosuresRejectsDuplicateNormalizedApprovals(t *testing.T) {
+	source := decodeSession(t, `{"id":"source","state":"complete"}`)
+	target := decodeSession(t, `{"id":"target","state":"complete"}`)
+
+	_, err := planWorkItemClosures(source, target, map[string]struct{}{"new": {}, "Activity new": {}})
+	if err == nil || !strings.Contains(err.Error(), "are duplicates") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

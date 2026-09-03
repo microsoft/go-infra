@@ -191,6 +191,41 @@ func TestComplianceClientRejectsNonJSONErrorBody(t *testing.T) {
 	}
 }
 
+func TestComplianceClientUsesBearerAuthForJWT(t *testing.T) {
+	const token = "header.payload.signature"
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+			t.Errorf("Authorization = %q", got)
+		}
+		if _, _, ok := r.BasicAuth(); ok {
+			t.Error("request unexpectedly uses basic authentication")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/_apis/wit/") {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"scope-id","name":"Product","assessmentGroups":[]}`))
+	}))
+	defer server.Close()
+
+	client, err := newComplianceClient(server.URL+"/account", token, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.getScope(context.Background(), "scope-id"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.setWorkItemState(context.Background(), server.URL+"/project", "123", "Completed"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("request count = %d, want 2", requests)
+	}
+}
+
 func rawArrayLength(t *testing.T, data json.RawMessage) int {
 	t.Helper()
 	var values []json.RawMessage

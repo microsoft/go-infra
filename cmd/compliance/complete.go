@@ -365,6 +365,14 @@ func planWorkItemClosures(source, target *session, approvedCurrentNodes map[stri
 	}
 
 	sourceByNode := make(map[string]sessionWorkItem)
+	normalizedApprovals := make(map[string]string, len(approvedCurrentNodes))
+	for nodeID := range approvedCurrentNodes {
+		normalizedNodeID := normalizeActivityNodeID(nodeID)
+		if previous, exists := normalizedApprovals[normalizedNodeID]; exists {
+			return nil, fmt.Errorf("approved current nodes %q and %q are duplicates", previous, nodeID)
+		}
+		normalizedApprovals[normalizedNodeID] = nodeID
+	}
 	completedState := ""
 	for _, item := range source.WorkItems {
 		if item.ItemType != "child" {
@@ -400,12 +408,12 @@ func planWorkItemClosures(source, target *session, approvedCurrentNodes map[stri
 				return nil, fmt.Errorf("source child node %q was not completed", item.NodeID)
 			}
 			state = sourceItem.WorkItemState.State
-		} else if _, approved := approvedCurrentNodes[item.NodeID]; approved {
+		} else if _, approved := normalizedApprovals[normalizeActivityNodeID(item.NodeID)]; approved {
 			if completedState == "" {
 				return nil, fmt.Errorf("cannot determine a single completed state for approved current node %q", item.NodeID)
 			}
 			state = completedState
-			usedApprovals[item.NodeID] = struct{}{}
+			usedApprovals[normalizeActivityNodeID(item.NodeID)] = struct{}{}
 		} else {
 			return nil, fmt.Errorf("generated child node %q has no matching source work item", item.NodeID)
 		}
@@ -417,9 +425,9 @@ func planWorkItemClosures(source, target *session, approvedCurrentNodes map[stri
 		}
 		closures = append(closures, workItemClosure{WorkItemID: item.WorkItemID, State: state})
 	}
-	for nodeID := range approvedCurrentNodes {
-		if _, used := usedApprovals[nodeID]; !used {
-			return nil, fmt.Errorf("approved current node %q is not an open generated child", nodeID)
+	for normalizedNodeID, originalNodeID := range normalizedApprovals {
+		if _, used := usedApprovals[normalizedNodeID]; !used {
+			return nil, fmt.Errorf("approved current node %q is not an open generated child", originalNodeID)
 		}
 	}
 	if len(closures) > 0 && target.ServerURL == "" {

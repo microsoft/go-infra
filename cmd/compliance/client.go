@@ -248,7 +248,7 @@ func (c *complianceClient) setWorkItemState(ctx context.Context, serverURL, work
 	if err != nil {
 		return fmt.Errorf("create work item state update: %w", err)
 	}
-	request.SetBasicAuth("", c.token)
+	c.setAuthorization(request)
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json-patch+json")
 	request.Header.Set("X-TFS-FedAuthRedirect", "Suppress")
@@ -293,7 +293,7 @@ func (c *complianceClient) doJSON(ctx context.Context, method, resource string, 
 	if err != nil {
 		return fmt.Errorf("create %s request: %w", resource, err)
 	}
-	request.SetBasicAuth("", c.token)
+	c.setAuthorization(request)
 	request.Header.Set("Accept", "application/json;api-version="+complianceAPIVersion+";excludeUrls=true")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-TFS-FedAuthRedirect", "Suppress")
@@ -330,6 +330,20 @@ func (c *complianceClient) doJSON(ctx context.Context, method, resource string, 
 		return fmt.Errorf("decode %s response: %w", resource, err)
 	}
 	return nil
+}
+
+func (c *complianceClient) setAuthorization(request *http.Request) {
+	if isJWT(c.token) {
+		request.Header.Set("Authorization", "Bearer "+c.token)
+		return
+	}
+	request.SetBasicAuth("", c.token)
+}
+
+// isJWT distinguishes Azure CLI access tokens from opaque Azure DevOps PATs.
+func isJWT(token string) bool {
+	parts := strings.Split(token, ".")
+	return len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] != ""
 }
 
 func jsonErrorMessage(contentType string, data []byte) string {
