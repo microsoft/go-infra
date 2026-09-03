@@ -32,9 +32,9 @@ For a reviewed, durable external action, describe the form with `ProcessInput`, 
 ```go
 ProcessDefinition{
     ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
-    Workflow: &ProcessWorkflow{
+    Workflow: ProcessWorkflow{
         Heading: "Configure release", SubmitLabel: "Prepare release",
-    Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID", Required: true}},
+        Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID"}},
         DurableAction: true,
     },
 }
@@ -42,9 +42,9 @@ ProcessDefinition{
 
   Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
-  Before preparation, the shared lifecycle validates request keys, required and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
+  Before preparation, the shared lifecycle validates request keys, visible and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
 
-  `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` remain available for custom lifecycles. Do not combine these handlers with `DurableAction`.
+  `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` define the custom go-images lifecycle. Do not combine these handlers with `DurableAction`.
 
 ## Go-images release modes
 

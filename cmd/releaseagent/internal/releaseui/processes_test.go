@@ -8,16 +8,20 @@ import (
 	"testing"
 )
 
+func testDurableWorkflow(heading string) ProcessWorkflow {
+	return ProcessWorkflow{Heading: heading, SubmitLabel: "Review", DurableAction: true}
+}
+
 func TestProcessRegistry(t *testing.T) {
 	registry, err := newProcessRegistry(
 		ProcessDefinition{
 			ID: "one", Name: "One", Mark: "O", Description: "First process",
 			DocumentationURL: "https://example.com/docs",
-			Workflow:         &ProcessWorkflow{Heading: "Configure one"},
+			Workflow:         testDurableWorkflow("Configure one"),
 		},
 		ProcessDefinition{
 			ID: "two", Name: "Two", Mark: "T", Description: "Second process",
-			Workflow: &ProcessWorkflow{Heading: "Configure two"},
+			Workflow: testDurableWorkflow("Configure two"),
 		},
 	)
 	if err != nil {
@@ -41,7 +45,7 @@ func TestProcessRegistry(t *testing.T) {
 func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 	valid := ProcessDefinition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
-		Workflow: &ProcessWorkflow{Heading: "Configure"},
+		Workflow: testDurableWorkflow("Configure"),
 	}
 	for _, test := range []struct {
 		name        string
@@ -50,7 +54,7 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 		{name: "empty"},
 		{name: "duplicate ID", definitions: []ProcessDefinition{valid, valid}},
 		{name: "invalid ID", definitions: []ProcessDefinition{{
-			ID: "One", Name: "One", Mark: "O", Description: "First", Workflow: &ProcessWorkflow{Heading: "Configure"},
+			ID: "One", Name: "One", Mark: "O", Description: "First", Workflow: testDurableWorkflow("Configure"),
 		}}},
 		{name: "missing workflow", definitions: []ProcessDefinition{{
 			ID: "one", Name: "One", Mark: "O", Description: "First",
@@ -65,11 +69,12 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 }
 
 func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
-	prepare := func(*Server, http.ResponseWriter, *http.Request) {}
+	handler := func(*Server, http.ResponseWriter, *http.Request) {}
 	definition := ProcessDefinition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
-		Workflow: &ProcessWorkflow{
-			Heading: "Configure", SubmitLabel: "Prepare", GetPlan: prepare, Prepare: prepare,
+		Workflow: ProcessWorkflow{
+			Heading: "Configure", SubmitLabel: "Prepare",
+			Preflight: handler, GetPlan: handler, Prepare: handler, Start: handler,
 			Inputs: []ProcessInput{{
 				ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
 				Options: []ProcessInputOption{{Value: "normal", Name: "Normal", Description: "Run normally"}},
@@ -84,9 +89,12 @@ func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
 		t.Fatal("invalid numeric default was accepted")
 	}
 	definition.Workflow.Inputs = nil
-	definition.Workflow.Start = prepare
 	if _, err := newProcessRegistry(definition); err != nil {
 		t.Fatalf("direct confirmed workflow was rejected: %v", err)
+	}
+	definition.Workflow.Start = nil
+	if _, err := newProcessRegistry(definition); err == nil {
+		t.Fatal("incomplete custom lifecycle was accepted")
 	}
 }
 
@@ -94,10 +102,10 @@ func TestProcessRegistryValidatesDurableAction(t *testing.T) {
 	handler := func(*Server, http.ResponseWriter, *http.Request) {}
 	definition := ProcessDefinition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
-		Workflow: &ProcessWorkflow{
+		Workflow: ProcessWorkflow{
 			Heading: "Configure", SubmitLabel: "Review", DurableAction: true,
 			Inputs: []ProcessInput{{
-				ID: "mode", Type: "choice", Label: "Mode", Required: true,
+				ID: "mode", Type: "choice", Label: "Mode",
 				Options: []ProcessInputOption{{Value: "run", Name: "Run", Description: "Run now"}},
 			}},
 		},

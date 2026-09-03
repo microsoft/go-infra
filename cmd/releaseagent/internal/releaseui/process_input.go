@@ -56,11 +56,8 @@ func normalizeProcessInputs(inputs []ProcessInput, data json.RawMessage) (json.R
 			continue
 		}
 		value := values[input.ID]
-		if input.Required && value == "" {
-			return nil, fmt.Errorf("process input %q is required", input.ID)
-		}
 		if value == "" {
-			continue
+			return nil, fmt.Errorf("process input %q is required", input.ID)
 		}
 		switch input.Type {
 		case "choice":

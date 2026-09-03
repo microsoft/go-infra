@@ -24,7 +24,7 @@ type ProcessDefinition struct {
 	Mark             string
 	Description      string
 	DocumentationURL string
-	Workflow         *ProcessWorkflow
+	Workflow         ProcessWorkflow
 }
 
 // ProcessWorkflow describes an in-UI workflow. DurableAction uses the shared confirmed execution
@@ -53,7 +53,6 @@ type ProcessInput struct {
 	Description string               `json:"description,omitempty"`
 	Default     string               `json:"default,omitempty"`
 	Placeholder string               `json:"placeholder,omitempty"`
-	Required    bool                 `json:"required,omitempty"`
 	Options     []ProcessInputOption `json:"options,omitempty"`
 	VisibleWhen *ProcessCondition    `json:"visibleWhen,omitempty"`
 }
@@ -119,12 +118,12 @@ func defaultProcessRegistry() (*processRegistry, error) {
 			ID: "go-images", Name: "Go images", Mark: "GI",
 			Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
 			DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images",
-			Workflow: &ProcessWorkflow{
+			Workflow: ProcessWorkflow{
 				Heading: "Choose release type", Description: "Only rollback accepts a pipeline input.",
 				SubmitLabel: "Prepare release",
 				Inputs: []ProcessInput{
 					{
-						ID: "mode", Type: "choice", Label: "Release type", Default: "normal", Required: true,
+						ID: "mode", Type: "choice", Label: "Release type", Default: "normal",
 						Options: []ProcessInputOption{
 							{Value: "normal", Name: "Normal release", Mark: "N", Description: "Build current microsoft/main and publish to public/. All parameters are locked.", NoticeTitle: "Normal release is locked.", Notice: "Current main, current-build artifacts, and public/ are selected server-side."},
 							{Value: "rollback", Name: "Rollback / republish", Mark: "R", Description: "Republish artifacts from one successful pipeline 1023 build to public/.", NoticeTitle: "Only the source build is editable.", Notice: "The server locks current main and public/, then validates the selected build."},
@@ -132,7 +131,7 @@ func defaultProcessRegistry() (*processRegistry, error) {
 						},
 					},
 					{
-						ID: "sourceBuildId", Type: "number", Label: "Source build ID", Required: true,
+						ID: "sourceBuildId", Type: "number", Label: "Source build ID",
 						Placeholder: "3034159",
 						Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
 						VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"},
@@ -149,12 +148,12 @@ func defaultProcessRegistry() (*processRegistry, error) {
 			ID: "go-infra", Name: "Go infrastructure", Mark: "IN",
 			Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 			DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
-			Workflow: &ProcessWorkflow{
+			Workflow: ProcessWorkflow{
 				Heading: "Choose release path", Description: "Review a fixed GitHub action before confirming it.",
 				SubmitLabel: "Review GitHub action",
 				Inputs: []ProcessInput{
 					{
-						ID: "action", Type: "choice", Label: "Release path", Default: goInfraActionReleaseOnMerge, Required: true,
+						ID: "action", Type: "choice", Label: "Release path", Default: goInfraActionReleaseOnMerge,
 						Options: []ProcessInputOption{
 							{
 								Value: goInfraActionReleaseOnMerge, Name: "Release on merge", Mark: "PR",
@@ -171,13 +170,13 @@ func defaultProcessRegistry() (*processRegistry, error) {
 						},
 					},
 					{
-						ID: "pullRequest", Type: "number", Label: "Pull request number", Required: true,
+						ID: "pullRequest", Type: "number", Label: "Pull request number",
 						Placeholder: "123",
 						Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
 						VisibleWhen: &ProcessCondition{InputID: "action", Equals: goInfraActionReleaseOnMerge},
 					},
 					{
-						ID: "dispatchMode", Type: "choice", Label: "Dispatch mode", Default: goInfraDispatchModeDryRun, Required: true,
+						ID: "dispatchMode", Type: "choice", Label: "Dispatch mode", Default: goInfraDispatchModeDryRun,
 						VisibleWhen: &ProcessCondition{InputID: "action", Equals: goInfraActionManualDispatch},
 						Options: []ProcessInputOption{
 							{Value: goInfraDispatchModeDryRun, Name: "Dry run", Mark: "D", Description: "Calculate the next v0.0.x version without creating a release."},
@@ -191,27 +190,21 @@ func defaultProcessRegistry() (*processRegistry, error) {
 	)
 }
 
-func validateProcessWorkflow(processID string, workflow *ProcessWorkflow) error {
-	if workflow == nil {
-		return fmt.Errorf("release process %q has no workflow", processID)
-	}
+func validateProcessWorkflow(processID string, workflow ProcessWorkflow) error {
 	if strings.TrimSpace(workflow.Heading) == "" {
 		return fmt.Errorf("release process %q has an incomplete workflow", processID)
 	}
-	if workflow.DurableAction && (workflow.GetPlan != nil || workflow.Prepare != nil || workflow.Simulate != nil || workflow.Start != nil) {
-		return fmt.Errorf("release process %q mixes durable execution with custom lifecycle handlers", processID)
-	}
-	if (workflow.Prepare == nil) != (workflow.GetPlan == nil) {
-		return fmt.Errorf("release process %q must define prepare and get-plan handlers together", processID)
-	}
-	if (workflow.Prepare != nil || workflow.DurableAction) && strings.TrimSpace(workflow.SubmitLabel) == "" {
+	if strings.TrimSpace(workflow.SubmitLabel) == "" {
 		return fmt.Errorf("release process %q has no workflow submit label", processID)
 	}
-	if workflow.Simulate != nil && workflow.Prepare == nil {
-		return fmt.Errorf("release process %q simulates without defining preparation", processID)
-	}
-	if workflow.Start != nil && workflow.Prepare == nil {
-		return fmt.Errorf("release process %q starts without defining preparation", processID)
+	if workflow.DurableAction {
+		if workflow.Preflight != nil || workflow.GetPlan != nil || workflow.Prepare != nil ||
+			workflow.Simulate != nil || workflow.Start != nil {
+
+			return fmt.Errorf("release process %q mixes durable execution with custom lifecycle handlers", processID)
+		}
+	} else if workflow.Preflight == nil || workflow.GetPlan == nil || workflow.Prepare == nil || workflow.Start == nil {
+		return fmt.Errorf("release process %q has an incomplete custom lifecycle", processID)
 	}
 	inputs := make(map[string]ProcessInput, len(workflow.Inputs))
 	for _, input := range workflow.Inputs {
