@@ -12,17 +12,14 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 type fakeReader struct {
-	builds       []*azdopipeline.Build
-	recent       [][]*azdopipeline.Build
-	timelines    []*azdopipeline.Timeline
-	gets         int
-	lists        int
-	timelineGets int
+	builds []*azdopipeline.Build
+	recent [][]*azdopipeline.Build
+	gets   int
+	lists  int
 }
 
 func (r *fakeReader) Get(context.Context, int) (*azdopipeline.Build, error) {
@@ -44,18 +41,6 @@ func (r *fakeReader) ListRecent(context.Context, int) ([]*azdopipeline.Build, er
 		index = len(r.recent) - 1
 	}
 	return r.recent[index], nil
-}
-
-func (r *fakeReader) GetTimeline(context.Context, int) (*azdopipeline.Timeline, error) {
-	index := r.timelineGets
-	r.timelineGets++
-	if len(r.timelines) == 0 {
-		return &azdopipeline.Timeline{}, nil
-	}
-	if index >= len(r.timelines) {
-		index = len(r.timelines) - 1
-	}
-	return r.timelines[index], nil
 }
 
 type fakeQueueClient struct {
@@ -253,11 +238,7 @@ func TestPollPipeline(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{
 		{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"},
 		{ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded"},
-	}, timelines: []*azdopipeline.Timeline{{Records: []azdopipeline.TimelineRecord{
-		{ID: "stage", Type: "Stage", Name: "Build and test", State: "inProgress", Order: 1},
-		{ID: "job", ParentID: "stage", Type: "Job", Name: "linux-amd64", State: "inProgress", Order: 2},
-		{ID: "task", ParentID: "job", Type: "Task", Name: "Build image", State: "inProgress", Order: 3},
-	}}}}
+	}}
 	sleeps := 0
 	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
 		Mode: goimagesworkflow.ModeNormal,
@@ -268,80 +249,11 @@ func TestPollPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := coordinator.NewRootStep("Wait", coordinator.NoTimeout, func(ctx context.Context) error {
-		return service.PollPipeline(ctx, "888")
-	})
-	var runner coordinator.StepRunner
-	_, updates, unsubscribe := runner.Subscribe(32)
-	defer unsubscribe()
-	if err := runner.Execute(context.Background(), []*coordinator.Step{step}); err != nil {
-		t.Fatal(err)
-	}
-	if reader.gets != 2 || reader.timelineGets != 1 || sleeps != 1 {
-		t.Fatalf("gets = %d, timeline gets = %d, sleeps = %d", reader.gets, reader.timelineGets, sleeps)
-	}
-	foundTimelineProgress := false
-drain:
-	for {
-		select {
-		case snapshot := <-updates:
-			for _, candidate := range snapshot.Steps {
-				if candidate.Progress != nil && len(candidate.Progress.Items) == 1 &&
-					candidate.Progress.Items[0] == "Build and test › linux-amd64 › Build image" {
-
-					foundTimelineProgress = true
-				}
-			}
-		default:
-			break drain
-		}
-	}
-	if !foundTimelineProgress {
-		t.Fatal("runner snapshots did not include the active Azure timeline path")
-	}
-}
-
-func TestTimelineStepProgressShowsParallelWork(t *testing.T) {
-	progress := timelineStepProgress(888, azdopipeline.RunStateRunning, []azdopipeline.TimelineRecord{
-		{ID: "stage", Type: "Stage", Name: "Publish", State: "inProgress"},
-		{ID: "job-a", ParentID: "stage", Type: "Job", Name: "linux-amd64", State: "inProgress", Order: 1},
-		{ID: "task-a", ParentID: "job-a", Type: "Task", Name: "Push image", State: "inProgress", Order: 2},
-		{ID: "job-b", ParentID: "stage", Type: "Job", Name: "windows-amd64", State: "inProgress", Order: 3},
-		{ID: "task-b", ParentID: "job-b", Type: "Task", Name: "Push image", State: "inProgress", Order: 4},
-		{ID: "done", Type: "Stage", Name: "Build", State: "completed", Result: "succeeded"},
-	})
-	if progress.Summary != "Running 2 pipeline tasks in parallel" || progress.Completed != 1 || progress.Total != 2 {
-		t.Fatalf("progress = %#v", progress)
-	}
-	if len(progress.Items) != 2 || progress.Items[0] != "Publish › linux-amd64 › Push image" ||
-		progress.Items[1] != "Publish › windows-amd64 › Push image" {
-
-		t.Fatalf("items = %#v", progress.Items)
-	}
-}
-
-func TestTimelinePollingIsThrottled(t *testing.T) {
-	reader := &fakeReader{timelines: []*azdopipeline.Timeline{{}}}
-	for range 7 {
-		reader.builds = append(reader.builds, &azdopipeline.Build{
-			ID: 888, DefinitionID: DefinitionID, Status: "inProgress",
-		})
-	}
-	reader.builds = append(reader.builds, &azdopipeline.Build{
-		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded",
-	})
-	config := completeConfig(Config{Mode: goimagesworkflow.ModeNormal})
-	config.PollInterval = time.Millisecond
-	config.TimelinePollInterval = 3 * time.Millisecond
-	service, err := New(reader, &fakeQueueClient{}, config, func(context.Context, time.Duration) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := service.PollPipeline(context.Background(), "888"); err != nil {
 		t.Fatal(err)
 	}
-	if reader.gets != 8 || reader.timelineGets != 3 {
-		t.Fatalf("build polls = %d, timeline polls = %d; want 8 and 3", reader.gets, reader.timelineGets)
+	if reader.gets != 2 || sleeps != 1 {
+		t.Fatalf("gets = %d, sleeps = %d", reader.gets, sleeps)
 	}
 }
 

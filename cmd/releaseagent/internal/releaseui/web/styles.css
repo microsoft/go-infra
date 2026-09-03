@@ -247,10 +247,6 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .step-progress-detail { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .step-progress-track { height: 4px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: #1a3045; }
 .step-progress-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan-deep), var(--green)); transition: width .25s ease; }
-.step-progress-items { display: grid; gap: 5px; margin: 9px 0 0; padding: 0; list-style: none; }
-.step-progress-items li { position: relative; padding-left: 11px; color: #b8cede; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
-.step-progress-items li::before { position: absolute; top: .55em; left: 0; width: 4px; height: 4px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 7px rgb(57 213 255 / 55%); content: ""; }
-
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 30; max-width: min(440px, calc(100vw - 48px)); padding: 14px 17px; border: 1px solid rgb(255 123 135 / 40%); border-radius: 12px; background: #381824; color: #ffdce0; box-shadow: var(--shadow); font-size: 12px; line-height: 1.45; }
 
 /* Release dashboard */

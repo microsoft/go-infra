@@ -100,16 +100,13 @@ func TestStepRunnerSnapshots(t *testing.T) {
 func TestStepRunnerProgressSnapshots(t *testing.T) {
 	reported := make(chan struct{})
 	releaseStep := make(chan struct{})
-	items := []string{"Build › linux-amd64 › Compile"}
 	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context) error {
 		ReportProgress(ctx, StepProgress{
 			Summary:   "Running one pipeline task",
 			Detail:    "1/3 stages complete",
-			Items:     items,
 			Completed: 1,
 			Total:     3,
 		})
-		items[0] = "mutated after reporting"
 		close(reported)
 		select {
 		case <-ctx.Done():
@@ -137,14 +134,10 @@ func TestStepRunnerProgressSnapshots(t *testing.T) {
 		t.Fatalf("snapshot has no progress: %#v", snapshot)
 	}
 	progress := snapshot.Steps[0].Progress
-	if progress.Summary != "Running one pipeline task" || progress.Completed != 1 || progress.Total != 3 ||
-		len(progress.Items) != 1 || progress.Items[0] != "Build › linux-amd64 › Compile" {
+	if progress.Summary != "Running one pipeline task" || progress.Detail != "1/3 stages complete" ||
+		progress.Completed != 1 || progress.Total != 3 {
 
 		t.Fatalf("progress = %#v", progress)
-	}
-	progress.Items[0] = "mutated snapshot"
-	if got := runner.Snapshot().Steps[0].Progress.Items[0]; got != "Build › linux-amd64 › Compile" {
-		t.Fatalf("snapshot mutation changed runner state: %q", got)
 	}
 
 	sawProgressUpdate := false

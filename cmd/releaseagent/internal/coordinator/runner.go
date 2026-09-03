@@ -42,15 +42,13 @@ type StepSnapshot struct {
 	FinishedAt *time.Time    `json:"finishedAt,omitempty"`
 }
 
-// StepProgress is optional live detail reported by a running step. Summary and Detail are short
-// human-readable strings. Items contains active sub-operations, while Completed and Total can be
-// used to render a determinate progress indicator when Total is positive.
+// StepProgress is optional live detail reported by a running step. Completed and Total can render
+// a determinate progress indicator when Total is positive.
 type StepProgress struct {
-	Summary   string   `json:"summary,omitempty"`
-	Detail    string   `json:"detail,omitempty"`
-	Items     []string `json:"items,omitempty"`
-	Completed int      `json:"completed,omitempty"`
-	Total     int      `json:"total,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Completed int    `json:"completed,omitempty"`
+	Total     int    `json:"total,omitempty"`
 }
 
 type progressReporterKey struct{}
@@ -191,7 +189,7 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 			DependsOn: make([]string, len(state.step.DependsOn)),
 		}
 		if state.progress != nil {
-			progress := cloneStepProgress(*state.progress)
+			progress := *state.progress
 			stepSnapshot.Progress = &progress
 		}
 		for i, dependency := range state.step.DependsOn {
@@ -234,26 +232,15 @@ func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
 	if state.status != StepStatusRunning || stepProgressEqual(state.progress, progress) {
 		return
 	}
-	cloned := cloneStepProgress(progress)
-	state.progress = &cloned
+	state.progress = &progress
 	r.publishLocked()
-}
-
-func cloneStepProgress(progress StepProgress) StepProgress {
-	progress.Items = append([]string(nil), progress.Items...)
-	return progress
 }
 
 func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
-		current.Completed != next.Completed || current.Total != next.Total || len(current.Items) != len(next.Items) {
+		current.Completed != next.Completed || current.Total != next.Total {
 
 		return false
-	}
-	for index := range current.Items {
-		if current.Items[index] != next.Items[index] {
-			return false
-		}
 	}
 	return true
 }

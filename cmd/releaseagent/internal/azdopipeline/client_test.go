@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	azdobuild "github.com/microsoft/azure-devops-go-api/azuredevops/build"
 )
 
@@ -22,12 +21,6 @@ func (t staticToken) Token(context.Context) (string, error) { return string(t), 
 type definitionClientFunc func(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
 
 func (f definitionClientFunc) GetDefinition(ctx context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
-	return f(ctx, args)
-}
-
-type timelineClientFunc func(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
-
-func (f timelineClientFunc) GetBuildTimeline(ctx context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
 	return f(ctx, args)
 }
 
@@ -98,43 +91,6 @@ func TestGetDefinition(t *testing.T) {
 }
 
 func idPointer(value int) *int { return &value }
-
-func stringPointer(value string) *string { return &value }
-
-func TestGetTimeline(t *testing.T) {
-	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stageID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	jobID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
-	taskID := uuid.MustParse("33333333-3333-3333-3333-333333333333")
-	inProgress := azdobuild.TimelineRecordStateValues.InProgress
-	succeeded := azdobuild.TaskResultValues.Succeeded
-	client.newTimelineClient = func(context.Context) (timelineClient, string, error) {
-		return timelineClientFunc(func(_ context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
-			if args.Project == nil || *args.Project != "internal" || args.BuildId == nil || *args.BuildId != 888 {
-				t.Fatalf("timeline args = %#v", args)
-			}
-			records := []azdobuild.TimelineRecord{
-				{Id: &stageID, Type: stringPointer("Stage"), Name: stringPointer("Build"), State: &inProgress, Order: idPointer(1)},
-				{Id: &jobID, ParentId: &stageID, Type: stringPointer("Job"), Name: stringPointer("linux-amd64"), State: &inProgress, Order: idPointer(2)},
-				{Id: &taskID, ParentId: &jobID, Type: stringPointer("Task"), Name: stringPointer("Build image"), State: &inProgress, Result: &succeeded, Order: idPointer(3)},
-			}
-			return &azdobuild.Timeline{Records: &records}, nil
-		}), "test-token", nil
-	}
-	timeline, err := client.GetTimeline(context.Background(), 888)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(timeline.Records) != 3 || timeline.Records[2].Name != "Build image" ||
-		timeline.Records[2].ParentID != jobID.String() || timeline.Records[0].Type != "Stage" ||
-		timeline.Records[2].Result != "succeeded" || timeline.Records[2].Order != 3 {
-
-		t.Fatalf("timeline = %#v", timeline)
-	}
-}
 
 func TestRunState(t *testing.T) {
 	for _, test := range []struct {
