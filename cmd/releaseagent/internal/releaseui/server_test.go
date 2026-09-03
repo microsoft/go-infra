@@ -145,9 +145,7 @@ func TestDashboardShowsProcessCatalog(t *testing.T) {
 	}
 	var goImages processDetail
 	decodeResponse(t, response, &goImages)
-	if response.StatusCode != http.StatusOK || !goImages.Workflow.CanSimulate ||
-		len(goImages.Workflow.Inputs) != 2 {
-
+	if response.StatusCode != http.StatusOK || !goImages.Workflow.CanSimulate || len(goImages.Workflow.Inputs) != 2 {
 		t.Fatalf("go-images process = %#v", goImages)
 	}
 	response, err = ui.client.Get(ui.http.URL + "/api/processes/go-infra")
