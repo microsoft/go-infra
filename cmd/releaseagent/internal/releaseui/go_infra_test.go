@@ -129,12 +129,7 @@ func testGoInfraOptions(t *testing.T, github *fakeGoInfraGitHub) []Option {
 }
 
 func TestGoInfraPreflightDisabled(t *testing.T) {
-	ui := newTestUI(t, WithExecutableLookup(func(name string) (string, error) {
-		if name == "gh" {
-			return "/test/bin/gh", nil
-		}
-		return "", errors.New("not found")
-	}))
+	ui := newTestUI(t)
 	response, err := ui.client.Get(ui.http.URL + "/api/processes/go-infra/preflight")
 	if err != nil {
 		t.Fatal(err)
@@ -184,8 +179,7 @@ func TestGoInfraPlanningDoesNotRequireExecutionReadiness(t *testing.T) {
 
 func TestGoInfraReleaseOnMergeRequiresExactConfirmation(t *testing.T) {
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
-	options := append([]Option{WithExecutableLookup(func(string) (string, error) { return "/test/bin/gh", nil })}, testGoInfraOptions(t, github)...)
-	ui := newTestUI(t, options...)
+	ui := newTestUI(t, testGoInfraOptions(t, github)...)
 	response, err := ui.client.Get(ui.http.URL + "/api/processes/go-infra/preflight")
 	if err != nil {
 		t.Fatal(err)

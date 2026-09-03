@@ -61,7 +61,6 @@ type Server struct {
 	ctx              context.Context
 	token            string
 	demoDelay        time.Duration
-	lookPath         executableLookup
 	processes        *processRegistry
 	activeProcessID  string
 	processExecutors map[string]ProcessExecutor
@@ -110,7 +109,6 @@ type GoImagesReadOnlyIntegration struct {
 // hardcode definition 1023 and microsoft/main, and derive parameters from the selected mode.
 type GoImagesExecutionIntegration struct {
 	DefinitionID int
-	Preflight    func(context.Context) (string, error)
 	NewService   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error)
 }
 
@@ -142,13 +140,6 @@ func WithSessionStore(store goimagessession.Store) Option {
 	}
 }
 
-// WithExecutableLookup replaces local executable discovery. It is intended for hermetic tests.
-func WithExecutableLookup(lookup func(string) (string, error)) Option {
-	return func(server *Server) {
-		server.lookPath = lookup
-	}
-}
-
 // WithGoImagesReadOnlyIntegration enables current-main resolution and rollback validation.
 func WithGoImagesReadOnlyIntegration(integration GoImagesReadOnlyIntegration) Option {
 	return func(server *Server) {
@@ -177,7 +168,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		ctx:              ctx,
 		token:            base64.RawURLEncoding.EncodeToString(tokenBytes),
 		demoDelay:        250 * time.Millisecond,
-		lookPath:         defaultExecutableLookup,
 		runner:           &coordinator.StepRunner{},
 		processExecutors: make(map[string]ProcessExecutor),
 	}
@@ -191,9 +181,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	}
 	if server.demoDelay < 0 {
 		return nil, errors.New("demo delay cannot be negative")
-	}
-	if server.lookPath == nil {
-		return nil, errors.New("executable lookup is nil")
 	}
 	if server.readOnly != nil {
 		if server.sessionStore == nil {
@@ -215,7 +202,7 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		if server.execution.DefinitionID != goImagesPipelineID {
 			return nil, fmt.Errorf("go-images execution definition %d is not allowlisted", server.execution.DefinitionID)
 		}
-		if server.execution.Preflight == nil || server.execution.NewService == nil {
+		if server.execution.NewService == nil {
 			return nil, errors.New("go-images execution integration is incomplete")
 		}
 	}
@@ -1102,7 +1089,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusConflict, "a workflow is already running")
 		return
 	}
-	preflight := s.execution.Preflight
+	preflight := s.readOnly.Preflight
 	resolveSource := s.readOnly.ResolveCurrentSource
 	validateRollback := s.readOnly.ValidateRollback
 	newService := s.execution.NewService
