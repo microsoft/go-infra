@@ -145,6 +145,7 @@ func verifyObject(t *testing.T, object, manifest []byte, machine, relocationType
 	}
 	if symbolName != ".rsrc" || symbol.Value != 0 || symbol.SectionNumber != 1 || symbol.Type != 0 ||
 		symbol.StorageClass != staticSymbolStorageClass || symbol.NumberOfAuxSymbols != 0 {
+
 		t.Fatalf("unexpected COFF symbol: %#v", symbol)
 	}
 
