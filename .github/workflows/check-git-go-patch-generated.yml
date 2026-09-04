@@ -1,0 +1,38 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Check git-go-patch generated files
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  check-generated:
+    name: generated files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check git-go-patch generated files are current
+        shell: bash
+        run: |
+          set -euo pipefail
+          go generate ./cmd/git-go-patch
+          if [[ -n "$(git status --porcelain -- cmd/git-go-patch)" ]]; then
+            git status --short -- cmd/git-go-patch
+            git diff --stat -- cmd/git-go-patch
+            echo "::error::git-go-patch generated files are stale. Run 'go generate ./cmd/git-go-patch' and commit the results."
+            exit 1
+          fi

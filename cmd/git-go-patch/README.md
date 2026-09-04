@@ -32,6 +32,31 @@ git go-patch -h
 > [!NOTE]
 > [`git` detects](https://git.github.io/htmldocs/howto/new-command.html) that our `git-go-patch` executable starts with `git-` and makes it available as `git go-patch`. The program still works if you call it with its real name, but we think it's easier to remember and type something that looks like a `git` subcommand.
 
+## Windows application manifest
+
+Windows can apply installer-detection and Program Compatibility Assistant heuristics to executables that do not declare a requested execution level.
+Those heuristics can misclassify `git-go-patch.exe` as a failed installer and require elevation before the Go `main` function runs, including for commands such as `-h` that do not need elevated privileges.
+
+Windows builds therefore embed a manifest with `requestedExecutionLevel` set to `asInvoker` and `uiAccess` set to `false`.
+This explicitly opts out of heuristic elevation: the command runs with the same access token as the process that started it and never requests elevation itself.
+Non-Windows builds are unaffected.
+
+The source manifest is in the [`windows`](windows) directory.
+Generated resources for `windows/386`, `windows/amd64`, and `windows/arm64` are checked in so `go install` does not require a resource compiler.
+After changing the manifest, regenerate the resources from the repository root:
+
+```sh
+go generate ./cmd/git-go-patch
+```
+
+This uses the repository-owned, standard-library-only generator in [`internal/winmanifest`](../../internal/winmanifest) and rewrites the architecture-specific `rsrc_windows_*.syso` files.
+By default it generates `386`, `amd64`, and `arm64` resources with the output prefix `rsrc`.
+Use `-arch` with a comma-separated list to select architectures and `-output-prefix` to change the prefix; for example, `-arch amd64,arm64 -output-prefix custom` writes `custom_windows_amd64.syso` and `custom_windows_arm64.syso`.
+The prefix may include directories, which are created as needed.
+If the value ends in a path separator, the generator appends the default prefix `rsrc`; for example, `-output-prefix artifacts/` writes `artifacts/rsrc_windows_*.syso`.
+Manifest line endings are normalized to LF so generation is reproducible across platforms.
+Its test byte-compares the checked-in files with freshly generated output and rejects unexpected COFF sections, symbols, relocations, or resources.
+
 # Subcommands
 
 ## Make changes to a patch file
