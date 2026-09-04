@@ -16,10 +16,13 @@ import (
 )
 
 type fakeReader struct {
-	builds []*azdopipeline.Build
-	recent [][]*azdopipeline.Build
-	gets   int
-	lists  int
+	builds      []*azdopipeline.Build
+	recent      [][]*azdopipeline.Build
+	failures    []azdopipeline.BuildFailure
+	failureErr  error
+	gets        int
+	lists       int
+	failureGets int
 }
 
 func (r *fakeReader) Get(context.Context, int) (*azdopipeline.Build, error) {
@@ -41,6 +44,11 @@ func (r *fakeReader) ListRecent(context.Context, int) ([]*azdopipeline.Build, er
 		index = len(r.recent) - 1
 	}
 	return r.recent[index], nil
+}
+
+func (r *fakeReader) GetFailures(context.Context, int) ([]azdopipeline.BuildFailure, error) {
+	r.failureGets++
+	return r.failures, r.failureErr
 }
 
 type fakeQueueClient struct {
@@ -240,18 +248,35 @@ func TestPollPipeline(t *testing.T) {
 	if err := service.PollPipeline(context.Background(), "888"); err != nil {
 		t.Fatal(err)
 	}
-	if reader.gets != 2 || sleeps != 1 {
-		t.Fatalf("gets = %d, sleeps = %d", reader.gets, sleeps)
+	if reader.gets != 2 || reader.failureGets != 0 || sleeps != 1 {
+		t.Fatalf("gets = %d, failure gets = %d, sleeps = %d", reader.gets, reader.failureGets, sleeps)
 	}
 }
 
 func TestPollPipelineReportsFailure(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
 		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
+	}}, failures: []azdopipeline.BuildFailure{{
+		Path: "Build > Linux arm32 > Build Images", Message: "PowerShell exited with code 1",
 	}}}
 	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
 	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
-	if err == nil || !strings.Contains(err.Error(), "failed") || !strings.Contains(err.Error(), "https://example/build/888") {
+	if err == nil || !strings.Contains(err.Error(), "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
+		!strings.Contains(err.Error(), "https://example/build/888") || reader.failureGets != 1 {
+
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPollPipelineFailureDetailsAreOptional(t *testing.T) {
+	reader := &fakeReader{builds: []*azdopipeline.Build{{
+		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
+	}}, failureErr: errors.New("timeline unavailable")}
+	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	err := service.PollPipeline(context.Background(), "888")
+	if err == nil || !strings.Contains(err.Error(), `failed with result "failed"`) ||
+		!strings.Contains(err.Error(), "https://example/build/888") {
+
 		t.Fatalf("error = %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +61,12 @@ type Build struct {
 	SourceVersion      string
 	Parameters         map[string]string
 	TemplateParameters map[string]any
+}
+
+// BuildFailure identifies one failed leaf in an Azure Pipelines run.
+type BuildFailure struct {
+	Path    string
+	Message string
 }
 
 // Definition is the allowlist-relevant metadata of an Azure Pipeline definition.
@@ -130,6 +137,21 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 		return nil, err
 	}
 	return response.build()
+}
+
+// GetFailures returns concise failure details from a completed pipeline run.
+func (c *Client) GetFailures(ctx context.Context, buildID int) ([]BuildFailure, error) {
+	if buildID <= 0 {
+		return nil, errors.New("build ID must be positive")
+	}
+	endpoint := c.buildsURL(nil) + "/" + strconv.Itoa(buildID) + "/timeline?api-version=7.1"
+	var response struct {
+		Records []apiTimelineRecord `json:"records"`
+	}
+	if err := c.getJSON(ctx, endpoint, &response); err != nil {
+		return nil, err
+	}
+	return timelineFailures(response.Records), nil
 }
 
 // GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.
@@ -333,6 +355,91 @@ type apiBuild struct {
 		ID int `json:"id"`
 	} `json:"definition"`
 	Links json.RawMessage `json:"_links"`
+}
+
+type apiTimelineRecord struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parentId"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Result   string `json:"result"`
+	Issues   []struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"issues"`
+}
+
+func timelineFailures(records []apiTimelineRecord) []BuildFailure {
+	byID := make(map[string]apiTimelineRecord, len(records))
+	for _, record := range records {
+		byID[record.ID] = record
+	}
+
+	var failed []apiTimelineRecord
+	for _, typeName := range []string{"task", "job", "stage"} {
+		for _, record := range records {
+			if strings.EqualFold(record.Type, typeName) && strings.EqualFold(record.Result, "failed") {
+				failed = append(failed, record)
+			}
+		}
+		if len(failed) != 0 {
+			break
+		}
+	}
+
+	result := make([]BuildFailure, 0, len(failed))
+	seen := make(map[string]struct{}, len(failed))
+	for _, record := range failed {
+		failure := BuildFailure{Path: timelineFailurePath(record, byID)}
+		for _, issue := range record.Issues {
+			if strings.EqualFold(issue.Type, "error") {
+				failure.Message = strings.Join(strings.Fields(issue.Message), " ")
+				if failure.Message != "" {
+					break
+				}
+			}
+		}
+		key := failure.Path + "\x00" + failure.Message
+		if failure.Path == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, failure)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Path < result[right].Path })
+	return result
+}
+
+func timelineFailurePath(record apiTimelineRecord, byID map[string]apiTimelineRecord) string {
+	var reversed []string
+	visited := make(map[string]struct{})
+	for {
+		if record.ID != "" {
+			if _, ok := visited[record.ID]; ok {
+				break
+			}
+			visited[record.ID] = struct{}{}
+		}
+		switch strings.ToLower(record.Type) {
+		case "stage", "job", "task":
+			if record.Name != "" {
+				reversed = append(reversed, record.Name)
+			}
+		}
+		parent, ok := byID[record.ParentID]
+		if !ok {
+			break
+		}
+		record = parent
+	}
+	path := make([]string, len(reversed))
+	for index := range reversed {
+		path[len(reversed)-1-index] = reversed[index]
+	}
+	return strings.Join(path, " > ")
 }
 
 func (b apiBuild) build() (*Build, error) {

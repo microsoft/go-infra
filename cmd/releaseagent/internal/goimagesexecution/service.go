@@ -13,6 +13,7 @@ import (
 	"maps"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
@@ -34,6 +35,7 @@ var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // PipelineReader is the read-only Azure DevOps behavior required for reconciliation and polling.
 type PipelineReader interface {
 	Get(context.Context, int) (*azdopipeline.Build, error)
+	GetFailures(context.Context, int) ([]azdopipeline.BuildFailure, error)
 	ListRecent(context.Context, int) ([]*azdopipeline.Build, error)
 }
 
@@ -270,11 +272,24 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 			})
 			return nil
 		case azdopipeline.RunStateFailed, azdopipeline.RunStateCanceled:
+			detail := fmt.Sprintf("Build %d finished with result %s", id, build.Result)
+			failure := fmt.Sprintf("go-images release build %d %s", id, state)
+			if state == azdopipeline.RunStateFailed {
+				if summary := s.failureSummary(ctx, id); summary != "" {
+					detail = summary
+					failure += ": " + summary
+				} else {
+					failure += fmt.Sprintf(" with result %q", build.Result)
+				}
+			}
 			coordinator.ReportProgress(ctx, coordinator.StepProgress{
 				Summary: fmt.Sprintf("Azure pipeline %s", state),
-				Detail:  fmt.Sprintf("Build %d finished with result %s", id, build.Result),
+				Detail:  detail,
 			})
-			return fmt.Errorf("go-images release build %d finished with state %q and result %q: %s", id, state, build.Result, build.WebURL)
+			if build.WebURL != "" {
+				failure += ". Inspect the Azure run: " + build.WebURL
+			}
+			return errors.New(failure)
 		case azdopipeline.RunStateWaiting, azdopipeline.RunStateRunning:
 			s.reportPipelineProgress(ctx, id, state)
 			if err := s.sleep(ctx, s.config.PollInterval); err != nil {
@@ -284,6 +299,36 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 			return fmt.Errorf("go-images release build %d has unsupported state %q", id, state)
 		}
 	}
+}
+
+func (s *Service) failureSummary(ctx context.Context, buildID int) string {
+	failures, err := s.reader.GetFailures(ctx, buildID)
+	if err != nil || len(failures) == 0 {
+		return ""
+	}
+	const maxFailures = 3
+	count := min(len(failures), maxFailures)
+	details := make([]string, 0, count+1)
+	for _, failure := range failures[:count] {
+		detail := failure.Path
+		if failure.Message != "" {
+			detail += ": " + truncateFailureMessage(failure.Message)
+		}
+		details = append(details, detail)
+	}
+	if remaining := len(failures) - count; remaining > 0 {
+		details = append(details, fmt.Sprintf("and %d more failures", remaining))
+	}
+	return strings.Join(details, "; ")
+}
+
+func truncateFailureMessage(message string) string {
+	const maxRunes = 240
+	runes := []rune(message)
+	if len(runes) <= maxRunes {
+		return message
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func (s *Service) reportPipelineProgress(ctx context.Context, buildID int, state azdopipeline.RunState) {
