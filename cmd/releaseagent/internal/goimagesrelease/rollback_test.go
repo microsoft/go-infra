@@ -44,7 +44,7 @@ func TestValidateRollbackSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if source.BuildID != 3019035 || source.URL != "https://example/build/3019035" ||
-		source.SourceVersion != testCommit || !reflect.DeepEqual(source.Versions, []string{"1.25.12-1", "1.26.5-2"}) {
+		!reflect.DeepEqual(source.Versions, []string{"1.25.12-1", "1.26.5-2"}) {
 
 		t.Fatalf("source = %#v", source)
 	}

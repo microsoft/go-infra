@@ -60,12 +60,10 @@ type Build struct {
 	SourceVersion      string
 	Parameters         map[string]string
 	TemplateParameters map[string]any
-	QueueTime          time.Time
 }
 
 // Definition is the allowlist-relevant metadata of an Azure Pipeline definition.
 type Definition struct {
-	ID            int
 	Name          string
 	QueueStatus   string
 	DefaultBranch string
@@ -153,7 +151,6 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 		return nil, fmt.Errorf("azure DevOps returned an unexpected definition, expected %d", definitionID)
 	}
 	return &Definition{
-		ID:            *response.Id,
 		Name:          stringValue(response.Name),
 		QueueStatus:   enumValue(response.QueueStatus),
 		DefaultBranch: repositoryValue(response.Repository, func(repository *azdobuild.BuildRepository) *string { return repository.DefaultBranch }),
@@ -332,7 +329,6 @@ type apiBuild struct {
 	SourceVersion      string         `json:"sourceVersion"`
 	Parameters         string         `json:"parameters"`
 	TemplateParameters map[string]any `json:"templateParameters"`
-	QueueTime          time.Time      `json:"queueTime"`
 	Definition         struct {
 		ID int `json:"id"`
 	} `json:"definition"`
@@ -357,7 +353,6 @@ func (b apiBuild) build() (*Build, error) {
 		SourceVersion:      b.SourceVersion,
 		Parameters:         parameters,
 		TemplateParameters: b.TemplateParameters,
-		QueueTime:          b.QueueTime,
 	}, nil
 }
 

@@ -169,8 +169,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 				return releaseui.GoImagesRollbackSource{}, err
 			}
 			return releaseui.GoImagesRollbackSource{
-				BuildID: source.BuildID, URL: source.URL, SourceBranch: source.SourceBranch,
-				SourceVersion: source.SourceVersion, Versions: source.Versions,
+				BuildID: source.BuildID, URL: source.URL, Versions: source.Versions,
 			}, nil
 		},
 	}))

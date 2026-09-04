@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -33,13 +32,11 @@ var (
 
 // StepSnapshot is an immutable view of a step's state at a point in time.
 type StepSnapshot struct {
-	Name       string        `json:"name"`
-	Status     StepStatus    `json:"status"`
-	DependsOn  []string      `json:"dependsOn,omitempty"`
-	Progress   *StepProgress `json:"progress,omitempty"`
-	Error      string        `json:"error,omitempty"`
-	StartedAt  *time.Time    `json:"startedAt,omitempty"`
-	FinishedAt *time.Time    `json:"finishedAt,omitempty"`
+	Name      string        `json:"name"`
+	Status    StepStatus    `json:"status"`
+	DependsOn []string      `json:"dependsOn,omitempty"`
+	Progress  *StepProgress `json:"progress,omitempty"`
+	Error     string        `json:"error,omitempty"`
 }
 
 // StepProgress is optional live detail reported by a running step. Completed and Total can render
@@ -198,14 +195,6 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 		if state.err != nil {
 			stepSnapshot.Error = state.err.Error()
 		}
-		if !state.startedAt.IsZero() {
-			startedAt := state.startedAt
-			stepSnapshot.StartedAt = &startedAt
-		}
-		if !state.finishedAt.IsZero() {
-			finishedAt := state.finishedAt
-			stepSnapshot.FinishedAt = &finishedAt
-		}
 		snapshot.Steps = append(snapshot.Steps, stepSnapshot)
 	}
 	return snapshot
@@ -215,13 +204,6 @@ func (r *StepRunner) transition(state *stepState, status StepStatus, err error) 
 	r.mu.Lock()
 	state.status = status
 	state.err = err
-	now := time.Now().UTC()
-	if status == StepStatusRunning {
-		state.startedAt = now
-	}
-	if isTerminalStatus(status) {
-		state.finishedAt = now
-	}
 	r.publishLocked()
 	r.mu.Unlock()
 }
@@ -258,19 +240,12 @@ func (r *StepRunner) publishLocked() {
 	}
 }
 
-func isTerminalStatus(status StepStatus) bool {
-	return status == StepStatusSucceeded || status == StepStatusFailed ||
-		status == StepStatusBlocked || status == StepStatusCanceled
-}
-
 type stepState struct {
 	step *Step
 
-	err        error
-	status     StepStatus
-	progress   *StepProgress
-	startedAt  time.Time
-	finishedAt time.Time
+	err      error
+	status   StepStatus
+	progress *StepProgress
 	// complete is closed after err and status are updated.
 	complete chan struct{}
 }

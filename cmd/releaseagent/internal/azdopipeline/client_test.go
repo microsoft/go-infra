@@ -49,7 +49,7 @@ func TestListRecent(t *testing.T) {
 		t.Fatalf("builds = %#v, want ID 11", builds)
 	}
 	build := builds[0]
-	if build.DefinitionID != 1023 || build.TemplateParameters["publishRepoPrefix"] != "public/" || build.QueueTime.IsZero() ||
+	if build.DefinitionID != 1023 || build.TemplateParameters["publishRepoPrefix"] != "public/" ||
 		build.SourceBranch != "refs/heads/microsoft/main" || build.SourceVersion == "" {
 
 		t.Fatalf("build metadata = %#v", build)
@@ -82,7 +82,7 @@ func TestGetDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if definition.ID != 1023 || definition.QueueStatus != "enabled" ||
+	if definition.QueueStatus != "enabled" ||
 		definition.DefaultBranch != "refs/heads/microsoft/main" || definition.Repository != "microsoft-go-images" ||
 		definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
 
