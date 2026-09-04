@@ -29,10 +29,10 @@ func TestTransitiveDependenciesValidation(t *testing.T) {
 		step *Step
 		want string
 	}{
-		{name: "valid", step: NewStep("B", NoTimeout, nop, a)},
-		{name: "nil dependency", step: NewStep("B", NoTimeout, nop, nil), want: "nil dependency"},
-		{name: "duplicate dependency", step: NewStep("B", NoTimeout, nop, a, a), want: "more than once"},
-		{name: "duplicate name", step: NewStep("A", NoTimeout, nop, a), want: "not unique"},
+		{name: "valid", step: a.Then("B", NoTimeout, nop)},
+		{name: "nil dependency", step: &Step{Name: "B", Func: nop, DependsOn: []*Step{nil}}, want: "nil dependency"},
+		{name: "duplicate dependency", step: &Step{Name: "B", Func: nop, DependsOn: []*Step{a, a}}, want: "more than once"},
+		{name: "duplicate name", step: a.Then("A", NoTimeout, nop), want: "not unique"},
 		{name: "empty name", step: &Step{Func: nop}, want: "empty name"},
 		{name: "nil implementation", step: &Step{Name: "Nil func"}, want: "no implementation"},
 	} {

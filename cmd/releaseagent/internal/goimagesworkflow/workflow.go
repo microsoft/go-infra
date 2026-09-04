@@ -220,8 +220,7 @@ func NewGraphWithCheckpoint(
 			})
 		},
 	)
-	complete := coordinator.NewIndicatorStep("✅ Go-images release complete", wait)
-	steps, err := complete.TransitiveDependencies()
+	steps, err := wait.TransitiveDependencies()
 	if err != nil {
 		return nil, nil, err
 	}

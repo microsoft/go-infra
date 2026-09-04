@@ -325,7 +325,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 			response := postJSON(t, ui, testGoImagesAPI+"/plan", test.body)
 			var plan planResponse
 			decodeResponse(t, response, &plan)
-			if response.StatusCode != http.StatusOK || plan.Input.Mode != test.wantMode || len(plan.Steps) != 4 {
+			if response.StatusCode != http.StatusOK || plan.Input.Mode != test.wantMode || len(plan.Steps) != 3 {
 				t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
 			}
 			fields := make(map[string]string)
@@ -630,7 +630,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
-	if plan.Execution.Enabled || len(plan.Steps) != 4 {
+	if plan.Execution.Enabled || len(plan.Steps) != 3 {
 		t.Fatalf("plan = %#v", plan)
 	}
 	response := postJSON(t, ui, testGoImagesAPI+"/simulate", `{}`)

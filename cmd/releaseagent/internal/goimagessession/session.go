@@ -23,7 +23,7 @@ const (
 	CurrentSchemaVersion = 8
 	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
 	// even if step names and dependencies have not changed.
-	CurrentWorkflowRevision = 7
+	CurrentWorkflowRevision = 8
 )
 
 // Document is the durable, non-secret state needed to reconstruct a release plan.
