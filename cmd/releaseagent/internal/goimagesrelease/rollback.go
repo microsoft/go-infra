@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
 // PipelineClient is the Azure DevOps behavior needed to validate a rollback source.
@@ -49,21 +50,20 @@ func ValidateRollbackSource(
 	ctx context.Context,
 	client PipelineClient,
 	resolver VersionResolver,
-	definitionID,
 	buildID int,
 ) (RollbackSource, error) {
 	if client == nil || resolver == nil {
 		return RollbackSource{}, errors.New("rollback pipeline client and version resolver are required")
 	}
-	if definitionID <= 0 || buildID <= 0 {
-		return RollbackSource{}, errors.New("rollback definition and build IDs must be positive")
+	if buildID <= 0 {
+		return RollbackSource{}, errors.New("rollback build ID must be positive")
 	}
 	build, err := client.Get(ctx, buildID)
 	if err != nil {
 		return RollbackSource{}, fmt.Errorf("get rollback source build %d: %w", buildID, err)
 	}
-	if build.DefinitionID != definitionID {
-		return RollbackSource{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, definitionID)
+	if build.DefinitionID != goimagesworkflow.DefinitionID {
+		return RollbackSource{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, goimagesworkflow.DefinitionID)
 	}
 	state, err := build.State()
 	if err != nil {
@@ -72,7 +72,7 @@ func ValidateRollbackSource(
 	if state != azdopipeline.RunStateSucceeded || build.Result != "succeeded" {
 		return RollbackSource{}, fmt.Errorf("rollback source build %d must have result succeeded", buildID)
 	}
-	if build.SourceBranch != "refs/heads/microsoft/main" || !sourceCommitPattern.MatchString(build.SourceVersion) {
+	if build.SourceBranch != goimagesworkflow.SourceBranch || !sourceCommitPattern.MatchString(build.SourceVersion) {
 		return RollbackSource{}, fmt.Errorf(
 			"rollback source build %d has unsupported source %s@%s",
 			buildID,

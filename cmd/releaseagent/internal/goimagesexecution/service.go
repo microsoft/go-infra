@@ -22,11 +22,6 @@ import (
 )
 
 const (
-	// DefinitionID is the microsoft-go-images (official) pipeline.
-	DefinitionID = 1023
-	// SourceBranch is the only source branch accepted by the release service.
-	SourceBranch = "refs/heads/microsoft/main"
-
 	correlationVariable     = "ReleaseUISessionID"
 	executionDigestVariable = "ReleaseUIExecutionDigest"
 	modeVariable            = "ReleaseUIGoImagesMode"
@@ -131,10 +126,7 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 
 // PollMirror waits until the plan's exact source commit is available in the allowlisted
 // internal microsoft-go-images repository.
-func (s *Service) PollMirror(ctx context.Context, target, commit string) error {
-	if target != goimagesworkflow.InternalMirrorTarget {
-		return fmt.Errorf("go-images mirror target %q is not allowlisted", target)
-	}
+func (s *Service) PollMirror(ctx context.Context, commit string) error {
 	if commit != s.config.SourceVersion {
 		return fmt.Errorf("go-images mirror commit %q does not match planned source %q", commit, s.config.SourceVersion)
 	}
@@ -160,12 +152,8 @@ func (s *Service) PollMirror(ctx context.Context, target, commit string) error {
 // QueuePipeline reconciles this session before queueing the hardcoded official pipeline.
 func (s *Service) QueuePipeline(
 	ctx context.Context,
-	pipelineID int,
 	parameters map[string]string,
 ) (string, error) {
-	if pipelineID != DefinitionID {
-		return "", fmt.Errorf("pipeline %d is not the allowlisted go-images definition %d", pipelineID, DefinitionID)
-	}
 	if !maps.Equal(parameters, s.parameters) {
 		return "", fmt.Errorf("go-images release parameters are not allowlisted: %#v", parameters)
 	}
@@ -204,7 +192,7 @@ func (s *Service) QueuePipeline(
 }
 
 func (s *Service) findCorrelatedBuild(ctx context.Context) (*azdopipeline.Build, error) {
-	builds, err := s.reader.ListRecent(ctx, DefinitionID)
+	builds, err := s.reader.ListRecent(ctx, goimagesworkflow.DefinitionID)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile go-images release pipeline run: %w", err)
 	}
@@ -221,13 +209,13 @@ func (s *Service) findCorrelatedBuild(ctx context.Context) (*azdopipeline.Build,
 }
 
 func (s *Service) validateCorrelatedBuild(build *azdopipeline.Build) error {
-	if build == nil || build.ID <= 0 || build.DefinitionID != DefinitionID {
+	if build == nil || build.ID <= 0 || build.DefinitionID != goimagesworkflow.DefinitionID {
 		return fmt.Errorf("correlated go-images release build has invalid identity: %#v", build)
 	}
-	if build.SourceBranch != SourceBranch || build.SourceVersion != s.config.SourceVersion {
+	if build.SourceBranch != goimagesworkflow.SourceBranch || build.SourceVersion != s.config.SourceVersion {
 		return fmt.Errorf(
 			"correlated go-images release build %d has source %s@%s, expected %s@%s",
-			build.ID, build.SourceBranch, build.SourceVersion, SourceBranch, s.config.SourceVersion,
+			build.ID, build.SourceBranch, build.SourceVersion, goimagesworkflow.SourceBranch, s.config.SourceVersion,
 		)
 	}
 	for name, want := range map[string]string{
@@ -265,8 +253,8 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 		if err != nil {
 			return fmt.Errorf("get go-images release build %d: %w", id, err)
 		}
-		if build.DefinitionID != 0 && build.DefinitionID != DefinitionID {
-			return fmt.Errorf("build %d belongs to pipeline %d, expected %d", id, build.DefinitionID, DefinitionID)
+		if build.DefinitionID != goimagesworkflow.DefinitionID {
+			return fmt.Errorf("build %d belongs to pipeline %d, expected %d", id, build.DefinitionID, goimagesworkflow.DefinitionID)
 		}
 		state, err := build.State()
 		if err != nil {

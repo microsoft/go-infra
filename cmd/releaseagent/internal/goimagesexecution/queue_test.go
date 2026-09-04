@@ -55,7 +55,7 @@ func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 					t.Fatal(err)
 				}
-				if body.Definition.ID != DefinitionID || body.SourceBranch != SourceBranch || body.SourceVersion != testCommit {
+				if body.Definition.ID != goimagesworkflow.DefinitionID || body.SourceBranch != goimagesworkflow.SourceBranch || body.SourceVersion != testCommit {
 					t.Fatalf("identity = %#v", body)
 				}
 				if body.TemplateParameters["sourceBuildPipelineRunId"] != test.wantSource ||

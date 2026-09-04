@@ -25,6 +25,7 @@ import (
 
 const (
 	testSourceCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	testSourceBranch = goimagesworkflow.SourceBranch
 	testGoImagesAPI  = "/api/processes/go-images"
 )
 
@@ -73,8 +74,7 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 
 func testReadOnly(source *GoImagesSource, rollbackCalls *int) GoImagesReadOnlyIntegration {
 	return GoImagesReadOnlyIntegration{
-		DefinitionID: goImagesPipelineID,
-		Preflight:    func(context.Context) (string, error) { return "verified", nil },
+		Preflight: func(context.Context) (string, error) { return "verified", nil },
 		ResolveCurrentSource: func(context.Context) (GoImagesSource, error) {
 			return *source, nil
 		},
@@ -290,7 +290,6 @@ func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	execution := GoImagesExecutionIntegration{
-		DefinitionID: goImagesPipelineID,
 		NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 			return &fakeExecutionService{}, nil
 		},
@@ -319,7 +318,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 				t.Fatal(err)
 			}
 			source := GoImagesSource{
-				Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2", "1.25.12-1"},
+				Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2", "1.25.12-1"},
 			}
 			rollbackCalls := 0
 			ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, &rollbackCalls)))
@@ -355,7 +354,7 @@ func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	for _, body := range []string{
 		`{"mode":"normal","sourceBuildId":"123"}`,
@@ -376,7 +375,7 @@ func TestPersistAndRestoreModePlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	created := createTestPlan(t, first, `{"mode":"test"}`)
 	if created.SessionID == "" || strings.Contains(created.View.Subtitle, "restored from disk") {
@@ -410,7 +409,7 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, first, `{"mode":"test"}`)
 	document, err := store.Load(context.Background())
@@ -433,7 +432,6 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
@@ -461,19 +459,16 @@ type fakeExecutionService struct {
 	mirrorErr   error
 }
 
-func (s *fakeExecutionService) PollMirror(_ context.Context, target, commit string) error {
+func (s *fakeExecutionService) PollMirror(_ context.Context, commit string) error {
 	s.mirrors++
-	if target != goimagesworkflow.InternalMirrorTarget || commit != testSourceCommit {
+	if commit != testSourceCommit {
 		return errors.New("unexpected mirror source")
 	}
 	return s.mirrorErr
 }
 
-func (s *fakeExecutionService) QueuePipeline(_ context.Context, pipelineID int, parameters map[string]string) (string, error) {
+func (s *fakeExecutionService) QueuePipeline(_ context.Context, parameters map[string]string) (string, error) {
 	s.queued++
-	if pipelineID != goImagesPipelineID {
-		return "", errors.New("unsafe execution request")
-	}
 	want, err := goimagesworkflow.PipelineParameters(s.mode, s.sourceBuild)
 	if err != nil {
 		return "", err
@@ -497,7 +492,7 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeNormal}
 	preflightCalls := 0
 	readOnly := testReadOnly(&source, nil)
@@ -509,7 +504,6 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(readOnly),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
 			NewService: func(request GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				if request.Mode != goimagesworkflow.ModeNormal || request.SourceVersion != testSourceCommit ||
 					len(request.ExecutionDigest) != 64 || request.SourceBuildID != "" {
@@ -577,7 +571,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{
 		mode:      goimagesworkflow.ModeNormal,
 		mirrorErr: errors.New("commit is not available in the internal mirror"),
@@ -586,7 +580,6 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 				return service, nil
 			},
@@ -610,14 +603,13 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	ui := newTestUI(t,
 		WithSessionStore(store),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
-			DefinitionID: goImagesPipelineID,
-			NewService:   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) { return service, nil },
+			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) { return service, nil },
 		}),
 	)
 	plan := createTestPlan(t, ui, `{"mode":"test"}`)
@@ -635,7 +627,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
 	if plan.Execution.Enabled || len(plan.Steps) != 4 {
@@ -676,7 +668,7 @@ func TestEventsSendInitialSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := GoImagesSource{Branch: goImagesSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, ui, `{"mode":"normal"}`)
 	ctx, cancel := context.WithCancel(context.Background())

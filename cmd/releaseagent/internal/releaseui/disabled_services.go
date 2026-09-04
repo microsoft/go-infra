@@ -17,11 +17,11 @@ var ErrExternalExecutionDisabled = errors.New("external release execution is dis
 
 type disabledGoImagesService struct{}
 
-func (disabledGoImagesService) PollMirror(context.Context, string, string) error {
+func (disabledGoImagesService) PollMirror(context.Context, string) error {
 	return ErrExternalExecutionDisabled
 }
 
-func (disabledGoImagesService) QueuePipeline(context.Context, int, map[string]string) (string, error) {
+func (disabledGoImagesService) QueuePipeline(context.Context, map[string]string) (string, error) {
 	return "", ErrExternalExecutionDisabled
 }
 
@@ -36,11 +36,11 @@ type restoredRunMonitor struct {
 	monitor func(context.Context, int) error
 }
 
-func (restoredRunMonitor) PollMirror(context.Context, string, string) error {
+func (restoredRunMonitor) PollMirror(context.Context, string) error {
 	return errors.New("a restored-run monitor cannot verify a source mirror")
 }
 
-func (restoredRunMonitor) QueuePipeline(context.Context, int, map[string]string) (string, error) {
+func (restoredRunMonitor) QueuePipeline(context.Context, map[string]string) (string, error) {
 	return "", errors.New("a restored-run monitor cannot queue a pipeline")
 }
 

@@ -32,8 +32,6 @@ import (
 
 const (
 	sessionCookieName       = "releaseui_session"
-	goImagesPipelineID      = 1023
-	goImagesSourceBranch    = "refs/heads/microsoft/main"
 	goImagesProcessID       = "go-images"
 	goImagesPipelineName    = "microsoft-go-images (official)"
 	goImagesPipelineOrg     = "dnceng"
@@ -97,7 +95,6 @@ type GoImagesRollbackSource struct {
 // GoImagesReadOnlyIntegration is the explicitly enabled Azure read boundary. It resolves current
 // main and validates rollback builds but cannot queue, cancel, approve, or otherwise mutate a run.
 type GoImagesReadOnlyIntegration struct {
-	DefinitionID         int
 	Preflight            func(context.Context) (string, error)
 	ResolveCurrentSource func(context.Context) (GoImagesSource, error)
 	ValidateRollback     func(context.Context, int) (GoImagesRollbackSource, error)
@@ -106,8 +103,7 @@ type GoImagesReadOnlyIntegration struct {
 // GoImagesExecutionIntegration is the only real execution boundary. Its implementation must
 // hardcode definition 1023 and microsoft/main, and derive parameters from the selected mode.
 type GoImagesExecutionIntegration struct {
-	DefinitionID int
-	NewService   func(GoImagesExecutionRequest) (goimagesworkflow.Service, error)
+	NewService func(GoImagesExecutionRequest) (goimagesworkflow.Service, error)
 }
 
 // GoImagesExecutionRequest binds one real run to a confirmed durable plan.
@@ -184,9 +180,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		if server.sessionStore == nil {
 			return nil, errors.New("go-images source resolution requires a durable session store")
 		}
-		if server.readOnly.DefinitionID != goImagesPipelineID {
-			return nil, fmt.Errorf("go-images definition %d is not allowlisted", server.readOnly.DefinitionID)
-		}
 		if server.readOnly.Preflight == nil || server.readOnly.ResolveCurrentSource == nil ||
 			server.readOnly.ValidateRollback == nil {
 
@@ -196,9 +189,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if server.execution != nil {
 		if server.sessionStore == nil || server.readOnly == nil {
 			return nil, errors.New("go-images execution requires durable storage and read-only validation")
-		}
-		if server.execution.DefinitionID != goImagesPipelineID {
-			return nil, fmt.Errorf("go-images execution definition %d is not allowlisted", server.execution.DefinitionID)
 		}
 		if server.execution.NewService == nil {
 			return nil, errors.New("go-images execution integration is incomplete")
@@ -658,11 +648,8 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	releaseInput := &goimagesworkflow.Input{
 		Versions:      versions,
 		Mode:          normalized.Mode,
-		SourceBranch:  source.Branch,
 		SourceVersion: source.Commit,
 		SourceBuildID: normalized.SourceBuildID,
-		MirrorTarget:  goimagesworkflow.InternalMirrorTarget,
-		PipelineID:    goImagesPipelineID,
 	}
 	steps, releaseState, err := goimagesworkflow.NewGraphWithCheckpoint(
 		releaseInput, nil, disabledGoImagesService{}, s.checkpointReleaseState,
@@ -768,14 +755,14 @@ func goImagesPlanView(
 		modeName = strings.ToUpper(modeName[:1]) + modeName[1:]
 	}
 	view := ProcessPlanView{
-		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, goImagesPipelineID, stepCount),
+		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, goimagesworkflow.DefinitionID, stepCount),
 		IntentBadge: parameters["publishRepoPrefix"],
 		Facts: []ProcessPlanFact{{
 			Label: "Pipeline source", Value: source.Branch, Detail: source.Commit,
 		}},
 		Request: &ProcessRequestPreview{
 			Eyebrow: "Azure DevOps request preview · not sent",
-			Title:   fmt.Sprintf("Pipeline %d · %s", goImagesPipelineID, goImagesPipelineName),
+			Title:   fmt.Sprintf("Pipeline %d · %s", goimagesworkflow.DefinitionID, goImagesPipelineName),
 			Target:  goImagesPipelineOrg + "/" + goImagesPipelineProject,
 		},
 	}
@@ -800,7 +787,7 @@ func goImagesPlanView(
 		view.ExecutionButtonLabel = "Run rollback"
 		if rollbackSource != nil {
 			view.Facts = append(view.Facts, ProcessPlanFact{
-				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goImagesPipelineID, rollbackSource.BuildID),
+				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goimagesworkflow.DefinitionID, rollbackSource.BuildID),
 				Href: rollbackSource.URL,
 			})
 		}
@@ -858,19 +845,17 @@ func (s *Server) executionResponseLocked() executionResponse {
 		ExecutionDigest  string
 		Mode             goimagesworkflow.Mode
 		Versions         []string
-		SourceBranch     string
 		SourceVersion    string
 		SourceBuildID    string
-		DefinitionID     int
 		Parameters       map[string]string
 		WorkflowRevision int
 		WorkflowDigest   string
 	}{
 		SessionID: s.goImages.document.ID, ExecutionDigest: s.goImages.document.ExecutionDigest,
 		Mode: s.goImages.workflowInput.Mode, Versions: append([]string(nil), s.goImages.workflowInput.Versions...),
-		SourceBranch: s.goImages.workflowInput.SourceBranch, SourceVersion: s.goImages.workflowInput.SourceVersion,
-		SourceBuildID: s.goImages.workflowInput.SourceBuildID, DefinitionID: goImagesPipelineID,
-		Parameters: parameters, WorkflowRevision: plan.WorkflowRevision, WorkflowDigest: plan.Digest,
+		SourceVersion: s.goImages.workflowInput.SourceVersion,
+		SourceBuildID: s.goImages.workflowInput.SourceBuildID,
+		Parameters:    parameters, WorkflowRevision: plan.WorkflowRevision, WorkflowDigest: plan.Digest,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -912,7 +897,7 @@ func (s *Server) restoreSession() error {
 	s.steps = steps
 	s.goImages.planInput = PlanInput{Mode: input.Mode, SourceBuildID: input.SourceBuildID}
 	s.goImages.source = GoImagesSource{
-		Branch: input.SourceBranch, Commit: input.SourceVersion,
+		Branch: goimagesworkflow.SourceBranch, Commit: input.SourceVersion,
 		Versions: append([]string(nil), input.Versions...),
 	}
 	if input.Mode == goimagesworkflow.ModeRollback {
@@ -1081,7 +1066,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 			writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("re-resolve current microsoft/main: %v", err))
 			return
 		}
-		if current.Branch != input.SourceBranch || current.Commit != input.SourceVersion {
+		if current.Branch != goimagesworkflow.SourceBranch || current.Commit != input.SourceVersion {
 			s.finishRelease()
 			writeError(response, http.StatusConflict, "microsoft/main changed after this plan was prepared; refresh the plan before queueing")
 			return
@@ -1164,7 +1149,7 @@ func normalizePlanInput(input PlanInput) (PlanInput, error) {
 }
 
 func validateCurrentSource(source GoImagesSource) error {
-	if source.Branch != goImagesSourceBranch {
+	if source.Branch != goimagesworkflow.SourceBranch {
 		return fmt.Errorf("resolved go-images branch %q is not allowlisted", source.Branch)
 	}
 	if len(source.Commit) != 40 {
