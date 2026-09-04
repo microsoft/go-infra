@@ -56,6 +56,35 @@ func TestListRecent(t *testing.T) {
 	}
 }
 
+func TestGetFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/internal/_apis/build/builds/888/timeline" || request.URL.Query().Get("api-version") != "7.1" {
+			t.Fatalf("unexpected timeline request: %s", request.URL.String())
+		}
+		_, _ = response.Write([]byte(`{"records":[` +
+			`{"id":"stage","type":"Stage","name":"Build","result":"failed"},` +
+			`{"id":"job","parentId":"stage","type":"Job","name":"Linux arm32","result":"failed"},` +
+			`{"id":"task","parentId":"job","type":"Task","name":"Build Images","result":"failed",` +
+			`"issues":[{"type":"warning","message":"retrying"},{"type":"error","message":"PowerShell  exited\nwith code 1"}]},` +
+			`{"id":"other","parentId":"job","type":"Task","name":"Cleanup","result":"succeeded"}` +
+			`]}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures, err := client.GetFailures(context.Background(), 888)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 1 || failures[0].Path != "Build > Linux arm32 > Build Images" ||
+		failures[0].Message != "PowerShell exited with code 1" {
+
+		t.Fatalf("failures = %#v", failures)
+	}
+}
+
 func TestGetDefinition(t *testing.T) {
 	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
 	if err != nil {

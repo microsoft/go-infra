@@ -352,7 +352,7 @@
     executionControls.hidden = !visible;
     const unavailableReason = execution?.unavailableReason ||
       (execution?.enabled && !preflightReady
-        ? "External execution is not ready. Review the preflight checks."
+        ? preflightFailureSummary()
         : "");
     executionUnavailable.hidden = visible || !unavailableReason;
     executionUnavailable.textContent = unavailableReason;
@@ -366,6 +366,12 @@
     executionWarning.textContent = view.executionWarning || "This starts the configured external release workflow.";
     runConfirmationCopy.textContent = view.executionConfirmation || "Confirm this release before starting it.";
     updateExecutionButton();
+  }
+
+  function preflightFailureSummary() {
+    const failures = (preflight?.checks || []).filter((check) => check.status !== "passed");
+    if (!failures.length) return "External execution is unavailable.";
+    return failures.map((check) => `${check.name}: ${check.details}`).join("; ");
   }
 
   function handleExecutionAction() {
