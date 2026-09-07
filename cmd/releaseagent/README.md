@@ -40,11 +40,11 @@ ProcessDefinition{
 }
 ```
 
-  Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
+Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
-  Before preparation, the shared lifecycle validates request keys, visible and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
+Before preparation, the shared lifecycle validates request keys, visible and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
 
-  `Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` define the custom go-images lifecycle. Do not combine these handlers with `DurableAction`.
+`Preflight`, `GetPlan`/`Prepare`, `Simulate`, and `Start` define the custom go-images lifecycle. Do not combine these handlers with `DurableAction`.
 
 ## Go-images release modes
 
@@ -147,12 +147,14 @@ older full-release-shaped prototype documents rather than retaining a second dom
 migration path. Workflow revision 8 uses unique step names as graph identity. Start with a new
 session file when either version is unsupported.
 
-The current session and process-run stores together own one active durable release at a time.
-Dashboard responses include both go-images sessions and durable process runs as process-neutral
-ongoing and recent release lists, so a future multi-session store can expand tracking without
-changing the browser API.
+The current session and process-run stores together own one active durable release at a time. The
+dashboard lists that release as ongoing or recently completed work.
 
-Durable external actions use an adjacent, schema-versioned atomic process-run journal derived from `-session-file`. The shared executor checkpoints `started` before calling the target service and resumes monitoring a known external run after restart. If a run cannot be correlated, the next startup marks the action `uncertain` and refuses a replacement. The local file protects one machine; it is not a shared handoff mechanism for an unexpected outage. A future `ProcessRunStore` implementation can use a work item or another shared store without changing process policy.
+Durable external actions use an adjacent, schema-versioned atomic process-run journal derived from
+`-session-file`. The shared executor checkpoints `started` before calling the target service and
+resumes monitoring a known external run after restart. If a run cannot be correlated, the next
+startup marks the action `uncertain` and refuses a replacement. The local file protects one
+machine; it is not a shared handoff mechanism for an unexpected outage.
 
 If a process terminates without cleaning up its lease, verify no release UI process is using the
 session and remove the adjacent `.lock` file manually.
@@ -170,4 +172,3 @@ session and remove the adjacent `.lock` file manually.
 * The durable session stores non-secret input, state, structural and execution digests, and no credentials.
 
 See [ADR 0020: Create UI for release management](https://github.com/microsoft/go-lab/blob/main/docs/adr/0020-microsoft-release-ui-for-go.md) for the accepted local-server design.
-The earlier graph prototype came from [ADR 0005: Use a release agent to coordinate releases](https://github.com/microsoft/go-lab/blob/main/docs/adr/0005-use-a-release-agent-to-coordinate-releases.md).
