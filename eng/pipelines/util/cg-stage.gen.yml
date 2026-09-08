@@ -1,0 +1,33 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# data inputs:
+# - stage - The stage and job name.
+# - displayName - The stage display name.
+# - repository - The Azure Pipelines repository resource name.
+
+stage: ${ .stage }
+displayName: ${ .displayName }
+dependsOn: []
+jobs:
+  - job: ${ .stage }
+    workspace:
+      clean: all
+    variables:
+      - name: RepositoryUrl
+        value: ${ printf "$[resources.repositories.%s.url]" .repository }
+      - name: RepositoryVersion
+        value: ${ printf "$[resources.repositories.%s.version]" .repository }
+      # We check out the repository ourselves, so we need to manually
+      # specify the repository information.
+      - name: CG_ADO_BUILD_REPOSITORY_URI
+        value: ${ printf "$[resources.repositories.%s.url]" .repository }
+      - name: CG_ADO_BUILD_SOURCEBRANCH
+        value: ${ printf "$[resources.repositories.%s.ref]" .repository }
+      - name: CG_ADO_BUILD_SOURCEVERSION
+        value: ${ printf "$[resources.repositories.%s.version]" .repository }
+    steps:
+      - template: /eng/pipelines/steps/checkout-windows-task.yml@self
+        parameters:
+          Build.Repository.Uri: $(RepositoryUrl)
+          Build.SourceVersion: $(RepositoryVersion)

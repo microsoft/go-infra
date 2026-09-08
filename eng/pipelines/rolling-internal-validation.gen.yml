@@ -3,7 +3,7 @@
 
 # This pipeline runs rolling validation.
 # For go-infra: CodeQL on active branch.
-# For internal go-mirror: CG on active branches.
+# For internal go-mirror and go-images-versions: CG on active branches.
 
 # official: https://dev.azure.com/dnceng/internal/_build?definitionId=1356
 # unofficial: https://dev.azure.com/dnceng/internal/_build?definitionId=1496
@@ -20,7 +20,7 @@ pipelineymlgen:
 
 parameters:
   - ${ inlinetemplate "util/info.gen.yml" }:
-      desc: This pipeline runs rolling validation, like CodeQL, for go-infra and internal go-mirror branches.
+      desc: This pipeline runs rolling validation, like CodeQL, for go-infra, internal go-mirror, and internal go-images-versions branches.
   - name: enableCodeQL
     displayName: '[Debug input] Enable CodeQL, ignoring cadence. Use to try modifications in dev branches.'
     type: boolean
@@ -63,6 +63,15 @@ resources:
               - master
               - release-branch.go*
 
+    - repository: GoImagesVersions
+      type: git
+      name: internal/microsoft-go-images-versions
+      ${ inlineif .official }:
+        trigger:
+          branches:
+            include:
+              - main
+
     - repository: 1ESPipelineTemplates
       type: git
       name: 1ESPipelineTemplates/1ESPipelineTemplates
@@ -100,9 +109,10 @@ extends:
       sourceRepositoriesToScan:
         include:
           - repository: GoMirror
+          - repository: GoImagesVersions
 
     stages:
-      # Don't run CodeQL if this is triggered by a push to GoMirror.
+      # Don't run CodeQL if this is triggered by a push to one of the internal repositories.
       - ${{ if in(variables['Build.Reason'], 'Schedule', 'Manual') }}:
         - stage: GoInfraCodeQL
           displayName: go-infra CodeQL
@@ -122,28 +132,12 @@ extends:
                     go build ./...
                   displayName: go
 
-      - stage: MirrorCG
-        displayName: go-mirror CG
-        dependsOn: []
-        jobs:
-          - job: MirrorCG
-            workspace:
-              clean: all
-            variables:
-              - name: RepositoryUrl
-                value: $[resources.repositories.GoMirror.url]
-              - name: RepositoryVersion
-                value: $[resources.repositories.GoMirror.version]
-              # We check out the repository ourselves, so we need to manually
-              # specify the repository information.
-              - name: CG_ADO_BUILD_REPOSITORY_URI
-                value: $[resources.repositories.GoMirror.url]
-              - name: CG_ADO_BUILD_SOURCEBRANCH
-                value: $[resources.repositories.GoMirror.ref]
-              - name: CG_ADO_BUILD_SOURCEVERSION
-                value: $[resources.repositories.GoMirror.version]
-            steps:
-              - template: /eng/pipelines/steps/checkout-windows-task.yml@self
-                parameters:
-                  Build.Repository.Uri: $(RepositoryUrl)
-                  Build.SourceVersion: $(RepositoryVersion)
+      - ${ inlinetemplate "util/cg-stage.gen.yml" }:
+          stage: MirrorCG
+          displayName: go-mirror CG
+          repository: GoMirror
+
+      - ${ inlinetemplate "util/cg-stage.gen.yml" }:
+          stage: ImagesVersionsCG
+          displayName: go-images-versions CG
+          repository: GoImagesVersions
