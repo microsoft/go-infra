@@ -49,7 +49,7 @@ After changing the manifest, regenerate the resources from the repository root:
 go generate ./cmd/git-go-patch
 ```
 
-This uses the repository-owned, standard-library-only generator in [`internal/winmanifest`](../../internal/winmanifest) and rewrites the architecture-specific `rsrc_windows_*.syso` files.
+This uses the repository-owned, standard-library-only generator in [`internal/cmd/winmanifest`](../../internal/cmd/winmanifest) and rewrites the architecture-specific `rsrc_windows_*.syso` files.
 By default it generates `386`, `amd64`, and `arm64` resources with the output prefix `rsrc`.
 Use `-arch` with a comma-separated list to select architectures and `-output-prefix` to change the prefix; for example, `-arch amd64,arm64 -output-prefix custom` writes `custom_windows_amd64.syso` and `custom_windows_arm64.syso`.
 The prefix may include directories, which are created as needed.

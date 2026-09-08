@@ -12,9 +12,9 @@ import (
 	"testing"
 )
 
-var gitGoPatchDir = filepath.Join("..", "..", "cmd", "git-go-patch")
+var gitGoPatchDir = filepath.Join("..", "..", "..", "cmd", "git-go-patch")
 
-func TestCheckedInResources(t *testing.T) {
+func TestGeneratedFilesAreCurrent(t *testing.T) {
 	manifest, err := os.ReadFile(filepath.Join(gitGoPatchDir, "windows", "git-go-patch.exe.manifest"))
 	if err != nil {
 		t.Fatal(err)
