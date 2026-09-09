@@ -33,6 +33,10 @@ type EvalState struct {
 	// inlinerange iterates without variable names, it may be any value
 	// (e.g. a scalar), allowing ${ . } to give the element directly.
 	Data any
+
+	// preservedYAML retains the original YAML nodes for maps and slices decoded
+	// into Data so yml can emit them without losing mapping order.
+	preservedYAML map[dataIdentity]preservedYAMLValue
 }
 
 // EvalFile is a helper to run EvalFileConfig and evalFileWithConfig in one.
@@ -219,6 +223,10 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 
 				if err := valueNode.Decode(&evalKey.data); err != nil {
 					return fail(fmt.Errorf("decoding template data for mapping key: %w", err))
+				}
+				evalKey.preservedYAML, err = preserveYAMLValueNodes(evalKey.data, valueNode)
+				if err != nil {
+					return fail(fmt.Errorf("preserving template data YAML nodes: %w", err))
 				}
 				m.content = append(m.content, evalKey)
 			// If the key is an evalRange, keep the value as the unevaluated body.
@@ -603,6 +611,7 @@ func (e *EvalState) evalTemplateResult(t *evalTemplate) (*yaml.Node, error) {
 	ee := *e
 	ee.File = filepath.Join(filepath.Dir(e.File), t.path)
 	ee.MergeData(t.data)
+	ee.mergePreservedYAML(t.preservedYAML)
 	v, err := ee.EvalFile()
 	if err != nil {
 		return nil, err
@@ -828,8 +837,9 @@ func (e *evalElse) satisfied() (bool, error) {
 }
 
 type evalTemplate struct {
-	path string
-	data map[string]any
+	path          string
+	data          map[string]any
+	preservedYAML map[dataIdentity]preservedYAMLValue
 }
 
 type evalRange struct {

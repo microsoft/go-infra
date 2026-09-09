@@ -73,9 +73,13 @@ func executeExpression(e *EvalState, expr string) (any, error) {
 			return "", nil
 		},
 		"yml": func(v any) (string, error) {
-			n, err := marshalToNode(v)
-			if err != nil {
-				return "", fmt.Errorf("failed to convert inline value: %w", err)
+			n := e.preservedYAMLNode(v)
+			if n == nil {
+				var err error
+				n, err = marshalToNode(v)
+				if err != nil {
+					return "", fmt.Errorf("failed to convert inline value: %w", err)
+				}
 			}
 			result = n
 			return "", nil
