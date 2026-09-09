@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/location"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/webapi"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/workitemtracking"
 )
@@ -42,6 +43,7 @@ type Client struct {
 	workItemType string
 	tokens       TokenProvider
 	newClient    func(context.Context) (workItemClient, string, error)
+	newLocation   func(context.Context) (locationClient, string, error)
 }
 
 type WorkItem struct {
@@ -59,6 +61,10 @@ type workItemClient interface {
 	GetWorkItems(context.Context, workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error)
 	QueryByWiql(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error)
 	UpdateWorkItem(context.Context, workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error)
+}
+
+type locationClient interface {
+	GetConnectionData(context.Context, location.GetConnectionDataArgs) (*location.ConnectionData, error)
 }
 
 func NewClient(config Config, tokens TokenProvider) (*Client, error) {
@@ -85,12 +91,34 @@ func NewClient(config Config, tokens TokenProvider) (*Client, error) {
 		tokens: tokens,
 	}
 	client.newClient = client.createClient
+	client.newLocation = client.createLocationClient
 	return client, nil
 }
 
-func (c *Client) Create(ctx context.Context, title string, snapshot *Snapshot) (*WorkItem, error) {
+// CurrentUser returns the identity used to assign a release work item.
+func (c *Client) CurrentUser(ctx context.Context) (string, error) {
+	sdk, token, err := c.newLocation(ctx)
+	if err != nil {
+		return "", fmt.Errorf("create Azure DevOps location client: %w", redactError(err, token))
+	}
+	data, err := sdk.GetConnectionData(ctx, location.GetConnectionDataArgs{})
+	if err != nil {
+		return "", fmt.Errorf("get authenticated Azure DevOps user: %w", redactError(err, token))
+	}
+	if data == nil || data.AuthenticatedUser == nil || data.AuthenticatedUser.ProviderDisplayName == nil ||
+		strings.TrimSpace(*data.AuthenticatedUser.ProviderDisplayName) == "" {
+
+		return "", errors.New("azure DevOps returned no authenticated user name")
+	}
+	return *data.AuthenticatedUser.ProviderDisplayName, nil
+}
+
+func (c *Client) Create(ctx context.Context, title, assignedTo string, snapshot *Snapshot) (*WorkItem, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, errors.New("release work item title must not be empty")
+	}
+	if strings.TrimSpace(assignedTo) == "" {
+		return nil, errors.New("release work item assignee must not be empty")
 	}
 	snapshotJSON, err := MarshalSnapshot(snapshot)
 	if err != nil {
@@ -104,6 +132,8 @@ func (c *Client) Create(ctx context.Context, title string, snapshot *Snapshot) (
 		patch(webapi.OperationValues.Add, "/fields/System.Title", title),
 		patch(webapi.OperationValues.Add, "/fields/System.AreaPath", AreaPath),
 		patch(webapi.OperationValues.Add, "/fields/System.Tags", workItemTags(snapshot)),
+		patch(webapi.OperationValues.Add, "/fields/System.AssignedTo", assignedTo),
+		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -158,6 +188,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
+		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -256,6 +287,23 @@ func (c *Client) Query(ctx context.Context, limit int) ([]*WorkItem, error) {
 }
 
 func (c *Client) createClient(ctx context.Context) (workItemClient, string, error) {
+	connection, token, err := c.createConnection(ctx)
+	if err != nil {
+		return nil, token, err
+	}
+	client, err := workitemtracking.NewClient(ctx, connection)
+	return client, token, err
+}
+
+func (c *Client) createLocationClient(ctx context.Context) (locationClient, string, error) {
+	connection, token, err := c.createConnection(ctx)
+	if err != nil {
+		return nil, token, err
+	}
+	return location.NewClient(ctx, connection), token, nil
+}
+
+func (c *Client) createConnection(ctx context.Context) (*azuredevops.Connection, string, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("acquire Azure DevOps token: %w", err)
@@ -267,8 +315,7 @@ func (c *Client) createClient(ctx context.Context) (workItemClient, string, erro
 	connection.AuthorizationString = "Bearer " + token
 	timeout := sdkTimeout
 	connection.Timeout = &timeout
-	client, err := workitemtracking.NewClient(ctx, connection)
-	return client, token, err
+	return connection, token, nil
 }
 
 func (c *Client) parseWrittenWorkItem(response *workitemtracking.WorkItem, want []byte, action string) (*WorkItem, error) {
@@ -315,6 +362,9 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	if hasTag(tags, TestTag) != snapshot.Test {
 		return nil, fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id)
+	}
+	if state != workItemState(snapshot.Status) {
+		return nil, fmt.Errorf("work item %d state %q does not match release status %q", *response.Id, state, snapshot.Status)
 	}
 	itemURL := workItemURL(response)
 	if itemURL == "" {
@@ -368,6 +418,13 @@ func workItemTags(snapshot *Snapshot) string {
 		return SelectorTag + "; " + TestTag
 	}
 	return SelectorTag
+}
+
+func workItemState(status Status) string {
+	if status == StatusSucceeded {
+		return "Closed"
+	}
+	return "Active"
 }
 func isRevisionConflict(err error) bool {
 	var value azuredevops.WrappedError

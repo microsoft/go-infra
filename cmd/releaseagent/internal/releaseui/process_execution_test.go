@@ -6,9 +6,9 @@ package releaseui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +17,9 @@ import (
 )
 
 func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryProcessRunStore()
 	var executed bool
+	var workItemCreatedBeforeExecution bool
 	executor := ProcessExecutor{
 		Preflight: func(context.Context) (string, error) { return "verified example", nil },
 		Prepare: func(_ context.Context, input json.RawMessage) (ProcessPreparedRun, error) {
@@ -37,6 +35,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 		},
 		Execute: func(ctx context.Context, payload json.RawMessage, checkpoint ProcessCheckpointFunc) error {
 			executed = true
+			workItemCreatedBeforeExecution = store.count() == 1
 			return checkpoint(ctx, ProcessRunCheckpoint{
 				State: json.RawMessage(`{"run":7}`),
 				External: ProcessRunReference{
@@ -79,6 +78,9 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 	if prepared.Code != http.StatusOK {
 		t.Fatalf("prepare status = %d, body = %s", prepared.Code, prepared.Body.String())
 	}
+	if count := store.count(); count != 0 {
+		t.Fatalf("work item count after preparation = %d, want 0", count)
+	}
 	var plan processRunResponse
 	if err := json.Unmarshal(prepared.Body.Bytes(), &plan); err != nil {
 		t.Fatal(err)
@@ -109,20 +111,53 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 	if !executed {
 		t.Fatal("example process was not executed")
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if !workItemCreatedBeforeExecution {
+		t.Fatal("process executed before its release work item was created")
 	}
+	persisted := store.latest(t)
 	if !persisted.Complete || persisted.Result != "succeeded" || persisted.External == nil || persisted.External.ID != "7" {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }
 
-func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
+func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	store.createErr = errors.New("tracking unavailable")
+	run := testProcessRun(t)
+	preflightCalled := false
+	executed := false
+	executor := ProcessExecutor{
+		Preflight: func(context.Context) (string, error) {
+			preflightCalled = true
+			return "verified", nil
+		},
+		Execute: func(context.Context, json.RawMessage, ProcessCheckpointFunc) error {
+			executed = true
+			return nil
+		},
+		Validate: func(*ProcessRun) error { return nil },
 	}
+	server := &Server{
+		ctx: context.Background(), processExecutors: map[string]ProcessExecutor{"example": executor},
+		processRunStore: store, processRun: run, runner: &coordinator.StepRunner{},
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost, "http://localhost/api/processes/example/start",
+		strings.NewReader(`{"planDigest":"`+run.Digest+`","confirmed":true}`),
+	)
+	request.Header.Set("Origin", "http://localhost")
+	server.handleStartProcessRun("example", response, request)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("start status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if preflightCalled || executed || server.processRun.Started || store.count() != 0 {
+		t.Fatalf("preflight = %v, executed = %v, run = %#v, records = %d", preflightCalled, executed, server.processRun, store.count())
+	}
+}
+
+func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
+	store := newMemoryProcessRunStore()
 	run, err := newProcessRun("example", ProcessPreparedRun{
 		Input: json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
 		Step: ProcessRunStep{Name: "Run example", Timeout: 5 * time.Millisecond},
@@ -136,7 +171,9 @@ func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	run.Started = true
-	if err := store.Save(context.Background(), run); err != nil {
+	workItemID := store.seed(run)
+	record, err := store.Get(context.Background(), workItemID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	resumeCalls := 0
@@ -154,7 +191,7 @@ func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
 		Validate: func(*ProcessRun) error { return nil },
 	}
 	server := &Server{
-		ctx: context.Background(), processRunStore: store, processRun: run,
+		ctx: context.Background(), processRunStore: store, processRun: run, processRunRecord: record,
 		runner: &coordinator.StepRunner{}, processRunning: true,
 	}
 	step := processExecutionStep(run, func(ctx context.Context) error {
@@ -188,10 +225,7 @@ func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
 	if resumeCalls != 1 {
 		t.Fatalf("resume calls = %d, want 1", resumeCalls)
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	persisted := store.latest(t)
 	if !persisted.Complete || persisted.Result != "succeeded" || persisted.External == nil || !persisted.External.Succeeded {
 		t.Fatalf("persisted = %#v", persisted)
 	}

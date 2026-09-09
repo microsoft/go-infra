@@ -73,7 +73,7 @@ func prepareGoInfraProcess(
 		return ProcessPreparedRun{}, fmt.Errorf("encode go-infra process plan: %w", err)
 	}
 	return ProcessPreparedRun{
-		Input: normalizedJSON, Payload: payloadJSON,
+		Test: goInfraProcessIsTest(normalized), Input: normalizedJSON, Payload: payloadJSON,
 		Step: goInfraProcessStep(payload), View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
 	}, nil
 }
@@ -170,6 +170,9 @@ func validateGoInfraProcessRun(run *ProcessRun) error {
 	if err != nil || normalized != payload.Input || input != payload.Input {
 		return errors.New("go-infra process input is invalid")
 	}
+	if run.Test != goInfraProcessIsTest(payload.Input) {
+		return errors.New("go-infra process test classification is invalid")
+	}
 	switch payload.Input.Action {
 	case goInfraActionReleaseOnMerge:
 		if payload.PullRequest == nil {
@@ -209,6 +212,10 @@ func validateGoInfraProcessRun(run *ProcessRun) error {
 		}
 	}
 	return nil
+}
+
+func goInfraProcessIsTest(input goInfraPlanInput) bool {
+	return input.Action == goInfraActionManualDispatch && input.DispatchMode == goInfraDispatchModeDryRun
 }
 
 func goInfraProcessStep(payload goInfraProcessPayload) ProcessRunStep {

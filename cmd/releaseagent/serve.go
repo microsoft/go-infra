@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdopipeline"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdorepo"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
@@ -50,8 +51,20 @@ func handleServe(parse subcmd.ParseFunc) error {
 		filepath.Join(configDir, "microsoft-go", "release-session.json"),
 		"JSON file used to persist and restore the non-secret release plan",
 	)
+	releaseWorkItem := flag.Int(
+		"release-work-item", 0,
+		"Azure DevOps work item ID to restore; 0 starts without a selected release",
+	)
 	if err := parse(); err != nil {
 		return err
+	}
+	if *releaseWorkItem < 0 {
+		return errors.New("release work item ID must not be negative")
+	}
+
+	tokenProvider := &azdopipeline.CachingTokenProvider{
+		Provider: azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
+		TTL:      5 * time.Minute,
 	}
 
 	var options []releaseui.Option
@@ -75,7 +88,19 @@ func handleServe(parse subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	processRunStore, err := releaseui.NewProcessRunFileStore(sessionPath + ".process-run.json")
+	workItems, err := azdoworkitem.NewClient(azdoworkitem.Config{
+		BaseURL:      "https://dev.azure.com/devdiv",
+		Project:      "DEVDIV",
+		WorkItemType: "Issue",
+	}, tokenProvider)
+	if err != nil {
+		return err
+	}
+	assignedTo, err := workItems.CurrentUser(context.Background())
+	if err != nil {
+		return err
+	}
+	processRunStore, err := releaseui.NewProcessRunWorkItemStore(workItems, assignedTo)
 	if err != nil {
 		return err
 	}
@@ -87,12 +112,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 			DispatchPatchRelease:   service.DispatchPatchRelease, PollWorkflowRun: service.PollWorkflowRun,
 		}),
 	)
+	if *releaseWorkItem > 0 {
+		options = append(options, releaseui.WithProcessRunWorkItem(*releaseWorkItem))
+	}
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
-	tokenProvider := &azdopipeline.CachingTokenProvider{
-		Provider: azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
-		TTL:      5 * time.Minute,
-	}
 	azureClient, err := azdopipeline.NewClient(
 		"https://dev.azure.com/dnceng",
 		"internal",
