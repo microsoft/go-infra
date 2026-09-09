@@ -1,0 +1,2 @@
+${ inlinetemplate "inline-x-template.yml" }:
+  x: ${ yml .x }

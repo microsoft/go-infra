@@ -4,3 +4,4 @@
 - template: release.yml
   parameters:
     publish: true
+    artifact: go
