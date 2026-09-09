@@ -1,0 +1,9 @@
+- ${ inlinetemplate "inline-forward-x-template.yml" }:
+    x:
+      - stage: ${ "PrepareRelease" }
+        jobs:
+          - job: PrepareRelease
+      - template: release.yml
+        parameters:
+          publish: ${ yml true }
+          artifact: go
