@@ -47,12 +47,13 @@ type Client struct {
 }
 
 type WorkItem struct {
-	ID       int
-	Revision int
-	URL      string
-	Title    string
-	State    string
-	Snapshot *Snapshot
+	ID        int
+	Revision  int
+	URL       string
+	Title     string
+	State     string
+	ChangedAt time.Time
+	Snapshot  *Snapshot
 }
 
 type workItemClient interface {
@@ -214,15 +215,19 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	return workItem, nil
 }
 
-func (c *Client) Query(ctx context.Context, limit int) ([]*WorkItem, error) {
+func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem, error) {
 	if limit <= 0 || limit > maxQueryResults {
 		return nil, fmt.Errorf("release work item query limit must be between 1 and %d", maxQueryResults)
 	}
+	stateOperator := "<>"
+	if closed {
+		stateOperator = "="
+	}
 	wiql := fmt.Sprintf(
 		"SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = '%s' "+
-			"AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s' "+
+			"AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s' AND [System.State] %s 'Closed' "+
 			"ORDER BY [System.ChangedDate] DESC",
-		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag),
+		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag), stateOperator,
 	)
 	sdk, token, err := c.newClient(ctx)
 	if err != nil {
@@ -352,9 +357,14 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	title, titleOK := fields["System.Title"].(string)
 	state, stateOK := fields["System.State"].(string)
+	changedText, changedOK := fields["System.ChangedDate"].(string)
 	description, snapshotOK := fields[descriptionField].(string)
-	if !titleOK || strings.TrimSpace(title) == "" || !stateOK || strings.TrimSpace(state) == "" || !snapshotOK {
+	if !titleOK || strings.TrimSpace(title) == "" || !stateOK || strings.TrimSpace(state) == "" || !changedOK || !snapshotOK {
 		return nil, fmt.Errorf("work item %d has incomplete managed fields", *response.Id)
+	}
+	changedAt, err := time.Parse(time.RFC3339Nano, changedText)
+	if err != nil {
+		return nil, fmt.Errorf("work item %d has invalid changed date %q", *response.Id, changedText)
 	}
 	snapshot, err := ParseDescription(description)
 	if err != nil {
@@ -372,13 +382,13 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	return &WorkItem{
 		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
-		Title: title, State: state, Snapshot: snapshot,
+		Title: title, State: state, ChangedAt: changedAt, Snapshot: snapshot,
 	}, nil
 }
 
 func (c *Client) fields() []string {
 	return []string{
-		"System.WorkItemType", "System.Title", "System.State", "System.AreaPath", "System.Tags", descriptionField,
+		"System.WorkItemType", "System.Title", "System.State", "System.AreaPath", "System.Tags", "System.ChangedDate", descriptionField,
 	}
 }
 

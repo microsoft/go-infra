@@ -201,7 +201,7 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 			if args.Top == nil || *args.Top != 20 || args.Wiql == nil || args.Wiql.Query == nil {
 				t.Fatalf("query args = %#v", args)
 			}
-			for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'"} {
+			for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'", "[System.State] <> 'Closed'"} {
 				if !strings.Contains(*args.Wiql.Query, clause) {
 					t.Fatalf("WIQL %q does not contain %q", *args.Wiql.Query, clause)
 				}
@@ -216,12 +216,30 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 		},
 	}
 	client := newTestClient(t, sdk, "test-token")
-	items, err := client.Query(context.Background(), 20)
+	items, err := client.Query(context.Background(), false, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := []int{items[0].ID, items[1].ID}; !slices.Equal(got, []int{2, 1}) {
 		t.Fatalf("work item order = %v, want [2 1]", got)
+	}
+}
+
+func TestQueryClosedWorkItems(t *testing.T) {
+	references := []workitemtracking.WorkItemReference{}
+	sdk := &fakeClient{query: func(_ context.Context, args workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error) {
+		if args.Wiql == nil || args.Wiql.Query == nil || !strings.Contains(*args.Wiql.Query, "[System.State] = 'Closed'") {
+			t.Fatalf("query args = %#v", args)
+		}
+		return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	items, err := client.Query(context.Background(), true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none", items)
 	}
 }
 
@@ -266,6 +284,7 @@ func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtr
 		"System.State":        workItemState(snapshot.Status),
 		"System.AreaPath":     AreaPath,
 		"System.Tags":         "other; " + workItemTags(snapshot),
+		"System.ChangedDate":  "2026-09-09T12:00:00Z",
 		"System.Description":  mustRenderDescription(t, snapshot),
 	}
 	return &workitemtracking.WorkItem{

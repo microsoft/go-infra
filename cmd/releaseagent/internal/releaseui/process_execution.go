@@ -424,6 +424,10 @@ func (s *Server) restoreProcessRun() error {
 	if err != nil {
 		return fmt.Errorf("load release work item %d: %w", s.processRunItemID, err)
 	}
+	return s.restoreProcessRunRecord(record)
+}
+
+func (s *Server) restoreProcessRunRecord(record *ProcessRunRecord) error {
 	run := record.Run
 	executor, ok := s.processExecutors[run.ProcessID]
 	if !ok {
@@ -435,10 +439,11 @@ func (s *Server) restoreProcessRun() error {
 	if run.Started && !run.Complete && len(run.Checkpoint) == 0 {
 		run.Complete = true
 		run.Result = "uncertain"
-		record, err = s.processRunStore.Update(s.ctx, record, run)
+		updated, err := s.processRunStore.Update(s.ctx, record, run)
 		if err != nil {
 			return fmt.Errorf("mark interrupted process run uncertain: %w", err)
 		}
+		record = updated
 		run = record.Run
 	}
 	s.processRun = run

@@ -32,7 +32,7 @@ body {
   min-height: 100vh;
 }
 
-button, input, textarea { font: inherit; }
+button, input, textarea, dialog { font: inherit; }
 button { color: inherit; }
 
 .topbar {
@@ -271,6 +271,15 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .release-card-title strong { font-size: 15px; }
 .release-card-body p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .compact-button { min-height: 34px; padding: 0 12px; text-decoration: none; }
+.release-card-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.tracking-error { margin: 12px 0 0; padding: 11px 13px; border: 1px solid rgb(255 123 135 / 34%); border-radius: 8px; background: rgb(255 123 135 / 8%); color: #ffd1d6; font-size: 12px; line-height: 1.5; }
+.json-dialog { width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.json-dialog::backdrop { background: rgb(0 0 0 / 68%); }
+.json-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.json-dialog-heading h2 { margin: 0; font-size: 20px; }
+.dialog-close { width: 36px; height: 36px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); color: var(--muted); cursor: pointer; font-size: 22px; }
+.json-dialog textarea { min-height: min(52vh, 540px); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; tab-size: 2; }
+.json-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .process-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .process-card { position: relative; min-height: 236px; padding: 21px; overflow: hidden; border: 1px solid var(--border); border-radius: 17px; background: linear-gradient(145deg, rgb(13 35 55 / 84%), rgb(6 19 33 / 78%)); color: inherit; text-decoration: none; transition: border-color .18s, transform .18s, background .18s; }
 a.process-card:hover { transform: translateY(-3px); border-color: rgb(57 213 255 / 46%); background: linear-gradient(145deg, rgb(19 51 73 / 90%), rgb(7 23 40 / 84%)); }
@@ -364,7 +373,10 @@ label.mode-card { position: relative; display: grid; grid-template-columns: auto
   .section-heading { align-items: flex-start; flex-direction: column; }
   .section-heading .button { width: 100%; }
   .release-card { align-items: flex-start; flex-wrap: wrap; }
-  .release-card .compact-button { width: 100%; }
+  .release-card-actions { width: 100%; }
+  .release-card .compact-button { flex: 1; }
+  .json-dialog-actions { flex-direction: column; }
+  .json-dialog-actions .button { width: 100%; }
   .release-hero { grid-template-columns: 1fr; }
   .release-product-mark { width: 52px; height: 52px; }
   .source-grid { grid-template-columns: 1fr; }

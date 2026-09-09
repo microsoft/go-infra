@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
@@ -123,12 +122,11 @@ func testGoImagesDocumentMode(t *testing.T, mode goimagesworkflow.Mode) *goimage
 	if mode == goimagesworkflow.ModeRollback {
 		input.SourceBuildID = "3019035"
 	}
-	state, err := goimagesworkflow.NewState(input)
+	steps, state, err := goimagesworkflow.NewGraphWithCheckpoint(input, nil, disabledGoImagesService{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := coordinator.NewRootStep("Test release", time.Minute, func(context.Context) error { return nil })
-	document, err := goimagessession.NewDocument(input, state, []*coordinator.Step{step}, time.Now())
+	document, err := goimagessession.NewDocument(input, state, steps, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

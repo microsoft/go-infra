@@ -51,7 +51,7 @@ type goImagesRuntime struct {
 	restored       bool
 }
 
-// Server hosts a single local release session.
+// Server hosts one local release UI instance.
 type Server struct {
 	ctx              context.Context
 	token            string
@@ -61,12 +61,14 @@ type Server struct {
 	processExecutors map[string]ProcessExecutor
 	processRunStore  ProcessRunStore
 	processRunItemID int
+	workItems        releaseWorkItemService
 
 	sessionStore       GoImagesSessionStore
 	goImagesWorkItemID int
 	readOnly           *GoImagesReadOnlyIntegration
 	execution          *GoImagesExecutionIntegration
 
+	selectionMu       sync.Mutex
 	mu                sync.Mutex
 	goImages          goImagesRuntime
 	steps             []*coordinator.Step
@@ -286,6 +288,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
+	mux.HandleFunc("POST /api/release-work-items/{id}/select", s.handleSelectWorkItem)
+	mux.HandleFunc("GET /api/release-work-items/{id}/export", s.handleExportWorkItem)
+	mux.HandleFunc("POST /api/release-work-items/{id}/import", s.handleImportWorkItem)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
@@ -440,20 +445,23 @@ type executionResponse struct {
 }
 
 type dashboardResponse struct {
-	Ongoing   []releaseSummary `json:"ongoing"`
-	Recent    []releaseSummary `json:"recent"`
-	Processes []processSummary `json:"processes"`
+	Ongoing       []releaseSummary `json:"ongoing"`
+	Recent        []releaseSummary `json:"recent"`
+	Processes     []processSummary `json:"processes"`
+	TrackingError string           `json:"trackingError,omitempty"`
 }
 
 type releaseSummary struct {
-	Mark      string    `json:"mark"`
-	Name      string    `json:"name"`
-	Mode      string    `json:"mode,omitempty"`
-	Status    string    `json:"status"`
-	RunID     string    `json:"runId,omitempty"`
-	RunLabel  string    `json:"runLabel,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Href      string    `json:"href"`
+	Mark        string    `json:"mark"`
+	Name        string    `json:"name"`
+	Mode        string    `json:"mode,omitempty"`
+	Status      string    `json:"status"`
+	RunID       string    `json:"runId,omitempty"`
+	RunLabel    string    `json:"runLabel,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	Href        string    `json:"href"`
+	WorkItemID  int       `json:"workItemId,omitempty"`
+	WorkItemURL string    `json:"workItemUrl,omitempty"`
 }
 
 type processSummary struct {
@@ -500,7 +508,11 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 	writeJSON(response, http.StatusOK, detail)
 }
 
-func (s *Server) handleDashboard(response http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
+	if s.workItems != nil {
+		writeJSON(response, http.StatusOK, s.workItemDashboard(request.Context()))
+		return
+	}
 	s.mu.Lock()
 	result := dashboardResponse{
 		Ongoing:   make([]releaseSummary, 0),
@@ -775,7 +787,11 @@ func secureEqual(left, right string) bool {
 }
 
 func decodeJSON(response http.ResponseWriter, request *http.Request, target any) error {
-	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	return decodeJSONLimit(response, request, target, 64<<10)
+}
+
+func decodeJSONLimit(response http.ResponseWriter, request *http.Request, target any, limit int64) error {
+	request.Body = http.MaxBytesReader(response, request.Body, limit)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

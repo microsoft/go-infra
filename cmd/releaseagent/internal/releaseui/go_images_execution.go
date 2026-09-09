@@ -86,6 +86,10 @@ func (s *Server) restoreSession() error {
 	if err != nil {
 		return fmt.Errorf("load release work item %d: %w", s.goImagesWorkItemID, err)
 	}
+	return s.restoreGoImagesSession(record)
+}
+
+func (s *Server) restoreGoImagesSession(record *GoImagesSessionRecord) error {
 	document := record.Document
 	input := document.Input
 	state := document.State
