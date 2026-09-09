@@ -128,7 +128,8 @@ If this node has an object child, it is merged into `data` before evaluating the
 More technically: if the node is a key node of a mapping pair, scalar values in the
 value mapping are decoded and structured values are retained as YAML nodes before
 being merged into `data`. This lets `yml` insert structured values without losing
-their original mapping order.
+their original mapping order. Retained structured values are opaque to other
+template operations and should be passed directly to `yml`.
 
 ### `inlinerange <args...>`
 

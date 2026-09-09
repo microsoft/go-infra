@@ -42,6 +42,9 @@ func marshalToNode(v any) (*yaml.Node, error) {
 // templateDataFromNode converts a template data mapping to expression values.
 // Structured values remain YAML nodes so yml can preserve their mapping order.
 func templateDataFromNode(n *yaml.Node) (map[string]any, error) {
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+		return nil, nil
+	}
 	if n.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("expected mapping node, got %v", kindStr(n))
 	}
