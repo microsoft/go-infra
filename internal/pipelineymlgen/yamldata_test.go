@@ -23,6 +23,8 @@ mapping:
 sequence:
   - second: 2
     first: 1
+emptyMapping: {}
+emptySequence: []
 `), &document); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +54,8 @@ sequence:
 	}{
 		{"mapping", yaml.MappingNode},
 		{"sequence", yaml.SequenceNode},
+		{"emptyMapping", yaml.MappingNode},
+		{"emptySequence", yaml.SequenceNode},
 	} {
 		t.Run(test.key, func(t *testing.T) {
 			got, ok := data[test.key].(*yaml.Node)
@@ -60,6 +64,11 @@ sequence:
 			}
 			if got.Kind != test.kind {
 				t.Errorf("%s kind = %v, want %v", test.key, got.Kind, test.kind)
+			}
+			for i := 0; i < len(source.Content); i += 2 {
+				if source.Content[i].Value == test.key && got != source.Content[i+1] {
+					t.Errorf("%s was copied or decoded instead of retaining its YAML node", test.key)
+				}
 			}
 		})
 	}
@@ -75,9 +84,9 @@ sequence:
 	if got := cloned.Content[0].Value; got != "second" {
 		t.Errorf("first mapping key = %q, want %q", got, "second")
 	}
-	cloned.Content = nil
-	if len(mapping.Content) == 0 {
-		t.Error("modifying cloned node changed the source node")
+	cloned.Content[1].Value = "changed"
+	if got := mapping.Content[1].Value; got != "2" {
+		t.Errorf("modifying cloned child changed source child to %q", got)
 	}
 }
 
@@ -107,6 +116,21 @@ func TestTemplateDataFromNodeRejectsInvalidData(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 	if !strings.Contains(err.Error(), "expected mapping node") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestTemplateDataFromNodeRejectsDuplicateKeys(t *testing.T) {
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte("duplicate: first\nduplicate: second\n"), &document); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := templateDataFromNode(document.Content[0])
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), `duplicate key "duplicate"`) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

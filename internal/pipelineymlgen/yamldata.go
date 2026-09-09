@@ -23,7 +23,7 @@ func sortedMapKeys(m map[string]any) []string {
 // marshalToNode marshals v to YAML and returns the inner node.
 func marshalToNode(v any) (*yaml.Node, error) {
 	if n, ok := v.(*yaml.Node); ok {
-		return cloneNode(n), nil
+		return cloneNodeTree(n), nil
 	}
 	out, err := yaml.Marshal(v)
 	if err != nil {
@@ -37,6 +37,17 @@ func marshalToNode(v any) (*yaml.Node, error) {
 		return n.Content[0], nil
 	}
 	return &n, nil
+}
+
+func cloneNodeTree(n *yaml.Node) *yaml.Node {
+	if n == nil {
+		return nil
+	}
+	cloned := cloneNode(n)
+	for i, child := range cloned.Content {
+		cloned.Content[i] = cloneNodeTree(child)
+	}
+	return cloned
 }
 
 // templateDataFromNode converts a template data mapping to expression values.
