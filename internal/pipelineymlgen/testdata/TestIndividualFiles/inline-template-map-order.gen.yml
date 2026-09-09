@@ -1,0 +1,8 @@
+- ${ inlinetemplate "inline-x-template.yml" }:
+    x:
+      - stage: PrepareRelease
+        jobs:
+          - job: PrepareRelease
+      - template: release.yml
+        parameters:
+          publish: true

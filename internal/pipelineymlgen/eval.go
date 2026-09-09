@@ -217,7 +217,8 @@ func (e *EvalState) eval(orig *yaml.Node) (any, error) {
 					return fail(fmt.Errorf("converting template data value to YAML: %w", err))
 				}
 
-				if err := valueNode.Decode(&evalKey.data); err != nil {
+				evalKey.data, err = templateDataFromNode(valueNode)
+				if err != nil {
 					return fail(fmt.Errorf("decoding template data for mapping key: %w", err))
 				}
 				m.content = append(m.content, evalKey)
