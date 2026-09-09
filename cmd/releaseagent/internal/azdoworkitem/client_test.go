@@ -133,13 +133,13 @@ func TestCurrentUser(t *testing.T) {
 }
 
 func TestUpdateTestsRevisionFirst(t *testing.T) {
-	snapshot := testSnapshot(StatusRunning)
+	snapshot := testSnapshot(StatusSucceeded)
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
 		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 3 {
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
-		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Active")
+		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -147,7 +147,7 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.Revision != 8 || item.Snapshot.Status != StatusRunning {
+	if item.Revision != 8 || item.Snapshot.Status != StatusSucceeded {
 		t.Fatalf("updated work item = %#v", item)
 	}
 }

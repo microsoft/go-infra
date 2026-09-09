@@ -47,6 +47,7 @@ type goImagesRuntime struct {
 	workflowInput  *goimagesworkflow.Input
 	workflowState  *goimagesworkflow.State
 	document       *goimagessession.Document
+	record         *GoImagesSessionRecord
 	restored       bool
 }
 
@@ -61,9 +62,10 @@ type Server struct {
 	processRunStore  ProcessRunStore
 	processRunItemID int
 
-	sessionStore goimagessession.Store
-	readOnly     *GoImagesReadOnlyIntegration
-	execution    *GoImagesExecutionIntegration
+	sessionStore       GoImagesSessionStore
+	goImagesWorkItemID int
+	readOnly           *GoImagesReadOnlyIntegration
+	execution          *GoImagesExecutionIntegration
 
 	mu                sync.Mutex
 	goImages          goImagesRuntime
@@ -126,9 +128,16 @@ func WithDemoDelay(delay time.Duration) Option {
 }
 
 // WithSessionStore enables durable, non-secret release plan persistence and restoration.
-func WithSessionStore(store goimagessession.Store) Option {
+func WithSessionStore(store GoImagesSessionStore) Option {
 	return func(server *Server) {
 		server.sessionStore = store
+	}
+}
+
+// WithGoImagesWorkItem selects one go-images work item to restore when the server starts.
+func WithGoImagesWorkItem(workItemID int) Option {
+	return func(server *Server) {
+		server.goImagesWorkItemID = workItemID
 	}
 }
 
@@ -173,6 +182,12 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	}
 	if server.demoDelay < 0 {
 		return nil, errors.New("demo delay cannot be negative")
+	}
+	if server.goImagesWorkItemID < 0 {
+		return nil, errors.New("go-images work item ID must not be negative")
+	}
+	if server.goImagesWorkItemID > 0 && server.sessionStore == nil {
+		return nil, errors.New("go-images work item selection requires a durable session store")
 	}
 	if server.readOnly != nil {
 		if server.sessionStore == nil {

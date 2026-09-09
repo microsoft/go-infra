@@ -45,17 +45,17 @@ func (s *Server) preflightReport(ctx context.Context) PreflightReport {
 	}
 	if s.sessionStore == nil {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID:      "durable-session",
-			Name:    "Durable session storage",
+			ID:      "release-tracking",
+			Name:    "Azure DevOps release tracking",
 			Status:  CheckStatusWarning,
-			Details: "Not configured. Release plans cannot be persisted or restored.",
+			Details: "Not configured. Confirmed releases cannot start or be restored.",
 		})
 	} else {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID:      "durable-session",
-			Name:    "Durable session storage",
+			ID:      "release-tracking",
+			Name:    "Azure DevOps release tracking",
 			Status:  CheckStatusPassed,
-			Details: "Enabled. The non-secret release plan is persisted atomically.",
+			Details: "Enabled. Confirmed release state is stored in a revisioned work item; unconfirmed plans remain in memory.",
 		})
 	}
 	if s.readOnly == nil {
