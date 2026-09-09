@@ -14,10 +14,10 @@ require (
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/crypto v0.56.0
-	golang.org/x/mod v0.40.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/mod v0.41.0
+	golang.org/x/oauth2 v0.37.0
 	golang.org/x/perf v0.0.0-20260409210113-8e83ce0f7b1c
-	golang.org/x/sync v0.22.0
+	golang.org/x/sync v0.23.0
 	golang.org/x/text v0.41.0
 	golang.org/x/tools v0.49.0
 )
