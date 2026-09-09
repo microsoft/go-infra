@@ -125,7 +125,10 @@ If the file is `gen.yml`, evaluate it and inline the result.
 
 If this node has an object child, it is merged into `data` before evaluating the template.
 
-More technically: if the node is a key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
+More technically: if the node is a key node of a mapping pair, scalar values in the
+value mapping are decoded and structured values are retained as YAML nodes before
+being merged into `data`. This lets `yml` insert structured values without losing
+their original mapping order.
 
 ### `inlinerange <args...>`
 
