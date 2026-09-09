@@ -112,7 +112,15 @@ func preserveYAMLValueNode(preserved map[dataIdentity]preservedYAMLValue, value 
 
 func identityOf(value reflect.Value) (dataIdentity, bool) {
 	switch value.Kind() {
-	case reflect.Map, reflect.Slice:
+	case reflect.Map:
+		if value.IsNil() {
+			return dataIdentity{}, false
+		}
+		return dataIdentity{
+			typ:     value.Type(),
+			pointer: uintptr(value.UnsafePointer()),
+		}, true
+	case reflect.Slice:
 		if value.IsNil() {
 			return dataIdentity{}, false
 		}
@@ -144,6 +152,11 @@ func (e *EvalState) preservedYAMLNode(value any) *yaml.Node {
 	}
 	preserved, ok := e.preservedYAML[identity]
 	if !ok {
+		return nil
+	}
+	decoded := reflect.New(reflect.TypeOf(value))
+	if err := preserved.node.Decode(decoded.Interface()); err != nil ||
+		!reflect.DeepEqual(value, decoded.Elem().Interface()) {
 		return nil
 	}
 	return cloneNodeTree(preserved.node)
