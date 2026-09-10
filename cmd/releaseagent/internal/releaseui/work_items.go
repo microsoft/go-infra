@@ -127,9 +127,14 @@ func (s *Server) handleSelectWorkItem(response http.ResponseWriter, request *htt
 	s.selectionMu.Lock()
 	defer s.selectionMu.Unlock()
 	s.mu.Lock()
+	if href, selected := s.selectedWorkItemHrefLocked(id); selected {
+		s.mu.Unlock()
+		writeJSON(response, http.StatusOK, map[string]string{"href": href})
+		return
+	}
 	if s.hasSelectedOrPreparedReleaseLocked() {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "restart without a selected or prepared release before selecting another work item")
+		writeError(response, http.StatusConflict, "restart without a selected or prepared release before selecting a different work item")
 		return
 	}
 	s.mu.Unlock()
@@ -143,6 +148,11 @@ func (s *Server) handleSelectWorkItem(response http.ResponseWriter, request *htt
 		return
 	}
 	s.mu.Lock()
+	if href, selected := s.selectedWorkItemHrefLocked(id); selected {
+		s.mu.Unlock()
+		writeJSON(response, http.StatusOK, map[string]string{"href": href})
+		return
+	}
 	if s.hasSelectedOrPreparedReleaseLocked() {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "a release was prepared while the work item was loading")
@@ -177,6 +187,16 @@ func (s *Server) handleSelectWorkItem(response http.ResponseWriter, request *htt
 	}
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, map[string]string{"href": href})
+}
+
+func (s *Server) selectedWorkItemHrefLocked(id int) (string, bool) {
+	if s.goImages.record != nil && s.goImages.record.WorkItemID == id {
+		return processPath(goImagesProcessID), true
+	}
+	if s.processRunRecord != nil && s.processRunRecord.WorkItemID == id {
+		return processPath(s.processRunRecord.Run.ProcessID), true
+	}
+	return "", false
 }
 
 func (s *Server) hasSelectedOrPreparedReleaseLocked() bool {

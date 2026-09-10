@@ -154,7 +154,10 @@ func TestSelectReleaseWorkItemRestoresProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := newMemoryReleaseWorkItemService(testReleaseWorkItem(42, snapshot, time.Now().UTC()))
+	service := newMemoryReleaseWorkItemService(
+		testReleaseWorkItem(42, snapshot, time.Now().UTC()),
+		testReleaseWorkItem(43, snapshot, time.Now().UTC()),
+	)
 	store, err := NewGoImagesWorkItemStore(service, "Release Operator")
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +179,40 @@ func TestSelectReleaseWorkItemRestoresProcess(t *testing.T) {
 		plan.Execution.WorkItem.ID != 42 || plan.Execution.WorkItem.URL != "https://example.invalid/workitems/42" {
 
 		t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
+	}
+	response = postJSON(t, ui, "/api/release-work-items/42/select", `{}`)
+	decodeResponse(t, response, &selected)
+	if response.StatusCode != http.StatusOK || selected["href"] != "/go-images" {
+		t.Fatalf("reopen status = %d, selected = %#v", response.StatusCode, selected)
+	}
+	response = postJSON(t, ui, "/api/release-work-items/43/select", `{}`)
+	response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("different work item status = %d, want %d", response.StatusCode, http.StatusConflict)
+	}
+}
+
+func TestSelectedWorkItemHrefLocked(t *testing.T) {
+	server := &Server{
+		goImages: goImagesRuntime{record: &GoImagesSessionRecord{WorkItemID: 42}},
+		processRunRecord: &ProcessRunRecord{
+			WorkItemID: 43,
+			Run:        &ProcessRun{ProcessID: "go-infra"},
+		},
+	}
+	for _, test := range []struct {
+		id   int
+		href string
+		ok   bool
+	}{
+		{id: 42, href: "/go-images", ok: true},
+		{id: 43, href: "/go-infra", ok: true},
+		{id: 44},
+	} {
+		href, ok := server.selectedWorkItemHrefLocked(test.id)
+		if href != test.href || ok != test.ok {
+			t.Fatalf("selectedWorkItemHrefLocked(%d) = %q, %v; want %q, %v", test.id, href, ok, test.href, test.ok)
+		}
 	}
 }
 

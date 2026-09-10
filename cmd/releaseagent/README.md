@@ -131,7 +131,8 @@ card or **Open** selects one work item for this server. Its Azure DevOps browser
 dashboard and selected release page. **View JSON** exports its snapshot for manual repair and imports
 edited JSON only when the exported Azure DevOps revision is still current. Import validates the
 process payload and cannot change its process ID or immutable intent digest. Restart without a
-selected release before repairing that release's state.
+selected release before repairing that release's state. Reopening the currently selected work item
+is idempotent; selecting a different work item still requires restarting the server.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
