@@ -63,7 +63,11 @@ func (s *Server) workItemDashboard(ctx context.Context) dashboardResponse {
 			}
 			continue
 		}
-		addDashboardRelease(&result, summary)
+		if item.State == "Closed" {
+			result.Recent = append(result.Recent, summary)
+		} else {
+			addDashboardRelease(&result, summary)
+		}
 	}
 	return result
 }

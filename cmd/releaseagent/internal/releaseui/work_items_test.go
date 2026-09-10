@@ -101,6 +101,8 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	canceledItem := testReleaseWorkItem(3, canceledSnapshot, time.Date(2026, 9, 9, 14, 0, 0, 0, time.UTC))
+	canceledItem.State = "Closed"
 	goImagesDocument := testGoImagesDocument(t)
 	goImagesState := goImagesDocument.State
 	goImagesState.Complete = true
@@ -124,7 +126,7 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newMemoryReleaseWorkItemService(
-		testReleaseWorkItem(3, canceledSnapshot, time.Date(2026, 9, 9, 14, 0, 0, 0, time.UTC)),
+		canceledItem,
 		testReleaseWorkItem(2, processSnapshot, time.Date(2026, 9, 9, 13, 0, 0, 0, time.UTC)),
 		testReleaseWorkItem(1, goImagesSnapshot, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)),
 	)
@@ -136,13 +138,13 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 	var dashboard dashboardResponse
 	decodeResponse(t, response, &dashboard)
 	if response.StatusCode != http.StatusOK || dashboard.TrackingError != "" ||
-		len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 1 {
+		len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 0 || len(dashboard.Recent) != 2 {
 
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
 	if dashboard.Ongoing[0].WorkItemID != 2 || dashboard.Ongoing[0].Status != "starting" ||
-		dashboard.NeedsAttention[0].WorkItemID != 3 || dashboard.NeedsAttention[0].Status != "canceled" ||
-		dashboard.Recent[0].WorkItemID != 1 || dashboard.Recent[0].Status != "succeeded" {
+		dashboard.Recent[0].WorkItemID != 3 || dashboard.Recent[0].Status != "canceled" ||
+		dashboard.Recent[1].WorkItemID != 1 || dashboard.Recent[1].Status != "succeeded" {
 
 		t.Fatalf("ongoing = %#v, attention = %#v, recent = %#v", dashboard.Ongoing, dashboard.NeedsAttention, dashboard.Recent)
 	}

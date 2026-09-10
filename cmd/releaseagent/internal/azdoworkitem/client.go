@@ -192,7 +192,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
-		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
+		patch(webapi.OperationValues.Add, "/fields/System.State", workItemStateForUpdate(current.State, snapshot.Status)),
 		patch(webapi.OperationValues.Replace, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
@@ -378,8 +378,8 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	if testTagged != snapshot.Test {
 		return nil, fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id)
 	}
-	if state != workItemState(snapshot.Status) {
-		return nil, fmt.Errorf("work item %d state %q does not match release status %q", *response.Id, state, snapshot.Status)
+	if !workItemStateMatches(state, snapshot.Status) {
+		return nil, fmt.Errorf("work item %d state %q is incompatible with release status %q", *response.Id, state, snapshot.Status)
 	}
 	return &WorkItem{
 		ID: *response.Id, Revision: *response.Rev, URL: c.workItemURL(*response.Id),
@@ -439,6 +439,24 @@ func workItemState(status Status) string {
 		return "Closed"
 	}
 	return "Active"
+}
+
+func workItemStateForUpdate(current string, status Status) string {
+	if current == "Closed" && isAttentionStatus(status) {
+		return "Closed"
+	}
+	return workItemState(status)
+}
+
+func workItemStateMatches(state string, status Status) bool {
+	if state == workItemState(status) {
+		return true
+	}
+	return state == "Closed" && isAttentionStatus(status)
+}
+
+func isAttentionStatus(status Status) bool {
+	return status == StatusFailed || status == StatusCanceled || status == StatusUncertain
 }
 
 func isRevisionConflict(err error) bool {

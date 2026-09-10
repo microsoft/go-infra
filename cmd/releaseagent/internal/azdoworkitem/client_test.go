@@ -143,6 +143,50 @@ func TestGetAcceptsAzureTagCasing(t *testing.T) {
 	}
 }
 
+func TestGetAcceptsClosedAttentionStatus(t *testing.T) {
+	for _, status := range []Status{StatusFailed, StatusCanceled, StatusUncertain} {
+		t.Run(string(status), func(t *testing.T) {
+			snapshot := testSnapshot(status)
+			item := sdkWorkItem(t, 42, 1, snapshot)
+			(*item.Fields)["System.State"] = "Closed"
+			sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+				return item, nil
+			}}
+			client := newTestClient(t, sdk, "test-token")
+			got, err := client.Get(context.Background(), 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != "Closed" || got.Snapshot.Status != status {
+				t.Fatalf("work item = %#v", got)
+			}
+		})
+	}
+}
+
+func TestGetRejectsIncompatibleWorkflowState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status Status
+		state  string
+	}{
+		{name: "closed running", status: StatusRunning, state: "Closed"},
+		{name: "active succeeded", status: StatusSucceeded, state: "Active"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := sdkWorkItem(t, 42, 1, testSnapshot(test.status))
+			(*item.Fields)["System.State"] = test.state
+			sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+				return item, nil
+			}}
+			client := newTestClient(t, sdk, "test-token")
+			if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "incompatible") {
+				t.Fatalf("error = %v, want incompatible state error", err)
+			}
+		})
+	}
+}
+
 func TestWorkItemURLUsesBrowserView(t *testing.T) {
 	item := sdkWorkItem(t, 3062459, 1, testSnapshot(StatusRunning))
 	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/3062459"
@@ -205,6 +249,28 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	if item.Revision != 8 || item.Snapshot.Status != StatusSucceeded {
+		t.Fatalf("updated work item = %#v", item)
+	}
+}
+
+func TestUpdatePreservesClosedAttentionStatus(t *testing.T) {
+	snapshot := testSnapshot(StatusCanceled)
+	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		if args.Document == nil {
+			t.Fatal("update document is nil")
+		}
+		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
+		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
+		item := sdkWorkItem(t, 42, 8, snapshot)
+		(*item.Fields)["System.State"] = "Closed"
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	item, err := client.Update(context.Background(), &WorkItem{ID: 42, Revision: 7, State: "Closed"}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != "Closed" || item.Snapshot.Status != StatusCanceled {
 		t.Fatalf("updated work item = %#v", item)
 	}
 }
