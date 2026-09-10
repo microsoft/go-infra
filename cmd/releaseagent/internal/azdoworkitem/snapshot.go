@@ -63,6 +63,11 @@ type DescriptionField struct {
 }
 
 func (s *Snapshot) Validate() error {
+	_, err := MarshalSnapshot(s)
+	return err
+}
+
+func (s *Snapshot) validateStructure() error {
 	if s == nil {
 		return errors.New("release snapshot is nil")
 	}
@@ -89,13 +94,6 @@ func (s *Snapshot) Validate() error {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(s.Payload, &payload); err != nil || payload == nil {
 		return errors.New("release payload must be a JSON object")
-	}
-	data, err := json.Marshal(s)
-	if err != nil {
-		return fmt.Errorf("marshal release snapshot: %w", err)
-	}
-	if len(data) > MaxSnapshotSize {
-		return fmt.Errorf("release snapshot exceeds %d bytes", MaxSnapshotSize)
 	}
 	return nil
 }
@@ -129,12 +127,15 @@ func (summary *DescriptionSummary) validate() error {
 
 // MarshalSnapshot validates and returns the canonical JSON representation of a snapshot.
 func MarshalSnapshot(snapshot *Snapshot) ([]byte, error) {
-	if err := snapshot.Validate(); err != nil {
+	if err := snapshot.validateStructure(); err != nil {
 		return nil, err
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("marshal release snapshot: %w", err)
+	}
+	if len(data) > MaxSnapshotSize {
+		return nil, fmt.Errorf("release snapshot exceeds %d bytes", MaxSnapshotSize)
 	}
 	return data, nil
 }

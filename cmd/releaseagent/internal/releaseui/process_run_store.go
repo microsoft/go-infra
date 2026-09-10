@@ -4,13 +4,11 @@
 package releaseui
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -198,14 +196,9 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ProcessRunRecord, error
 	if workItem == nil || workItem.Snapshot == nil {
 		return nil, errors.New("release work item is empty")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
-	decoder.DisallowUnknownFields()
-	var run ProcessRun
-	if err := decoder.Decode(&run); err != nil {
+	run, err := decodeStrictJSON[ProcessRun](workItem.Snapshot.Payload)
+	if err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode process run: trailing JSON content")
 	}
 	if err := validateProcessRun(&run); err != nil {
 		return nil, fmt.Errorf("validate process run: %w", err)

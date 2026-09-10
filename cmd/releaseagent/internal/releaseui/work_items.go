@@ -308,7 +308,6 @@ func (s *Server) handleImportWorkItem(response http.ResponseWriter, request *htt
 
 func validateImportedSnapshot(current *azdoworkitem.WorkItem, snapshot *azdoworkitem.Snapshot) error {
 	candidate := *current
-	candidate.State = workItemStateForStatus(snapshot.Status)
 	candidate.Snapshot = snapshot
 	if snapshot.ProcessID == goImagesProcessID {
 		record, err := goImagesSessionRecord(&candidate)
@@ -322,13 +321,6 @@ func validateImportedSnapshot(current *azdoworkitem.WorkItem, snapshot *azdowork
 		snapshot.Description = processRunDescription(record.Run)
 	}
 	return err
-}
-
-func workItemStateForStatus(status azdoworkitem.Status) string {
-	if status == azdoworkitem.StatusSucceeded {
-		return "Closed"
-	}
-	return "Active"
 }
 
 func exportWorkItem(item *azdoworkitem.WorkItem) workItemExport {

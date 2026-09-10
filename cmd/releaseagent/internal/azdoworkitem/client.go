@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,7 +21,6 @@ const (
 	SelectorTag      = "releaseagent"
 	TestTag          = "test"
 	legacyTestTag    = "releaseagent-test"
-	browserProject   = "DevDiv"
 	descriptionField = "System.Description"
 	maxQueryResults  = 200
 	sdkTimeout       = 3 * time.Minute
@@ -62,7 +60,7 @@ type WorkItem struct {
 type workItemClient interface {
 	CreateWorkItem(context.Context, workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error)
 	GetWorkItem(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error)
-	GetWorkItems(context.Context, workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error)
+	GetWorkItemsBatch(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error)
 	QueryByWiql(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error)
 	UpdateWorkItem(context.Context, workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error)
 }
@@ -146,6 +144,7 @@ func (c *Client) Create(ctx context.Context, title, assignedTo string, snapshot 
 	}
 	response, err := sdk.CreateWorkItem(ctx, workitemtracking.CreateWorkItemArgs{
 		Document: &document, Project: &c.project, Type: &c.workItemType,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create release work item: %w", redactError(err, token))
@@ -164,6 +163,7 @@ func (c *Client) Get(ctx context.Context, id int) (*WorkItem, error) {
 	fields := c.fields()
 	response, err := sdk.GetWorkItem(ctx, workitemtracking.GetWorkItemArgs{
 		Id: &id, Project: &c.project, Fields: &fields,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get release work item %d: %w", id, redactError(err, token))
@@ -202,6 +202,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	response, err := sdk.UpdateWorkItem(ctx, workitemtracking.UpdateWorkItemArgs{
 		Document: &document, Id: &current.ID, Project: &c.project,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		if isRevisionConflict(err) {
@@ -263,8 +264,12 @@ func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem
 		positions[*reference.Id] = index
 	}
 	fields := c.fields()
-	responses, err := sdk.GetWorkItems(ctx, workitemtracking.GetWorkItemsArgs{
-		Ids: &ids, Project: &c.project, Fields: &fields,
+	expand := workitemtracking.WorkItemExpandValues.Links
+	responses, err := sdk.GetWorkItemsBatch(ctx, workitemtracking.GetWorkItemsBatchArgs{
+		Project: &c.project,
+		WorkItemGetRequest: &workitemtracking.WorkItemBatchGetRequest{
+			Ids: &ids, Fields: &fields, Expand: &expand,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("read release work item query results: %w", redactError(err, token))
@@ -381,8 +386,12 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	if !workItemStateMatches(state, snapshot.Status) {
 		return nil, fmt.Errorf("work item %d state %q is incompatible with release status %q", *response.Id, state, snapshot.Status)
 	}
+	itemURL := workItemURL(response)
+	if itemURL == "" {
+		return nil, fmt.Errorf("work item %d has no browser URL", *response.Id)
+	}
 	return &WorkItem{
-		ID: *response.Id, Revision: *response.Rev, URL: c.workItemURL(*response.Id),
+		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
 		Title: title, State: state, ChangedAt: changedAt, Snapshot: snapshot,
 	}, nil
 }
@@ -397,19 +406,17 @@ func patch(operation webapi.Operation, path string, value any) webapi.JsonPatchO
 	return webapi.JsonPatchOperation{Op: &operation, Path: &path, Value: value}
 }
 
-func (c *Client) workItemURL(id int) string {
-	baseURL := c.baseURL
-	project := c.project
-	if strings.EqualFold(project, browserProject) {
-		project = browserProject
+func workItemURL(item *workitemtracking.WorkItem) string {
+	links, ok := item.Links.(map[string]any)
+	if !ok {
+		return ""
 	}
-	parsed, _ := url.Parse(baseURL)
-	organization := strings.Trim(parsed.Path, "/")
-	if parsed.Hostname() == "dev.azure.com" && organization != "" && !strings.Contains(organization, "/") {
-		baseURL = parsed.Scheme + "://" + organization + ".visualstudio.com"
+	htmlLink, ok := links["html"].(map[string]any)
+	if !ok {
+		return ""
 	}
-	result, _ := url.JoinPath(baseURL, project, "_workitems", "edit", strconv.Itoa(id))
-	return result
+	href, _ := htmlLink["href"].(string)
+	return href
 }
 
 func hasTag(tags, want string) bool {

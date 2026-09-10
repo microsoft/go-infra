@@ -1,12 +1,10 @@
 package releaseui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -174,14 +172,9 @@ func goImagesSessionRecord(workItem *azdoworkitem.WorkItem) (*GoImagesSessionRec
 	if workItem == nil || workItem.Snapshot == nil {
 		return nil, errors.New("release work item is empty")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
-	decoder.DisallowUnknownFields()
-	var document goimagessession.Document
-	if err := decoder.Decode(&document); err != nil {
+	document, err := decodeStrictJSON[goimagessession.Document](workItem.Snapshot.Payload)
+	if err != nil {
 		return nil, fmt.Errorf("decode go-images session: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode go-images session: trailing JSON content")
 	}
 	if err := document.Validate(); err != nil {
 		return nil, fmt.Errorf("validate go-images session: %w", err)

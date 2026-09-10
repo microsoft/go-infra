@@ -63,7 +63,7 @@ func (s *memoryReleaseWorkItemService) Update(
 	}
 	item.Revision++
 	item.ChangedAt = item.ChangedAt.Add(time.Minute)
-	item.State = workItemStateForStatus(snapshot.Status)
+	item.State = testWorkItemState(snapshot.Status)
 	item.Snapshot = cloneReleaseSnapshot(snapshot)
 	return cloneReleaseWorkItem(item), nil
 }
@@ -327,9 +327,16 @@ func postJSONValue(t *testing.T, ui *testUI, path string, value any) *http.Respo
 func testReleaseWorkItem(id int, snapshot *azdoworkitem.Snapshot, changedAt time.Time) *azdoworkitem.WorkItem {
 	return &azdoworkitem.WorkItem{
 		ID: id, Revision: 1, URL: fmt.Sprintf("https://example.invalid/workitems/%d", id),
-		Title: fmt.Sprintf("Release %d", id), State: workItemStateForStatus(snapshot.Status),
+		Title: fmt.Sprintf("Release %d", id), State: testWorkItemState(snapshot.Status),
 		ChangedAt: changedAt, Snapshot: cloneReleaseSnapshot(snapshot),
 	}
+}
+
+func testWorkItemState(status azdoworkitem.Status) string {
+	if status == azdoworkitem.StatusSucceeded {
+		return "Closed"
+	}
+	return "Active"
 }
 
 func cloneReleaseWorkItem(item *azdoworkitem.WorkItem) *azdoworkitem.WorkItem {

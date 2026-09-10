@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -32,7 +33,7 @@ func (f fakeLocationClient) GetConnectionData(ctx context.Context, args location
 type fakeClient struct {
 	create func(context.Context, workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error)
 	get    func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error)
-	gets   func(context.Context, workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error)
+	gets   func(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error)
 	query  func(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error)
 	update func(context.Context, workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error)
 }
@@ -45,7 +46,7 @@ func (f *fakeClient) GetWorkItem(ctx context.Context, args workitemtracking.GetW
 	return f.get(ctx, args)
 }
 
-func (f *fakeClient) GetWorkItems(ctx context.Context, args workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error) {
+func (f *fakeClient) GetWorkItemsBatch(ctx context.Context, args workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
 	return f.gets(ctx, args)
 }
 
@@ -60,7 +61,9 @@ func (f *fakeClient) UpdateWorkItem(ctx context.Context, args workitemtracking.U
 func TestCreateUsesFixedMetadata(t *testing.T) {
 	snapshot := testSnapshot(StatusStarting)
 	sdk := &fakeClient{create: func(_ context.Context, args workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Issue" || args.Document == nil {
+		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Issue" || args.Document == nil ||
+			args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 			t.Fatalf("create args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Add, "/fields/System.Title", "Go images test release")
@@ -187,12 +190,16 @@ func TestGetRejectsIncompatibleWorkflowState(t *testing.T) {
 	}
 }
 
-func TestWorkItemURLUsesBrowserView(t *testing.T) {
+func TestWorkItemURLUsesSDKBrowserLink(t *testing.T) {
 	item := sdkWorkItem(t, 3062459, 1, testSnapshot(StatusRunning))
 	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/3062459"
 	item.Url = &apiURL
-	item.Links = nil
-	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+	const want = "https://dev.azure.com/devdiv/project/_workitems/edit/3062459"
+	item.Links = map[string]any{"html": map[string]any{"href": want}}
+	sdk := &fakeClient{get: func(_ context.Context, args workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		if args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+			t.Fatalf("expand = %v, want Links", args.Expand)
+		}
 		return item, nil
 	}}
 	client, err := NewClient(Config{
@@ -208,9 +215,22 @@ func TestWorkItemURLUsesBrowserView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "https://devdiv.visualstudio.com/DevDiv/_workitems/edit/3062459"
 	if got.URL != want {
 		t.Fatalf("work item URL = %q, want %q", got.URL, want)
+	}
+}
+
+func TestGetRejectsMissingBrowserLink(t *testing.T) {
+	item := sdkWorkItem(t, 42, 1, testSnapshot(StatusRunning))
+	item.Links = nil
+	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/42"
+	item.Url = &apiURL
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "browser URL") {
+		t.Fatalf("error = %v, want missing browser URL error", err)
 	}
 }
 
@@ -235,7 +255,9 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusSucceeded)
 	snapshot.Test = true
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 4 {
+		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 4 ||
+			args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
@@ -353,8 +375,11 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 			}
 			return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
 		},
-		gets: func(_ context.Context, args workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error) {
-			if args.Ids == nil || !slices.Equal(*args.Ids, []int{2, 1}) {
+		gets: func(_ context.Context, args workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
+			request := args.WorkItemGetRequest
+			if request == nil || request.Ids == nil || !slices.Equal(*request.Ids, []int{2, 1}) ||
+				request.Expand == nil || *request.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 				t.Fatalf("get work items args = %#v", args)
 			}
 			return &responses, nil
@@ -434,7 +459,7 @@ func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtr
 	}
 	return &workitemtracking.WorkItem{
 		Id: &id, Rev: &revision, Fields: &fields,
-		Links: map[string]any{"html": map[string]any{"href": "https://example.invalid/workitems/42"}},
+		Links: map[string]any{"html": map[string]any{"href": fmt.Sprintf("https://example.invalid/workitems/%d", id)}},
 	}
 }
 
