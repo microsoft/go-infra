@@ -39,15 +39,16 @@ type HTTPDoer interface {
 
 // Client accesses one Azure DevOps project.
 type Client struct {
-	baseURL             string
-	project             string
-	http                HTTPDoer
-	tokens              TokenProvider
-	newDefinitionClient func(context.Context) (definitionClient, string, error)
+	baseURL        string
+	project        string
+	http           HTTPDoer
+	tokens         TokenProvider
+	newBuildClient func(context.Context) (buildClient, string, error)
 }
 
-type definitionClient interface {
+type buildClient interface {
 	GetDefinition(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+	GetBuildTimeline(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
 }
 
 // Build is the release UI's stable view of an Azure Pipelines run.
@@ -122,7 +123,7 @@ func NewClient(baseURL, project string, httpClient HTTPDoer, tokens TokenProvide
 		http:    httpClient,
 		tokens:  tokens,
 	}
-	client.newDefinitionClient = client.createDefinitionClient
+	client.newBuildClient = client.createBuildClient
 	return client, nil
 }
 
@@ -144,14 +145,20 @@ func (c *Client) GetFailures(ctx context.Context, buildID int) ([]BuildFailure, 
 	if buildID <= 0 {
 		return nil, errors.New("build ID must be positive")
 	}
-	endpoint := c.buildsURL(nil) + "/" + strconv.Itoa(buildID) + "/timeline?api-version=7.1"
-	var response struct {
-		Records []apiTimelineRecord `json:"records"`
+	client, token, err := c.newBuildClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
 	}
-	if err := c.getJSON(ctx, endpoint, &response); err != nil {
-		return nil, err
+	timeline, err := client.GetBuildTimeline(ctx, azdobuild.GetBuildTimelineArgs{
+		Project: &c.project, BuildId: &buildID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get Azure DevOps build %d timeline: %w", buildID, redactError(err, token))
 	}
-	return timelineFailures(response.Records), nil
+	if timeline == nil || timeline.Records == nil {
+		return []BuildFailure{}, nil
+	}
+	return timelineFailures(*timeline.Records), nil
 }
 
 // GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.
@@ -159,7 +166,7 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 	if definitionID <= 0 {
 		return nil, errors.New("pipeline definition ID must be positive")
 	}
-	client, token, err := c.newDefinitionClient(ctx)
+	client, token, err := c.newBuildClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
 	}
@@ -181,12 +188,7 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 	}, nil
 }
 
-func (c *Client) createDefinitionClient(ctx context.Context) (definitionClient, string, error) {
-	client, token, err := c.createBuildClient(ctx)
-	return client, token, err
-}
-
-func (c *Client) createBuildClient(ctx context.Context) (azdobuild.Client, string, error) {
+func (c *Client) createBuildClient(ctx context.Context) (buildClient, string, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("acquire Azure DevOps token: %w", err)
@@ -357,28 +359,20 @@ type apiBuild struct {
 	Links json.RawMessage `json:"_links"`
 }
 
-type apiTimelineRecord struct {
-	ID       string `json:"id"`
-	ParentID string `json:"parentId"`
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Result   string `json:"result"`
-	Issues   []struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	} `json:"issues"`
-}
-
-func timelineFailures(records []apiTimelineRecord) []BuildFailure {
-	byID := make(map[string]apiTimelineRecord, len(records))
+func timelineFailures(records []azdobuild.TimelineRecord) []BuildFailure {
+	byID := make(map[string]azdobuild.TimelineRecord, len(records))
 	for _, record := range records {
-		byID[record.ID] = record
+		if record.Id != nil {
+			byID[record.Id.String()] = record
+		}
 	}
 
-	var failed []apiTimelineRecord
+	var failed []azdobuild.TimelineRecord
 	for _, typeName := range []string{"task", "job", "stage"} {
 		for _, record := range records {
-			if strings.EqualFold(record.Type, typeName) && strings.EqualFold(record.Result, "failed") {
+			if strings.EqualFold(stringValue(record.Type), typeName) &&
+				strings.EqualFold(enumValue(record.Result), string(azdobuild.TaskResultValues.Failed)) {
+
 				failed = append(failed, record)
 			}
 		}
@@ -391,9 +385,12 @@ func timelineFailures(records []apiTimelineRecord) []BuildFailure {
 	seen := make(map[string]struct{}, len(failed))
 	for _, record := range failed {
 		failure := BuildFailure{Path: timelineFailurePath(record, byID)}
-		for _, issue := range record.Issues {
-			if strings.EqualFold(issue.Type, "error") {
-				failure.Message = strings.Join(strings.Fields(issue.Message), " ")
+		if record.Issues != nil {
+			for _, issue := range *record.Issues {
+				if !strings.EqualFold(enumValue(issue.Type), string(azdobuild.IssueTypeValues.Error)) {
+					continue
+				}
+				failure.Message = strings.Join(strings.Fields(stringValue(issue.Message)), " ")
 				if failure.Message != "" {
 					break
 				}
@@ -413,23 +410,31 @@ func timelineFailures(records []apiTimelineRecord) []BuildFailure {
 	return result
 }
 
-func timelineFailurePath(record apiTimelineRecord, byID map[string]apiTimelineRecord) string {
+func timelineFailurePath(record azdobuild.TimelineRecord, byID map[string]azdobuild.TimelineRecord) string {
 	var reversed []string
 	visited := make(map[string]struct{})
 	for {
-		if record.ID != "" {
-			if _, ok := visited[record.ID]; ok {
+		id := ""
+		if record.Id != nil {
+			id = record.Id.String()
+		}
+		if id != "" {
+			if _, ok := visited[id]; ok {
 				break
 			}
-			visited[record.ID] = struct{}{}
+			visited[id] = struct{}{}
 		}
-		switch strings.ToLower(record.Type) {
+		switch strings.ToLower(stringValue(record.Type)) {
 		case "stage", "job", "task":
-			if record.Name != "" {
-				reversed = append(reversed, record.Name)
+			if name := stringValue(record.Name); name != "" {
+				reversed = append(reversed, name)
 			}
 		}
-		parent, ok := byID[record.ParentID]
+		parentID := ""
+		if record.ParentId != nil {
+			parentID = record.ParentId.String()
+		}
+		parent, ok := byID[parentID]
 		if !ok {
 			break
 		}
