@@ -65,7 +65,7 @@ func TestCreateUsesFixedMetadata(t *testing.T) {
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Add, "/fields/System.Title", "Go images test release")
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.AreaPath", AreaPath)
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag)
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; go-images")
 		assertPatch(t, *args.Document, 3, webapi.OperationValues.Add, "/fields/System.AssignedTo", "Release Operator")
 		assertPatch(t, *args.Document, 4, webapi.OperationValues.Add, "/fields/System.State", "Active")
 		assertPatch(t, *args.Document, 5, webapi.OperationValues.Add, "/fields/System.Description", mustRenderDescription(t, snapshot))
@@ -88,7 +88,7 @@ func TestCreateAddsTestTag(t *testing.T) {
 		if args.Document == nil {
 			t.Fatal("create document is nil")
 		}
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag)
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
 		return sdkWorkItem(t, 42, 1, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -112,6 +112,20 @@ func TestGetRejectsMismatchedTestTag(t *testing.T) {
 	client := newTestClient(t, sdk, "test-token")
 	if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "test tag") {
 		t.Fatalf("error = %v, want mismatched test tag error", err)
+	}
+}
+
+func TestGetAcceptsLegacyTestTag(t *testing.T) {
+	snapshot := testSnapshot(StatusStarting)
+	snapshot.Test = true
+	item := sdkWorkItem(t, 42, 1, snapshot)
+	(*item.Fields)["System.Tags"] = SelectorTag + "; " + legacyTestTag
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -161,12 +175,14 @@ func TestCurrentUser(t *testing.T) {
 
 func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusSucceeded)
+	snapshot.Test = true
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 3 {
+		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 4 {
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -176,6 +192,28 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 	}
 	if item.Revision != 8 || item.Snapshot.Status != StatusSucceeded {
 		t.Fatalf("updated work item = %#v", item)
+	}
+}
+
+func TestWorkItemTagsIncludeProcess(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		processID string
+		test      bool
+		want      string
+	}{
+		{name: "release", processID: "go-images", want: "releaseagent; go-images"},
+		{name: "test", processID: "go-images", test: true, want: "releaseagent; test; go-images"},
+		{name: "dry run", processID: "go-infra", test: true, want: "releaseagent; test; go-infra"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := testSnapshot(StatusStarting)
+			snapshot.ProcessID = test.processID
+			snapshot.Test = test.test
+			if got := workItemTags(snapshot); got != test.want {
+				t.Fatalf("work item tags = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

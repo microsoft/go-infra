@@ -64,7 +64,8 @@ It offers three explicit modes:
   It then uses that ID as `sourceBuildPipelineRunId` and publishes to `public/`.
   The build ID is the only editable pipeline input.
 * **Test** resolves the current `microsoft/main` tip, builds fresh images, and fixes `publishRepoPrefix` to `dev/`.
-  It still queues a real official build, creates a `releaseagent-test` work item when confirmed, and
+  It still queues a real official build, creates a work item tagged `releaseagent`, `test`, and
+  `go-images` when confirmed, and
   may consume signing and agent resources, but it does not publish under `public/`.
 
 The pipeline declares `publishRepoPrefix` as an unrestricted string whose official default is `public/`.
@@ -87,8 +88,9 @@ and exposes both supported paths:
 
 * **Release on merge** accepts one pull request number. The server verifies that the PR is open, targets `main`, and is not from a fork, then prepares a request to add the `release-on-merge` label. Starting the action rechecks the exact PR head SHA. The UI never merges the PR; the existing workflow creates the release only after the labeled PR is merged.
 * **Manual patch release** dispatches only `create-go-infra-patch-release.yml` on `main`. Dry-run
-  mode sets `dry-run` to `true`, calculates the next version, and creates a `releaseagent-test` work
-  item when confirmed. Publish mode sets it to `false` and can create the next patch release. After
+  mode sets `dry-run` to `true`, calculates the next version, and creates a work item tagged
+  `releaseagent`, `test`, and `go-infra` when confirmed. Publish mode sets it to `false` and can
+  create the next patch release. After
   GitHub accepts the dispatch, the server
   discovers the new run, checkpoints its ID and URL, and polls it to a terminal conclusion. GitHub's workflow dispatch endpoint does not return a run ID, so the UI supplies a random token as the run title and matches that exact title. If a monitoring interval times out, polling continues from the checkpointed run ID. The dashboard reports the final result.
 
@@ -106,7 +108,8 @@ go run ./cmd/releaseagent serve
 
 Authenticate `az` before starting the UI and `gh` before using GitHub-backed go-infra actions. Each
 confirmed execution creates a tagged DEVDIV `Issue` under `DevDiv\GoLang`; this includes go-images
-test mode and go-infra dry-run mode. Those two modes also receive the `releaseagent-test` tag.
+test mode and go-infra dry-run mode. Every item receives its process ID as a tag. Test and dry-run
+items also receive `test`; all release UI queries combine these tags with `releaseagent`.
 Simulations and unconfirmed plans remain in memory and create no work item. To restore one
 explicitly, add `-release-work-item <id>`. Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing

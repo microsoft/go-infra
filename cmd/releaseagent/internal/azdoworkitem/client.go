@@ -20,7 +20,8 @@ import (
 const (
 	AreaPath         = `DevDiv\GoLang`
 	SelectorTag      = "releaseagent"
-	TestTag          = "releaseagent-test"
+	TestTag          = "test"
+	legacyTestTag    = "releaseagent-test"
 	browserProject   = "DevDiv"
 	descriptionField = "System.Description"
 	maxQueryResults  = 200
@@ -192,6 +193,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
 		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
+		patch(webapi.OperationValues.Add, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -372,7 +374,8 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	if err != nil {
 		return nil, fmt.Errorf("parse work item %d release snapshot: %w", *response.Id, err)
 	}
-	if hasTag(tags, TestTag) != snapshot.Test {
+	testTagged := hasTag(tags, TestTag) || hasTag(tags, legacyTestTag)
+	if testTagged != snapshot.Test {
 		return nil, fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id)
 	}
 	if state != workItemState(snapshot.Status) {
@@ -423,10 +426,12 @@ func escapeWIQL(value string) string {
 }
 
 func workItemTags(snapshot *Snapshot) string {
+	tags := []string{SelectorTag}
 	if snapshot.Test {
-		return SelectorTag + "; " + TestTag
+		tags = append(tags, TestTag)
 	}
-	return SelectorTag
+	tags = append(tags, snapshot.ProcessID)
+	return strings.Join(tags, "; ")
 }
 
 func workItemState(status Status) string {
