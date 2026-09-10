@@ -485,6 +485,9 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 	execution := executionResponse{
 		Enabled: true, Eligible: run.Digest != "", PlanDigest: run.Digest,
 	}
+	if s.processRunRecord != nil {
+		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
+	}
 	if run.Started {
 		reference := run.Target
 		if run.External != nil {

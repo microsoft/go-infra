@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ const (
 	AreaPath         = `DevDiv\GoLang`
 	SelectorTag      = "releaseagent"
 	TestTag          = "releaseagent-test"
+	browserProject   = "DevDiv"
 	descriptionField = "System.Description"
 	maxQueryResults  = 200
 	sdkTimeout       = 3 * time.Minute
@@ -376,12 +378,8 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	if state != workItemState(snapshot.Status) {
 		return nil, fmt.Errorf("work item %d state %q does not match release status %q", *response.Id, state, snapshot.Status)
 	}
-	itemURL := workItemURL(response)
-	if itemURL == "" {
-		return nil, fmt.Errorf("work item %d has no URL", *response.Id)
-	}
 	return &WorkItem{
-		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
+		ID: *response.Id, Revision: *response.Rev, URL: c.workItemURL(*response.Id),
 		Title: title, State: state, ChangedAt: changedAt, Snapshot: snapshot,
 	}, nil
 }
@@ -396,18 +394,19 @@ func patch(operation webapi.Operation, path string, value any) webapi.JsonPatchO
 	return webapi.JsonPatchOperation{Op: &operation, Path: &path, Value: value}
 }
 
-func workItemURL(item *workitemtracking.WorkItem) string {
-	if links, ok := item.Links.(map[string]any); ok {
-		if html, ok := links["html"].(map[string]any); ok {
-			if href, ok := html["href"].(string); ok && href != "" {
-				return href
-			}
-		}
+func (c *Client) workItemURL(id int) string {
+	baseURL := c.baseURL
+	project := c.project
+	if strings.EqualFold(project, browserProject) {
+		project = browserProject
 	}
-	if item.Url != nil {
-		return *item.Url
+	parsed, _ := url.Parse(baseURL)
+	organization := strings.Trim(parsed.Path, "/")
+	if parsed.Hostname() == "dev.azure.com" && organization != "" && !strings.Contains(organization, "/") {
+		baseURL = parsed.Scheme + "://" + organization + ".visualstudio.com"
 	}
-	return ""
+	result, _ := url.JoinPath(baseURL, project, "_workitems", "edit", strconv.Itoa(id))
+	return result
 }
 
 func hasTag(tags, want string) bool {

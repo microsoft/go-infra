@@ -155,7 +155,9 @@ func TestSelectReleaseWorkItemRestoresProcess(t *testing.T) {
 	}
 	var plan planResponse
 	decodeResponse(t, response, &plan)
-	if response.StatusCode != http.StatusOK || plan.SessionID != document.ID {
+	if response.StatusCode != http.StatusOK || plan.SessionID != document.ID || plan.Execution.WorkItem == nil ||
+		plan.Execution.WorkItem.ID != 42 || plan.Execution.WorkItem.URL != "https://example.invalid/workitems/42" {
+
 		t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
 	}
 }

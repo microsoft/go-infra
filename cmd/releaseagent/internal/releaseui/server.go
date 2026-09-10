@@ -436,12 +436,18 @@ type pipelineRun struct {
 	Complete  bool   `json:"complete"`
 }
 
+type workItemReference struct {
+	ID  int    `json:"id"`
+	URL string `json:"url"`
+}
+
 type executionResponse struct {
-	Enabled           bool        `json:"enabled"`
-	Eligible          bool        `json:"eligible"`
-	PlanDigest        string      `json:"planDigest,omitempty"`
-	UnavailableReason string      `json:"unavailableReason,omitempty"`
-	Run               pipelineRun `json:"run"`
+	Enabled           bool               `json:"enabled"`
+	Eligible          bool               `json:"eligible"`
+	PlanDigest        string             `json:"planDigest,omitempty"`
+	UnavailableReason string             `json:"unavailableReason,omitempty"`
+	Run               pipelineRun        `json:"run"`
+	WorkItem          *workItemReference `json:"workItem,omitempty"`
 }
 
 type dashboardResponse struct {

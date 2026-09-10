@@ -115,6 +115,33 @@ func TestGetRejectsMismatchedTestTag(t *testing.T) {
 	}
 }
 
+func TestWorkItemURLUsesBrowserView(t *testing.T) {
+	item := sdkWorkItem(t, 3062459, 1, testSnapshot(StatusRunning))
+	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/3062459"
+	item.Url = &apiURL
+	item.Links = nil
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client, err := NewClient(Config{
+		BaseURL: "https://dev.azure.com/devdiv", Project: "DEVDIV", WorkItemType: "Issue",
+	}, staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.newClient = func(context.Context) (workItemClient, string, error) {
+		return sdk, "test-token", nil
+	}
+	got, err := client.Get(context.Background(), 3062459)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "https://devdiv.visualstudio.com/DevDiv/_workitems/edit/3062459"
+	if got.URL != want {
+		t.Fatalf("work item URL = %q, want %q", got.URL, want)
+	}
+}
+
 func TestCurrentUser(t *testing.T) {
 	name := "Release Operator"
 	client := newTestClient(t, &fakeClient{}, "test-token")

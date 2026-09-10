@@ -22,6 +22,9 @@ import (
 
 func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 	result := executionResponse{Enabled: s.execution != nil}
+	if s.goImages.record != nil {
+		result.WorkItem = &workItemReference{ID: s.goImages.record.WorkItemID, URL: s.goImages.record.URL}
+	}
 	if s.goImages.document == nil || s.goImages.workflowInput == nil || len(s.steps) == 0 {
 		return result
 	}

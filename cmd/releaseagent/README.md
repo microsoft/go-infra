@@ -112,14 +112,16 @@ explicitly, add `-release-work-item <id>`. Starting the server does not perform 
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.
 
-Releaseagent owns `System.Description` on these work items. It stores a visible managed-state
-notice followed by base64url-encoded canonical JSON so Azure DevOps HTML normalization cannot alter
-the release state. Add operator notes as work-item comments rather than editing Description.
+Releaseagent owns `System.Description` on these work items. It shows a compact process, status, and
+release-type summary, then keeps the base64url-encoded canonical JSON in a collapsed managed-state
+section so Azure DevOps HTML normalization cannot alter the release state. Add operator notes as
+work-item comments rather than editing Description.
 
-The dashboard queries active tagged work items and the ten most recently closed items. **Resume**
-selects one work item for this server. **View JSON** exports its snapshot for manual repair and
-imports edited JSON only when the exported Azure DevOps revision is still current. Import validates
-the process payload and cannot change its process ID or immutable intent digest. Restart without a
+The dashboard queries active tagged work items and the ten most recently closed items. Clicking a
+card or **Open** selects one work item for this server. Its Azure DevOps browser link appears on the
+dashboard and selected release page. **View JSON** exports its snapshot for manual repair and imports
+edited JSON only when the exported Azure DevOps revision is still current. Import validates the
+process payload and cannot change its process ID or immutable intent digest. Restart without a
 selected release before repairing that release's state.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.

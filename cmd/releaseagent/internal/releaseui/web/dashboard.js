@@ -82,13 +82,25 @@ function createReleaseCard(release) {
     edit.textContent = "View JSON";
     edit.addEventListener("click", () => openJSON(release));
 
-    const resume = document.createElement("button");
-    resume.className = "button button-secondary compact-button";
-    resume.type = "button";
-    const selectLabel = release.status === "succeeded" ? "Inspect" : "Resume";
-    resume.textContent = selectLabel;
-    resume.addEventListener("click", () => selectWorkItem(release, resume, selectLabel));
-    actions.append(workItemLink, edit, resume);
+    const open = document.createElement("button");
+    open.className = "button button-secondary compact-button";
+    open.type = "button";
+    open.textContent = "Open";
+    const openRelease = () => {
+      if (!open.disabled) selectWorkItem(release, open, "Open");
+    };
+    open.addEventListener("click", openRelease);
+    card.classList.add("release-card-selectable");
+    card.tabIndex = 0;
+    card.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest("a, button")) openRelease();
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openRelease();
+    });
+    actions.append(workItemLink, edit, open);
   } else {
     const link = document.createElement("a");
     link.className = "button button-secondary compact-button";

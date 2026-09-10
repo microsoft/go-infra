@@ -118,12 +118,41 @@ func RenderDescription(snapshot *Snapshot) (string, error) {
 		return "", err
 	}
 	encoded := base64.RawURLEncoding.EncodeToString(data)
-	description := "<p>Managed by releaseagent. Add operator notes as comments.</p><pre>" +
-		descriptionMarker + encoded + "</pre>"
+	releaseType := "Release"
+	if snapshot.Test {
+		releaseType = "Test / dry run"
+	}
+	description := "<h3>Release status</h3><table><tbody>" +
+		"<tr><td><strong>Process</strong></td><td><code>" + snapshot.ProcessID + "</code></td></tr>" +
+		"<tr><td><strong>Execution</strong></td><td>" + statusLabel(snapshot.Status) + "</td></tr>" +
+		"<tr><td><strong>Type</strong></td><td>" + releaseType + "</td></tr>" +
+		"</tbody></table>" +
+		"<p>Releaseagent manages this state. Add operator notes as comments.</p>" +
+		"<details><summary>Managed state</summary><p>Do not edit this value directly.</p><pre>" +
+		descriptionMarker + encoded + "</pre></details>"
 	if len(description) > MaxDescriptionSize {
 		return "", fmt.Errorf("release description exceeds %d characters", MaxDescriptionSize)
 	}
 	return description, nil
+}
+
+func statusLabel(status Status) string {
+	switch status {
+	case StatusStarting:
+		return "Starting"
+	case StatusRunning:
+		return "In progress"
+	case StatusSucceeded:
+		return "Succeeded"
+	case StatusFailed:
+		return "Failed"
+	case StatusCanceled:
+		return "Canceled"
+	case StatusUncertain:
+		return "Needs attention"
+	default:
+		return string(status)
+	}
 }
 
 // ParseDescription decodes the releaseagent snapshot embedded in an HTML Description field.

@@ -82,6 +82,15 @@ func TestDescriptionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, text := range []string{
+		"<strong>Process</strong>", "<code>go-images</code>",
+		"<strong>Execution</strong>", "In progress",
+		"<strong>Type</strong>", "Release", "<summary>Managed state</summary>",
+	} {
+		if !strings.Contains(description, text) {
+			t.Fatalf("description does not contain %q: %q", text, description)
+		}
+	}
 	if strings.Contains(description, `{"buildId"`) || !strings.Contains(description, descriptionMarker) {
 		t.Fatalf("description does not use encoded transport: %q", description)
 	}
@@ -99,6 +108,23 @@ func TestDescriptionRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(gotJSON, wantJSON) {
 		t.Fatalf("snapshot = %s, want %s", gotJSON, wantJSON)
+	}
+}
+
+func TestDescriptionLabelsTestRun(t *testing.T) {
+	description, err := RenderDescription(&Snapshot{
+		SchemaVersion: CurrentSchemaVersion,
+		ProcessID:     "go-infra",
+		Status:        StatusUncertain,
+		Test:          true,
+		IntentDigest:  testDigest,
+		Payload:       json.RawMessage(`{"action":"manual-dispatch"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(description, "Test / dry run") || !strings.Contains(description, "Needs attention") {
+		t.Fatalf("description = %q", description)
 	}
 }
 
