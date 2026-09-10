@@ -43,7 +43,7 @@ type Client struct {
 	workItemType string
 	tokens       TokenProvider
 	newClient    func(context.Context) (workItemClient, string, error)
-	newLocation   func(context.Context) (locationClient, string, error)
+	newLocation  func(context.Context) (locationClient, string, error)
 }
 
 type WorkItem struct {
@@ -426,6 +426,7 @@ func workItemState(status Status) string {
 	}
 	return "Active"
 }
+
 func isRevisionConflict(err error) bool {
 	var value azuredevops.WrappedError
 	if errors.As(err, &value) && value.TypeName != nil && strings.Contains(*value.TypeName, "WorkItemRevisionMismatchException") {
