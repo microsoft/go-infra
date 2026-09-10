@@ -159,7 +159,39 @@ func processRunSnapshot(run *ProcessRun) (*azdoworkitem.Snapshot, error) {
 		Test:          run.Test,
 		IntentDigest:  run.Digest,
 		Payload:       payload,
+		Description:   processRunDescription(run),
 	}, nil
+}
+
+func processRunDescription(run *ProcessRun) *azdoworkitem.DescriptionSummary {
+	processName := run.ProcessID
+	if run.ProcessID == "go-infra" {
+		processName = "Go infrastructure"
+	}
+	fields := []azdoworkitem.DescriptionField{
+		{Label: "Intent", Value: run.View.IntentTitle},
+		{Label: "Action", Value: run.Step.Name},
+	}
+	for _, fact := range run.View.Facts {
+		value := fact.Value
+		if fact.Detail != "" {
+			value += " · " + fact.Detail
+		}
+		fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: value, URL: fact.Href})
+	}
+	fields = append(fields, azdoworkitem.DescriptionField{
+		Label: "Target", Value: strings.TrimPrefix(run.Target.LinkLabel, "Open "), URL: run.Target.URL,
+	})
+	if run.External != nil {
+		value := strings.TrimPrefix(run.External.LinkLabel, "Open ")
+		if run.External.Status != "" {
+			value += " · " + run.External.Status
+		}
+		fields = append(fields, azdoworkitem.DescriptionField{
+			Label: "External run", Value: value, URL: run.External.URL,
+		})
+	}
+	return &azdoworkitem.DescriptionSummary{ProcessName: processName, Fields: fields}
 }
 
 func processRunRecord(workItem *azdoworkitem.WorkItem) (*ProcessRunRecord, error) {

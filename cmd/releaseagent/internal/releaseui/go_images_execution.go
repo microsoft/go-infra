@@ -33,7 +33,7 @@ func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 		BuildID: state.BuildID, Result: state.Result, Complete: state.Complete,
 	}
 	if result.Run.BuildID != "" {
-		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
+		result.Run.URL = goImagesBuildURL(result.Run.BuildID)
 		result.Run.LinkLabel = "Open Azure DevOps run " + result.Run.BuildID
 	}
 	if !result.Enabled {

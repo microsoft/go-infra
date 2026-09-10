@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +217,20 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	decodeResponse(t, response, &updated)
 	if response.StatusCode != http.StatusOK || updated.Revision != 2 {
 		t.Fatalf("status = %d, update = %#v", response.StatusCode, updated)
+	}
+	item, err := service.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Snapshot.Description == nil {
+		t.Fatal("import did not regenerate work item description")
+	}
+	description, err := azdoworkitem.RenderDescription(item.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(description, "<strong>Last checkpoint</strong>") {
+		t.Fatalf("description = %s", description)
 	}
 
 	response = postJSONValue(t, ui, "/api/release-work-items/42/import", exported)

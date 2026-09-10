@@ -287,10 +287,16 @@ func validateImportedSnapshot(current *azdoworkitem.WorkItem, snapshot *azdowork
 	candidate.State = workItemStateForStatus(snapshot.Status)
 	candidate.Snapshot = snapshot
 	if snapshot.ProcessID == goImagesProcessID {
-		_, err := goImagesSessionRecord(&candidate)
+		record, err := goImagesSessionRecord(&candidate)
+		if err == nil {
+			snapshot.Description = goImagesDescription(record.Document)
+		}
 		return err
 	}
-	_, err := processRunRecord(&candidate)
+	record, err := processRunRecord(&candidate)
+	if err == nil {
+		snapshot.Description = processRunDescription(record.Run)
+	}
 	return err
 }
 

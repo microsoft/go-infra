@@ -112,10 +112,13 @@ explicitly, add `-release-work-item <id>`. Starting the server does not perform 
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.
 
-Releaseagent owns `System.Description` on these work items. It shows a compact process, status, and
-release-type summary, then keeps the base64url-encoded canonical JSON in a collapsed managed-state
-section so Azure DevOps HTML normalization cannot alter the release state. Add operator notes as
-work-item comments rather than editing Description.
+Releaseagent owns `System.Description` on these work items. It shows status and release type plus
+useful process details. Go-images work items include mode, versions, publication prefix, source
+commit, Azure build, and checkpoint timestamps. Generic actions include their intent, action,
+reviewed facts, target, and external run. Links open the underlying commit, build, pull request, or
+workflow run. The base64url-encoded canonical JSON remains in a collapsed managed-state section so
+Azure DevOps HTML normalization cannot alter release state. Add operator notes as work-item comments
+rather than editing Description.
 
 The dashboard queries active tagged work items and the ten most recently closed items. Starting and
 running work appears under **Ongoing releases**. Failed, canceled, and uncertain work appears under

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
@@ -110,7 +112,62 @@ func goImagesSnapshot(document *goimagessession.Document) (*azdoworkitem.Snapsho
 		Test:          document.Input.Mode == goimagesworkflow.ModeTest,
 		IntentDigest:  document.ExecutionDigest,
 		Payload:       payload,
+		Description:   goImagesDescription(document),
 	}, nil
+}
+
+func goImagesDescription(document *goimagessession.Document) *azdoworkitem.DescriptionSummary {
+	publication := "public/"
+	if document.Input.Mode == goimagesworkflow.ModeTest {
+		publication = "dev/"
+	}
+	fields := []azdoworkitem.DescriptionField{
+		{Label: "Mode", Value: goImagesModeName(document.Input.Mode)},
+		{Label: "Versions", Value: strings.Join(document.Input.Versions, ", ")},
+		{Label: "Publication", Value: publication},
+		{
+			Label: "Source commit", Value: document.Input.SourceVersion,
+			URL: "https://dev.azure.com/dnceng/internal/_git/microsoft-go-images/commit/" + url.PathEscape(document.Input.SourceVersion),
+		},
+	}
+	if document.Input.SourceBuildID != "" {
+		fields = append(fields, azdoworkitem.DescriptionField{
+			Label: "Source build", Value: document.Input.SourceBuildID,
+			URL: goImagesBuildURL(document.Input.SourceBuildID),
+		})
+	}
+	if document.State.BuildID != "" {
+		fields = append(fields, azdoworkitem.DescriptionField{
+			Label: "Azure build", Value: document.State.BuildID,
+			URL: goImagesBuildURL(document.State.BuildID),
+		})
+	}
+	fields = append(fields,
+		azdoworkitem.DescriptionField{Label: "Created", Value: formatWorkItemTime(document.CreatedAt)},
+		azdoworkitem.DescriptionField{Label: "Last checkpoint", Value: formatWorkItemTime(document.UpdatedAt)},
+	)
+	return &azdoworkitem.DescriptionSummary{ProcessName: "Go images", Fields: fields}
+}
+
+func goImagesModeName(mode goimagesworkflow.Mode) string {
+	switch mode {
+	case goimagesworkflow.ModeNormal:
+		return "Normal"
+	case goimagesworkflow.ModeRollback:
+		return "Rollback / republish"
+	case goimagesworkflow.ModeTest:
+		return "Test"
+	default:
+		return string(mode)
+	}
+}
+
+func goImagesBuildURL(buildID string) string {
+	return "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + url.QueryEscape(buildID)
+}
+
+func formatWorkItemTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
 func goImagesSessionRecord(workItem *azdoworkitem.WorkItem) (*GoImagesSessionRecord, error) {
