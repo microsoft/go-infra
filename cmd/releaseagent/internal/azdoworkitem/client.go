@@ -369,6 +369,7 @@ func workItemTags(snapshot *Snapshot) string {
 	}
 	return SelectorTag
 }
+
 func isRevisionConflict(err error) bool {
 	var value azuredevops.WrappedError
 	if errors.As(err, &value) && value.TypeName != nil && strings.Contains(*value.TypeName, "WorkItemRevisionMismatchException") {
