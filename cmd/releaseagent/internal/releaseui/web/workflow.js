@@ -616,7 +616,12 @@
       pipelineRunLink.removeAttribute("href");
     } else {
       pipelineRunLink.href = run.url;
-      pipelineRunLink.textContent = `${run.linkLabel || `Open external run ${run.buildId}`} ↗ · ${run.complete ? "Completed" : "In progress"}`;
+      const outcome = run.complete
+        ? run.result === "failed" ? "Failed"
+          : run.result === "canceled" ? "Canceled"
+            : run.result === "uncertain" ? "Needs attention" : "Completed"
+        : "In progress";
+      pipelineRunLink.textContent = `${run.linkLabel || `Open external run ${run.buildId}`} ↗ · ${outcome}`;
       pipelineRunLink.hidden = false;
     }
     executionLinks.hidden = workItemLink.hidden && pipelineRunLink.hidden;

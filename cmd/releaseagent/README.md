@@ -117,7 +117,9 @@ release-type summary, then keeps the base64url-encoded canonical JSON in a colla
 section so Azure DevOps HTML normalization cannot alter the release state. Add operator notes as
 work-item comments rather than editing Description.
 
-The dashboard queries active tagged work items and the ten most recently closed items. Clicking a
+The dashboard queries active tagged work items and the ten most recently closed items. Starting and
+running work appears under **Ongoing releases**. Failed, canceled, and uncertain work appears under
+**Needs attention**, while successful closed work appears under **Recently completed**. Clicking a
 card or **Open** selects one work item for this server. Its Azure DevOps browser link appears on the
 dashboard and selected release page. **View JSON** exports its snapshot for manual repair and imports
 edited JSON only when the exported Azure DevOps revision is still current. Import validates the

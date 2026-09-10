@@ -420,6 +420,7 @@ type fakeExecutionService struct {
 	mode        goimagesworkflow.Mode
 	sourceBuild string
 	mirrorErr   error
+	pollErr     error
 	beforeQueue func()
 }
 
@@ -451,7 +452,7 @@ func (s *fakeExecutionService) PollPipeline(_ context.Context, buildID string) e
 	if buildID != "888" {
 		return errors.New("unexpected build ID")
 	}
-	return nil
+	return s.pollErr
 }
 
 func TestRealReleaseRequiresExactIntent(t *testing.T) {
@@ -533,6 +534,70 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	decodeResponse(t, response, &dashboard)
 	if len(dashboard.Recent) != 1 || len(dashboard.Ongoing) != 0 {
 		t.Fatalf("dashboard = %#v", dashboard)
+	}
+}
+
+func TestCanceledReleaseMovesToNeedsAttention(t *testing.T) {
+	store := newMemoryGoImagesSessionStore()
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	service := &fakeExecutionService{
+		mode: goimagesworkflow.ModeTest,
+		pollErr: &goimagesworkflow.PipelineResultError{
+			Result: "canceled", Err: errors.New("pipeline canceled"),
+		},
+	}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
+			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
+				return service, nil
+			},
+		}),
+	)
+	plan := createTestPlan(t, ui, `{"mode":"test"}`)
+	body, err := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSON(t, ui, testGoImagesAPI+"/start", string(body))
+	response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("start status = %d", response.StatusCode)
+	}
+	waitForRelease(t, ui)
+
+	persisted := store.latest(t)
+	if !persisted.State.Complete || persisted.State.Result != "canceled" {
+		t.Fatalf("persisted state = %#v", persisted.State)
+	}
+	response, err = ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dashboard dashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if len(dashboard.Ongoing) != 0 || len(dashboard.NeedsAttention) != 1 ||
+		dashboard.NeedsAttention[0].Status != "canceled" {
+
+		t.Fatalf("dashboard = %#v", dashboard)
+	}
+	response, err = ui.client.Get(ui.http.URL + testGoImagesAPI + "/plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored planResponse
+	decodeResponse(t, response, &restored)
+	statuses := make(map[string]string)
+	for _, step := range restored.Steps {
+		statuses[step.Name] = step.Status
+	}
+	if statuses["Verify go-images commit is mirrored internally"] != "succeeded" ||
+		statuses["🚀 Queue go-images release"] != "succeeded" ||
+		statuses["⌚ Wait for go-images release"] != "canceled" ||
+		!restored.Execution.Run.Complete || restored.Execution.Run.Result != "canceled" {
+
+		t.Fatalf("restored plan = %#v", restored)
 	}
 }
 

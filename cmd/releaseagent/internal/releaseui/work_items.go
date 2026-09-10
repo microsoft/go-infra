@@ -40,9 +40,10 @@ type workItemExport struct {
 
 func (s *Server) workItemDashboard(ctx context.Context) dashboardResponse {
 	result := dashboardResponse{
-		Ongoing:   make([]releaseSummary, 0),
-		Recent:    make([]releaseSummary, 0),
-		Processes: s.processes.summaries(),
+		Ongoing:        make([]releaseSummary, 0),
+		NeedsAttention: make([]releaseSummary, 0),
+		Recent:         make([]releaseSummary, 0),
+		Processes:      s.processes.summaries(),
 	}
 	active, err := s.workItems.Query(ctx, false, dashboardActiveLimit)
 	if err != nil {
@@ -62,11 +63,7 @@ func (s *Server) workItemDashboard(ctx context.Context) dashboardResponse {
 			}
 			continue
 		}
-		if item.Snapshot.Status == azdoworkitem.StatusSucceeded {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.Ongoing = append(result.Ongoing, summary)
-		}
+		addDashboardRelease(&result, summary)
 	}
 	return result
 }

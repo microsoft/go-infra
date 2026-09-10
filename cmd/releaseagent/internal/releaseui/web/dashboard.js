@@ -1,6 +1,8 @@
 "use strict";
 
 const ongoingReleases = document.querySelector("#ongoing-releases");
+const attentionSection = document.querySelector("#attention-section");
+const attentionReleases = document.querySelector("#attention-releases");
 const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
 const processGrid = document.querySelector("#process-grid");
@@ -22,7 +24,9 @@ jsonSave.addEventListener("click", saveJSON);
 
 async function loadDashboard() {
   const dashboardState = await requestJSON("/api/dashboard");
-  renderReleases(ongoingReleases, dashboardState.ongoing, "No active release work items.");
+  renderReleases(ongoingReleases, dashboardState.ongoing, "No releases are currently in progress.");
+  attentionSection.hidden = dashboardState.needsAttention.length === 0;
+  renderReleases(attentionReleases, dashboardState.needsAttention, "");
   processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
   recentSection.hidden = dashboardState.recent.length === 0;
   renderReleases(recentReleases, dashboardState.recent, "");

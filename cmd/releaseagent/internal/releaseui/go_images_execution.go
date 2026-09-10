@@ -30,7 +30,7 @@ func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 	}
 	state := s.goImages.document.State
 	result.Run = pipelineRun{
-		BuildID: state.BuildID, Complete: state.Complete,
+		BuildID: state.BuildID, Result: state.Result, Complete: state.Complete,
 	}
 	if result.Run.BuildID != "" {
 		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID

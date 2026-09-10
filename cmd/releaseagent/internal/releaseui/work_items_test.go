@@ -85,11 +85,25 @@ func (s *memoryReleaseWorkItemService) Query(_ context.Context, closed bool, lim
 }
 
 func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
+	canceledDocument := testGoImagesDocument(t)
+	canceledState := canceledDocument.State
+	canceledState.QueueAttempted = true
+	canceledState.BuildID = "888"
+	canceledState.Complete = true
+	canceledState.Result = "canceled"
+	var err error
+	canceledDocument, err = canceledDocument.WithState(&canceledState, canceledDocument.UpdatedAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceledSnapshot, err := goImagesSnapshot(canceledDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
 	goImagesDocument := testGoImagesDocument(t)
 	goImagesState := goImagesDocument.State
 	goImagesState.Complete = true
 	goImagesState.Result = "succeeded"
-	var err error
 	goImagesDocument, err = goImagesDocument.WithState(&goImagesState, goImagesDocument.UpdatedAt.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -109,6 +123,7 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := newMemoryReleaseWorkItemService(
+		testReleaseWorkItem(3, canceledSnapshot, time.Date(2026, 9, 9, 14, 0, 0, 0, time.UTC)),
 		testReleaseWorkItem(2, processSnapshot, time.Date(2026, 9, 9, 13, 0, 0, 0, time.UTC)),
 		testReleaseWorkItem(1, goImagesSnapshot, time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)),
 	)
@@ -120,14 +135,15 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 	var dashboard dashboardResponse
 	decodeResponse(t, response, &dashboard)
 	if response.StatusCode != http.StatusOK || dashboard.TrackingError != "" ||
-		len(dashboard.Ongoing) != 1 || len(dashboard.Recent) != 1 {
+		len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 1 {
 
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
 	if dashboard.Ongoing[0].WorkItemID != 2 || dashboard.Ongoing[0].Status != "starting" ||
+		dashboard.NeedsAttention[0].WorkItemID != 3 || dashboard.NeedsAttention[0].Status != "canceled" ||
 		dashboard.Recent[0].WorkItemID != 1 || dashboard.Recent[0].Status != "succeeded" {
 
-		t.Fatalf("ongoing = %#v, recent = %#v", dashboard.Ongoing, dashboard.Recent)
+		t.Fatalf("ongoing = %#v, attention = %#v, recent = %#v", dashboard.Ongoing, dashboard.NeedsAttention, dashboard.Recent)
 	}
 }
 

@@ -433,6 +433,7 @@ type pipelineRun struct {
 	BuildID   string `json:"buildId,omitempty"`
 	URL       string `json:"url,omitempty"`
 	LinkLabel string `json:"linkLabel,omitempty"`
+	Result    string `json:"result,omitempty"`
 	Complete  bool   `json:"complete"`
 }
 
@@ -451,10 +452,11 @@ type executionResponse struct {
 }
 
 type dashboardResponse struct {
-	Ongoing       []releaseSummary `json:"ongoing"`
-	Recent        []releaseSummary `json:"recent"`
-	Processes     []processSummary `json:"processes"`
-	TrackingError string           `json:"trackingError,omitempty"`
+	Ongoing        []releaseSummary `json:"ongoing"`
+	NeedsAttention []releaseSummary `json:"needsAttention"`
+	Recent         []releaseSummary `json:"recent"`
+	Processes      []processSummary `json:"processes"`
+	TrackingError  string           `json:"trackingError,omitempty"`
 }
 
 type releaseSummary struct {
@@ -521,28 +523,30 @@ func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Req
 	}
 	s.mu.Lock()
 	result := dashboardResponse{
-		Ongoing:   make([]releaseSummary, 0),
-		Recent:    make([]releaseSummary, 0),
-		Processes: s.processes.summaries(),
+		Ongoing:        make([]releaseSummary, 0),
+		NeedsAttention: make([]releaseSummary, 0),
+		Recent:         make([]releaseSummary, 0),
+		Processes:      s.processes.summaries(),
 	}
 	if s.goImages.document != nil {
-		summary := s.releaseSummaryLocked()
-		if s.goImages.document.State.Complete {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.Ongoing = append(result.Ongoing, summary)
-		}
+		addDashboardRelease(&result, s.releaseSummaryLocked())
 	}
 	if s.processRun != nil {
-		summary := s.processRunSummaryLocked()
-		if s.processRun.Complete {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.Ongoing = append(result.Ongoing, summary)
-		}
+		addDashboardRelease(&result, s.processRunSummaryLocked())
 	}
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
+}
+
+func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
+	switch summary.Status {
+	case "succeeded":
+		result.Recent = append(result.Recent, summary)
+	case "failed", "canceled", "uncertain":
+		result.NeedsAttention = append(result.NeedsAttention, summary)
+	default:
+		result.Ongoing = append(result.Ongoing, summary)
+	}
 }
 
 func (s *Server) releaseSummaryLocked() releaseSummary {

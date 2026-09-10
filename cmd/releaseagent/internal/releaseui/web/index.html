@@ -51,6 +51,17 @@
       <p id="tracking-error" class="tracking-error" hidden></p>
     </section>
 
+    <section id="attention-section" class="dashboard-section" aria-labelledby="attention-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Operator action</p>
+          <h2 id="attention-title">Needs attention</h2>
+          <p>Inspect a stopped release before deciding what to do next.</p>
+        </div>
+      </div>
+      <div id="attention-releases" class="release-list" aria-live="polite"></div>
+    </section>
+
     <section class="dashboard-section" aria-labelledby="processes-title">
       <div class="section-heading">
         <div>

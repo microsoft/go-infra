@@ -261,10 +261,26 @@ func TestPollPipelineReportsFailure(t *testing.T) {
 	}}}
 	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
 	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
+	var resultError *goimagesworkflow.PipelineResultError
 	if err == nil || !strings.Contains(err.Error(), "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
-		!strings.Contains(err.Error(), "https://example/build/888") || reader.failureGets != 1 {
+		!strings.Contains(err.Error(), "https://example/build/888") || reader.failureGets != 1 ||
+		!errors.As(err, &resultError) || resultError.Result != "failed" {
 
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPollPipelineReportsCancellation(t *testing.T) {
+	reader := &fakeReader{builds: []*azdopipeline.Build{{
+		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "canceled", WebURL: "https://example/build/888",
+	}}}
+	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeTest})
+	err := service.PollPipeline(context.Background(), "888")
+	var resultError *goimagesworkflow.PipelineResultError
+	if err == nil || !errors.As(err, &resultError) || resultError.Result != "canceled" ||
+		!strings.Contains(err.Error(), "go-images release build 888 canceled") || reader.failureGets != 0 {
+
+		t.Fatalf("error = %v, result error = %#v", err, resultError)
 	}
 }
 
