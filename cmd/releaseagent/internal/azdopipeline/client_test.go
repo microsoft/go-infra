@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	azdobuild "github.com/microsoft/azure-devops-go-api/azuredevops/build"
 )
 
@@ -18,10 +19,17 @@ type staticToken string
 
 func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
 
-type definitionClientFunc func(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+type fakeBuildClient struct {
+	getDefinition func(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+	getTimeline   func(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
+}
 
-func (f definitionClientFunc) GetDefinition(ctx context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
-	return f(ctx, args)
+func (f fakeBuildClient) GetDefinition(ctx context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+	return f.getDefinition(ctx, args)
+}
+
+func (f fakeBuildClient) GetBuildTimeline(ctx context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+	return f.getTimeline(ctx, args)
 }
 
 func TestListRecent(t *testing.T) {
@@ -56,13 +64,74 @@ func TestListRecent(t *testing.T) {
 	}
 }
 
+func TestGetFailures(t *testing.T) {
+	stageID := uuid.New()
+	jobID := uuid.New()
+	taskID := uuid.New()
+	otherID := uuid.New()
+	typeStage, typeJob, typeTask := "Stage", "Job", "Task"
+	nameStage, nameJob, nameTask, nameOther := "Build", "Linux arm32", "Build Images", "Cleanup"
+	failed := azdobuild.TaskResultValues.Failed
+	succeeded := azdobuild.TaskResultValues.Succeeded
+	warning := azdobuild.IssueTypeValues.Warning
+	errorIssue := azdobuild.IssueTypeValues.Error
+	retrying := "retrying"
+	message := "PowerShell  exited\nwith code 1"
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.newBuildClient = func(context.Context) (buildClient, string, error) {
+		return fakeBuildClient{getTimeline: func(_ context.Context, args azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+			if args.Project == nil || *args.Project != "internal" || args.BuildId == nil || *args.BuildId != 888 {
+				t.Fatalf("timeline args = %#v", args)
+			}
+			records := []azdobuild.TimelineRecord{
+				{Id: &stageID, Type: &typeStage, Name: &nameStage, Result: &failed},
+				{Id: &jobID, ParentId: &stageID, Type: &typeJob, Name: &nameJob, Result: &failed},
+				{
+					Id: &taskID, ParentId: &jobID, Type: &typeTask, Name: &nameTask, Result: &failed,
+					Issues: &[]azdobuild.Issue{{Type: &warning, Message: &retrying}, {Type: &errorIssue, Message: &message}},
+				},
+				{Id: &otherID, ParentId: &jobID, Type: &typeTask, Name: &nameOther, Result: &succeeded},
+			}
+			return &azdobuild.Timeline{Records: &records}, nil
+		}}, "test-token", nil
+	}
+	failures, err := client.GetFailures(context.Background(), 888)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) != 1 || failures[0].Path != "Build > Linux arm32 > Build Images" ||
+		failures[0].Message != "PowerShell exited with code 1" {
+
+		t.Fatalf("failures = %#v", failures)
+	}
+}
+
+func TestGetFailuresRedactsToken(t *testing.T) {
+	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("secret-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.newBuildClient = func(context.Context) (buildClient, string, error) {
+		return fakeBuildClient{getTimeline: func(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error) {
+			return nil, errors.New("secret-token denied")
+		}}, "secret-token", nil
+	}
+	_, err = client.GetFailures(context.Background(), 888)
+	if err == nil || strings.Contains(err.Error(), "secret-token") || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("error = %v, want redacted error", err)
+	}
+}
+
 func TestGetDefinition(t *testing.T) {
 	client, err := NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.newDefinitionClient = func(context.Context) (definitionClient, string, error) {
-		return definitionClientFunc(func(_ context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
+	client.newBuildClient = func(context.Context) (buildClient, string, error) {
+		return fakeBuildClient{getDefinition: func(_ context.Context, args azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error) {
 			if args.Project == nil || *args.Project != "internal" || args.DefinitionId == nil || *args.DefinitionId != 1023 {
 				t.Fatalf("definition args = %#v", args)
 			}
@@ -76,7 +145,7 @@ func TestGetDefinition(t *testing.T) {
 				Process:    map[string]any{"yamlFilename": "eng/pipeline/go-docker-rolling-internal-pipeline.yml"},
 				Repository: &azdobuild.BuildRepository{DefaultBranch: &defaultBranch, Name: &repositoryName},
 			}, nil
-		}), "test-token", nil
+		}}, "test-token", nil
 	}
 	definition, err := client.GetDefinition(context.Background(), 1023)
 	if err != nil {

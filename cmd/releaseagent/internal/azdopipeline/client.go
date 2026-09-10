@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,15 +39,16 @@ type HTTPDoer interface {
 
 // Client accesses one Azure DevOps project.
 type Client struct {
-	baseURL             string
-	project             string
-	http                HTTPDoer
-	tokens              TokenProvider
-	newDefinitionClient func(context.Context) (definitionClient, string, error)
+	baseURL        string
+	project        string
+	http           HTTPDoer
+	tokens         TokenProvider
+	newBuildClient func(context.Context) (buildClient, string, error)
 }
 
-type definitionClient interface {
+type buildClient interface {
 	GetDefinition(context.Context, azdobuild.GetDefinitionArgs) (*azdobuild.BuildDefinition, error)
+	GetBuildTimeline(context.Context, azdobuild.GetBuildTimelineArgs) (*azdobuild.Timeline, error)
 }
 
 // Build is the release UI's stable view of an Azure Pipelines run.
@@ -60,6 +62,12 @@ type Build struct {
 	SourceVersion      string
 	Parameters         map[string]string
 	TemplateParameters map[string]any
+}
+
+// BuildFailure identifies one failed leaf in an Azure Pipelines run.
+type BuildFailure struct {
+	Path    string
+	Message string
 }
 
 // Definition is the allowlist-relevant metadata of an Azure Pipeline definition.
@@ -115,7 +123,7 @@ func NewClient(baseURL, project string, httpClient HTTPDoer, tokens TokenProvide
 		http:    httpClient,
 		tokens:  tokens,
 	}
-	client.newDefinitionClient = client.createDefinitionClient
+	client.newBuildClient = client.createBuildClient
 	return client, nil
 }
 
@@ -132,12 +140,33 @@ func (c *Client) Get(ctx context.Context, buildID int) (*Build, error) {
 	return response.build()
 }
 
+// GetFailures returns concise failure details from a completed pipeline run.
+func (c *Client) GetFailures(ctx context.Context, buildID int) ([]BuildFailure, error) {
+	if buildID <= 0 {
+		return nil, errors.New("build ID must be positive")
+	}
+	client, token, err := c.newBuildClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
+	}
+	timeline, err := client.GetBuildTimeline(ctx, azdobuild.GetBuildTimelineArgs{
+		Project: &c.project, BuildId: &buildID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get Azure DevOps build %d timeline: %w", buildID, redactError(err, token))
+	}
+	if timeline == nil || timeline.Records == nil {
+		return []BuildFailure{}, nil
+	}
+	return timelineFailures(*timeline.Records), nil
+}
+
 // GetDefinition returns read-only metadata used to verify an allowlisted pipeline target.
 func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definition, error) {
 	if definitionID <= 0 {
 		return nil, errors.New("pipeline definition ID must be positive")
 	}
-	client, token, err := c.newDefinitionClient(ctx)
+	client, token, err := c.newBuildClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create Azure DevOps Build client: %w", redactError(err, token))
 	}
@@ -159,12 +188,7 @@ func (c *Client) GetDefinition(ctx context.Context, definitionID int) (*Definiti
 	}, nil
 }
 
-func (c *Client) createDefinitionClient(ctx context.Context) (definitionClient, string, error) {
-	client, token, err := c.createBuildClient(ctx)
-	return client, token, err
-}
-
-func (c *Client) createBuildClient(ctx context.Context) (azdobuild.Client, string, error) {
+func (c *Client) createBuildClient(ctx context.Context) (buildClient, string, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("acquire Azure DevOps token: %w", err)
@@ -333,6 +357,94 @@ type apiBuild struct {
 		ID int `json:"id"`
 	} `json:"definition"`
 	Links json.RawMessage `json:"_links"`
+}
+
+func timelineFailures(records []azdobuild.TimelineRecord) []BuildFailure {
+	byID := make(map[string]azdobuild.TimelineRecord, len(records))
+	for _, record := range records {
+		if record.Id != nil {
+			byID[record.Id.String()] = record
+		}
+	}
+
+	var failed []azdobuild.TimelineRecord
+	for _, typeName := range []string{"task", "job", "stage"} {
+		for _, record := range records {
+			if strings.EqualFold(stringValue(record.Type), typeName) &&
+				strings.EqualFold(enumValue(record.Result), string(azdobuild.TaskResultValues.Failed)) {
+
+				failed = append(failed, record)
+			}
+		}
+		if len(failed) != 0 {
+			break
+		}
+	}
+
+	result := make([]BuildFailure, 0, len(failed))
+	seen := make(map[string]struct{}, len(failed))
+	for _, record := range failed {
+		failure := BuildFailure{Path: timelineFailurePath(record, byID)}
+		if record.Issues != nil {
+			for _, issue := range *record.Issues {
+				if !strings.EqualFold(enumValue(issue.Type), string(azdobuild.IssueTypeValues.Error)) {
+					continue
+				}
+				failure.Message = strings.Join(strings.Fields(stringValue(issue.Message)), " ")
+				if failure.Message != "" {
+					break
+				}
+			}
+		}
+		key := failure.Path + "\x00" + failure.Message
+		if failure.Path == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, failure)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Path < result[right].Path })
+	return result
+}
+
+func timelineFailurePath(record azdobuild.TimelineRecord, byID map[string]azdobuild.TimelineRecord) string {
+	var reversed []string
+	visited := make(map[string]struct{})
+	for {
+		id := ""
+		if record.Id != nil {
+			id = record.Id.String()
+		}
+		if id != "" {
+			if _, ok := visited[id]; ok {
+				break
+			}
+			visited[id] = struct{}{}
+		}
+		switch strings.ToLower(stringValue(record.Type)) {
+		case "stage", "job", "task":
+			if name := stringValue(record.Name); name != "" {
+				reversed = append(reversed, name)
+			}
+		}
+		parentID := ""
+		if record.ParentId != nil {
+			parentID = record.ParentId.String()
+		}
+		parent, ok := byID[parentID]
+		if !ok {
+			break
+		}
+		record = parent
+	}
+	path := make([]string, len(reversed))
+	for index := range reversed {
+		path[len(reversed)-1-index] = reversed[index]
+	}
+	return strings.Join(path, " > ")
 }
 
 func (b apiBuild) build() (*Build, error) {
