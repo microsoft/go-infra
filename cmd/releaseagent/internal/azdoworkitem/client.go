@@ -193,7 +193,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
 		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
-		patch(webapi.OperationValues.Add, "/fields/System.Tags", workItemTags(snapshot)),
+		patch(webapi.OperationValues.Replace, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -414,7 +414,7 @@ func (c *Client) workItemURL(id int) string {
 
 func hasTag(tags, want string) bool {
 	for _, tag := range strings.Split(tags, ";") {
-		if strings.TrimSpace(tag) == want {
+		if strings.EqualFold(strings.TrimSpace(tag), want) {
 			return true
 		}
 	}

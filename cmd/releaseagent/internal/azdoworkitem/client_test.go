@@ -129,6 +129,20 @@ func TestGetAcceptsLegacyTestTag(t *testing.T) {
 	}
 }
 
+func TestGetAcceptsAzureTagCasing(t *testing.T) {
+	snapshot := testSnapshot(StatusStarting)
+	snapshot.Test = true
+	item := sdkWorkItem(t, 42, 1, snapshot)
+	(*item.Fields)["System.Tags"] = "ReleaseAgent; Test; go-images"
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkItemURLUsesBrowserView(t *testing.T) {
 	item := sdkWorkItem(t, 3062459, 1, testSnapshot(StatusRunning))
 	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/3062459"
@@ -182,7 +196,7 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Replace, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")

@@ -109,7 +109,8 @@ go run ./cmd/releaseagent serve
 Authenticate `az` before starting the UI and `gh` before using GitHub-backed go-infra actions. Each
 confirmed execution creates a tagged DEVDIV `Issue` under `DevDiv\GoLang`; this includes go-images
 test mode and go-infra dry-run mode. Every item receives its process ID as a tag. Test and dry-run
-items also receive `test`; all release UI queries combine these tags with `releaseagent`.
+items also receive `test`; all release UI queries combine these tags with `releaseagent`. Azure
+DevOps treats tags as case-insensitive and may display the project-canonical casing, such as `Test`.
 Simulations and unconfirmed plans remain in memory and create no work item. To restore one
 explicitly, add `-release-work-item <id>`. Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
