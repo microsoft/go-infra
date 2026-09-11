@@ -131,11 +131,6 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusConflict, "an external action has uncertain status; inspect the target service before preparing another process")
 		return
 	}
-	if err := s.sessionStore.Save(request.Context(), document); err != nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("persist release session: %v", err))
-		return
-	}
 	s.steps = steps
 	s.goImages.planInput = normalized
 	s.goImages.source = source
@@ -143,6 +138,7 @@ func (s *Server) handlePlan(response http.ResponseWriter, request *http.Request)
 	s.goImages.workflowInput = releaseInput
 	s.goImages.workflowState = releaseState
 	s.goImages.document = document
+	s.goImages.record = nil
 	s.runner = &coordinator.StepRunner{}
 	s.goImages.restored = false
 	result := s.goImagesPlanResponseLocked(false)
@@ -223,7 +219,7 @@ func goImagesPlanView(
 		},
 	}
 	if restored {
-		view.Subtitle += " · restored from disk"
+		view.Subtitle += " · restored from work item"
 	}
 	for _, name := range sortedMapKeys(parameters) {
 		view.Request.Fields = append(view.Request.Fields, ProcessRequestField{Name: name, Value: parameters[name]})

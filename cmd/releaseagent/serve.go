@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesexecution"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesrelease"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goinfragithub"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/releaseui"
@@ -40,17 +38,8 @@ func init() {
 }
 
 func handleServe(parse subcmd.ParseFunc) error {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return fmt.Errorf("resolve user configuration directory: %w", err)
-	}
 	listenAddress := flag.String("listen", "127.0.0.1:0", "Loopback address for the local HTTP server")
 	noOpen := flag.Bool("no-open", false, "Do not automatically open the UI in the default browser")
-	sessionFile := flag.String(
-		"session-file",
-		filepath.Join(configDir, "microsoft-go", "release-session.json"),
-		"JSON file used to persist and restore the non-secret release plan",
-	)
 	releaseWorkItem := flag.Int(
 		"release-work-item", 0,
 		"Azure DevOps work item ID to restore; 0 starts without a selected release",
@@ -66,23 +55,6 @@ func handleServe(parse subcmd.ParseFunc) error {
 		Provider: azdopipeline.AzureCLITokenProvider{Runner: azdopipeline.ExecCommandRunner{}},
 		TTL:      5 * time.Minute,
 	}
-
-	var options []releaseui.Option
-	store, err := goimagessession.NewFileStore(*sessionFile)
-	if err != nil {
-		return err
-	}
-	lease, err := store.AcquireLease()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := lease.Release(); err != nil {
-			log.Printf("Unable to release session lease: %v", err)
-		}
-	}()
-	sessionPath := store.Path()
-	options = append(options, releaseui.WithSessionStore(store))
 
 	service, err := goinfragithub.New(goinfragithub.ExecCommandRunner{})
 	if err != nil {
@@ -100,20 +72,33 @@ func handleServe(parse subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
+	goImagesStore, err := releaseui.NewGoImagesWorkItemStore(workItems, assignedTo)
+	if err != nil {
+		return err
+	}
 	processRunStore, err := releaseui.NewProcessRunWorkItemStore(workItems, assignedTo)
 	if err != nil {
 		return err
 	}
-	options = append(options,
+	options := []releaseui.Option{
+		releaseui.WithSessionStore(goImagesStore),
 		releaseui.WithProcessRunStore(processRunStore),
 		releaseui.WithGoInfraGitHubIntegration(releaseui.GoInfraGitHubIntegration{
 			Preflight: service.Preflight, GetPullRequest: service.GetPullRequest,
 			AddReleaseOnMergeLabel: service.AddReleaseOnMergeLabel,
 			DispatchPatchRelease:   service.DispatchPatchRelease, PollWorkflowRun: service.PollWorkflowRun,
 		}),
-	)
+	}
 	if *releaseWorkItem > 0 {
-		options = append(options, releaseui.WithProcessRunWorkItem(*releaseWorkItem))
+		selected, err := workItems.Get(context.Background(), *releaseWorkItem)
+		if err != nil {
+			return fmt.Errorf("select release work item %d: %w", *releaseWorkItem, err)
+		}
+		if selected.Snapshot.ProcessID == "go-images" {
+			options = append(options, releaseui.WithGoImagesWorkItem(*releaseWorkItem))
+		} else {
+			options = append(options, releaseui.WithProcessRunWorkItem(*releaseWorkItem))
+		}
 	}
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
@@ -262,7 +247,9 @@ func handleServe(parse subcmd.ParseFunc) error {
 
 	fmt.Printf("Release UI listening at %s\n", launchURL)
 	fmt.Println("Go-images pipeline 1023 execution is available for normal, rollback, and dev/ test releases.")
-	fmt.Printf("Durable session file: %s\n", sessionPath)
+	if *releaseWorkItem > 0 {
+		fmt.Printf("Restored Azure DevOps work item: %d\n", *releaseWorkItem)
+	}
 	if !*noOpen {
 		if err := releaseui.OpenBrowser(launchURL); err != nil {
 			log.Printf("Unable to open browser automatically: %v", err)

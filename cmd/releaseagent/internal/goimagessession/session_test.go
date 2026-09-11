@@ -5,10 +5,6 @@ package goimagessession
 
 import (
 	"context"
-	"errors"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -63,50 +59,6 @@ func TestDocumentPlanFingerprint(t *testing.T) {
 	}
 }
 
-func TestFileStoreRoundTripAndReplace(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "session.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(context.Background()); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Load missing session error = %v, want ErrNotFound", err)
-	}
-
-	document := testDocument(t)
-	if err := store.Save(context.Background(), document); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.ID != document.ID || loaded.Plan.Digest != document.Plan.Digest {
-		t.Fatalf("loaded document differs: got %#v, want %#v", loaded, document)
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if permissions := info.Mode().Perm(); permissions != 0o600 {
-			t.Fatalf("session permissions = %o, want 600", permissions)
-		}
-	}
-
-	document.UpdatedAt = document.UpdatedAt.Add(time.Minute)
-	if err := store.Save(context.Background(), document); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err = store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.UpdatedAt.Equal(document.UpdatedAt) {
-		t.Fatalf("updated time = %v, want %v", loaded.UpdatedAt, document.UpdatedAt)
-	}
-}
-
 func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
 	document := testDocument(t)
 	state := document.State
@@ -135,59 +87,6 @@ func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 	document.Input.SourceVersion = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
 	if err := document.Validate(); err == nil {
 		t.Fatal("modified immutable input unexpectedly passed validation")
-	}
-}
-
-func TestFileStoreRejectsUnknownAndInvalidDocuments(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.json")
-	store, err := NewFileStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":1,"unknown":true}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(context.Background()); err == nil {
-		t.Fatal("unknown session field unexpectedly loaded")
-	}
-	if err := os.WriteFile(path, []byte(`{"schemaVersion":6}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Load(context.Background()); err == nil {
-		t.Fatal("obsolete session schema unexpectedly loaded")
-	}
-
-	document := testDocument(t)
-	document.SchemaVersion++
-	if err := store.Save(context.Background(), document); err == nil {
-		t.Fatal("unsupported session schema unexpectedly saved")
-	}
-}
-
-func TestFileStoreLease(t *testing.T) {
-	store, err := NewFileStore(filepath.Join(t.TempDir(), "session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := store.AcquireLease()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AcquireLease(); !errors.Is(err, ErrLocked) {
-		t.Fatalf("second lease error = %v, want ErrLocked", err)
-	}
-	if err := first.Release(); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Release(); err != nil {
-		t.Fatalf("second Release returned error: %v", err)
-	}
-	second, err := store.AcquireLease()
-	if err != nil {
-		t.Fatalf("lease after release failed: %v", err)
-	}
-	if err := second.Release(); err != nil {
-		t.Fatal(err)
 	}
 }
 

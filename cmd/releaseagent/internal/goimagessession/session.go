@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimagessession persists durable, non-secret standalone go-images state.
+// Package goimagessession models durable, non-secret standalone go-images state.
 package goimagessession
 
 import (
