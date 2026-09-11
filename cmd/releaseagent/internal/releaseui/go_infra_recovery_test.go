@@ -34,7 +34,8 @@ func TestInterruptedGoInfraRunRestoresUncertain(t *testing.T) {
 	var restored processRunResponse
 	decodeResponse(t, response, &restored)
 	if response.StatusCode != http.StatusOK || !restored.Execution.Run.Complete || len(restored.Steps) != 1 ||
-		restored.Steps[0].Status != "failed" {
+		restored.Steps[0].Status != "failed" || restored.Execution.WorkItem == nil ||
+		restored.Execution.WorkItem.ID != workItemID {
 
 		t.Fatalf("restored = %#v", restored)
 	}

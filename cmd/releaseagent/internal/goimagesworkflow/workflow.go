@@ -7,6 +7,7 @@ package goimagesworkflow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"regexp"
@@ -65,6 +66,20 @@ type Service interface {
 	PollMirror(context.Context, string) error
 	QueuePipeline(context.Context, map[string]string) (string, error)
 	PollPipeline(context.Context, string) error
+}
+
+// PipelineResultError reports a known terminal pipeline outcome.
+type PipelineResultError struct {
+	Result string
+	Err    error
+}
+
+func (e *PipelineResultError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *PipelineResultError) Unwrap() error {
+	return e.Err
 }
 
 // CheckpointFunc durably records State. The state pointer is valid only during the call.
@@ -212,6 +227,19 @@ func NewGraphWithCheckpoint(
 			}
 			buildID := stateValue(access, func(state *State) string { return state.BuildID })
 			if err := service.PollPipeline(ctx, buildID); err != nil {
+				var resultError *PipelineResultError
+				if !errors.As(err, &resultError) {
+					return err
+				}
+				if resultError.Result != "failed" && resultError.Result != "canceled" {
+					return fmt.Errorf("invalid terminal pipeline result %q: %w", resultError.Result, err)
+				}
+				if checkpointErr := access.update(ctx, func(state *State) {
+					state.Complete = true
+					state.Result = resultError.Result
+				}); checkpointErr != nil {
+					return errors.Join(err, fmt.Errorf("checkpoint terminal pipeline result: %w", checkpointErr))
+				}
 				return err
 			}
 			return access.update(ctx, func(state *State) {

@@ -424,6 +424,10 @@ func (s *Server) restoreProcessRun() error {
 	if err != nil {
 		return fmt.Errorf("load release work item %d: %w", s.processRunItemID, err)
 	}
+	return s.restoreProcessRunRecord(record)
+}
+
+func (s *Server) restoreProcessRunRecord(record *ProcessRunRecord) error {
 	run := record.Run
 	executor, ok := s.processExecutors[run.ProcessID]
 	if !ok {
@@ -435,10 +439,11 @@ func (s *Server) restoreProcessRun() error {
 	if run.Started && !run.Complete && len(run.Checkpoint) == 0 {
 		run.Complete = true
 		run.Result = "uncertain"
-		record, err = s.processRunStore.Update(s.ctx, record, run)
+		updated, err := s.processRunStore.Update(s.ctx, record, run)
 		if err != nil {
 			return fmt.Errorf("mark interrupted process run uncertain: %w", err)
 		}
+		record = updated
 		run = record.Run
 	}
 	s.processRun = run
@@ -480,6 +485,9 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 	execution := executionResponse{
 		Enabled: true, Eligible: run.Digest != "", PlanDigest: run.Digest,
 	}
+	if s.processRunRecord != nil {
+		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
+	}
 	if run.Started {
 		reference := run.Target
 		if run.External != nil {
@@ -487,7 +495,7 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 		}
 		execution.Run = pipelineRun{
 			BuildID: reference.ID, URL: reference.URL, LinkLabel: reference.LinkLabel,
-			Complete: run.Complete,
+			Result: run.Result, Complete: run.Complete,
 		}
 	}
 	return processRunResponse{

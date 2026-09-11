@@ -289,7 +289,7 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 			if build.WebURL != "" {
 				failure += ". Inspect the Azure run: " + build.WebURL
 			}
-			return errors.New(failure)
+			return &goimagesworkflow.PipelineResultError{Result: string(state), Err: errors.New(failure)}
 		case azdopipeline.RunStateWaiting, azdopipeline.RunStateRunning:
 			s.reportPipelineProgress(ctx, id, state)
 			if err := s.sleep(ctx, s.config.PollInterval); err != nil {

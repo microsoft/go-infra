@@ -32,7 +32,7 @@ body {
   min-height: 100vh;
 }
 
-button, input, textarea { font: inherit; }
+button, input, textarea, dialog { font: inherit; }
 button { color: inherit; }
 
 .topbar {
@@ -212,8 +212,9 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .pipeline-parameters dt { color: #8cabc5; background: rgb(18 42 64 / 72%); }
 .pipeline-parameters dd { color: var(--text); background: rgb(6 17 30 / 65%); }
 .pipeline-parameters > :nth-last-child(-n+2) { border-bottom: 0; }
-.pipeline-run-link { display: flex; align-items: center; justify-content: center; min-height: 52px; margin-top: 16px; padding: 0 18px; border: 1px solid rgb(57 213 255 / 45%); border-radius: 11px; background: rgb(57 213 255 / 12%); color: var(--cyan); font-size: 14px; font-weight: 800; text-align: center; text-decoration: none; }
-.pipeline-run-link:hover { background: rgb(57 213 255 / 18%); border-color: var(--cyan); }
+.execution-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 10px; margin-top: 16px; }
+.execution-link { display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 0 18px; border: 1px solid rgb(57 213 255 / 45%); border-radius: 11px; background: rgb(57 213 255 / 12%); color: var(--cyan); font-size: 14px; font-weight: 800; text-align: center; text-decoration: none; }
+.execution-link:hover { background: rgb(57 213 255 / 18%); border-color: var(--cyan); }
 .demo-unavailable { margin: 14px 0; padding: 11px 13px; border: 1px solid rgb(255 197 92 / 34%); border-radius: 10px; background: rgb(255 197 92 / 8%); color: var(--yellow); font-size: 10px; line-height: 1.5; }
 
 .step-graph-viewport { position: relative; min-height: 210px; max-height: 760px; margin: 0; overflow: auto; border: 1px solid var(--border); border-radius: 14px; background: radial-gradient(circle at 50% 50%, rgb(31 66 91 / 18%), transparent 70%), rgb(5 16 29 / 42%); }
@@ -264,6 +265,9 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .release-empty { padding: 23px; border: 1px dashed var(--border); border-radius: 14px; color: var(--muted); background: rgb(5 16 29 / 32%); font-size: 14px; text-align: center; }
 .loading-card { animation: gentle-pulse 1.6s ease-in-out infinite; }
 .release-card { display: flex; align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: rgb(6 18 32 / 58%); }
+.release-card-selectable { cursor: pointer; }
+.release-card-selectable:hover { border-color: var(--cyan); }
+.release-card-selectable:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .release-icon, .process-mark, .release-product-mark { display: grid; flex: 0 0 auto; place-items: center; border-radius: 12px; background: linear-gradient(145deg, var(--cyan), #2588f2); color: #03101b; font-weight: 900; }
 .release-icon { width: 42px; height: 42px; font-size: 11px; }
 .release-card-body { min-width: 0; flex: 1; }
@@ -271,6 +275,15 @@ input:focus, textarea:focus { border-color: var(--cyan-deep); box-shadow: 0 0 0 
 .release-card-title strong { font-size: 15px; }
 .release-card-body p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .compact-button { min-height: 34px; padding: 0 12px; text-decoration: none; }
+.release-card-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.tracking-error { margin: 12px 0 0; padding: 11px 13px; border: 1px solid rgb(255 123 135 / 34%); border-radius: 8px; background: rgb(255 123 135 / 8%); color: #ffd1d6; font-size: 12px; line-height: 1.5; }
+.json-dialog { width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.json-dialog::backdrop { background: rgb(0 0 0 / 68%); }
+.json-dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.json-dialog-heading h2 { margin: 0; font-size: 20px; }
+.dialog-close { width: 36px; height: 36px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); color: var(--muted); cursor: pointer; font-size: 22px; }
+.json-dialog textarea { min-height: min(52vh, 540px); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; tab-size: 2; }
+.json-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .process-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .process-card { position: relative; min-height: 236px; padding: 21px; overflow: hidden; border: 1px solid var(--border); border-radius: 17px; background: linear-gradient(145deg, rgb(13 35 55 / 84%), rgb(6 19 33 / 78%)); color: inherit; text-decoration: none; transition: border-color .18s, transform .18s, background .18s; }
 a.process-card:hover { transform: translateY(-3px); border-color: rgb(57 213 255 / 46%); background: linear-gradient(145deg, rgb(19 51 73 / 90%), rgb(7 23 40 / 84%)); }
@@ -364,7 +377,10 @@ label.mode-card { position: relative; display: grid; grid-template-columns: auto
   .section-heading { align-items: flex-start; flex-direction: column; }
   .section-heading .button { width: 100%; }
   .release-card { align-items: flex-start; flex-wrap: wrap; }
-  .release-card .compact-button { width: 100%; }
+  .release-card-actions { width: 100%; }
+  .release-card .compact-button { flex: 1; }
+  .json-dialog-actions { flex-direction: column; }
+  .json-dialog-actions .button { width: 100%; }
   .release-hero { grid-template-columns: 1fr; }
   .release-product-mark { width: 52px; height: 52px; }
   .source-grid { grid-template-columns: 1fr; }

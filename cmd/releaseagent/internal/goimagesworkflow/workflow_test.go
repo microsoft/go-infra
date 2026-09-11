@@ -21,6 +21,7 @@ var testInput = &Input{
 
 type fakeService struct {
 	mirrorErr error
+	pollErr   error
 	mirrors   int
 	queues    int
 	polls     int
@@ -47,7 +48,7 @@ func (service *fakeService) PollPipeline(_ context.Context, buildID string) erro
 	if buildID != "888" {
 		return errors.New("unexpected build ID")
 	}
-	return nil
+	return service.pollErr
 }
 
 func TestPipelineParameters(t *testing.T) {
@@ -113,6 +114,48 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 		checkpoints[1].BuildID != "888" || checkpoints[1].Complete {
 
 		t.Fatalf("checkpoints = %#v", checkpoints)
+	}
+}
+
+func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
+	for _, result := range []string{"failed", "canceled"} {
+		t.Run(result, func(t *testing.T) {
+			terminalErr := errors.New("pipeline " + result)
+			service := &fakeService{pollErr: &PipelineResultError{Result: result, Err: terminalErr}}
+			var checkpoint State
+			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(_ context.Context, state *State) error {
+				checkpoint = *state
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var runner coordinator.StepRunner
+			if err := runner.Execute(context.Background(), steps); !errors.Is(err, terminalErr) {
+				t.Fatalf("error = %v, want %v", err, terminalErr)
+			}
+			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
+				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)
+			}
+		})
+	}
+}
+
+func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
+	pollErr := errors.New("pipeline read unavailable")
+	service := &fakeService{pollErr: pollErr}
+	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(context.Context, *State) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); !errors.Is(err, pollErr) {
+		t.Fatalf("error = %v, want %v", err, pollErr)
+	}
+	if state.Complete || state.Result != "" {
+		t.Fatalf("state = %#v, want resumable incomplete state", state)
 	}
 }
 

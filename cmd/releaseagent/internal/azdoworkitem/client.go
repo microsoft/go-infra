@@ -19,7 +19,8 @@ import (
 const (
 	AreaPath         = `DevDiv\GoLang`
 	SelectorTag      = "releaseagent"
-	TestTag          = "releaseagent-test"
+	TestTag          = "test"
+	legacyTestTag    = "releaseagent-test"
 	descriptionField = "System.Description"
 	maxQueryResults  = 200
 	sdkTimeout       = 3 * time.Minute
@@ -47,18 +48,19 @@ type Client struct {
 }
 
 type WorkItem struct {
-	ID       int
-	Revision int
-	URL      string
-	Title    string
-	State    string
-	Snapshot *Snapshot
+	ID        int
+	Revision  int
+	URL       string
+	Title     string
+	State     string
+	ChangedAt time.Time
+	Snapshot  *Snapshot
 }
 
 type workItemClient interface {
 	CreateWorkItem(context.Context, workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error)
 	GetWorkItem(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error)
-	GetWorkItems(context.Context, workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error)
+	GetWorkItemsBatch(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error)
 	QueryByWiql(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error)
 	UpdateWorkItem(context.Context, workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error)
 }
@@ -142,6 +144,7 @@ func (c *Client) Create(ctx context.Context, title, assignedTo string, snapshot 
 	}
 	response, err := sdk.CreateWorkItem(ctx, workitemtracking.CreateWorkItemArgs{
 		Document: &document, Project: &c.project, Type: &c.workItemType,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create release work item: %w", redactError(err, token))
@@ -160,6 +163,7 @@ func (c *Client) Get(ctx context.Context, id int) (*WorkItem, error) {
 	fields := c.fields()
 	response, err := sdk.GetWorkItem(ctx, workitemtracking.GetWorkItemArgs{
 		Id: &id, Project: &c.project, Fields: &fields,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get release work item %d: %w", id, redactError(err, token))
@@ -188,7 +192,8 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
-		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
+		patch(webapi.OperationValues.Add, "/fields/System.State", workItemStateForUpdate(current.State, snapshot.Status)),
+		patch(webapi.OperationValues.Replace, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -197,6 +202,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	response, err := sdk.UpdateWorkItem(ctx, workitemtracking.UpdateWorkItemArgs{
 		Document: &document, Id: &current.ID, Project: &c.project,
+		Expand: &workitemtracking.WorkItemExpandValues.Links,
 	})
 	if err != nil {
 		if isRevisionConflict(err) {
@@ -214,15 +220,19 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	return workItem, nil
 }
 
-func (c *Client) Query(ctx context.Context, limit int) ([]*WorkItem, error) {
+func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem, error) {
 	if limit <= 0 || limit > maxQueryResults {
 		return nil, fmt.Errorf("release work item query limit must be between 1 and %d", maxQueryResults)
 	}
+	stateOperator := "<>"
+	if closed {
+		stateOperator = "="
+	}
 	wiql := fmt.Sprintf(
 		"SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = '%s' "+
-			"AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s' "+
+			"AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s' AND [System.State] %s 'Closed' "+
 			"ORDER BY [System.ChangedDate] DESC",
-		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag),
+		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag), stateOperator,
 	)
 	sdk, token, err := c.newClient(ctx)
 	if err != nil {
@@ -254,8 +264,12 @@ func (c *Client) Query(ctx context.Context, limit int) ([]*WorkItem, error) {
 		positions[*reference.Id] = index
 	}
 	fields := c.fields()
-	responses, err := sdk.GetWorkItems(ctx, workitemtracking.GetWorkItemsArgs{
-		Ids: &ids, Project: &c.project, Fields: &fields,
+	expand := workitemtracking.WorkItemExpandValues.Links
+	responses, err := sdk.GetWorkItemsBatch(ctx, workitemtracking.GetWorkItemsBatchArgs{
+		Project: &c.project,
+		WorkItemGetRequest: &workitemtracking.WorkItemBatchGetRequest{
+			Ids: &ids, Fields: &fields, Expand: &expand,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("read release work item query results: %w", redactError(err, token))
@@ -352,33 +366,39 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	title, titleOK := fields["System.Title"].(string)
 	state, stateOK := fields["System.State"].(string)
+	changedText, changedOK := fields["System.ChangedDate"].(string)
 	description, snapshotOK := fields[descriptionField].(string)
-	if !titleOK || strings.TrimSpace(title) == "" || !stateOK || strings.TrimSpace(state) == "" || !snapshotOK {
+	if !titleOK || strings.TrimSpace(title) == "" || !stateOK || strings.TrimSpace(state) == "" || !changedOK || !snapshotOK {
 		return nil, fmt.Errorf("work item %d has incomplete managed fields", *response.Id)
+	}
+	changedAt, err := time.Parse(time.RFC3339Nano, changedText)
+	if err != nil {
+		return nil, fmt.Errorf("work item %d has invalid changed date %q", *response.Id, changedText)
 	}
 	snapshot, err := ParseDescription(description)
 	if err != nil {
 		return nil, fmt.Errorf("parse work item %d release snapshot: %w", *response.Id, err)
 	}
-	if hasTag(tags, TestTag) != snapshot.Test {
+	testTagged := hasTag(tags, TestTag) || hasTag(tags, legacyTestTag)
+	if testTagged != snapshot.Test {
 		return nil, fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id)
 	}
-	if state != workItemState(snapshot.Status) {
-		return nil, fmt.Errorf("work item %d state %q does not match release status %q", *response.Id, state, snapshot.Status)
+	if !workItemStateMatches(state, snapshot.Status) {
+		return nil, fmt.Errorf("work item %d state %q is incompatible with release status %q", *response.Id, state, snapshot.Status)
 	}
 	itemURL := workItemURL(response)
 	if itemURL == "" {
-		return nil, fmt.Errorf("work item %d has no URL", *response.Id)
+		return nil, fmt.Errorf("work item %d has no browser URL", *response.Id)
 	}
 	return &WorkItem{
 		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
-		Title: title, State: state, Snapshot: snapshot,
+		Title: title, State: state, ChangedAt: changedAt, Snapshot: snapshot,
 	}, nil
 }
 
 func (c *Client) fields() []string {
 	return []string{
-		"System.WorkItemType", "System.Title", "System.State", "System.AreaPath", "System.Tags", descriptionField,
+		"System.WorkItemType", "System.Title", "System.State", "System.AreaPath", "System.Tags", "System.ChangedDate", descriptionField,
 	}
 }
 
@@ -387,22 +407,21 @@ func patch(operation webapi.Operation, path string, value any) webapi.JsonPatchO
 }
 
 func workItemURL(item *workitemtracking.WorkItem) string {
-	if links, ok := item.Links.(map[string]any); ok {
-		if html, ok := links["html"].(map[string]any); ok {
-			if href, ok := html["href"].(string); ok && href != "" {
-				return href
-			}
-		}
+	links, ok := item.Links.(map[string]any)
+	if !ok {
+		return ""
 	}
-	if item.Url != nil {
-		return *item.Url
+	htmlLink, ok := links["html"].(map[string]any)
+	if !ok {
+		return ""
 	}
-	return ""
+	href, _ := htmlLink["href"].(string)
+	return href
 }
 
 func hasTag(tags, want string) bool {
 	for _, tag := range strings.Split(tags, ";") {
-		if strings.TrimSpace(tag) == want {
+		if strings.EqualFold(strings.TrimSpace(tag), want) {
 			return true
 		}
 	}
@@ -414,10 +433,12 @@ func escapeWIQL(value string) string {
 }
 
 func workItemTags(snapshot *Snapshot) string {
+	tags := []string{SelectorTag}
 	if snapshot.Test {
-		return SelectorTag + "; " + TestTag
+		tags = append(tags, TestTag)
 	}
-	return SelectorTag
+	tags = append(tags, snapshot.ProcessID)
+	return strings.Join(tags, "; ")
 }
 
 func workItemState(status Status) string {
@@ -425,6 +446,24 @@ func workItemState(status Status) string {
 		return "Closed"
 	}
 	return "Active"
+}
+
+func workItemStateForUpdate(current string, status Status) string {
+	if current == "Closed" && isAttentionStatus(status) {
+		return "Closed"
+	}
+	return workItemState(status)
+}
+
+func workItemStateMatches(state string, status Status) bool {
+	if state == workItemState(status) {
+		return true
+	}
+	return state == "Closed" && isAttentionStatus(status)
+}
+
+func isAttentionStatus(status Status) bool {
+	return status == StatusFailed || status == StatusCanceled || status == StatusUncertain
 }
 
 func isRevisionConflict(err error) bool {

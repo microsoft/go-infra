@@ -81,6 +81,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return err
 	}
 	options := []releaseui.Option{
+		releaseui.WithReleaseWorkItems(workItems),
 		releaseui.WithSessionStore(goImagesStore),
 		releaseui.WithProcessRunStore(processRunStore),
 		releaseui.WithGoInfraGitHubIntegration(releaseui.GoInfraGitHubIntegration{
