@@ -5,9 +5,9 @@ The server runs on the release runner's machine and opens in their default brows
 
 `releaseagent serve` starts the local release UI.
 
-The landing page lists work tracked by the current durable session and the two implemented release
-processes. Go images provides local planning, execution, and monitoring. Go infrastructure provides
-reviewed, confirmed actions for the two GitHub-owned patch release paths documented by the team.
+The landing page lists the two implemented release processes. Go images provides local planning,
+execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two
+GitHub-owned patch release paths documented by the team.
 
 Each registry entry owns its dashboard metadata, inputs, and workflow callbacks. The server derives
 the process page and API routes from that entry. One HTML page and JavaScript implementation render
@@ -40,7 +40,11 @@ ProcessDefinition{
 }
 ```
 
-Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store holds the server's single current durable external action. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`, and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
+Supply one `ProcessExecutor` under the same process ID and one shared `ProcessRunStore`. The store
+creates an Azure DevOps work item only after confirmation and updates it by revision at durable
+checkpoints. The executor owns process policy through `Preflight`, `Prepare`, `Execute`, `Resume`,
+and `Validate`. The server owns confirmation, duplicate-start protection, checkpoints, restart
+behavior, state APIs, and event streaming.
 
 Before preparation, the shared lifecycle validates request keys, visible and conditional fields, choice values, positive integer syntax, and defaults. Executors then apply process-specific semantic and fixed-target validation.
 
@@ -84,7 +88,7 @@ and exposes both supported paths:
 * **Manual patch release** dispatches only `create-go-infra-patch-release.yml` on `main`. Dry-run
   mode sets `dry-run` to `true` and only calculates the next version. Publish mode sets it to
   `false` and can create the next patch release. After GitHub accepts the dispatch, the server
-  discovers the new run, journals its ID and URL, and polls it to a terminal conclusion. GitHub's workflow dispatch endpoint does not return a run ID, so the UI supplies a random token as the run title and matches that exact title. If a monitoring interval times out, polling continues from the checkpointed run ID. The dashboard reports the final result.
+  discovers the new run, checkpoints its ID and URL, and polls it to a terminal conclusion. GitHub's workflow dispatch endpoint does not return a run ID, so the UI supplies a random token as the run title and matches that exact title. If a monitoring interval times out, polling continues from the checkpointed run ID. The dashboard reports the final result.
 
 Both paths require an authenticated `gh` CLI, a reviewed plan, and a separate confirmation click.
 The server hardcodes `microsoft/go-infra`, `main`,
@@ -92,7 +96,7 @@ The server hardcodes `microsoft/go-infra`, `main`,
 
 ## Running locally
 
-Start the fully configured release UI without arguments:
+Start the release UI without additional storage configuration:
 
 ```console
 go run ./cmd/releaseagent serve
@@ -102,17 +106,22 @@ Authenticate `az` before using Azure-backed go-images actions and `gh` before us
 go-infra actions. Missing authentication is reported by process preflight; it does not require a
 different server startup mode.
 
-By default, the UI stores its durable session under the operating system's user configuration directory.
-Use `-session-file` only to override that location:
+Go-images still stores its durable session under the operating system's user configuration
+directory. Use `-session-file` only to override that location:
 
 ```console
 go run ./cmd/releaseagent serve \
   -session-file /path/to/release-session.json
 ```
 
-The configured session path also derives an adjacent durable process-run journal. Starting the
-server does not perform an external action. Opening the go-infra page performs read-only preflight
-checks; a mutation still requires preparing the exact request and confirming it.
+Generic actions do not use the session file. Each confirmed action creates a tagged DEVDIV `Issue`
+under `DevDiv\GoLang`. To restore one explicitly, add `-release-work-item <id>`. Starting the server
+does not perform an external action. Opening the go-infra page performs read-only preflight checks;
+a mutation still requires preparing the exact request and confirming it.
+
+Releaseagent owns `System.Description` on generic-action work items. It stores a visible managed-state
+notice followed by base64url-encoded canonical JSON so Azure DevOps HTML normalization cannot alter
+the release state. Add operator notes as work-item comments rather than editing Description.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
@@ -147,14 +156,11 @@ older full-release-shaped prototype documents rather than retaining a second dom
 migration path. Workflow revision 8 uses unique step names as graph identity. Start with a new
 session file when either version is unsupported.
 
-The current session and process-run stores together own one active durable release at a time. The
-dashboard lists that release as ongoing or recently completed work.
-
-Durable external actions use an adjacent, schema-versioned atomic process-run journal derived from
-`-session-file`. The shared executor checkpoints `started` before calling the target service and
-resumes monitoring a known external run after restart. If a run cannot be correlated, the next
-startup marks the action `uncertain` and refuses a replacement. The local file protects one
-machine; it is not a shared handoff mechanism for an unexpected outage.
+The current server runs one selected release at a time. Go-images state remains in its session file.
+Generic action state lives only in the selected Azure DevOps work item. The shared executor creates
+the work item before calling the target service, updates it with an Azure DevOps revision check, and
+resumes monitoring a known external run after explicit restore. If a run cannot be correlated, the
+restored action becomes `uncertain` and refuses a replacement.
 
 If a process terminates without cleaning up its lease, verify no release UI process is using the
 session and remove the adjacent `.lock` file manually.
