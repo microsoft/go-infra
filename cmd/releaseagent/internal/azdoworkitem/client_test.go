@@ -102,6 +102,7 @@ func TestGetRejectsMismatchedTestTag(t *testing.T) {
 		t.Fatalf("error = %v, want mismatched test tag error", err)
 	}
 }
+
 func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusRunning)
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
