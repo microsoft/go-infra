@@ -24,17 +24,12 @@ func TestGoInfraDispatchSuccessWithoutExternalRunFailsPolicyValidation(t *testin
 }
 
 func TestInterruptedGoInfraRunRestoresUncertain(t *testing.T) {
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryProcessRunStore()
 	run := testStoredGoInfraRun(t, goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModePublish}, nil)
 	run.Started = true
-	if err := store.Save(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
+	workItemID := store.seed(run)
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
-	ui := newTestUI(t, WithProcessRunStore(store), WithGoInfraGitHubIntegration(github.integration()))
+	ui := newTestUI(t, WithProcessRunStore(store), WithProcessRunWorkItem(workItemID), WithGoInfraGitHubIntegration(github.integration()))
 	response, err := ui.client.Get(ui.http.URL + "/api/processes/go-infra/plan")
 	if err != nil {
 		t.Fatal(err)
@@ -54,20 +49,14 @@ func TestInterruptedGoInfraRunRestoresUncertain(t *testing.T) {
 	if len(github.dispatches) != 0 || github.labelCalls != 0 {
 		t.Fatalf("dispatches = %v, label calls = %d", github.dispatches, github.labelCalls)
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	persisted := store.latest(t)
 	if !persisted.Complete || persisted.Result != "uncertain" {
 		t.Fatalf("persisted = %#v", persisted)
 	}
 }
 
 func TestDiscoveredGoInfraRunResumesMonitoring(t *testing.T) {
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryProcessRunStore()
 	run := testStoredGoInfraRun(t, goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun}, nil)
 	queued := testGoInfraWorkflowRun("queued", "")
 	state, err := json.Marshal(queued)
@@ -78,9 +67,7 @@ func TestDiscoveredGoInfraRunResumesMonitoring(t *testing.T) {
 	run.Checkpoint = state
 	external := goInfraExternalRun(queued)
 	run.External = &external
-	if err := store.Save(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
+	workItemID := store.seed(run)
 	github := &fakeGoInfraGitHub{
 		pullRequest: testGoInfraPullRequest(), workflowRun: queued,
 		workflowUpdates: []GoInfraWorkflowRun{
@@ -88,15 +75,12 @@ func TestDiscoveredGoInfraRunResumesMonitoring(t *testing.T) {
 			testGoInfraWorkflowRun("completed", "success"),
 		},
 	}
-	ui := newTestUI(t, WithProcessRunStore(store), WithGoInfraGitHubIntegration(github.integration()))
+	ui := newTestUI(t, WithProcessRunStore(store), WithProcessRunWorkItem(workItemID), WithGoInfraGitHubIntegration(github.integration()))
 	waitForGoInfraAction(t, ui)
 	if github.pollCalls != 1 || len(github.dispatches) != 0 {
 		t.Fatalf("poll calls = %d, dispatches = %v", github.pollCalls, github.dispatches)
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	persisted := store.latest(t)
 	if !persisted.Complete || persisted.Result != "succeeded" || persisted.External == nil ||
 		persisted.External.Status != "completed" || !persisted.External.Succeeded {
 
@@ -109,10 +93,7 @@ func TestGoInfraExecutorRequiresProcessRunStore(t *testing.T) {
 	if _, err := New(context.Background(), WithGoInfraGitHubIntegration(github.integration())); err == nil {
 		t.Fatal("go-infra executor was enabled without a process run store")
 	}
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryProcessRunStore()
 	if _, err := New(context.Background(), WithProcessRunStore(store)); err == nil {
 		t.Fatal("process run store was enabled without an executor")
 	}
@@ -125,15 +106,10 @@ func TestGoInfraExecutorRequiresProcessRunStore(t *testing.T) {
 }
 
 func TestUncertainGoInfraRunDoesNotHideBehindGoImagesSession(t *testing.T) {
-	runStore, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	runStore := newMemoryProcessRunStore()
 	run := testStoredGoInfraRun(t, goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModePublish}, nil)
 	run.Started = true
-	if err := runStore.Save(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
+	workItemID := runStore.seed(run)
 	sessionStore, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +119,7 @@ func TestUncertainGoInfraRunDoesNotHideBehindGoImagesSession(t *testing.T) {
 	createTestPlan(t, first, `{"mode":"normal"}`)
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 	_, err = New(
-		context.Background(), WithSessionStore(sessionStore), WithProcessRunStore(runStore),
+		context.Background(), WithSessionStore(sessionStore), WithProcessRunStore(runStore), WithProcessRunWorkItem(workItemID),
 		WithGoInfraGitHubIntegration(github.integration()),
 	)
 	if err == nil {
@@ -163,7 +139,7 @@ func testStoredGoInfraRun(t *testing.T, input goInfraPlanInput, pullRequest *GoI
 		t.Fatal(err)
 	}
 	run, err := newProcessRun(goInfraProcessID, ProcessPreparedRun{
-		Input: inputJSON, Payload: payloadJSON,
+		Test: goInfraProcessIsTest(input), Input: inputJSON, Payload: payloadJSON,
 		Step: goInfraProcessStep(payload), View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
 	})
 	if err != nil {
