@@ -117,6 +117,10 @@ func RenderDescription(snapshot *Snapshot) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return renderDescription(data)
+}
+
+func renderDescription(data []byte) (string, error) {
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	description := "<p>Managed by releaseagent. Add operator notes as comments.</p><pre>" +
 		descriptionMarker + encoded + "</pre>"
