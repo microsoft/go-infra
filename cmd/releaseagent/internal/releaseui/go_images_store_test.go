@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
@@ -30,10 +30,6 @@ func (f *fakeGoImagesWorkItemClient) Create(
 	f.item = &azdoworkitem.WorkItem{
 		ID: 42, Revision: 1, URL: "https://example.invalid/workitems/42", Snapshot: snapshot,
 	}
-	return f.item, nil
-}
-
-func (f *fakeGoImagesWorkItemClient) Get(context.Context, int) (*azdoworkitem.WorkItem, error) {
 	return f.item, nil
 }
 
@@ -86,6 +82,25 @@ func TestGoImagesWorkItemStoreRoundTrip(t *testing.T) {
 
 		t.Fatalf("updated = %#v, snapshot = %#v", updated, client.item.Snapshot)
 	}
+	description, err := azdoworkitem.RenderDescription(client.item.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		"<strong>Process</strong></td><td>Go images",
+		"<strong>Status</strong></td><td>Succeeded",
+		"<strong>Mode</strong></td><td>Normal",
+		"<strong>Versions</strong></td><td>1.26.5-2",
+		"<strong>Publication</strong></td><td>public/",
+		"microsoft-go-images/commit/" + testSourceCommit,
+		`_build/results?buildId=888">888</a>`,
+		"<strong>Created</strong>",
+		"<strong>Last checkpoint</strong>",
+	} {
+		if !strings.Contains(description, text) {
+			t.Fatalf("description does not contain %q: %s", text, description)
+		}
+	}
 }
 
 func TestGoImagesTestModeClassification(t *testing.T) {
@@ -123,12 +138,11 @@ func testGoImagesDocumentMode(t *testing.T, mode goimagesworkflow.Mode) *goimage
 	if mode == goimagesworkflow.ModeRollback {
 		input.SourceBuildID = "3019035"
 	}
-	state, err := goimagesworkflow.NewState(input)
+	steps, state, err := goimagesworkflow.NewGraphWithCheckpoint(input, nil, disabledGoImagesService{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := coordinator.NewRootStep("Test release", time.Minute, func(context.Context) error { return nil })
-	document, err := goimagessession.NewDocument(input, state, []*coordinator.Step{step}, time.Now())
+	document, err := goimagessession.NewDocument(input, state, steps, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,16 +176,6 @@ func (s *memoryGoImagesSessionStore) Create(
 	}
 	s.records[record.WorkItemID] = record
 	s.nextID++
-	return cloneGoImagesSessionRecord(record), nil
-}
-
-func (s *memoryGoImagesSessionStore) Get(_ context.Context, id int) (*GoImagesSessionRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.records[id]
-	if !ok {
-		return nil, errors.New("go-images session record not found")
-	}
 	return cloneGoImagesSessionRecord(record), nil
 }
 

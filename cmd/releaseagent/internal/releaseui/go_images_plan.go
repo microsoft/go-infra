@@ -160,9 +160,9 @@ func (s *Server) goImagesPlanResponseLocked(restored bool) planResponse {
 	if s.goImages.document != nil {
 		state := s.goImages.document.State
 		if state.Complete {
-			for i := range steps {
-				steps[i].Status = "succeeded"
-			}
+			setPlanStepStatus(steps, "Verify go-images commit is mirrored internally", "succeeded")
+			setPlanStepStatus(steps, "🚀 Queue go-images release", "succeeded")
+			setPlanStepStatus(steps, "⌚ Wait for go-images release", state.Result)
 		} else if state.BuildID != "" {
 			setPlanStepStatus(steps, "Verify go-images commit is mirrored internally", "succeeded")
 			setPlanStepStatus(steps, "🚀 Queue go-images release", "succeeded")

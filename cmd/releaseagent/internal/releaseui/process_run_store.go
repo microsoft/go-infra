@@ -4,13 +4,11 @@
 package releaseui
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -20,7 +18,6 @@ import (
 // ProcessRunStore persists confirmed process runs as explicitly identified work items.
 type ProcessRunStore interface {
 	Create(context.Context, *ProcessRun) (*ProcessRunRecord, error)
-	Get(context.Context, int) (*ProcessRunRecord, error)
 	Update(context.Context, *ProcessRunRecord, *ProcessRun) (*ProcessRunRecord, error)
 }
 
@@ -79,7 +76,6 @@ type ProcessPreparedRun struct {
 
 type releaseWorkItemClient interface {
 	Create(context.Context, string, string, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
-	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
 	Update(context.Context, *azdoworkitem.WorkItem, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
 }
 
@@ -105,14 +101,6 @@ func (s *processRunWorkItemStore) Create(ctx context.Context, run *ProcessRun) (
 		return nil, err
 	}
 	workItem, err := s.client.Create(ctx, "[releaseagent] "+run.View.IntentTitle, s.assignedTo, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return processRunRecord(workItem)
-}
-
-func (s *processRunWorkItemStore) Get(ctx context.Context, workItemID int) (*ProcessRunRecord, error) {
-	workItem, err := s.client.Get(ctx, workItemID)
 	if err != nil {
 		return nil, err
 	}
@@ -159,21 +147,48 @@ func processRunSnapshot(run *ProcessRun) (*azdoworkitem.Snapshot, error) {
 		Test:          run.Test,
 		IntentDigest:  run.Digest,
 		Payload:       payload,
+		Description:   processRunDescription(run),
 	}, nil
+}
+
+func processRunDescription(run *ProcessRun) *azdoworkitem.DescriptionSummary {
+	processName := run.ProcessID
+	if run.ProcessID == "go-infra" {
+		processName = "Go infrastructure"
+	}
+	fields := []azdoworkitem.DescriptionField{
+		{Label: "Intent", Value: run.View.IntentTitle},
+		{Label: "Action", Value: run.Step.Name},
+	}
+	for _, fact := range run.View.Facts {
+		value := fact.Value
+		if fact.Detail != "" {
+			value += " · " + fact.Detail
+		}
+		fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: value, URL: fact.Href})
+	}
+	fields = append(fields, azdoworkitem.DescriptionField{
+		Label: "Target", Value: strings.TrimPrefix(run.Target.LinkLabel, "Open "), URL: run.Target.URL,
+	})
+	if run.External != nil {
+		value := strings.TrimPrefix(run.External.LinkLabel, "Open ")
+		if run.External.Status != "" {
+			value += " · " + run.External.Status
+		}
+		fields = append(fields, azdoworkitem.DescriptionField{
+			Label: "External run", Value: value, URL: run.External.URL,
+		})
+	}
+	return &azdoworkitem.DescriptionSummary{ProcessName: processName, Fields: fields}
 }
 
 func processRunRecord(workItem *azdoworkitem.WorkItem) (*ProcessRunRecord, error) {
 	if workItem == nil || workItem.Snapshot == nil {
 		return nil, errors.New("release work item is empty")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
-	decoder.DisallowUnknownFields()
-	var run ProcessRun
-	if err := decoder.Decode(&run); err != nil {
+	run, err := decodeStrictJSON[ProcessRun](workItem.Snapshot.Payload)
+	if err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode process run: trailing JSON content")
 	}
 	if err := validateProcessRun(&run); err != nil {
 		return nil, fmt.Errorf("validate process run: %w", err)

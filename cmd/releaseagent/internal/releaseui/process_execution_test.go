@@ -172,10 +172,9 @@ func TestProcessRunTimeoutAutomaticallyResumesKnownRun(t *testing.T) {
 	}
 	run.Started = true
 	workItemID := store.seed(run)
-	record, err := store.Get(context.Background(), workItemID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store.mu.Lock()
+	record := cloneProcessRunRecord(store.records[workItemID])
+	store.mu.Unlock()
 	resumeCalls := 0
 	executor := ProcessExecutor{
 		Resume: func(ctx context.Context, _, _ json.RawMessage, checkpoint ProcessCheckpointFunc) error {

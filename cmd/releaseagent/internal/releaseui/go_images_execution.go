@@ -22,15 +22,18 @@ import (
 
 func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 	result := executionResponse{Enabled: s.execution != nil}
+	if s.goImages.record != nil {
+		result.WorkItem = &workItemReference{ID: s.goImages.record.WorkItemID, URL: s.goImages.record.URL}
+	}
 	if s.goImages.document == nil || s.goImages.workflowInput == nil || len(s.steps) == 0 {
 		return result
 	}
 	state := s.goImages.document.State
 	result.Run = pipelineRun{
-		BuildID: state.BuildID, Complete: state.Complete,
+		BuildID: state.BuildID, Result: state.Result, Complete: state.Complete,
 	}
 	if result.Run.BuildID != "" {
-		result.Run.URL = "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + result.Run.BuildID
+		result.Run.URL = goImagesBuildURL(result.Run.BuildID)
 		result.Run.LinkLabel = "Open Azure DevOps run " + result.Run.BuildID
 	}
 	if !result.Enabled {
@@ -78,14 +81,7 @@ func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 	return result
 }
 
-func (s *Server) restoreSession() error {
-	if s.sessionStore == nil || s.goImagesWorkItemID == 0 {
-		return nil
-	}
-	record, err := s.sessionStore.Get(s.ctx, s.goImagesWorkItemID)
-	if err != nil {
-		return fmt.Errorf("load release work item %d: %w", s.goImagesWorkItemID, err)
-	}
+func (s *Server) restoreGoImagesSession(record *GoImagesSessionRecord) error {
 	document := record.Document
 	input := document.Input
 	state := document.State

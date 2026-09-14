@@ -81,6 +81,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return err
 	}
 	options := []releaseui.Option{
+		releaseui.WithReleaseWorkItems(workItems),
 		releaseui.WithSessionStore(goImagesStore),
 		releaseui.WithProcessRunStore(processRunStore),
 		releaseui.WithGoInfraGitHubIntegration(releaseui.GoInfraGitHubIntegration{
@@ -94,11 +95,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 		if err != nil {
 			return fmt.Errorf("select release work item %d: %w", *releaseWorkItem, err)
 		}
-		if selected.Snapshot.ProcessID == "go-images" {
-			options = append(options, releaseui.WithGoImagesWorkItem(*releaseWorkItem))
-		} else {
-			options = append(options, releaseui.WithProcessRunWorkItem(*releaseWorkItem))
-		}
+		options = append(options, releaseui.WithReleaseWorkItem(selected))
 	}
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}

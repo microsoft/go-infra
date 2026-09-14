@@ -152,11 +152,8 @@ func (d *Document) Validate() error {
 	if len(d.Input.Versions) == 0 {
 		return errors.New("session has no release versions")
 	}
-	if _, err := goimagesworkflow.NewState(&d.Input); err != nil {
-		return fmt.Errorf("validate session input: %w", err)
-	}
-	if d.State.InputChecksum == 0 {
-		return errors.New("session state has no input checksum")
+	if err := goimagesworkflow.ValidateState(&d.Input, &d.State); err != nil {
+		return fmt.Errorf("validate session state: %w", err)
 	}
 	if len(d.Plan.Steps) == 0 {
 		return errors.New("session plan has no steps")

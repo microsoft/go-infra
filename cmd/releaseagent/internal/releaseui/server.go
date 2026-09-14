@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
@@ -51,7 +52,7 @@ type goImagesRuntime struct {
 	restored       bool
 }
 
-// Server hosts a single local release session.
+// Server hosts one local release UI instance.
 type Server struct {
 	ctx              context.Context
 	token            string
@@ -60,13 +61,14 @@ type Server struct {
 	activeProcessID  string
 	processExecutors map[string]ProcessExecutor
 	processRunStore  ProcessRunStore
-	processRunItemID int
+	workItems        releaseWorkItemService
+	initialWorkItem  *azdoworkitem.WorkItem
 
-	sessionStore       GoImagesSessionStore
-	goImagesWorkItemID int
-	readOnly           *GoImagesReadOnlyIntegration
-	execution          *GoImagesExecutionIntegration
+	sessionStore GoImagesSessionStore
+	readOnly     *GoImagesReadOnlyIntegration
+	execution    *GoImagesExecutionIntegration
 
+	selectionMu       sync.Mutex
 	mu                sync.Mutex
 	goImages          goImagesRuntime
 	steps             []*coordinator.Step
@@ -134,13 +136,6 @@ func WithSessionStore(store GoImagesSessionStore) Option {
 	}
 }
 
-// WithGoImagesWorkItem selects one go-images work item to restore when the server starts.
-func WithGoImagesWorkItem(workItemID int) Option {
-	return func(server *Server) {
-		server.goImagesWorkItemID = workItemID
-	}
-}
-
 // WithGoImagesReadOnlyIntegration enables current-main resolution and rollback validation.
 func WithGoImagesReadOnlyIntegration(integration GoImagesReadOnlyIntegration) Option {
 	return func(server *Server) {
@@ -183,12 +178,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if server.demoDelay < 0 {
 		return nil, errors.New("demo delay cannot be negative")
 	}
-	if server.goImagesWorkItemID < 0 {
-		return nil, errors.New("go-images work item ID must not be negative")
-	}
-	if server.goImagesWorkItemID > 0 && server.sessionStore == nil {
-		return nil, errors.New("go-images work item selection requires a durable session store")
-	}
 	if server.readOnly != nil {
 		if server.sessionStore == nil {
 			return nil, errors.New("go-images source resolution requires a durable session store")
@@ -210,14 +199,12 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err := server.validateProcessExecutionConfiguration(); err != nil {
 		return nil, err
 	}
-	if err := server.restoreSession(); err != nil {
-		return nil, err
-	}
-	if err := server.restoreProcessRun(); err != nil {
-		return nil, err
-	}
-	if err := server.resumeRestoredMonitoring(); err != nil {
-		return nil, err
+	initialWorkItem := server.initialWorkItem
+	server.initialWorkItem = nil
+	if initialWorkItem != nil {
+		if _, err := server.restoreReleaseWorkItem(initialWorkItem); err != nil {
+			return nil, fmt.Errorf("restore release work item %d: %w", initialWorkItem.ID, err)
+		}
 	}
 	return server, nil
 }
@@ -286,6 +273,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
+	mux.HandleFunc("POST /api/release-work-items/{id}/select", s.handleSelectWorkItem)
+	mux.HandleFunc("GET /api/release-work-items/{id}/export", s.handleExportWorkItem)
+	mux.HandleFunc("POST /api/release-work-items/{id}/import", s.handleImportWorkItem)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
@@ -428,32 +418,43 @@ type pipelineRun struct {
 	BuildID   string `json:"buildId,omitempty"`
 	URL       string `json:"url,omitempty"`
 	LinkLabel string `json:"linkLabel,omitempty"`
+	Result    string `json:"result,omitempty"`
 	Complete  bool   `json:"complete"`
 }
 
+type workItemReference struct {
+	ID  int    `json:"id"`
+	URL string `json:"url"`
+}
+
 type executionResponse struct {
-	Enabled           bool        `json:"enabled"`
-	Eligible          bool        `json:"eligible"`
-	PlanDigest        string      `json:"planDigest,omitempty"`
-	UnavailableReason string      `json:"unavailableReason,omitempty"`
-	Run               pipelineRun `json:"run"`
+	Enabled           bool               `json:"enabled"`
+	Eligible          bool               `json:"eligible"`
+	PlanDigest        string             `json:"planDigest,omitempty"`
+	UnavailableReason string             `json:"unavailableReason,omitempty"`
+	Run               pipelineRun        `json:"run"`
+	WorkItem          *workItemReference `json:"workItem,omitempty"`
 }
 
 type dashboardResponse struct {
-	Ongoing   []releaseSummary `json:"ongoing"`
-	Recent    []releaseSummary `json:"recent"`
-	Processes []processSummary `json:"processes"`
+	Ongoing        []releaseSummary `json:"ongoing"`
+	NeedsAttention []releaseSummary `json:"needsAttention"`
+	Recent         []releaseSummary `json:"recent"`
+	Processes      []processSummary `json:"processes"`
+	TrackingError  string           `json:"trackingError,omitempty"`
 }
 
 type releaseSummary struct {
-	Mark      string    `json:"mark"`
-	Name      string    `json:"name"`
-	Mode      string    `json:"mode,omitempty"`
-	Status    string    `json:"status"`
-	RunID     string    `json:"runId,omitempty"`
-	RunLabel  string    `json:"runLabel,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Href      string    `json:"href"`
+	Mark        string    `json:"mark"`
+	Name        string    `json:"name"`
+	Mode        string    `json:"mode,omitempty"`
+	Status      string    `json:"status"`
+	RunID       string    `json:"runId,omitempty"`
+	RunLabel    string    `json:"runLabel,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	Href        string    `json:"href"`
+	WorkItemID  int       `json:"workItemId,omitempty"`
+	WorkItemURL string    `json:"workItemUrl,omitempty"`
 }
 
 type processSummary struct {
@@ -500,31 +501,37 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 	writeJSON(response, http.StatusOK, detail)
 }
 
-func (s *Server) handleDashboard(response http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
+	if s.workItems != nil {
+		writeJSON(response, http.StatusOK, s.workItemDashboard(request.Context()))
+		return
+	}
 	s.mu.Lock()
 	result := dashboardResponse{
-		Ongoing:   make([]releaseSummary, 0),
-		Recent:    make([]releaseSummary, 0),
-		Processes: s.processes.summaries(),
+		Ongoing:        make([]releaseSummary, 0),
+		NeedsAttention: make([]releaseSummary, 0),
+		Recent:         make([]releaseSummary, 0),
+		Processes:      s.processes.summaries(),
 	}
 	if s.goImages.document != nil {
-		summary := s.releaseSummaryLocked()
-		if s.goImages.document.State.Complete {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.Ongoing = append(result.Ongoing, summary)
-		}
+		addDashboardRelease(&result, s.releaseSummaryLocked())
 	}
 	if s.processRun != nil {
-		summary := s.processRunSummaryLocked()
-		if s.processRun.Complete {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.Ongoing = append(result.Ongoing, summary)
-		}
+		addDashboardRelease(&result, s.processRunSummaryLocked())
 	}
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
+}
+
+func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
+	switch summary.Status {
+	case "succeeded":
+		result.Recent = append(result.Recent, summary)
+	case "failed", "canceled", "uncertain":
+		result.NeedsAttention = append(result.NeedsAttention, summary)
+	default:
+		result.Ongoing = append(result.Ongoing, summary)
+	}
 }
 
 func (s *Server) releaseSummaryLocked() releaseSummary {
@@ -775,7 +782,11 @@ func secureEqual(left, right string) bool {
 }
 
 func decodeJSON(response http.ResponseWriter, request *http.Request, target any) error {
-	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	return decodeJSONLimit(response, request, target, 64<<10)
+}
+
+func decodeJSONLimit(response http.ResponseWriter, request *http.Request, target any, limit int64) error {
+	request.Body = http.MaxBytesReader(response, request.Body, limit)
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
