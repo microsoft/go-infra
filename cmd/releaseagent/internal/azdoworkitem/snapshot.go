@@ -166,6 +166,10 @@ func RenderDescription(snapshot *Snapshot) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return renderDescription(snapshot, data)
+}
+
+func renderDescription(snapshot *Snapshot, data []byte) (string, error) {
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	releaseType := "Release"
 	if snapshot.Test {
