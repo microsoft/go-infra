@@ -50,7 +50,6 @@ type WorkItem struct {
 	ID       int
 	Revision int
 	URL      string
-	Title    string
 	State    string
 	Snapshot *Snapshot
 }
@@ -124,7 +123,7 @@ func (c *Client) Create(ctx context.Context, title, assignedTo string, snapshot 
 	if err != nil {
 		return nil, err
 	}
-	description, err := RenderDescription(snapshot)
+	description, err := renderDescription(snapshotJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +181,7 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	if err != nil {
 		return nil, err
 	}
-	description, err := RenderDescription(snapshot)
+	description, err := renderDescription(snapshotJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +371,7 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	return &WorkItem{
 		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
-		Title: title, State: state, Snapshot: snapshot,
+		State: state, Snapshot: snapshot,
 	}, nil
 }
 
