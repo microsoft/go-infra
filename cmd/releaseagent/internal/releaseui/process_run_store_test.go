@@ -32,10 +32,6 @@ func (f *fakeReleaseWorkItemClient) Create(
 	return f.item, nil
 }
 
-func (f *fakeReleaseWorkItemClient) Get(context.Context, int) (*azdoworkitem.WorkItem, error) {
-	return f.item, nil
-}
-
 func (f *fakeReleaseWorkItemClient) Update(
 	_ context.Context,
 	current *azdoworkitem.WorkItem,
@@ -67,14 +63,6 @@ func TestProcessRunWorkItemStoreRoundTrip(t *testing.T) {
 
 		t.Fatalf("record = %#v, snapshot = %#v", record, client.item.Snapshot)
 	}
-	loaded, err := store.Get(context.Background(), 42)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Run.Digest != run.Digest {
-		t.Fatalf("loaded run = %#v", loaded.Run)
-	}
-
 	run.Complete = true
 	run.Result = "succeeded"
 	run.Checkpoint = json.RawMessage(`{"status":"completed"}`)
@@ -162,16 +150,6 @@ func (s *memoryProcessRunStore) Create(_ context.Context, run *ProcessRun) (*Pro
 	}
 	s.records[record.WorkItemID] = record
 	s.nextID++
-	return cloneProcessRunRecord(record), nil
-}
-
-func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ProcessRunRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.records[id]
-	if !ok {
-		return nil, errors.New("process run record not found")
-	}
 	return cloneProcessRunRecord(record), nil
 }
 

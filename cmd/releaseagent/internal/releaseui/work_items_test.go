@@ -105,6 +105,8 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 	canceledItem.State = "Closed"
 	goImagesDocument := testGoImagesDocument(t)
 	goImagesState := goImagesDocument.State
+	goImagesState.QueueAttempted = true
+	goImagesState.BuildID = "777"
 	goImagesState.Complete = true
 	goImagesState.Result = "succeeded"
 	goImagesDocument, err = goImagesDocument.WithState(&goImagesState, goImagesDocument.UpdatedAt.Add(time.Minute))
@@ -290,13 +292,25 @@ func TestImportRejectsChangedIntentAndInconsistentStatus(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		change func(*workItemExport)
+		change func(*testing.T, *workItemExport)
 	}{
-		{name: "intent", change: func(exported *workItemExport) {
+		{name: "intent", change: func(_ *testing.T, exported *workItemExport) {
 			exported.Snapshot.IntentDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		}},
-		{name: "status", change: func(exported *workItemExport) {
+		{name: "status", change: func(_ *testing.T, exported *workItemExport) {
 			exported.Snapshot.Status = azdoworkitem.StatusSucceeded
+		}},
+		{name: "state checksum", change: func(t *testing.T, exported *workItemExport) {
+			var document goimagessession.Document
+			if err := json.Unmarshal(exported.Snapshot.Payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			document.State.InputChecksum++
+			var err error
+			exported.Snapshot.Payload, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -305,7 +319,7 @@ func TestImportRejectsChangedIntentAndInconsistentStatus(t *testing.T) {
 				t.Fatal(err)
 			}
 			exported := exportWorkItem(item)
-			test.change(&exported)
+			test.change(t, &exported)
 			response := postJSONValue(t, ui, "/api/release-work-items/42/import", exported)
 			response.Body.Close()
 			if response.StatusCode != http.StatusBadRequest {
@@ -327,7 +341,7 @@ func postJSONValue(t *testing.T, ui *testUI, path string, value any) *http.Respo
 func testReleaseWorkItem(id int, snapshot *azdoworkitem.Snapshot, changedAt time.Time) *azdoworkitem.WorkItem {
 	return &azdoworkitem.WorkItem{
 		ID: id, Revision: 1, URL: fmt.Sprintf("https://example.invalid/workitems/%d", id),
-		Title: fmt.Sprintf("Release %d", id), State: testWorkItemState(snapshot.Status),
+		State:     testWorkItemState(snapshot.Status),
 		ChangedAt: changedAt, Snapshot: cloneReleaseSnapshot(snapshot),
 	}
 }

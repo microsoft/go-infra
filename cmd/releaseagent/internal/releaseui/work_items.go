@@ -21,6 +21,7 @@ const (
 
 type releaseWorkItemService interface {
 	releaseWorkItemClient
+	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
 	Query(context.Context, bool, int) ([]*azdoworkitem.WorkItem, error)
 }
 
@@ -28,6 +29,13 @@ type releaseWorkItemService interface {
 func WithReleaseWorkItems(workItems releaseWorkItemService) Option {
 	return func(server *Server) {
 		server.workItems = workItems
+	}
+}
+
+// WithReleaseWorkItem selects an already loaded work item to restore when the server starts.
+func WithReleaseWorkItem(workItem *azdoworkitem.WorkItem) Option {
+	return func(server *Server) {
+		server.initialWorkItem = workItem
 	}
 }
 
@@ -162,27 +170,7 @@ func (s *Server) handleSelectWorkItem(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusConflict, "a release was prepared while the work item was loading")
 		return
 	}
-	var href string
-	if item.Snapshot.ProcessID == goImagesProcessID {
-		s.goImagesWorkItemID = id
-		var record *GoImagesSessionRecord
-		record, err = goImagesSessionRecord(item)
-		if err == nil {
-			err = s.restoreGoImagesSession(record)
-		}
-		if err == nil {
-			err = s.resumeRestoredMonitoring()
-		}
-		href = processPath(goImagesProcessID)
-	} else {
-		s.processRunItemID = id
-		var record *ProcessRunRecord
-		record, err = processRunRecord(item)
-		if err == nil {
-			err = s.restoreProcessRunRecord(record)
-		}
-		href = processPath(item.Snapshot.ProcessID)
-	}
+	href, err := s.restoreReleaseWorkItem(item)
 	if err != nil {
 		s.clearSelectedReleaseLocked()
 		s.mu.Unlock()
@@ -191,6 +179,39 @@ func (s *Server) handleSelectWorkItem(response http.ResponseWriter, request *htt
 	}
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, map[string]string{"href": href})
+}
+
+func (s *Server) restoreReleaseWorkItem(item *azdoworkitem.WorkItem) (string, error) {
+	if item == nil || item.Snapshot == nil {
+		return "", errors.New("release work item is empty")
+	}
+	if item.Snapshot.ProcessID == goImagesProcessID {
+		if s.sessionStore == nil {
+			return "", errors.New("go-images work item selection requires a durable session store")
+		}
+		record, err := goImagesSessionRecord(item)
+		if err != nil {
+			return "", err
+		}
+		if err := s.restoreGoImagesSession(record); err != nil {
+			return "", err
+		}
+		if err := s.resumeRestoredMonitoring(); err != nil {
+			return "", err
+		}
+		return processPath(goImagesProcessID), nil
+	}
+	if s.processRunStore == nil {
+		return "", errors.New("process work item selection requires a durable run store")
+	}
+	record, err := processRunRecord(item)
+	if err != nil {
+		return "", err
+	}
+	if err := s.restoreProcessRunRecord(record); err != nil {
+		return "", err
+	}
+	return processPath(record.Run.ProcessID), nil
 }
 
 func (s *Server) selectedWorkItemHrefLocked(id int) (string, bool) {
@@ -213,10 +234,8 @@ func (s *Server) clearSelectedReleaseLocked() {
 	s.steps = nil
 	s.runner = &coordinator.StepRunner{}
 	s.goImages = goImagesRuntime{}
-	s.goImagesWorkItemID = 0
 	s.processRun = nil
 	s.processRunRecord = nil
-	s.processRunItemID = 0
 }
 
 func (s *Server) handleExportWorkItem(response http.ResponseWriter, request *http.Request) {

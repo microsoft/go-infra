@@ -17,7 +17,6 @@ import (
 // GoImagesSessionStore persists confirmed go-images releases as explicitly identified work items.
 type GoImagesSessionStore interface {
 	Create(context.Context, *goimagessession.Document) (*GoImagesSessionRecord, error)
-	Get(context.Context, int) (*GoImagesSessionRecord, error)
 	Update(context.Context, *GoImagesSessionRecord, *goimagessession.Document) (*GoImagesSessionRecord, error)
 }
 
@@ -56,14 +55,6 @@ func (s *goImagesWorkItemStore) Create(
 	}
 	title := fmt.Sprintf("[releaseagent] Go images %s release: %s", document.Input.Mode, strings.Join(document.Input.Versions, ", "))
 	workItem, err := s.client.Create(ctx, title, s.assignedTo, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return goImagesSessionRecord(workItem)
-}
-
-func (s *goImagesWorkItemStore) Get(ctx context.Context, workItemID int) (*GoImagesSessionRecord, error) {
-	workItem, err := s.client.Get(ctx, workItemID)
 	if err != nil {
 		return nil, err
 	}

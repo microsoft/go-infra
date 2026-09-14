@@ -82,13 +82,6 @@ func WithProcessRunStore(store ProcessRunStore) Option {
 	}
 }
 
-// WithProcessRunWorkItem selects one work item to restore when the server starts.
-func WithProcessRunWorkItem(workItemID int) Option {
-	return func(server *Server) {
-		server.processRunItemID = workItemID
-	}
-}
-
 func (s *Server) validateProcessExecutionConfiguration() error {
 	for processID, executor := range s.processExecutors {
 		definition, ok := s.processes.byID[processID]
@@ -106,12 +99,6 @@ func (s *Server) validateProcessExecutionConfiguration() error {
 	}
 	if s.processRunStore != nil && len(s.processExecutors) == 0 {
 		return errors.New("process run store requires at least one executor")
-	}
-	if s.processRunItemID < 0 {
-		return errors.New("process run work item ID must not be negative")
-	}
-	if s.processRunItemID > 0 && s.processRunStore == nil {
-		return errors.New("process run work item selection requires a durable run store")
 	}
 	return nil
 }
@@ -414,17 +401,6 @@ func (s *Server) executeProcessRun(digest string, runner *coordinator.StepRunner
 	if resumeRunner != nil {
 		go s.executeProcessRun(digest, resumeRunner, resumeStep, executor)
 	}
-}
-
-func (s *Server) restoreProcessRun() error {
-	if s.processRunStore == nil || s.processRunItemID == 0 {
-		return nil
-	}
-	record, err := s.processRunStore.Get(s.ctx, s.processRunItemID)
-	if err != nil {
-		return fmt.Errorf("load release work item %d: %w", s.processRunItemID, err)
-	}
-	return s.restoreProcessRunRecord(record)
 }
 
 func (s *Server) restoreProcessRunRecord(record *ProcessRunRecord) error {

@@ -143,6 +143,34 @@ func TestDescriptionRejectsInvalidSummary(t *testing.T) {
 	}
 }
 
+func TestDescriptionEscapesStateMarkerInSummary(t *testing.T) {
+	snapshot := &Snapshot{
+		SchemaVersion: CurrentSchemaVersion,
+		ProcessID:     "go-infra",
+		Status:        StatusStarting,
+		IntentDigest:  testDigest,
+		Payload:       json.RawMessage(`{"action":"manual-dispatch"}`),
+		Description: &DescriptionSummary{
+			ProcessName: "Go infrastructure " + descriptionMarker,
+			Fields: []DescriptionField{{
+				Label: descriptionMarker,
+				Value: "PR title containing " + descriptionMarker,
+				URL:   "https://example.invalid/" + descriptionMarker,
+			}},
+		},
+	}
+	description, err := RenderDescription(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(description, descriptionMarker) != 1 || !strings.Contains(description, "releaseagent-state-v1&#58;") {
+		t.Fatalf("description contains an ambiguous state marker: %q", description)
+	}
+	if _, err := ParseDescription(description); err != nil {
+		t.Fatalf("parse description with escaped summary marker: %v", err)
+	}
+}
+
 func TestDescriptionLabelsTestRun(t *testing.T) {
 	description, err := RenderDescription(&Snapshot{
 		SchemaVersion: CurrentSchemaVersion,

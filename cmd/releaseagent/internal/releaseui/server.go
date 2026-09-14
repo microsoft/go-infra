@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
@@ -60,13 +61,12 @@ type Server struct {
 	activeProcessID  string
 	processExecutors map[string]ProcessExecutor
 	processRunStore  ProcessRunStore
-	processRunItemID int
 	workItems        releaseWorkItemService
+	initialWorkItem  *azdoworkitem.WorkItem
 
-	sessionStore       GoImagesSessionStore
-	goImagesWorkItemID int
-	readOnly           *GoImagesReadOnlyIntegration
-	execution          *GoImagesExecutionIntegration
+	sessionStore GoImagesSessionStore
+	readOnly     *GoImagesReadOnlyIntegration
+	execution    *GoImagesExecutionIntegration
 
 	selectionMu       sync.Mutex
 	mu                sync.Mutex
@@ -136,13 +136,6 @@ func WithSessionStore(store GoImagesSessionStore) Option {
 	}
 }
 
-// WithGoImagesWorkItem selects one go-images work item to restore when the server starts.
-func WithGoImagesWorkItem(workItemID int) Option {
-	return func(server *Server) {
-		server.goImagesWorkItemID = workItemID
-	}
-}
-
 // WithGoImagesReadOnlyIntegration enables current-main resolution and rollback validation.
 func WithGoImagesReadOnlyIntegration(integration GoImagesReadOnlyIntegration) Option {
 	return func(server *Server) {
@@ -185,12 +178,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if server.demoDelay < 0 {
 		return nil, errors.New("demo delay cannot be negative")
 	}
-	if server.goImagesWorkItemID < 0 {
-		return nil, errors.New("go-images work item ID must not be negative")
-	}
-	if server.goImagesWorkItemID > 0 && server.sessionStore == nil {
-		return nil, errors.New("go-images work item selection requires a durable session store")
-	}
 	if server.readOnly != nil {
 		if server.sessionStore == nil {
 			return nil, errors.New("go-images source resolution requires a durable session store")
@@ -212,14 +199,12 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err := server.validateProcessExecutionConfiguration(); err != nil {
 		return nil, err
 	}
-	if err := server.restoreSession(); err != nil {
-		return nil, err
-	}
-	if err := server.restoreProcessRun(); err != nil {
-		return nil, err
-	}
-	if err := server.resumeRestoredMonitoring(); err != nil {
-		return nil, err
+	initialWorkItem := server.initialWorkItem
+	server.initialWorkItem = nil
+	if initialWorkItem != nil {
+		if _, err := server.restoreReleaseWorkItem(initialWorkItem); err != nil {
+			return nil, fmt.Errorf("restore release work item %d: %w", initialWorkItem.ID, err)
+		}
 	}
 	return server, nil
 }

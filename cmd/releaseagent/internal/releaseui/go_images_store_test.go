@@ -33,10 +33,6 @@ func (f *fakeGoImagesWorkItemClient) Create(
 	return f.item, nil
 }
 
-func (f *fakeGoImagesWorkItemClient) Get(context.Context, int) (*azdoworkitem.WorkItem, error) {
-	return f.item, nil
-}
-
 func (f *fakeGoImagesWorkItemClient) Update(
 	_ context.Context,
 	current *azdoworkitem.WorkItem,
@@ -180,16 +176,6 @@ func (s *memoryGoImagesSessionStore) Create(
 	}
 	s.records[record.WorkItemID] = record
 	s.nextID++
-	return cloneGoImagesSessionRecord(record), nil
-}
-
-func (s *memoryGoImagesSessionStore) Get(_ context.Context, id int) (*GoImagesSessionRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.records[id]
-	if !ok {
-		return nil, errors.New("go-images session record not found")
-	}
 	return cloneGoImagesSessionRecord(record), nil
 }
 

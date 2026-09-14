@@ -62,6 +62,7 @@ func TestDocumentPlanFingerprint(t *testing.T) {
 func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
 	document := testDocument(t)
 	state := document.State
+	state.QueueAttempted = true
 	state.BuildID = "42"
 	updatedAt := document.UpdatedAt.Add(time.Minute)
 	updated, err := document.WithState(&state, updatedAt)
@@ -87,6 +88,27 @@ func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 	document.Input.SourceVersion = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
 	if err := document.Validate(); err == nil {
 		t.Fatal("modified immutable input unexpectedly passed validation")
+	}
+}
+
+func TestDocumentRejectsInvalidState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*goimagesworkflow.State)
+	}{
+		{name: "checksum", change: func(state *goimagesworkflow.State) { state.InputChecksum++ }},
+		{name: "build ID", change: func(state *goimagesworkflow.State) {
+			state.QueueAttempted = true
+			state.BuildID = "invalid"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			document := testDocument(t)
+			test.change(&document.State)
+			if err := document.Validate(); err == nil {
+				t.Fatalf("document with invalid %s unexpectedly passed validation", test.name)
+			}
+		})
 	}
 }
 

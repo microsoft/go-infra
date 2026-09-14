@@ -81,17 +81,6 @@ func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 	return result
 }
 
-func (s *Server) restoreSession() error {
-	if s.sessionStore == nil || s.goImagesWorkItemID == 0 {
-		return nil
-	}
-	record, err := s.sessionStore.Get(s.ctx, s.goImagesWorkItemID)
-	if err != nil {
-		return fmt.Errorf("load release work item %d: %w", s.goImagesWorkItemID, err)
-	}
-	return s.restoreGoImagesSession(record)
-}
-
 func (s *Server) restoreGoImagesSession(record *GoImagesSessionRecord) error {
 	document := record.Document
 	input := document.Input

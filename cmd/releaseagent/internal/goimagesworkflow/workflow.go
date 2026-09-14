@@ -180,7 +180,7 @@ func NewGraphWithCheckpoint(
 	if state == nil {
 		state, err = NewState(input)
 	} else {
-		state, err = validateState(input, state)
+		err = ValidateState(input, state)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -268,16 +268,47 @@ func NewState(input *Input) (*State, error) {
 	return &State{InputChecksum: checksum}, nil
 }
 
-func validateState(input *Input, state *State) (*State, error) {
+// ValidateState checks that state can result from this workflow or an explicit uncertain repair.
+func ValidateState(input *Input, state *State) error {
+	if state == nil {
+		return errors.New("go-images state is nil")
+	}
 	initialized, err := NewState(input)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	checksum := initialized.InputChecksum
 	if state.InputChecksum != checksum {
-		return nil, fmt.Errorf("go-images input does not match initial input: expected checksum %v, got %v", state.InputChecksum, checksum)
+		return fmt.Errorf("go-images input does not match initial input: expected checksum %v, got %v", checksum, state.InputChecksum)
 	}
-	return state, nil
+	if state.BuildID != "" {
+		buildID, err := strconv.Atoi(state.BuildID)
+		if err != nil || buildID <= 0 {
+			return fmt.Errorf("go-images state has invalid build ID %q", state.BuildID)
+		}
+		if !state.QueueAttempted {
+			return errors.New("go-images state has a build before queue intent")
+		}
+	}
+	if !state.Complete {
+		if state.Result != "" {
+			return errors.New("incomplete go-images state has a result")
+		}
+		return nil
+	}
+	if !state.QueueAttempted {
+		return errors.New("completed go-images state has no queue intent")
+	}
+	switch state.Result {
+	case "succeeded", "failed", "canceled":
+		if state.BuildID == "" {
+			return errors.New("completed go-images state has no build ID")
+		}
+	case "uncertain":
+	default:
+		return fmt.Errorf("completed go-images state has invalid result %q", state.Result)
+	}
+	return nil
 }
 
 func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, checkpoint CheckpointFunc) {

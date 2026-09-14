@@ -391,11 +391,15 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 		t.Fatal(err)
 	}
 	workItemID := store.seed(document)
+	snapshot, err := goImagesSnapshot(document)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	second := newTestUI(t,
 		WithSessionStore(store),
-		WithGoImagesWorkItem(workItemID),
+		WithReleaseWorkItem(testReleaseWorkItem(workItemID, snapshot, time.Now())),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {

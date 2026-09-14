@@ -18,7 +18,6 @@ import (
 // ProcessRunStore persists confirmed process runs as explicitly identified work items.
 type ProcessRunStore interface {
 	Create(context.Context, *ProcessRun) (*ProcessRunRecord, error)
-	Get(context.Context, int) (*ProcessRunRecord, error)
 	Update(context.Context, *ProcessRunRecord, *ProcessRun) (*ProcessRunRecord, error)
 }
 
@@ -77,7 +76,6 @@ type ProcessPreparedRun struct {
 
 type releaseWorkItemClient interface {
 	Create(context.Context, string, string, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
-	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
 	Update(context.Context, *azdoworkitem.WorkItem, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
 }
 
@@ -103,14 +101,6 @@ func (s *processRunWorkItemStore) Create(ctx context.Context, run *ProcessRun) (
 		return nil, err
 	}
 	workItem, err := s.client.Create(ctx, "[releaseagent] "+run.View.IntentTitle, s.assignedTo, snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return processRunRecord(workItem)
-}
-
-func (s *processRunWorkItemStore) Get(ctx context.Context, workItemID int) (*ProcessRunRecord, error) {
-	workItem, err := s.client.Get(ctx, workItemID)
 	if err != nil {
 		return nil, err
 	}

@@ -204,12 +204,12 @@ func renderDescription(snapshot *Snapshot, data []byte) (string, error) {
 
 func writeDescriptionField(description *strings.Builder, field DescriptionField) {
 	description.WriteString("<tr><td><strong>")
-	description.WriteString(html.EscapeString(strings.TrimSpace(field.Label)))
+	description.WriteString(escapeDescriptionHTML(strings.TrimSpace(field.Label)))
 	description.WriteString("</strong></td><td>")
-	value := html.EscapeString(strings.TrimSpace(field.Value))
+	value := escapeDescriptionHTML(strings.TrimSpace(field.Value))
 	if field.URL != "" {
 		description.WriteString(`<a href="`)
-		description.WriteString(html.EscapeString(field.URL))
+		description.WriteString(escapeDescriptionHTML(field.URL))
 		description.WriteString(`">`)
 		description.WriteString(value)
 		description.WriteString("</a>")
@@ -217,6 +217,10 @@ func writeDescriptionField(description *strings.Builder, field DescriptionField)
 		description.WriteString(value)
 	}
 	description.WriteString("</td></tr>")
+}
+
+func escapeDescriptionHTML(value string) string {
+	return strings.ReplaceAll(html.EscapeString(value), descriptionMarker, "releaseagent-state-v1&#58;")
 }
 
 func statusLabel(status Status) string {
