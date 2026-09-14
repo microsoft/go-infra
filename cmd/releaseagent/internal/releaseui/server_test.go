@@ -13,13 +13,11 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/coordinator"
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagesworkflow"
 )
 
@@ -285,10 +283,7 @@ func TestPreflightIsLocalAndExecutionDisabled(t *testing.T) {
 }
 
 func TestExecutionOptionRequiresReadOnlyValidation(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	execution := GoImagesExecutionIntegration{
 		NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
 			return &fakeExecutionService{}, nil
@@ -313,10 +308,7 @@ func TestPrepareReleaseModes(t *testing.T) {
 		{name: "test", body: `{"mode":"test"}`, wantMode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			store := newMemoryGoImagesSessionStore()
 			source := GoImagesSource{
 				Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2", "1.25.12-1"},
 			}
@@ -338,22 +330,15 @@ func TestPrepareReleaseModes(t *testing.T) {
 			if (len(plan.View.Facts) == 2) != test.wantRollback || rollbackCalls != boolInt(test.wantRollback) {
 				t.Fatalf("facts = %#v, rollback calls = %d", plan.View.Facts, rollbackCalls)
 			}
-			persisted, err := store.Load(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if persisted.Input.Mode != test.wantMode || persisted.Input.SourceVersion != testSourceCommit {
-				t.Fatalf("persisted input = %#v", persisted.Input)
+			if count := store.count(); count != 0 {
+				t.Fatalf("work item count after preparation = %d, want 0", count)
 			}
 		})
 	}
 }
 
 func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	for _, body := range []string{
@@ -370,66 +355,47 @@ func TestPlanRejectsInputsOutsideSelectedMode(t *testing.T) {
 	}
 }
 
-func TestPersistAndRestoreModePlan(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestUnconfirmedGoImagesPlanIsNotPersisted(t *testing.T) {
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	created := createTestPlan(t, first, `{"mode":"test"}`)
-	if created.SessionID == "" || strings.Contains(created.View.Subtitle, "restored from disk") {
+	if created.SessionID == "" || strings.Contains(created.View.Subtitle, "restored from work item") {
 		t.Fatalf("created = %#v", created)
+	}
+	if count := store.count(); count != 0 {
+		t.Fatalf("work item count after preparation = %d, want 0", count)
 	}
 	second := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	response, err := second.client.Get(second.http.URL + testGoImagesAPI + "/plan")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var restored planResponse
-	decodeResponse(t, response, &restored)
-	if !strings.Contains(restored.View.Subtitle, "restored from disk") || restored.SessionID != created.SessionID ||
-		restored.Input.Mode != goimagesworkflow.ModeTest {
-
-		t.Fatalf("restored = %#v", restored)
-	}
-	response, err = second.client.Get(second.http.URL + "/api/dashboard")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var dashboard dashboardResponse
-	decodeResponse(t, response, &dashboard)
-	if len(dashboard.Ongoing) != 1 || dashboard.Ongoing[0].Status != "ready" {
-		t.Fatalf("dashboard = %#v", dashboard)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("restored plan status = %d, want %d", response.StatusCode, http.StatusNoContent)
 	}
 }
 
 func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, first, `{"mode":"test"}`)
-	document, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	document := cloneGoImagesDocument(first.server.goImages.document)
 	state := document.State
 	state.QueueAttempted = true
 	state.BuildID = "888"
-	document, err = document.WithState(&state, time.Now())
+	document, err := document.WithState(&state, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), document); err != nil {
-		t.Fatal(err)
-	}
+	workItemID := store.seed(document)
 
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	second := newTestUI(t,
 		WithSessionStore(store),
+		WithGoImagesWorkItem(workItemID),
 		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
 		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
 			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
@@ -441,10 +407,7 @@ func TestRestoredQueuedReleaseAutomaticallyResumesMonitoring(t *testing.T) {
 	if service.mirrors != 0 || service.queued != 0 || service.polled != 1 {
 		t.Fatalf("mirrors = %d, queued = %d, polled = %d", service.mirrors, service.queued, service.polled)
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
+	persisted := store.latest(t)
 	if !persisted.State.Complete || persisted.State.Result != "succeeded" {
 		t.Fatalf("persisted state = %#v", persisted.State)
 	}
@@ -457,6 +420,7 @@ type fakeExecutionService struct {
 	mode        goimagesworkflow.Mode
 	sourceBuild string
 	mirrorErr   error
+	beforeQueue func()
 }
 
 func (s *fakeExecutionService) PollMirror(_ context.Context, commit string) error {
@@ -468,6 +432,9 @@ func (s *fakeExecutionService) PollMirror(_ context.Context, commit string) erro
 }
 
 func (s *fakeExecutionService) QueuePipeline(_ context.Context, parameters map[string]string) (string, error) {
+	if s.beforeQueue != nil {
+		s.beforeQueue()
+	}
 	s.queued++
 	want, err := goimagesworkflow.PipelineParameters(s.mode, s.sourceBuild)
 	if err != nil {
@@ -488,12 +455,15 @@ func (s *fakeExecutionService) PollPipeline(_ context.Context, buildID string) e
 }
 
 func TestRealReleaseRequiresExactIntent(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
-	service := &fakeExecutionService{mode: goimagesworkflow.ModeNormal}
+	workItemCreatedBeforeQueue := false
+	service := &fakeExecutionService{
+		mode: goimagesworkflow.ModeNormal,
+		beforeQueue: func() {
+			workItemCreatedBeforeQueue = store.count() == 1
+		},
+	}
 	preflightCalls := 0
 	readOnly := testReadOnly(&source, nil)
 	readOnly.Preflight = func(context.Context) (string, error) {
@@ -546,10 +516,10 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	if preflightCalls != 2 || service.mirrors != 1 || service.queued != 1 || service.polled != 1 {
 		t.Fatalf("preflights = %d, mirrors = %d, queued = %d, polled = %d", preflightCalls, service.mirrors, service.queued, service.polled)
 	}
-	persisted, err := store.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if !workItemCreatedBeforeQueue {
+		t.Fatal("go-images pipeline was queued before its release work item was created")
 	}
+	persisted := store.latest(t)
 	if !persisted.State.QueueAttempted || persisted.State.BuildID != "888" ||
 		!persisted.State.Complete || persisted.State.Result != "succeeded" {
 
@@ -566,11 +536,29 @@ func TestRealReleaseRequiresExactIntent(t *testing.T) {
 	}
 }
 
-func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
+func TestGoImagesWorkItemCreationFailurePreventsQueue(t *testing.T) {
+	store := newMemoryGoImagesSessionStore()
+	store.createErr = errors.New("tracking unavailable")
+	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
+	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
+	ui := newTestUI(t,
+		WithSessionStore(store),
+		WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)),
+		WithGoImagesExecutionIntegration(GoImagesExecutionIntegration{
+			NewService: func(GoImagesExecutionRequest) (goimagesworkflow.Service, error) { return service, nil },
+		}),
+	)
+	plan := createTestPlan(t, ui, `{"mode":"test"}`)
+	body, _ := json.Marshal(releaseStartRequest{PlanDigest: plan.Execution.PlanDigest, Confirmed: true})
+	response := postJSON(t, ui, testGoImagesAPI+"/start", string(body))
+	response.Body.Close()
+	if response.StatusCode != http.StatusInternalServerError || service.mirrors != 0 || service.queued != 0 || store.count() != 0 {
+		t.Fatalf("status = %d, mirrors = %d, queued = %d, records = %d", response.StatusCode, service.mirrors, service.queued, store.count())
 	}
+}
+
+func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{
 		mode:      goimagesworkflow.ModeNormal,
@@ -599,10 +587,7 @@ func TestReleaseDoesNotQueueWhenMirrorVerificationFails(t *testing.T) {
 }
 
 func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	service := &fakeExecutionService{mode: goimagesworkflow.ModeTest}
 	ui := newTestUI(t,
@@ -623,10 +608,7 @@ func TestReleaseRejectsWhenMainAdvances(t *testing.T) {
 }
 
 func TestCreatePlanAndRunSimulation(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	plan := createTestPlan(t, ui, `{"mode":"normal"}`)
@@ -664,10 +646,7 @@ func TestCreatePlanAndRunSimulation(t *testing.T) {
 }
 
 func TestEventsSendInitialSnapshot(t *testing.T) {
-	store, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "release-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	ui := newTestUI(t, WithSessionStore(store), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, ui, `{"mode":"normal"}`)

@@ -5,7 +5,7 @@ The server runs on the release runner's machine and opens in their default brows
 
 `releaseagent serve` starts the local release UI.
 
-The landing page lists the two implemented release processes. Go images provides local planning,
+The landing page lists the two implemented release processes. Go images provides planning,
 execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two
 GitHub-owned patch release paths documented by the team.
 
@@ -64,7 +64,8 @@ It offers three explicit modes:
   It then uses that ID as `sourceBuildPipelineRunId` and publishes to `public/`.
   The build ID is the only editable pipeline input.
 * **Test** resolves the current `microsoft/main` tip, builds fresh images, and fixes `publishRepoPrefix` to `dev/`.
-  It still queues a real official build and may consume signing and agent resources, but it does not publish under `public/`.
+  It still queues a real official build, creates a `releaseagent-test` work item when confirmed, and
+  may consume signing and agent resources, but it does not publish under `public/`.
 
 The pipeline declares `publishRepoPrefix` as an unrestricted string whose official default is `public/`.
 The release execution layer independently allowlists exactly `public/` for normal and rollback and `dev/` for test; arbitrary prefixes never cross the browser/API boundary.
@@ -86,8 +87,9 @@ and exposes both supported paths:
 
 * **Release on merge** accepts one pull request number. The server verifies that the PR is open, targets `main`, and is not from a fork, then prepares a request to add the `release-on-merge` label. Starting the action rechecks the exact PR head SHA. The UI never merges the PR; the existing workflow creates the release only after the labeled PR is merged.
 * **Manual patch release** dispatches only `create-go-infra-patch-release.yml` on `main`. Dry-run
-  mode sets `dry-run` to `true` and only calculates the next version. Publish mode sets it to
-  `false` and can create the next patch release. After GitHub accepts the dispatch, the server
+  mode sets `dry-run` to `true`, calculates the next version, and creates a `releaseagent-test` work
+  item when confirmed. Publish mode sets it to `false` and can create the next patch release. After
+  GitHub accepts the dispatch, the server
   discovers the new run, checkpoints its ID and URL, and polls it to a terminal conclusion. GitHub's workflow dispatch endpoint does not return a run ID, so the UI supplies a random token as the run title and matches that exact title. If a monitoring interval times out, polling continues from the checkpointed run ID. The dashboard reports the final result.
 
 Both paths require an authenticated `gh` CLI, a reviewed plan, and a separate confirmation click.
@@ -102,22 +104,13 @@ Start the release UI without additional storage configuration:
 go run ./cmd/releaseagent serve
 ```
 
-Authenticate `az` before using Azure-backed go-images actions and `gh` before using GitHub-backed
-go-infra actions. Missing authentication is reported by process preflight; it does not require a
-different server startup mode.
-
-Go-images still stores its durable session under the operating system's user configuration
-directory. Use `-session-file` only to override that location:
-
-```console
-go run ./cmd/releaseagent serve \
-  -session-file /path/to/release-session.json
-```
-
-Generic actions do not use the session file. Each confirmed action creates a tagged DEVDIV `Issue`
-under `DevDiv\GoLang`. To restore one explicitly, add `-release-work-item <id>`. Starting the server
-does not perform an external action. Opening the go-infra page performs read-only preflight checks;
-a mutation still requires preparing the exact request and confirming it.
+Authenticate `az` before starting the UI and `gh` before using GitHub-backed go-infra actions. Each
+confirmed execution creates a tagged DEVDIV `Issue` under `DevDiv\GoLang`; this includes go-images
+test mode and go-infra dry-run mode. Those two modes also receive the `releaseagent-test` tag.
+Simulations and unconfirmed plans remain in memory and create no work item. To restore one
+explicitly, add `-release-work-item <id>`. Starting the server does not perform an external action.
+Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
+the exact request and confirming it.
 
 Releaseagent owns `System.Description` on generic-action work items. It stores a visible managed-state
 notice followed by base64url-encoded canonical JSON so Azure DevOps HTML normalization cannot alter
@@ -143,27 +136,25 @@ The generated `Build.Parameters` field can carry the legacy correlation variable
 ## Durability and duplicate prevention
 
 The focused graph checkpoints queue intent **before** issuing the Azure POST, then checkpoints the returned build ID and successful completion.
-Correlation variables bind an Azure run to the local session, release mode, execution digest, source build, source commit, and version metadata.
+Correlation variables bind an Azure run to the release session ID, release mode, execution digest, source build, source commit, and version metadata.
 If the process restarts in the queue-response crash window, it reconciles recent runs before attempting another POST.
 
 When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
-The go-images session document is schema-versioned, structurally fingerprinted, atomically replaced, and protected from concurrent cooperative processes by an adjacent lease file.
+The go-images session document is schema-versioned and structurally fingerprinted. The release UI
+stores it in the selected Azure DevOps work item and checks the work item revision on every update.
 It contains no credentials.
 Schema version 8 stores only standalone go-images input and state. It intentionally rejects the
 older full-release-shaped prototype documents rather than retaining a second domain model and
-migration path. Workflow revision 8 uses unique step names as graph identity. Start with a new
-session file when either version is unsupported.
+migration path. Workflow revision 8 uses unique step names as graph identity. An incompatible work
+item cannot be restored by the current releaseagent.
 
-The current server runs one selected release at a time. Go-images state remains in its session file.
-Generic action state lives only in the selected Azure DevOps work item. The shared executor creates
-the work item before calling the target service, updates it with an Azure DevOps revision check, and
-resumes monitoring a known external run after explicit restore. If a run cannot be correlated, the
-restored action becomes `uncertain` and refuses a replacement.
-
-If a process terminates without cleaning up its lease, verify no release UI process is using the
-session and remove the adjacent `.lock` file manually.
+The current server runs one selected release at a time. Go-images and generic action state live only
+in the selected Azure DevOps work item. The server creates the work item before calling the target
+service, updates it with an Azure DevOps revision check, and resumes monitoring a known external run
+after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and
+refuses a replacement.
 
 ## Security boundaries
 
@@ -175,6 +166,6 @@ session and remove the adjacent `.lock` file manually.
 * Go-infra uses the locally authenticated `gh` CLI. JSON mutation bodies are sent through stdin, and the GitHub host, repository, ref, label, and workflow are hardcoded server-side.
 * The generic Azure pipeline client is read-only.
 * The dedicated queue client can only POST definition `1023` on `refs/heads/microsoft/main` with a server-derived normal, rollback, or test parameter set.
-* The durable session stores non-secret input, state, structural and execution digests, and no credentials.
+* Release work items store non-secret input, state, structural and execution digests, and no credentials.
 
 See [ADR 0020: Create UI for release management](https://github.com/microsoft/go-lab/blob/main/docs/adr/0020-microsoft-release-ui-for-go.md) for the accepted local-server design.

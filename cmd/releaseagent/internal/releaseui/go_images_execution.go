@@ -79,16 +79,14 @@ func (s *Server) goImagesExecutionResponseLocked() executionResponse {
 }
 
 func (s *Server) restoreSession() error {
-	if s.sessionStore == nil {
+	if s.sessionStore == nil || s.goImagesWorkItemID == 0 {
 		return nil
 	}
-	document, err := s.sessionStore.Load(s.ctx)
-	if errors.Is(err, goimagessession.ErrNotFound) {
-		return nil
-	}
+	record, err := s.sessionStore.Get(s.ctx, s.goImagesWorkItemID)
 	if err != nil {
-		return fmt.Errorf("load release session: %w", err)
+		return fmt.Errorf("load release work item %d: %w", s.goImagesWorkItemID, err)
 	}
+	document := record.Document
 	input := document.Input
 	state := document.State
 	steps, restoredState, err := goimagesworkflow.NewGraphWithCheckpoint(
@@ -117,6 +115,7 @@ func (s *Server) restoreSession() error {
 	s.goImages.workflowInput = &input
 	s.goImages.workflowState = restoredState
 	s.goImages.document = document
+	s.goImages.record = record
 	s.runner = &coordinator.StepRunner{}
 	s.goImages.restored = true
 	s.activeProcessID = goImagesProcessID
@@ -183,19 +182,21 @@ func (s *Server) checkpointReleaseState(ctx context.Context, state *goimageswork
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sessionStore == nil {
-		return nil
+		return errors.New("go-images session store is unavailable")
 	}
-	if s.goImages.document == nil {
-		return errors.New("cannot checkpoint release state before creating a session document")
+	if s.goImages.document == nil || s.goImages.record == nil {
+		return errors.New("cannot checkpoint release state before creating a release work item")
 	}
 	document, err := s.goImages.document.WithState(state, time.Now())
 	if err != nil {
 		return fmt.Errorf("update release session document: %w", err)
 	}
-	if err := s.sessionStore.Save(ctx, document); err != nil {
+	record, err := s.sessionStore.Update(ctx, s.goImages.record, document)
+	if err != nil {
 		return fmt.Errorf("persist release state checkpoint: %w", err)
 	}
-	s.goImages.document = document
+	s.goImages.record = record
+	s.goImages.document = record.Document
 	return nil
 }
 
@@ -262,6 +263,7 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 	newService := s.execution.NewService
 	input := *s.goImages.workflowInput
 	state := s.goImages.workflowState
+	document := s.goImages.document
 	previousQueueAttempt := state.QueueAttempted
 	sessionID := s.goImages.document.ID
 	expectedPlan := s.goImages.document.Plan
@@ -319,10 +321,18 @@ func (s *Server) handleReleaseStart(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusConflict, "go-images execution graph no longer matches the confirmed plan")
 		return
 	}
+	record, err := s.sessionStore.Create(request.Context(), document)
+	if err != nil {
+		s.finishRelease()
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release work item before mutation: %v", err))
+		return
+	}
 
 	s.mu.Lock()
 	s.steps = steps
 	s.goImages.workflowState = state
+	s.goImages.record = record
+	s.goImages.document = record.Document
 	s.runner = &coordinator.StepRunner{}
 	runner := s.runner
 	s.mu.Unlock()

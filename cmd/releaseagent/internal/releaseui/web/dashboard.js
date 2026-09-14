@@ -9,7 +9,7 @@ loadDashboard();
 
 async function loadDashboard() {
   const dashboardState = await requestJSON("/api/dashboard");
-  renderReleases(ongoingReleases, dashboardState.ongoing, "No release is currently being tracked in this local session.");
+  renderReleases(ongoingReleases, dashboardState.ongoing, "No release work item is currently selected.");
   processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
   recentSection.hidden = dashboardState.recent.length === 0;
   renderReleases(recentReleases, dashboardState.recent, "");
