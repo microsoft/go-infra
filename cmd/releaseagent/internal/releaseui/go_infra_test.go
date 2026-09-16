@@ -121,10 +121,7 @@ func testGoInfraPullRequest() GoInfraPullRequest {
 
 func testGoInfraOptions(t *testing.T, github *fakeGoInfraGitHub) []Option {
 	t.Helper()
-	store, err := NewProcessRunFileStore(filepath.Join(t.TempDir(), "process-run.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newMemoryProcessRunStore()
 	return []Option{WithProcessRunStore(store), WithGoInfraGitHubIntegration(github.integration())}
 }
 
@@ -266,6 +263,34 @@ func TestGoInfraWorkflowDispatchModes(t *testing.T) {
 				plan.Execution.Run.URL != "https://github.com/microsoft/go-infra/actions/runs/123" {
 
 				t.Fatalf("completed plan = %#v", plan)
+			}
+		})
+	}
+}
+
+func TestGoInfraTestClassification(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "dry-run", input: `{"action":"manual-dispatch","dispatchMode":"dry-run"}`, want: true},
+		{name: "publish", input: `{"action":"manual-dispatch","dispatchMode":"publish"}`},
+		{name: "release-on-merge", input: `{"action":"release-on-merge","pullRequest":"42"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
+			ui := newTestUI(t, testGoInfraOptions(t, github)...)
+			response := postJSON(t, ui, "/api/processes/go-infra/plan", test.input)
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("plan status = %d", response.StatusCode)
+			}
+			ui.server.mu.Lock()
+			got := ui.server.processRun.Test
+			ui.server.mu.Unlock()
+			if got != test.want {
+				t.Fatalf("processRun.Test = %v, want %v", got, test.want)
 			}
 		})
 	}
