@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/identity"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/location"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/webapi"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/workitemtracking"
 )
@@ -18,6 +20,14 @@ import (
 type staticToken string
 
 func (t staticToken) Token(context.Context) (string, error) { return string(t), nil }
+
+type fakeLocationClient struct {
+	get func(context.Context, location.GetConnectionDataArgs) (*location.ConnectionData, error)
+}
+
+func (f fakeLocationClient) GetConnectionData(ctx context.Context, args location.GetConnectionDataArgs) (*location.ConnectionData, error) {
+	return f.get(ctx, args)
+}
 
 type fakeClient struct {
 	create func(context.Context, workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error)
@@ -50,17 +60,19 @@ func (f *fakeClient) UpdateWorkItem(ctx context.Context, args workitemtracking.U
 func TestCreateUsesFixedMetadata(t *testing.T) {
 	snapshot := testSnapshot(StatusStarting)
 	sdk := &fakeClient{create: func(_ context.Context, args workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Task" || args.Document == nil {
+		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Issue" || args.Document == nil {
 			t.Fatalf("create args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Add, "/fields/System.Title", "Go images test release")
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.AreaPath", AreaPath)
 		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag)
-		assertPatch(t, *args.Document, 3, webapi.OperationValues.Add, "/fields/System.Description", mustRenderDescription(t, snapshot))
+		assertPatch(t, *args.Document, 3, webapi.OperationValues.Add, "/fields/System.AssignedTo", "Release Operator")
+		assertPatch(t, *args.Document, 4, webapi.OperationValues.Add, "/fields/System.State", "Active")
+		assertPatch(t, *args.Document, 5, webapi.OperationValues.Add, "/fields/System.Description", mustRenderDescription(t, snapshot))
 		return sdkWorkItem(t, 42, 1, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
-	item, err := client.Create(context.Background(), "Go images test release", snapshot)
+	item, err := client.Create(context.Background(), "Go images test release", "Release Operator", snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +92,7 @@ func TestCreateAddsTestTag(t *testing.T) {
 		return sdkWorkItem(t, 42, 1, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
-	item, err := client.Create(context.Background(), "Go images test release", snapshot)
+	item, err := client.Create(context.Background(), "Go images test release", "Release Operator", snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,13 +115,31 @@ func TestGetRejectsMismatchedTestTag(t *testing.T) {
 	}
 }
 
+func TestCurrentUser(t *testing.T) {
+	name := "Release Operator"
+	client := newTestClient(t, &fakeClient{}, "test-token")
+	client.newLocation = func(context.Context) (locationClient, string, error) {
+		return fakeLocationClient{get: func(context.Context, location.GetConnectionDataArgs) (*location.ConnectionData, error) {
+			return &location.ConnectionData{AuthenticatedUser: &identity.Identity{ProviderDisplayName: &name}}, nil
+		}}, "test-token", nil
+	}
+	got, err := client.CurrentUser(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != name {
+		t.Fatalf("CurrentUser = %q, want %q", got, name)
+	}
+}
+
 func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusRunning)
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 2 {
+		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 3 {
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
+		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Active")
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -145,7 +175,7 @@ func TestCreateRejectsChangedSnapshot(t *testing.T) {
 		return sdkWorkItem(t, 42, 1, testSnapshot(StatusRunning)), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
-	if _, err := client.Create(context.Background(), "Go images test release", testSnapshot(StatusStarting)); err == nil || !strings.Contains(err.Error(), "different created release snapshot") {
+	if _, err := client.Create(context.Background(), "Go images test release", "Release Operator", testSnapshot(StatusStarting)); err == nil || !strings.Contains(err.Error(), "different created release snapshot") {
 		t.Fatalf("error = %v, want changed snapshot error", err)
 	}
 }
@@ -171,7 +201,7 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 			if args.Top == nil || *args.Top != 20 || args.Wiql == nil || args.Wiql.Query == nil {
 				t.Fatalf("query args = %#v", args)
 			}
-			for _, clause := range []string{"[System.WorkItemType] = 'Task'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'"} {
+			for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'"} {
 				if !strings.Contains(*args.Wiql.Query, clause) {
 					t.Fatalf("WIQL %q does not contain %q", *args.Wiql.Query, clause)
 				}
@@ -209,7 +239,7 @@ func TestSDKErrorRedactsToken(t *testing.T) {
 func newTestClient(t *testing.T, sdk workItemClient, token string) *Client {
 	t.Helper()
 	client, err := NewClient(Config{
-		BaseURL: "https://example.invalid", Project: "project", WorkItemType: "Task",
+		BaseURL: "https://example.invalid", Project: "project", WorkItemType: "Issue",
 	}, staticToken(token))
 	if err != nil {
 		t.Fatal(err)
@@ -231,9 +261,9 @@ func testSnapshot(status Status) *Snapshot {
 func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtracking.WorkItem {
 	t.Helper()
 	fields := map[string]any{
-		"System.WorkItemType": "Task",
+		"System.WorkItemType": "Issue",
 		"System.Title":        "Go images release",
-		"System.State":        "Active",
+		"System.State":        workItemState(snapshot.Status),
 		"System.AreaPath":     AreaPath,
 		"System.Tags":         "other; " + workItemTags(snapshot),
 		"System.Description":  mustRenderDescription(t, snapshot),

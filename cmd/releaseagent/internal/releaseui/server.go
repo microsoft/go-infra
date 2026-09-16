@@ -59,6 +59,7 @@ type Server struct {
 	activeProcessID  string
 	processExecutors map[string]ProcessExecutor
 	processRunStore  ProcessRunStore
+	processRunItemID int
 
 	sessionStore goimagessession.Store
 	readOnly     *GoImagesReadOnlyIntegration
@@ -71,6 +72,7 @@ type Server struct {
 	simulationRunning bool
 	releaseRunning    bool
 	processRun        *ProcessRun
+	processRunRecord  *ProcessRunRecord
 	processRunning    bool
 }
 

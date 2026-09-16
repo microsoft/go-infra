@@ -4,36 +4,39 @@
 package releaseui
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"path/filepath"
+	"io"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/atomicfile"
+	"github.com/microsoft/go-infra/cmd/releaseagent/internal/azdoworkitem"
 )
 
-const (
-	processRunSchemaVersion = 1
-	maxProcessRunSize       = 64 << 10
-)
-
-var ErrProcessRunNotFound = errors.New("process run not found")
-
-// ProcessRunStore persists the server's single current reviewed process intent without credentials.
+// ProcessRunStore persists confirmed process runs as explicitly identified work items.
 type ProcessRunStore interface {
-	Load(context.Context) (*ProcessRun, error)
-	Save(context.Context, *ProcessRun) error
+	Create(context.Context, *ProcessRun) (*ProcessRunRecord, error)
+	Get(context.Context, int) (*ProcessRunRecord, error)
+	Update(context.Context, *ProcessRunRecord, *ProcessRun) (*ProcessRunRecord, error)
+}
+
+// ProcessRunRecord binds one process run to its Azure DevOps work item revision.
+type ProcessRunRecord struct {
+	WorkItemID int
+	Revision   int
+	URL        string
+	Run        *ProcessRun
+	workItem   *azdoworkitem.WorkItem
 }
 
 // ProcessRun is the durable, process-neutral state of one reviewed external action.
 type ProcessRun struct {
 	ProcessID  string               `json:"processId"`
+	Test       bool                 `json:"test,omitempty"`
 	Input      json.RawMessage      `json:"input"`
 	Payload    json.RawMessage      `json:"payload"`
 	Digest     string               `json:"digest"`
@@ -66,6 +69,7 @@ type ProcessRunReference struct {
 
 // ProcessPreparedRun is the immutable plan returned by a process-specific executor.
 type ProcessPreparedRun struct {
+	Test    bool
 	Input   json.RawMessage
 	Payload json.RawMessage
 	Step    ProcessRunStep
@@ -73,79 +77,155 @@ type ProcessPreparedRun struct {
 	Target  ProcessRunReference
 }
 
-type processRunDocument struct {
-	SchemaVersion int        `json:"schemaVersion"`
-	Run           ProcessRun `json:"run"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+type releaseWorkItemClient interface {
+	Create(context.Context, string, string, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
+	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
+	Update(context.Context, *azdoworkitem.WorkItem, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
 }
 
-// ProcessRunFileStore atomically persists one process run.
-type ProcessRunFileStore struct {
-	path string
-	mu   sync.Mutex
+type processRunWorkItemStore struct {
+	client     releaseWorkItemClient
+	assignedTo string
 }
 
-// NewProcessRunFileStore creates a file-backed process run store.
-func NewProcessRunFileStore(path string) (*ProcessRunFileStore, error) {
-	if path == "" {
-		return nil, errors.New("process run file path is empty")
+// NewProcessRunWorkItemStore creates a generic process-run store backed by Azure DevOps.
+func NewProcessRunWorkItemStore(client releaseWorkItemClient, assignedTo string) (ProcessRunStore, error) {
+	if client == nil {
+		return nil, errors.New("release work item client is nil")
 	}
-	absolute, err := filepath.Abs(path)
+	if strings.TrimSpace(assignedTo) == "" {
+		return nil, errors.New("release work item assignee is empty")
+	}
+	return &processRunWorkItemStore{client: client, assignedTo: assignedTo}, nil
+}
+
+func (s *processRunWorkItemStore) Create(ctx context.Context, run *ProcessRun) (*ProcessRunRecord, error) {
+	snapshot, err := processRunSnapshot(run)
 	if err != nil {
-		return nil, fmt.Errorf("make process run path absolute: %w", err)
-	}
-	return &ProcessRunFileStore{path: filepath.Clean(absolute)}, nil
-}
-
-func (s *ProcessRunFileStore) Load(ctx context.Context) (*ProcessRun, error) {
-	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var document processRunDocument
-	if err := atomicfile.ReadJSON(s.path, maxProcessRunSize, &document); errors.Is(err, fs.ErrNotExist) {
-		return nil, ErrProcessRunNotFound
-	} else if err != nil {
-		return nil, fmt.Errorf("read process run: %w", err)
+	workItem, err := s.client.Create(ctx, "[releaseagent] "+run.View.IntentTitle, s.assignedTo, snapshot)
+	if err != nil {
+		return nil, err
 	}
-	if document.SchemaVersion != processRunSchemaVersion {
-		return nil, fmt.Errorf("unsupported process run schema %d", document.SchemaVersion)
-	}
-	if err := validateProcessRun(&document.Run); err != nil {
-		return nil, fmt.Errorf("validate process run: %w", err)
-	}
-	result := cloneProcessRun(&document.Run)
-	result.UpdatedAt = document.UpdatedAt
-	return result, nil
+	return processRunRecord(workItem)
 }
 
-func (s *ProcessRunFileStore) Save(ctx context.Context, run *ProcessRun) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func (s *processRunWorkItemStore) Get(ctx context.Context, workItemID int) (*ProcessRunRecord, error) {
+	workItem, err := s.client.Get(ctx, workItemID)
+	if err != nil {
+		return nil, err
 	}
-	if err := validateProcessRun(run); err != nil {
-		return fmt.Errorf("refuse to save invalid process run: %w", err)
-	}
-	now := time.Now().UTC()
-	run.UpdatedAt = now
-	document := processRunDocument{
-		SchemaVersion: processRunSchemaVersion,
-		Run:           *cloneProcessRun(run),
-		UpdatedAt:     now,
-	}
+	return processRunRecord(workItem)
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := atomicfile.WriteJSON(s.path, ".process-run-*.tmp", maxProcessRunSize, document); err != nil {
-		return fmt.Errorf("write process run: %w", err)
+func (s *processRunWorkItemStore) Update(
+	ctx context.Context,
+	current *ProcessRunRecord,
+	run *ProcessRun,
+) (*ProcessRunRecord, error) {
+	if current == nil || current.workItem == nil || current.WorkItemID != current.workItem.ID ||
+		current.Revision != current.workItem.Revision {
+
+		return nil, errors.New("current process run record is invalid")
 	}
-	return nil
+	snapshot, err := processRunSnapshot(run)
+	if err != nil {
+		return nil, err
+	}
+	workItem, err := s.client.Update(ctx, current.workItem, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return processRunRecord(workItem)
+}
+
+func processRunSnapshot(run *ProcessRun) (*azdoworkitem.Snapshot, error) {
+	if err := validateProcessRun(run); err != nil {
+		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
+	}
+	status, err := processRunStatus(run)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(run)
+	if err != nil {
+		return nil, fmt.Errorf("marshal process run: %w", err)
+	}
+	return &azdoworkitem.Snapshot{
+		SchemaVersion: azdoworkitem.CurrentSchemaVersion,
+		ProcessID:     run.ProcessID,
+		Status:        status,
+		Test:          run.Test,
+		IntentDigest:  run.Digest,
+		Payload:       payload,
+	}, nil
+}
+
+func processRunRecord(workItem *azdoworkitem.WorkItem) (*ProcessRunRecord, error) {
+	if workItem == nil || workItem.Snapshot == nil {
+		return nil, errors.New("release work item is empty")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
+	decoder.DisallowUnknownFields()
+	var run ProcessRun
+	if err := decoder.Decode(&run); err != nil {
+		return nil, fmt.Errorf("decode process run: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("decode process run: trailing JSON content")
+	}
+	if err := validateProcessRun(&run); err != nil {
+		return nil, fmt.Errorf("validate process run: %w", err)
+	}
+	if workItem.Snapshot.ProcessID != run.ProcessID || workItem.Snapshot.IntentDigest != run.Digest {
+		return nil, errors.New("release work item identity does not match process run")
+	}
+	if workItem.Snapshot.Test != run.Test {
+		return nil, errors.New("release work item test classification does not match process run")
+	}
+	status, err := processRunStatus(&run)
+	if err != nil {
+		return nil, err
+	}
+	if workItem.Snapshot.Status != status {
+		return nil, errors.New("release work item status does not match process run")
+	}
+	return &ProcessRunRecord{
+		WorkItemID: workItem.ID,
+		Revision:   workItem.Revision,
+		URL:        workItem.URL,
+		Run:        cloneProcessRun(&run),
+		workItem:   workItem,
+	}, nil
+}
+
+func processRunStatus(run *ProcessRun) (azdoworkitem.Status, error) {
+	if !run.Started {
+		return "", errors.New("process run has not started")
+	}
+	if !run.Complete {
+		if run.External != nil {
+			return azdoworkitem.StatusRunning, nil
+		}
+		return azdoworkitem.StatusStarting, nil
+	}
+	switch run.Result {
+	case "succeeded":
+		return azdoworkitem.StatusSucceeded, nil
+	case "failed":
+		return azdoworkitem.StatusFailed, nil
+	case "uncertain":
+		return azdoworkitem.StatusUncertain, nil
+	default:
+		return "", fmt.Errorf("process run has invalid terminal result %q", run.Result)
+	}
 }
 
 func newProcessRun(processID string, prepared ProcessPreparedRun) (*ProcessRun, error) {
 	run := &ProcessRun{
 		ProcessID: processID,
+		Test:      prepared.Test,
 		Input:     append(json.RawMessage(nil), prepared.Input...),
 		Payload:   append(json.RawMessage(nil), prepared.Payload...),
 		Step:      prepared.Step,
@@ -167,6 +247,7 @@ func newProcessRun(processID string, prepared ProcessPreparedRun) (*ProcessRun, 
 func processRunDigest(run *ProcessRun) (string, error) {
 	payload := struct {
 		ProcessID string
+		Test      bool
 		Input     json.RawMessage
 		Payload   json.RawMessage
 		Step      ProcessRunStep
@@ -174,6 +255,7 @@ func processRunDigest(run *ProcessRun) (string, error) {
 		Target    ProcessRunReference
 	}{
 		ProcessID: run.ProcessID,
+		Test:      run.Test,
 		Input:     run.Input,
 		Payload:   run.Payload,
 		Step:      run.Step,

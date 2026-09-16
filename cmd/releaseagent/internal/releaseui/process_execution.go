@@ -82,6 +82,13 @@ func WithProcessRunStore(store ProcessRunStore) Option {
 	}
 }
 
+// WithProcessRunWorkItem selects one work item to restore when the server starts.
+func WithProcessRunWorkItem(workItemID int) Option {
+	return func(server *Server) {
+		server.processRunItemID = workItemID
+	}
+}
+
 func (s *Server) validateProcessExecutionConfiguration() error {
 	for processID, executor := range s.processExecutors {
 		definition, ok := s.processes.byID[processID]
@@ -99,6 +106,12 @@ func (s *Server) validateProcessExecutionConfiguration() error {
 	}
 	if s.processRunStore != nil && len(s.processExecutors) == 0 {
 		return errors.New("process run store requires at least one executor")
+	}
+	if s.processRunItemID < 0 {
+		return errors.New("process run work item ID must not be negative")
+	}
+	if s.processRunItemID > 0 && s.processRunStore == nil {
+		return errors.New("process run work item selection requires a durable run store")
 	}
 	return nil
 }
@@ -184,7 +197,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 	}
 	if s.processRun != nil && s.processRun.Result == "uncertain" {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and remove the process run journal before retrying")
+		writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and repair its release work item before retrying")
 		return
 	}
 	s.mu.Unlock()
@@ -223,15 +236,11 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 	}
 	if s.processRun != nil && s.processRun.Result == "uncertain" {
 		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and remove the process run journal before retrying")
-		return
-	}
-	if err := s.processRunStore.Save(request.Context(), run); err != nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("persist reviewed process run: %v", err))
+		writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and repair its release work item before retrying")
 		return
 	}
 	s.processRun = run
+	s.processRunRecord = nil
 	s.steps = []*coordinator.Step{step}
 	s.runner = &coordinator.StepRunner{}
 	result := s.processRunResponseLocked()
@@ -293,12 +302,15 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("validate started process run: %v", err))
 		return
 	}
-	if err := s.processRunStore.Save(request.Context(), run); err != nil {
+	record, err := s.processRunStore.Create(request.Context(), run)
+	if err != nil {
 		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("checkpoint process run before mutation: %v", err))
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release work item before mutation: %v", err))
 		return
 	}
+	run = record.Run
 	s.processRun = run
+	s.processRunRecord = record
 	s.processRunning = true
 	s.mu.Unlock()
 
@@ -324,11 +336,17 @@ func (s *Server) processCheckpoint(digest string, executor ProcessExecutor) Proc
 			s.mu.Unlock()
 			return err
 		}
-		if err := s.processRunStore.Save(ctx, run); err != nil {
+		if s.processRunRecord == nil {
+			s.mu.Unlock()
+			return errors.New("external run has no release work item")
+		}
+		record, err := s.processRunStore.Update(ctx, s.processRunRecord, run)
+		if err != nil {
 			s.mu.Unlock()
 			return fmt.Errorf("persist external run checkpoint: %w", err)
 		}
-		s.processRun = run
+		s.processRunRecord = record
+		s.processRun = record.Run
 		s.mu.Unlock()
 		coordinator.ReportProgress(ctx, coordinator.StepProgress{
 			Summary: checkpoint.Progress.Summary, Detail: checkpoint.Progress.Detail,
@@ -368,10 +386,14 @@ func (s *Server) executeProcessRun(digest string, runner *coordinator.StepRunner
 			run.Result = "uncertain"
 			valid = false
 		}
-		if saveErr := s.processRunStore.Save(context.Background(), run); saveErr != nil {
+		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, run)
+		if saveErr != nil {
 			run.Complete = true
 			run.Result = "uncertain"
 			valid = false
+		} else {
+			s.processRunRecord = record
+			run = record.Run
 		}
 		s.processRun = run
 		if valid && resumable && errors.Is(err, context.DeadlineExceeded) && s.ctx.Err() == nil {
@@ -395,16 +417,14 @@ func (s *Server) executeProcessRun(digest string, runner *coordinator.StepRunner
 }
 
 func (s *Server) restoreProcessRun() error {
-	if s.processRunStore == nil {
+	if s.processRunStore == nil || s.processRunItemID == 0 {
 		return nil
 	}
-	run, err := s.processRunStore.Load(s.ctx)
-	if errors.Is(err, ErrProcessRunNotFound) {
-		return nil
-	}
+	record, err := s.processRunStore.Get(s.ctx, s.processRunItemID)
 	if err != nil {
-		return fmt.Errorf("load process run journal: %w", err)
+		return fmt.Errorf("load release work item %d: %w", s.processRunItemID, err)
 	}
+	run := record.Run
 	executor, ok := s.processExecutors[run.ProcessID]
 	if !ok {
 		return fmt.Errorf("stored process %q has no configured executor", run.ProcessID)
@@ -415,14 +435,17 @@ func (s *Server) restoreProcessRun() error {
 	if run.Started && !run.Complete && len(run.Checkpoint) == 0 {
 		run.Complete = true
 		run.Result = "uncertain"
-		if err := s.processRunStore.Save(s.ctx, run); err != nil {
+		record, err = s.processRunStore.Update(s.ctx, record, run)
+		if err != nil {
 			return fmt.Errorf("mark interrupted process run uncertain: %w", err)
 		}
+		run = record.Run
 	}
 	s.processRun = run
+	s.processRunRecord = record
 	if s.goImages.document != nil {
 		if run.Result == "uncertain" || run.Started && !run.Complete {
-			return errors.New("both a go-images session and an active or uncertain process run exist; inspect the process run journal before restarting")
+			return errors.New("both a go-images session and an active or uncertain process work item exist; inspect the work item before restarting")
 		}
 		return nil
 	}
