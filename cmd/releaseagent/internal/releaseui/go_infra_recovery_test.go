@@ -7,10 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"testing"
-
-	"github.com/microsoft/go-infra/cmd/releaseagent/internal/goimagessession"
 )
 
 func TestGoInfraDispatchSuccessWithoutExternalRunFailsPolicyValidation(t *testing.T) {
@@ -110,16 +107,15 @@ func TestUncertainGoInfraRunDoesNotHideBehindGoImagesSession(t *testing.T) {
 	run := testStoredGoInfraRun(t, goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModePublish}, nil)
 	run.Started = true
 	workItemID := runStore.seed(run)
-	sessionStore, err := goimagessession.NewFileStore(filepath.Join(t.TempDir(), "go-images-session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	sessionStore := newMemoryGoImagesSessionStore()
 	source := GoImagesSource{Branch: testSourceBranch, Commit: testSourceCommit, Versions: []string{"1.26.5-2"}}
 	first := newTestUI(t, WithSessionStore(sessionStore), WithGoImagesReadOnlyIntegration(testReadOnly(&source, nil)))
 	createTestPlan(t, first, `{"mode":"normal"}`)
+	goImagesWorkItemID := sessionStore.seed(first.server.goImages.document)
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
-	_, err = New(
-		context.Background(), WithSessionStore(sessionStore), WithProcessRunStore(runStore), WithProcessRunWorkItem(workItemID),
+	_, err := New(
+		context.Background(), WithSessionStore(sessionStore), WithGoImagesWorkItem(goImagesWorkItemID),
+		WithProcessRunStore(runStore), WithProcessRunWorkItem(workItemID),
 		WithGoInfraGitHubIntegration(github.integration()),
 	)
 	if err == nil {
