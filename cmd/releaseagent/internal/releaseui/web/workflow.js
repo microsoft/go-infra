@@ -32,6 +32,8 @@
   const stepGraph = document.querySelector("#step-graph");
   const stepEdges = document.querySelector("#step-edges");
   const stepList = document.querySelector("#step-list");
+  const executionLinks = document.querySelector("#execution-links");
+  const workItemLink = document.querySelector("#work-item-link");
   const pipelineRunLink = document.querySelector("#pipeline-run-link");
   const executionControls = document.querySelector("#execution-controls");
   const executionUnavailable = document.querySelector("#execution-unavailable");
@@ -301,7 +303,7 @@
     executionActive = snapshot.active;
     updateSteps(snapshot);
     updateProgress(snapshot);
-    renderRun(nextPlan.execution?.run);
+    renderLinks(nextPlan.execution);
     renderExecution(nextPlan.execution, view);
     updateActionButtons();
   }
@@ -598,15 +600,31 @@
     return status === "running" ? "in progress" : status;
   }
 
-  function renderRun(run) {
+  function renderLinks(execution) {
+    const workItem = execution?.workItem;
+    workItemLink.hidden = !workItem?.id;
+    if (workItem?.id) {
+      workItemLink.href = workItem.url;
+      workItemLink.textContent = `Open work item ${workItem.id} ↗`;
+    } else {
+      workItemLink.removeAttribute("href");
+    }
+
+    const run = execution?.run;
     if (!run?.buildId) {
       pipelineRunLink.hidden = true;
       pipelineRunLink.removeAttribute("href");
-      return;
+    } else {
+      pipelineRunLink.href = run.url;
+      const outcome = run.complete
+        ? run.result === "failed" ? "Failed"
+          : run.result === "canceled" ? "Canceled"
+            : run.result === "uncertain" ? "Needs attention" : "Completed"
+        : "In progress";
+      pipelineRunLink.textContent = `${run.linkLabel || `Open external run ${run.buildId}`} ↗ · ${outcome}`;
+      pipelineRunLink.hidden = false;
     }
-    pipelineRunLink.href = run.url;
-    pipelineRunLink.textContent = `${run.linkLabel || `Open external run ${run.buildId}`} ↗ · ${run.complete ? "Completed" : "In progress"}`;
-    pipelineRunLink.hidden = false;
+    executionLinks.hidden = workItemLink.hidden && pipelineRunLink.hidden;
   }
 
   function updateActionButtons() {
@@ -666,7 +684,7 @@
       if (!response.ok) throw new Error(latest.error || `${response.status} ${response.statusText}`);
       if (!plan || latest.sessionId !== plan.sessionId) return;
       plan = latest;
-      renderRun(latest.execution?.run);
+      renderLinks(latest.execution);
       renderExecution(latest.execution, latest.view || {});
       updateActionButtons();
     } finally {
