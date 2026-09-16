@@ -4,12 +4,10 @@
 package releaseui
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"strconv"
 )
@@ -320,17 +318,4 @@ func goInfraProcessView(payload goInfraProcessPayload) ProcessPlanView {
 		}
 	}
 	return view
-}
-
-func decodeStrictJSON[T any](data json.RawMessage) (T, error) {
-	var value T
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return value, fmt.Errorf("decode process data: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return value, errors.New("process data must contain exactly one JSON value")
-	}
-	return value, nil
 }

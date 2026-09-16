@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -32,7 +33,7 @@ func (f fakeLocationClient) GetConnectionData(ctx context.Context, args location
 type fakeClient struct {
 	create func(context.Context, workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error)
 	get    func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error)
-	gets   func(context.Context, workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error)
+	gets   func(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error)
 	query  func(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error)
 	update func(context.Context, workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error)
 }
@@ -45,7 +46,7 @@ func (f *fakeClient) GetWorkItem(ctx context.Context, args workitemtracking.GetW
 	return f.get(ctx, args)
 }
 
-func (f *fakeClient) GetWorkItems(ctx context.Context, args workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error) {
+func (f *fakeClient) GetWorkItemsBatch(ctx context.Context, args workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
 	return f.gets(ctx, args)
 }
 
@@ -60,12 +61,14 @@ func (f *fakeClient) UpdateWorkItem(ctx context.Context, args workitemtracking.U
 func TestCreateUsesFixedMetadata(t *testing.T) {
 	snapshot := testSnapshot(StatusStarting)
 	sdk := &fakeClient{create: func(_ context.Context, args workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Issue" || args.Document == nil {
+		if args.Project == nil || *args.Project != "project" || args.Type == nil || *args.Type != "Issue" || args.Document == nil ||
+			args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 			t.Fatalf("create args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Add, "/fields/System.Title", "Go images test release")
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.AreaPath", AreaPath)
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag)
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; go-images")
 		assertPatch(t, *args.Document, 3, webapi.OperationValues.Add, "/fields/System.AssignedTo", "Release Operator")
 		assertPatch(t, *args.Document, 4, webapi.OperationValues.Add, "/fields/System.State", "Active")
 		assertPatch(t, *args.Document, 5, webapi.OperationValues.Add, "/fields/System.Description", mustRenderDescription(t, snapshot))
@@ -88,7 +91,7 @@ func TestCreateAddsTestTag(t *testing.T) {
 		if args.Document == nil {
 			t.Fatal("create document is nil")
 		}
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag)
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
 		return sdkWorkItem(t, 42, 1, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -115,6 +118,122 @@ func TestGetRejectsMismatchedTestTag(t *testing.T) {
 	}
 }
 
+func TestGetAcceptsLegacyTestTag(t *testing.T) {
+	snapshot := testSnapshot(StatusStarting)
+	snapshot.Test = true
+	item := sdkWorkItem(t, 42, 1, snapshot)
+	(*item.Fields)["System.Tags"] = SelectorTag + "; " + legacyTestTag
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetAcceptsAzureTagCasing(t *testing.T) {
+	snapshot := testSnapshot(StatusStarting)
+	snapshot.Test = true
+	item := sdkWorkItem(t, 42, 1, snapshot)
+	(*item.Fields)["System.Tags"] = "ReleaseAgent; Test; go-images"
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetAcceptsClosedAttentionStatus(t *testing.T) {
+	for _, status := range []Status{StatusFailed, StatusCanceled, StatusUncertain} {
+		t.Run(string(status), func(t *testing.T) {
+			snapshot := testSnapshot(status)
+			item := sdkWorkItem(t, 42, 1, snapshot)
+			(*item.Fields)["System.State"] = "Closed"
+			sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+				return item, nil
+			}}
+			client := newTestClient(t, sdk, "test-token")
+			got, err := client.Get(context.Background(), 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != "Closed" || got.Snapshot.Status != status {
+				t.Fatalf("work item = %#v", got)
+			}
+		})
+	}
+}
+
+func TestGetRejectsIncompatibleWorkflowState(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status Status
+		state  string
+	}{
+		{name: "closed running", status: StatusRunning, state: "Closed"},
+		{name: "active succeeded", status: StatusSucceeded, state: "Active"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			item := sdkWorkItem(t, 42, 1, testSnapshot(test.status))
+			(*item.Fields)["System.State"] = test.state
+			sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+				return item, nil
+			}}
+			client := newTestClient(t, sdk, "test-token")
+			if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "incompatible") {
+				t.Fatalf("error = %v, want incompatible state error", err)
+			}
+		})
+	}
+}
+
+func TestWorkItemURLUsesSDKBrowserLink(t *testing.T) {
+	item := sdkWorkItem(t, 3062459, 1, testSnapshot(StatusRunning))
+	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/3062459"
+	item.Url = &apiURL
+	const want = "https://dev.azure.com/devdiv/project/_workitems/edit/3062459"
+	item.Links = map[string]any{"html": map[string]any{"href": want}}
+	sdk := &fakeClient{get: func(_ context.Context, args workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		if args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+			t.Fatalf("expand = %v, want Links", args.Expand)
+		}
+		return item, nil
+	}}
+	client, err := NewClient(Config{
+		BaseURL: "https://dev.azure.com/devdiv", Project: "DEVDIV", WorkItemType: "Issue",
+	}, staticToken("test-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.newClient = func(context.Context) (workItemClient, string, error) {
+		return sdk, "test-token", nil
+	}
+	got, err := client.Get(context.Background(), 3062459)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != want {
+		t.Fatalf("work item URL = %q, want %q", got.URL, want)
+	}
+}
+
+func TestGetRejectsMissingBrowserLink(t *testing.T) {
+	item := sdkWorkItem(t, 42, 1, testSnapshot(StatusRunning))
+	item.Links = nil
+	apiURL := "https://devdiv.visualstudio.com/_apis/wit/workItems/42"
+	item.Url = &apiURL
+	sdk := &fakeClient{get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "browser URL") {
+		t.Fatalf("error = %v, want missing browser URL error", err)
+	}
+}
+
 func TestCurrentUser(t *testing.T) {
 	name := "Release Operator"
 	client := newTestClient(t, &fakeClient{}, "test-token")
@@ -134,12 +253,16 @@ func TestCurrentUser(t *testing.T) {
 
 func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusSucceeded)
+	snapshot.Test = true
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 3 {
+		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 4 ||
+			args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
 		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Replace, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
@@ -149,6 +272,50 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 	}
 	if item.Revision != 8 || item.Snapshot.Status != StatusSucceeded {
 		t.Fatalf("updated work item = %#v", item)
+	}
+}
+
+func TestUpdatePreservesClosedAttentionStatus(t *testing.T) {
+	snapshot := testSnapshot(StatusCanceled)
+	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		if args.Document == nil {
+			t.Fatal("update document is nil")
+		}
+		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
+		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
+		item := sdkWorkItem(t, 42, 8, snapshot)
+		(*item.Fields)["System.State"] = "Closed"
+		return item, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	item, err := client.Update(context.Background(), &WorkItem{ID: 42, Revision: 7, State: "Closed"}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != "Closed" || item.Snapshot.Status != StatusCanceled {
+		t.Fatalf("updated work item = %#v", item)
+	}
+}
+
+func TestWorkItemTagsIncludeProcess(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		processID string
+		test      bool
+		want      string
+	}{
+		{name: "release", processID: "go-images", want: "releaseagent; go-images"},
+		{name: "test", processID: "go-images", test: true, want: "releaseagent; test; go-images"},
+		{name: "dry run", processID: "go-infra", test: true, want: "releaseagent; test; go-infra"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := testSnapshot(StatusStarting)
+			snapshot.ProcessID = test.processID
+			snapshot.Test = test.test
+			if got := workItemTags(snapshot); got != test.want {
+				t.Fatalf("work item tags = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -201,27 +368,48 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 			if args.Top == nil || *args.Top != 20 || args.Wiql == nil || args.Wiql.Query == nil {
 				t.Fatalf("query args = %#v", args)
 			}
-			for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'"} {
+			for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'", "[System.State] <> 'Closed'"} {
 				if !strings.Contains(*args.Wiql.Query, clause) {
 					t.Fatalf("WIQL %q does not contain %q", *args.Wiql.Query, clause)
 				}
 			}
 			return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
 		},
-		gets: func(_ context.Context, args workitemtracking.GetWorkItemsArgs) (*[]workitemtracking.WorkItem, error) {
-			if args.Ids == nil || !slices.Equal(*args.Ids, []int{2, 1}) {
+		gets: func(_ context.Context, args workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
+			request := args.WorkItemGetRequest
+			if request == nil || request.Ids == nil || !slices.Equal(*request.Ids, []int{2, 1}) ||
+				request.Expand == nil || *request.Expand != workitemtracking.WorkItemExpandValues.Links {
+
 				t.Fatalf("get work items args = %#v", args)
 			}
 			return &responses, nil
 		},
 	}
 	client := newTestClient(t, sdk, "test-token")
-	items, err := client.Query(context.Background(), 20)
+	items, err := client.Query(context.Background(), false, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := []int{items[0].ID, items[1].ID}; !slices.Equal(got, []int{2, 1}) {
 		t.Fatalf("work item order = %v, want [2 1]", got)
+	}
+}
+
+func TestQueryClosedWorkItems(t *testing.T) {
+	references := []workitemtracking.WorkItemReference{}
+	sdk := &fakeClient{query: func(_ context.Context, args workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error) {
+		if args.Wiql == nil || args.Wiql.Query == nil || !strings.Contains(*args.Wiql.Query, "[System.State] = 'Closed'") {
+			t.Fatalf("query args = %#v", args)
+		}
+		return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	items, err := client.Query(context.Background(), true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none", items)
 	}
 }
 
@@ -266,11 +454,12 @@ func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtr
 		"System.State":        workItemState(snapshot.Status),
 		"System.AreaPath":     AreaPath,
 		"System.Tags":         "other; " + workItemTags(snapshot),
+		"System.ChangedDate":  "2026-09-09T12:00:00Z",
 		"System.Description":  mustRenderDescription(t, snapshot),
 	}
 	return &workitemtracking.WorkItem{
 		Id: &id, Rev: &revision, Fields: &fields,
-		Links: map[string]any{"html": map[string]any{"href": "https://example.invalid/workitems/42"}},
+		Links: map[string]any{"html": map[string]any{"href": fmt.Sprintf("https://example.invalid/workitems/%d", id)}},
 	}
 }
 

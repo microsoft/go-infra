@@ -42,12 +42,24 @@
         <div>
           <p class="eyebrow">Live work</p>
           <h2 id="ongoing-title">Ongoing releases</h2>
-          <p>Reopen the currently selected release work item.</p>
+          <p>Select a release work item to open its release page.</p>
         </div>
       </div>
       <div id="ongoing-releases" class="release-list" aria-live="polite">
-        <article class="release-empty loading-card">Checking the selected work item…</article>
+        <article class="release-empty loading-card">Loading release work items…</article>
       </div>
+      <p id="tracking-error" class="tracking-error" hidden></p>
+    </section>
+
+    <section id="attention-section" class="dashboard-section" aria-labelledby="attention-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Operator action</p>
+          <h2 id="attention-title">Needs attention</h2>
+          <p>Inspect a stopped release before deciding what to do next.</p>
+        </div>
+      </div>
+      <div id="attention-releases" class="release-list" aria-live="polite"></div>
     </section>
 
     <section class="dashboard-section" aria-labelledby="processes-title">
@@ -64,7 +76,7 @@
     <section id="recent-section" class="dashboard-section" aria-labelledby="recent-title" hidden>
       <div class="section-heading">
         <div>
-          <p class="eyebrow">This session</p>
+          <p class="eyebrow">Release history</p>
           <h2 id="recent-title">Recently completed</h2>
         </div>
       </div>
@@ -72,5 +84,22 @@
     </section>
 
   </main>
+
+  <dialog id="json-dialog" class="json-dialog">
+    <div class="json-dialog-heading">
+      <div>
+        <p class="eyebrow">Manual repair</p>
+        <h2 id="json-dialog-title">Release state JSON</h2>
+      </div>
+      <button id="json-close" class="dialog-close" type="button" aria-label="Close JSON editor">×</button>
+    </div>
+    <label for="json-editor">Work item export</label>
+    <textarea id="json-editor" spellcheck="false"></textarea>
+    <p id="json-error" class="tracking-error" hidden></p>
+    <div class="json-dialog-actions">
+      <button id="json-copy" class="button button-secondary" type="button">Copy JSON</button>
+      <button id="json-save" class="button button-danger" type="button">Save repaired state</button>
+    </div>
+  </dialog>
 </body>
 </html>

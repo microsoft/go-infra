@@ -21,6 +21,7 @@ var testInput = &Input{
 
 type fakeService struct {
 	mirrorErr error
+	pollErr   error
 	mirrors   int
 	queues    int
 	polls     int
@@ -47,7 +48,7 @@ func (service *fakeService) PollPipeline(_ context.Context, buildID string) erro
 	if buildID != "888" {
 		return errors.New("unexpected build ID")
 	}
-	return nil
+	return service.pollErr
 }
 
 func TestPipelineParameters(t *testing.T) {
@@ -116,6 +117,48 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 	}
 }
 
+func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
+	for _, result := range []string{"failed", "canceled"} {
+		t.Run(result, func(t *testing.T) {
+			terminalErr := errors.New("pipeline " + result)
+			service := &fakeService{pollErr: &PipelineResultError{Result: result, Err: terminalErr}}
+			var checkpoint State
+			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(_ context.Context, state *State) error {
+				checkpoint = *state
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var runner coordinator.StepRunner
+			if err := runner.Execute(context.Background(), steps); !errors.Is(err, terminalErr) {
+				t.Fatalf("error = %v, want %v", err, terminalErr)
+			}
+			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
+				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)
+			}
+		})
+	}
+}
+
+func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
+	pollErr := errors.New("pipeline read unavailable")
+	service := &fakeService{pollErr: pollErr}
+	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(context.Context, *State) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); !errors.Is(err, pollErr) {
+		t.Fatalf("error = %v, want %v", err, pollErr)
+	}
+	if state.Complete || state.Result != "" {
+		t.Fatalf("state = %#v, want resumable incomplete state", state)
+	}
+}
+
 func TestGraphBlocksQueueUntilMirrorAvailable(t *testing.T) {
 	mirrorErr := errors.New("not mirrored")
 	service := &fakeService{mirrorErr: mirrorErr}
@@ -137,6 +180,7 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.QueueAttempted = true
 	state.BuildID = "888"
 	service := &fakeService{}
 	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
@@ -149,6 +193,40 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 	if service.mirrors != 0 || service.queues != 0 || service.polls != 1 || !state.Complete {
 		t.Fatalf("service = %#v, state = %#v", service, state)
+	}
+}
+
+func TestValidateState(t *testing.T) {
+	initial, err := NewState(testInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		state State
+	}{
+		{name: "checksum", state: State{InputChecksum: initial.InputChecksum + 1}},
+		{name: "invalid build", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, BuildID: "invalid"}},
+		{name: "build before queue", state: State{InputChecksum: initial.InputChecksum, BuildID: "888"}},
+		{name: "incomplete result", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, Result: "failed"}},
+		{name: "complete before queue", state: State{InputChecksum: initial.InputChecksum, Complete: true, Result: "uncertain"}},
+		{name: "complete without result", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, Complete: true}},
+		{name: "success without build", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, Complete: true, Result: "succeeded"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateState(testInput, &test.state); err == nil {
+				t.Fatalf("invalid state unexpectedly passed validation: %#v", test.state)
+			}
+		})
+	}
+	uncertain := &State{
+		InputChecksum:  initial.InputChecksum,
+		QueueAttempted: true,
+		Complete:       true,
+		Result:         "uncertain",
+	}
+	if err := ValidateState(testInput, uncertain); err != nil {
+		t.Fatalf("valid uncertain repair failed validation: %v", err)
 	}
 }
 

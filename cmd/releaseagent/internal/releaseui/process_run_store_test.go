@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,10 +29,6 @@ func (f *fakeReleaseWorkItemClient) Create(
 	f.item = &azdoworkitem.WorkItem{
 		ID: 42, Revision: 1, URL: "https://example.invalid/workitems/42", Snapshot: snapshot,
 	}
-	return f.item, nil
-}
-
-func (f *fakeReleaseWorkItemClient) Get(context.Context, int) (*azdoworkitem.WorkItem, error) {
 	return f.item, nil
 }
 
@@ -66,16 +63,13 @@ func TestProcessRunWorkItemStoreRoundTrip(t *testing.T) {
 
 		t.Fatalf("record = %#v, snapshot = %#v", record, client.item.Snapshot)
 	}
-	loaded, err := store.Get(context.Background(), 42)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Run.Digest != run.Digest {
-		t.Fatalf("loaded run = %#v", loaded.Run)
-	}
-
 	run.Complete = true
 	run.Result = "succeeded"
+	run.Checkpoint = json.RawMessage(`{"status":"completed"}`)
+	run.External = &ProcessRunReference{
+		ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7",
+		Status: "completed", Terminal: true, Succeeded: true,
+	}
 	updated, err := store.Update(context.Background(), record, run)
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +78,22 @@ func TestProcessRunWorkItemStoreRoundTrip(t *testing.T) {
 		client.item.Snapshot.Status != azdoworkitem.StatusSucceeded {
 
 		t.Fatalf("updated = %#v, snapshot = %#v", updated, client.item.Snapshot)
+	}
+	description, err := azdoworkitem.RenderDescription(client.item.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		"<strong>Status</strong></td><td>Succeeded",
+		"<strong>Intent</strong></td><td>Run example",
+		"<strong>Action</strong></td><td>Run example",
+		`href="https://example.com/docs">Fixed input</a>`,
+		`href="https://example.com/runs">example runs</a>`,
+		`href="https://example.com/runs/7">example run 7 · completed</a>`,
+	} {
+		if !strings.Contains(description, text) {
+			t.Fatalf("description does not contain %q: %s", text, description)
+		}
 	}
 }
 
@@ -106,6 +116,7 @@ func testProcessRun(t *testing.T) *ProcessRun {
 		View: ProcessPlanView{
 			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
+			Facts:                []ProcessPlanFact{{Label: "Input", Value: "Fixed input", Href: "https://example.com/docs"}},
 		},
 		Target: ProcessRunReference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	})
@@ -139,16 +150,6 @@ func (s *memoryProcessRunStore) Create(_ context.Context, run *ProcessRun) (*Pro
 	}
 	s.records[record.WorkItemID] = record
 	s.nextID++
-	return cloneProcessRunRecord(record), nil
-}
-
-func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ProcessRunRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	record, ok := s.records[id]
-	if !ok {
-		return nil, errors.New("process run record not found")
-	}
 	return cloneProcessRunRecord(record), nil
 }
 
