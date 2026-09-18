@@ -54,11 +54,12 @@ func (input Input) checksum() (uint32, error) {
 
 // State is the durable execution state of one standalone go-images release.
 type State struct {
-	InputChecksum  uint32
-	BuildID        string
-	Result         string
-	Complete       bool
-	QueueAttempted bool
+	InputChecksum          uint32
+	VerifiedMirroredCommit string
+	BuildID                string
+	Result                 string
+	Complete               bool
+	QueueAttempted         bool
 }
 
 // Service is the complete external surface available to the standalone go-images workflow.
@@ -86,26 +87,34 @@ func (e *PipelineResultError) Unwrap() error {
 type CheckpointFunc func(context.Context, *State) error
 
 type stateAccess struct {
-	mu         sync.Mutex
-	state      *State
-	checkpoint CheckpointFunc
-	dirty      bool
+	// Updates hold snapshotMu for reading. This unusual use lets independent graph steps update
+	// different fields concurrently, while snapshot takes the write lock to exclude every update.
+	// The dependency graph must order steps that access the same field. Race tests detect mistakes.
+	snapshotMu   sync.RWMutex
+	checkpointMu sync.Mutex
+	state        *State
+	checkpoint   CheckpointFunc
+	dirty        bool
 }
 
-func (access *stateAccess) update(ctx context.Context, update func(*State)) error {
-	access.mu.Lock()
-	defer access.mu.Unlock()
-	update(access.state)
+func (access *stateAccess) update(ctx context.Context, update func()) error {
+	func() {
+		access.snapshotMu.RLock()
+		defer access.snapshotMu.RUnlock()
+		update()
+	}()
 	if access.checkpoint == nil {
 		return nil
 	}
+	access.checkpointMu.Lock()
+	defer access.checkpointMu.Unlock()
 	access.dirty = true
 	return access.flushLocked(ctx)
 }
 
 func (access *stateAccess) flush(ctx context.Context) error {
-	access.mu.Lock()
-	defer access.mu.Unlock()
+	access.checkpointMu.Lock()
+	defer access.checkpointMu.Unlock()
 	return access.flushLocked(ctx)
 }
 
@@ -113,17 +122,18 @@ func (access *stateAccess) flushLocked(ctx context.Context) error {
 	if !access.dirty || access.checkpoint == nil {
 		return nil
 	}
-	if err := access.checkpoint(ctx, access.state); err != nil {
+	snapshot := access.snapshot()
+	if err := access.checkpoint(ctx, &snapshot); err != nil {
 		return err
 	}
 	access.dirty = false
 	return nil
 }
 
-func stateValue[T any](access *stateAccess, value func(*State) T) T {
-	access.mu.Lock()
-	defer access.mu.Unlock()
-	return value(access.state)
+func (access *stateAccess) snapshot() State {
+	access.snapshotMu.Lock()
+	defer access.snapshotMu.Unlock()
+	return *access.state
 }
 
 const (
@@ -191,21 +201,26 @@ func NewGraphWithCheckpoint(
 		"Verify go-images commit is mirrored internally",
 		internalMirrorTimeout,
 		func(ctx context.Context) error {
-			if stateValue(access, func(state *State) string { return state.BuildID }) != "" {
+			if state.VerifiedMirroredCommit == input.SourceVersion {
 				return nil
 			}
-			return service.PollMirror(ctx, input.SourceVersion)
+			if err := service.PollMirror(ctx, input.SourceVersion); err != nil {
+				return err
+			}
+			return access.update(ctx, func() {
+				state.VerifiedMirroredCommit = input.SourceVersion
+			})
 		},
 	)
 	queue := verifyMirror.Then(
 		"🚀 Queue go-images release",
 		shortTimeout,
 		func(ctx context.Context) error {
-			if stateValue(access, func(state *State) string { return state.BuildID }) != "" {
+			if state.BuildID != "" {
 				return nil
 			}
-			if !stateValue(access, func(state *State) bool { return state.QueueAttempted }) {
-				if err := access.update(ctx, func(state *State) { state.QueueAttempted = true }); err != nil {
+			if !state.QueueAttempted {
+				if err := access.update(ctx, func() { state.QueueAttempted = true }); err != nil {
 					return err
 				}
 			}
@@ -213,7 +228,7 @@ func NewGraphWithCheckpoint(
 			if err != nil {
 				return err
 			}
-			return access.update(ctx, func(state *State) {
+			return access.update(ctx, func() {
 				state.BuildID = buildID
 			})
 		},
@@ -222,10 +237,10 @@ func NewGraphWithCheckpoint(
 		"⌚ Wait for go-images release",
 		officialPipelineTimeout,
 		func(ctx context.Context) error {
-			if stateValue(access, func(state *State) bool { return state.Complete }) {
+			if state.Complete {
 				return nil
 			}
-			buildID := stateValue(access, func(state *State) string { return state.BuildID })
+			buildID := state.BuildID
 			if err := service.PollPipeline(ctx, buildID); err != nil {
 				var resultError *PipelineResultError
 				if !errors.As(err, &resultError) {
@@ -234,7 +249,7 @@ func NewGraphWithCheckpoint(
 				if resultError.Result != "failed" && resultError.Result != "canceled" {
 					return fmt.Errorf("invalid terminal pipeline result %q: %w", resultError.Result, err)
 				}
-				if checkpointErr := access.update(ctx, func(state *State) {
+				if checkpointErr := access.update(ctx, func() {
 					state.Complete = true
 					state.Result = resultError.Result
 				}); checkpointErr != nil {
@@ -242,7 +257,7 @@ func NewGraphWithCheckpoint(
 				}
 				return err
 			}
-			return access.update(ctx, func(state *State) {
+			return access.update(ctx, func() {
 				state.Complete = true
 				state.Result = "succeeded"
 			})
@@ -280,6 +295,9 @@ func ValidateState(input *Input, state *State) error {
 	checksum := initialized.InputChecksum
 	if state.InputChecksum != checksum {
 		return fmt.Errorf("go-images input does not match initial input: expected checksum %v, got %v", checksum, state.InputChecksum)
+	}
+	if state.VerifiedMirroredCommit != "" && state.VerifiedMirroredCommit != input.SourceVersion {
+		return fmt.Errorf("go-images state has verified mirror commit %q, expected %q", state.VerifiedMirroredCommit, input.SourceVersion)
 	}
 	if state.BuildID != "" {
 		buildID, err := strconv.Atoi(state.BuildID)

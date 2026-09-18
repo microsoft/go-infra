@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
@@ -110,8 +111,9 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 	if state.BuildID != "888" || !state.Complete || state.Result != "succeeded" {
 		t.Fatalf("state = %#v", state)
 	}
-	if len(checkpoints) != 3 || !checkpoints[0].QueueAttempted || checkpoints[0].BuildID != "" ||
-		checkpoints[1].BuildID != "888" || checkpoints[1].Complete {
+	if len(checkpoints) != 4 || checkpoints[0].VerifiedMirroredCommit != testCommit ||
+		checkpoints[0].QueueAttempted || !checkpoints[1].QueueAttempted || checkpoints[1].BuildID != "" ||
+		checkpoints[2].BuildID != "888" || checkpoints[2].Complete || !checkpoints[3].Complete {
 
 		t.Fatalf("checkpoints = %#v", checkpoints)
 	}
@@ -182,6 +184,7 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 	state.QueueAttempted = true
 	state.BuildID = "888"
+	state.VerifiedMirroredCommit = testCommit
 	service := &fakeService{}
 	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
 	if err != nil {
@@ -196,6 +199,29 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 }
 
+func TestGraphReverifiesLegacyKnownBuildWithoutQueue(t *testing.T) {
+	state, err := NewState(testInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.QueueAttempted = true
+	state.BuildID = "888"
+	service := &fakeService{}
+	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner coordinator.StepRunner
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+	if service.mirrors != 1 || service.queues != 0 || service.polls != 1 ||
+		state.VerifiedMirroredCommit != testCommit || !state.Complete {
+
+		t.Fatalf("service = %#v, state = %#v", service, state)
+	}
+}
+
 func TestValidateState(t *testing.T) {
 	initial, err := NewState(testInput)
 	if err != nil {
@@ -206,6 +232,7 @@ func TestValidateState(t *testing.T) {
 		state State
 	}{
 		{name: "checksum", state: State{InputChecksum: initial.InputChecksum + 1}},
+		{name: "wrong mirrored commit", state: State{InputChecksum: initial.InputChecksum, VerifiedMirroredCommit: "0123456789abcdef0123456789abcdef01234567"}},
 		{name: "invalid build", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, BuildID: "invalid"}},
 		{name: "build before queue", state: State{InputChecksum: initial.InputChecksum, BuildID: "888"}},
 		{name: "incomplete result", state: State{InputChecksum: initial.InputChecksum, QueueAttempted: true, Result: "failed"}},
@@ -245,7 +272,7 @@ func TestStateAccessRetriesDirtyCheckpoint(t *testing.T) {
 			return nil
 		},
 	}
-	if err := access.update(context.Background(), func(state *State) {
+	if err := access.update(context.Background(), func() {
 		state.QueueAttempted = true
 	}); !errors.Is(err, checkpointErr) {
 		t.Fatalf("update error = %v, want checkpoint error", err)
@@ -256,5 +283,38 @@ func TestStateAccessRetriesDirtyCheckpoint(t *testing.T) {
 	}
 	if checkpointCalls != 2 || !state.QueueAttempted {
 		t.Fatalf("checkpoint calls = %d, state = %#v", checkpointCalls, state)
+	}
+}
+
+func TestStateAccessSnapshotWaitsForUpdate(t *testing.T) {
+	state := &State{}
+	access := &stateAccess{state: state}
+	updateStarted := make(chan struct{})
+	finishUpdate := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- access.update(context.Background(), func() {
+			close(updateStarted)
+			<-finishUpdate
+			state.QueueAttempted = true
+		})
+	}()
+	<-updateStarted
+
+	snapshotDone := make(chan State, 1)
+	go func() {
+		snapshotDone <- access.snapshot()
+	}()
+	select {
+	case snapshot := <-snapshotDone:
+		t.Fatalf("snapshot completed during update: %#v", snapshot)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(finishUpdate)
+	if err := <-updateDone; err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := <-snapshotDone; !snapshot.QueueAttempted {
+		t.Fatalf("snapshot = %#v, want completed update", snapshot)
 	}
 }
