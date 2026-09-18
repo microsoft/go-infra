@@ -13,6 +13,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 )
 
 type commandCall struct {
@@ -24,6 +26,14 @@ type fakeRunner struct {
 	responses [][]byte
 	errors    []error
 	calls     []commandCall
+}
+
+func newTestGitHubService(runner *fakeRunner) (*Service, error) {
+	client, err := githubclient.New("github.com", runner)
+	if err != nil {
+		return nil, err
+	}
+	return NewGitHubService(client)
 }
 
 func (r *fakeRunner) Run(_ context.Context, input []byte, args ...string) ([]byte, error) {
@@ -60,7 +70,7 @@ func TestPreflight(t *testing.T) {
 		[]byte(`{"path":".github/workflows/create-go-infra-patch-release.yml","state":"active"}`),
 		[]byte(`{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte(workflow)) + `"}`),
 	}}
-	service, err := New(runner)
+	service, err := newTestGitHubService(runner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +104,7 @@ func TestPreflightRejectsWorkflowInputDrift(t *testing.T) {
 		[]byte(`{"path":".github/workflows/create-go-infra-patch-release.yml","state":"active"}`),
 		[]byte(`{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte(workflow)) + `"}`),
 	}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	if _, err := service.Preflight(context.Background()); err == nil {
 		t.Fatal("workflow input drift was accepted")
 	}
@@ -116,7 +126,7 @@ func TestGetPullRequestRejectsFork(t *testing.T) {
         "state":"open","merged":false,"base":{"ref":"main"},
         "head":{"ref":"feature","sha":"0123456789abcdef0123456789abcdef01234567","repo":{"fork":true}}
     }`)}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	if _, err := service.GetPullRequest(context.Background(), 42); err == nil {
 		t.Fatal("fork pull request was accepted")
 	}
@@ -132,7 +142,7 @@ func TestAddReleaseOnMergeLabel(t *testing.T) {
         }`),
 		[]byte(`[{"name":"release-on-merge"}]`),
 	}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	pullRequest, err := service.AddReleaseOnMergeLabel(context.Background(), 42, "0123456789abcdef0123456789abcdef01234567")
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +171,7 @@ func TestAddReleaseOnMergeLabelIsIdempotent(t *testing.T) {
         "head":{"ref":"feature","sha":"0123456789abcdef0123456789abcdef01234567","repo":{"fork":false}},
         "labels":[{"name":"release-on-merge"}]
     }`)}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	if _, err := service.AddReleaseOnMergeLabel(context.Background(), 42, "0123456789abcdef0123456789abcdef01234567"); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +186,7 @@ func TestAddReleaseOnMergeLabelRejectsChangedPR(t *testing.T) {
         "state":"open","merged":false,"base":{"ref":"main"},
         "head":{"ref":"feature","sha":"0123456789abcdef0123456789abcdef01234567","repo":{"fork":false}}
     }`)}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	if _, err := service.AddReleaseOnMergeLabel(context.Background(), 42, "ffffffffffffffffffffffffffffffffffffffff"); err == nil {
 		t.Fatal("changed pull request was labeled")
 	}
@@ -187,7 +197,7 @@ func TestAddReleaseOnMergeLabelRejectsChangedPR(t *testing.T) {
 
 func TestRunnerErrorIsReturned(t *testing.T) {
 	runner := &fakeRunner{errors: []error{errors.New("not authenticated")}}
-	service, _ := New(runner)
+	service, _ := newTestGitHubService(runner)
 	if _, err := service.Preflight(context.Background()); err == nil {
 		t.Fatal("preflight unexpectedly succeeded")
 	}

@@ -26,7 +26,7 @@ const (
 type AzureService struct {
 	pipelines  *azdopipeline.Client
 	repository *azdorepo.Client
-	queue      *HTTPQueueClient
+	queue      QueueClient
 }
 
 // NewAzureService creates the fixed Go-images Azure service.
@@ -39,10 +39,7 @@ func NewAzureService(httpClient azdopipeline.HTTPDoer, tokens azdopipeline.Token
 	if err != nil {
 		return nil, err
 	}
-	queue, err := NewHTTPQueueClient(azureBaseURL, azureProject, httpClient, tokens)
-	if err != nil {
-		return nil, err
-	}
+	queue := &azureQueueClient{client: pipelines}
 	return &AzureService{pipelines: pipelines, repository: repository, queue: queue}, nil
 }
 

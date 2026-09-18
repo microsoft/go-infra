@@ -20,6 +20,23 @@ Add a package under `cmd/releaseui/internal` that implements `contract.Process` 
 `contract.Run`, then pass the process to `releaseui.WithProcesses`. No HTML, JavaScript, or
 route change is required.
 
+Keep process policy separate from reusable mechanics:
+
+```text
+releaseui/                         Local HTTP lifecycle, UI, execution, and persistence
+releaseui/contract/                Process and durable-state contracts
+cmd/releaseui/internal/azdopipeline/  Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdorepo/      Azure Repos reads
+cmd/releaseui/internal/githubclient/  Authenticated GitHub operations
+cmd/releaseui/internal/goimages/      Go-images targets, allowlists, state, and graph
+cmd/releaseui/internal/goinfra/       Go-infra targets, allowlists, state, and graph
+```
+
+The neutral clients accept service-level requests. A release package decides which repository,
+pipeline, branch, workflow, labels, and parameters are allowed before calling them. The command
+only parses flags, constructs those dependencies, and registers processes. `releaseui.ListenAndServe`
+owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
+
 | Field | Purpose |
 | --- | --- |
 | `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `go-infra`. |
@@ -57,9 +74,9 @@ func (p *exampleProcess) Definition() contract.Definition {
 variant's fields with one `InputSet` helper, then calls that helper again with real Go field pointers
 and parses `Selection.Input`. `Process.Restore` validates persisted state and reconstructs the same
 kind of run. `Run.Snapshot` returns an independent durable state copy, while `Run.Steps` builds the
-executable graph. Release-specific packages own direct Azure Pipeline and GitHub operations. The
-server owns confirmation, work-item persistence, duplicate-start protection, checkpoints, restart
-behavior, state APIs, and event streaming.
+executable graph. Release-specific packages own target policy and call neutral Azure or GitHub
+clients for transport. The server owns confirmation, work-item persistence, duplicate-start
+protection, checkpoints, restart behavior, state APIs, and event streaming.
 
 `contract.NewState` converts a prepared plan into durable state, creates its immutable intent
 digest, and validates the process-neutral structure. `State.Validate`, `State.Clone`, and

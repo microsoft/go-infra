@@ -6,11 +6,11 @@ package goimages
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
 )
 
 const (
@@ -73,10 +73,11 @@ func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 				_ = json.NewEncoder(response).Encode(map[string]int{"id": 888})
 			}))
 			defer server.Close()
-			client, err := NewHTTPQueueClient(server.URL, "internal", server.Client(), staticToken("test-token"))
+			pipelines, err := azdopipeline.NewClient(server.URL, "internal", server.Client(), staticToken("test-token"))
 			if err != nil {
 				t.Fatal(err)
 			}
+			client := &azureQueueClient{client: pipelines}
 			buildID, err := client.QueueRelease(context.Background(), QueueRequest{
 				Mode: test.mode, SourceVersion: queueTestCommit, SourceBuildID: test.sourceBuildID,
 				SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
@@ -92,10 +93,11 @@ func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 }
 
 func TestQueueReleaseRejectsInvalidModeInputs(t *testing.T) {
-	client, err := NewHTTPQueueClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
+	pipelines, err := azdopipeline.NewClient("https://example.invalid", "internal", http.DefaultClient, staticToken("test-token"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	client := &azureQueueClient{client: pipelines}
 	base := QueueRequest{
 		Mode: ModeNormal, SourceVersion: queueTestCommit,
 		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
@@ -108,24 +110,5 @@ func TestQueueReleaseRejectsInvalidModeInputs(t *testing.T) {
 	base.SourceBuildID = "invalid"
 	if _, err := client.QueueRelease(context.Background(), base); err == nil {
 		t.Fatal("rollback accepted an invalid source build")
-	}
-}
-
-func TestQueueReleaseRedactsToken(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(response, "denied test-token")
-	}))
-	defer server.Close()
-	client, err := NewHTTPQueueClient(server.URL, "internal", server.Client(), staticToken("test-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = client.QueueRelease(context.Background(), QueueRequest{
-		Mode: ModeTest, SourceVersion: queueTestCommit,
-		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
-	})
-	if err == nil || strings.Contains(err.Error(), "test-token") || !strings.Contains(err.Error(), "[REDACTED]") {
-		t.Fatalf("error = %v", err)
 	}
 }
