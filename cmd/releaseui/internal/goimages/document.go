@@ -14,14 +14,10 @@ import (
 	"time"
 )
 
-// CurrentSchemaVersion identifies the current Go-images document format.
-const CurrentSchemaVersion = 1
-
 // Document is the durable, non-secret domain state of one Go-images release.
 //
 // Credentials and derived graph metadata are excluded.
 type Document struct {
-	SchemaVersion   int       `json:"schemaVersion"`
 	ID              string    `json:"id"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
@@ -55,12 +51,11 @@ func NewDocument(input *Input, state *State, now time.Time) (*Document, error) {
 	}
 	now = now.UTC()
 	document := &Document{
-		SchemaVersion: CurrentSchemaVersion,
-		ID:            base64.RawURLEncoding.EncodeToString(idBytes),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Input:         inputCopy,
-		State:         stateCopy,
+		ID:        base64.RawURLEncoding.EncodeToString(idBytes),
+		CreatedAt: now,
+		UpdatedAt: now,
+		Input:     inputCopy,
+		State:     stateCopy,
 	}
 	document.ExecutionDigest, err = executionDigest(document.Input)
 	if err != nil {
@@ -76,9 +71,6 @@ func NewDocument(input *Input, state *State, now time.Time) (*Document, error) {
 func (d *Document) Validate() error {
 	if d == nil {
 		return errors.New("session document is nil")
-	}
-	if d.SchemaVersion != CurrentSchemaVersion {
-		return fmt.Errorf("unsupported session schema version %d", d.SchemaVersion)
 	}
 	if d.ID == "" {
 		return errors.New("session ID is empty")

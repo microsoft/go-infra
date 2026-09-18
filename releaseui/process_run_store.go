@@ -6,13 +6,11 @@ package releaseui
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -88,7 +86,7 @@ func (s *processRunWorkItemStore) Update(
 }
 
 func processRunSnapshot(run *contract.State) (*azdoworkitem.Snapshot, error) {
-	if err := validateProcessRun(run); err != nil {
+	if err := run.Validate(); err != nil {
 		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
 	}
 	status, err := processRunStatus(run)
@@ -156,7 +154,7 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("decode process run: trailing JSON content")
 	}
-	if err := validateProcessRun(&run); err != nil {
+	if err := run.Validate(); err != nil {
 		return nil, fmt.Errorf("validate process run: %w", err)
 	}
 	if workItem.Snapshot.ProcessID != run.ProcessID || workItem.Snapshot.IntentDigest != run.Digest {
@@ -177,7 +175,7 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 		WorkItemID: workItem.ID,
 		Revision:   workItem.Revision,
 		URL:        workItem.URL,
-		Run:        CloneReleaseRunState(&run),
+		Run:        run.Clone(),
 		workItem:   workItem,
 	}, nil
 }
@@ -193,177 +191,15 @@ func processRunStatus(run *contract.State) (azdoworkitem.Status, error) {
 		return azdoworkitem.StatusStarting, nil
 	}
 	switch run.Result {
-	case "succeeded":
+	case contract.ResultSucceeded:
 		return azdoworkitem.StatusSucceeded, nil
-	case "failed":
+	case contract.ResultFailed:
 		return azdoworkitem.StatusFailed, nil
-	case "canceled":
+	case contract.ResultCanceled:
 		return azdoworkitem.StatusCanceled, nil
-	case "uncertain":
+	case contract.ResultUncertain:
 		return azdoworkitem.StatusUncertain, nil
 	default:
 		return "", fmt.Errorf("process run has invalid terminal result %q", run.Result)
 	}
-}
-
-// NewReleaseRunState creates validated durable state from a prepared release plan.
-func NewReleaseRunState(processID string, prepared contract.Plan) (*contract.State, error) {
-	if prepared.VariantID == "" {
-		return nil, errors.New("release plan variant ID is empty")
-	}
-	run := &contract.State{
-		ProcessID: processID,
-		VariantID: prepared.VariantID,
-		Test:      prepared.Test,
-		Input:     append(json.RawMessage(nil), prepared.Input...),
-		Payload:   append(json.RawMessage(nil), prepared.Payload...),
-		SessionID: prepared.SessionID,
-		View:      cloneProcessPlanView(prepared.View),
-		Target:    prepared.Target,
-		UpdatedAt: time.Now().UTC(),
-	}
-	digest, err := processRunDigest(run)
-	if err != nil {
-		return nil, err
-	}
-	run.Digest = digest
-	if run.SessionID == "" {
-		run.SessionID = digest
-	}
-	if err := validateProcessRun(run); err != nil {
-		return nil, err
-	}
-	return run, nil
-}
-
-func processRunDigest(run *contract.State) (string, error) {
-	payload := struct {
-		ProcessID string
-		VariantID string
-		Test      bool
-		Input     json.RawMessage
-		Payload   json.RawMessage
-		View      contract.PlanView
-		Target    contract.Reference
-	}{
-		ProcessID: run.ProcessID,
-		VariantID: run.VariantID,
-		Test:      run.Test,
-		Input:     run.Input,
-		Payload:   run.Payload,
-		View:      run.View,
-		Target:    run.Target,
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(data)
-	return fmt.Sprintf("%x", digest), nil
-}
-
-func validateProcessRun(run *contract.State) error {
-	if run == nil {
-		return errors.New("process run is nil")
-	}
-	if !processIDPattern.MatchString(run.ProcessID) {
-		return fmt.Errorf("process run has invalid process ID %q", run.ProcessID)
-	}
-	if !processIDPattern.MatchString(run.VariantID) {
-		return fmt.Errorf("process run has invalid variant ID %q", run.VariantID)
-	}
-	if !json.Valid(run.Input) || !json.Valid(run.Payload) {
-		return errors.New("process run input or payload is invalid JSON")
-	}
-	if strings.TrimSpace(run.SessionID) == "" {
-		return errors.New("process run session ID is empty")
-	}
-	if strings.TrimSpace(run.View.IntentTitle) == "" || strings.TrimSpace(run.View.ExecutionTitle) == "" ||
-		strings.TrimSpace(run.View.ExecutionConfirmation) == "" ||
-		strings.TrimSpace(run.View.ExecutionButtonLabel) == "" {
-
-		return errors.New("process run view is incomplete")
-	}
-	if err := validateProcessRunReference(run.Target); err != nil {
-		return fmt.Errorf("validate process run target: %w", err)
-	}
-	if run.External != nil {
-		if !run.Started {
-			return errors.New("process run has an external run before starting")
-		}
-		if len(run.Checkpoint) == 0 {
-			return errors.New("process run has an external run without a checkpoint")
-		}
-		if err := validateProcessRunReference(*run.External); err != nil {
-			return fmt.Errorf("validate external process run: %w", err)
-		}
-	}
-	if len(run.Checkpoint) > 0 && (!run.Started || !json.Valid(run.Checkpoint)) {
-		return errors.New("process run checkpoint is invalid")
-	}
-	digest, err := processRunDigest(run)
-	if err != nil || !secureEqual(digest, run.Digest) {
-		return errors.New("process run digest does not match its content")
-	}
-	if run.Complete && !run.Started {
-		return errors.New("process run completed before it started")
-	}
-	if !run.Complete && run.Result != "" {
-		return errors.New("incomplete process run has a result")
-	}
-	if run.Complete && run.Result != "succeeded" && run.Result != "failed" && run.Result != "canceled" && run.Result != "uncertain" {
-		return fmt.Errorf("completed process run has invalid result %q", run.Result)
-	}
-	if run.Complete && run.External != nil && run.Result != "uncertain" {
-		if !run.External.Terminal {
-			return errors.New("completed process run has an incomplete external run")
-		}
-		if run.Result == "succeeded" && !run.External.Succeeded {
-			return errors.New("successful process run has an unsuccessful external run")
-		}
-		if (run.Result == "failed" || run.Result == "canceled") && run.External.Succeeded {
-			return errors.New("failed process run has a successful external run")
-		}
-	}
-	return nil
-}
-
-func validateProcessRunReference(reference contract.Reference) error {
-	if strings.TrimSpace(reference.ID) == "" || !strings.HasPrefix(reference.URL, "https://") ||
-		strings.TrimSpace(reference.LinkLabel) == "" {
-
-		return errors.New("process run reference is incomplete")
-	}
-	if reference.Succeeded && !reference.Terminal {
-		return errors.New("process run reference succeeded before reaching a terminal state")
-	}
-	return nil
-}
-
-// CloneReleaseRunState returns an independent copy of run.
-func CloneReleaseRunState(run *contract.State) *contract.State {
-	if run == nil {
-		return nil
-	}
-	clone := *run
-	clone.Input = append(json.RawMessage(nil), run.Input...)
-	clone.Payload = append(json.RawMessage(nil), run.Payload...)
-	clone.View = cloneProcessPlanView(run.View)
-	clone.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
-	if run.External != nil {
-		external := *run.External
-		clone.External = &external
-	}
-	return &clone
-}
-
-func cloneProcessPlanView(view contract.PlanView) contract.PlanView {
-	clone := view
-	clone.Facts = append([]contract.PlanFact(nil), view.Facts...)
-	if view.Request != nil {
-		request := *view.Request
-		request.Fields = append([]contract.RequestField(nil), view.Request.Fields...)
-		clone.Request = &request
-	}
-	return clone
 }

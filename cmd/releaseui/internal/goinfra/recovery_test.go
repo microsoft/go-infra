@@ -76,7 +76,10 @@ func TestDiscoveredGoInfraRunResumesMonitoring(t *testing.T) {
 		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
 	})
 	queued := testGoInfraWorkflowRun("queued", "")
-	state, err := json.Marshal(queued)
+	state, err := json.Marshal(goInfraCheckpoint{
+		SchemaVersion: goInfraCheckpointSchemaVersion,
+		WorkflowRun:   queued,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

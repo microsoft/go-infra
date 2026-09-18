@@ -61,6 +61,15 @@ executable graph. Release-specific packages own direct Azure Pipeline and GitHub
 server owns confirmation, work-item persistence, duplicate-start protection, checkpoints, restart
 behavior, state APIs, and event streaming.
 
+`contract.NewState` converts a prepared plan into durable state, creates its immutable intent
+digest, and validates the process-neutral structure. `State.Validate`, `State.Clone`, and
+`Reference.Validate` keep those rules with the contract types. Every process-owned payload and
+checkpoint is a versioned JSON object; `Restore` rejects missing or unsupported versions.
+
+Planning and execution readiness are independent. Planning readiness controls creation of new
+plans. Execution readiness controls starting a confirmed plan and may remain available when new
+planning is unavailable. Neither flag prevents restoring or continuing a run that already started.
+
 Before preparation, the shared lifecycle validates the selected variant. `InputSet.Parse` rejects
 missing or unknown fields and binds valid positive integers directly to typed Go fields. Each process
 then applies its semantic and fixed-target validation.
@@ -176,11 +185,10 @@ If the process restarts in the queue-response crash window, it reconciles recent
 When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
-The go-images session document is schema-versioned. The release UI
-stores it in the selected Azure DevOps work item and checks the work item revision on every update.
-It contains no credentials.
-Schema version 1 stores only standalone go-images input and state. `Run.Steps` reconstructs the
-coordinator graph instead of serializing it. The reader accepts only the current format.
+The Go-images document stores only standalone input and state. `Run.Steps` reconstructs the
+coordinator graph instead of serializing it. The release UI stores the document inside the
+process-owned payload and checks the work-item revision on every update. It contains no credentials.
+Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
 
 The current server runs one selected release at a time. Go-images and generic action state live only
 in the selected Azure DevOps work item. The server creates the work item before calling the target

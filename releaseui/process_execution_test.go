@@ -60,14 +60,15 @@ func waitForProcessRun(t *testing.T, server *Server) {
 	}
 }
 
-func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
+func TestDurableProcessStartsReviewedRunWhenPlanningUnavailable(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	var executed bool
 	var workItemCreatedBeforeExecution bool
+	planningEnabled := true
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
 		preflight: func(context.Context) (contract.Readiness, error) {
-			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified example"}, nil
+			return contract.Readiness{PlanningEnabled: planningEnabled, ExecutionEnabled: true, Details: "verified example"}, nil
 		},
 		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
 			return examplePreparedRun(input), nil
@@ -114,6 +115,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 	if err := json.Unmarshal(prepared.Body.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
+	planningEnabled = false
 	started := httptest.NewRecorder()
 	request = httptest.NewRequest(
 		http.MethodPost, "http://localhost/api/processes/example/start",

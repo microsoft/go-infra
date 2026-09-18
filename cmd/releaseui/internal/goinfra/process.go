@@ -13,14 +13,24 @@ import (
 	"reflect"
 	"strconv"
 
-	releaseui "github.com/microsoft/go-infra/releaseui"
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
+const (
+	goInfraPayloadSchemaVersion    = 1
+	goInfraCheckpointSchemaVersion = 1
+)
+
 type goInfraProcessPayload struct {
-	Input       goInfraPlanInput    `json:"input"`
-	PullRequest *GoInfraPullRequest `json:"pullRequest,omitempty"`
+	SchemaVersion int                 `json:"schemaVersion"`
+	Input         goInfraPlanInput    `json:"input"`
+	PullRequest   *GoInfraPullRequest `json:"pullRequest,omitempty"`
+}
+
+type goInfraCheckpoint struct {
+	SchemaVersion int                `json:"schemaVersion"`
+	WorkflowRun   GoInfraWorkflowRun `json:"workflowRun"`
 }
 
 type releaseOnMergeVariantInput struct {
@@ -95,7 +105,7 @@ func (p *goInfraProcess) Prepare(ctx context.Context, selection contract.Selecti
 	if err != nil {
 		return nil, err
 	}
-	state, err := releaseui.NewReleaseRunState(goInfraProcessID, prepared)
+	state, err := contract.NewState(goInfraProcessID, prepared)
 	if err != nil {
 		return nil, fmt.Errorf("create go-infra release run: %w", err)
 	}
@@ -106,11 +116,11 @@ func (p *goInfraProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := validateGoInfraProcessRun(state); err != nil {
 		return nil, err
 	}
-	return &goInfraRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
+	return &goInfraRun{process: p, state: state.Clone()}, nil
 }
 
 func (r *goInfraRun) Snapshot() *contract.State {
-	return releaseui.CloneReleaseRunState(r.state)
+	return r.state.Clone()
 }
 
 func (r *goInfraRun) Steps(
@@ -124,7 +134,7 @@ func (r *goInfraRun) Steps(
 	if err := validateGoInfraProcessRun(run); err != nil {
 		return nil, err
 	}
-	payload, err := decodeStrictJSON[goInfraProcessPayload](run.Payload)
+	payload, err := decodeGoInfraProcessPayload(run.Payload)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +166,7 @@ func prepareGoInfraProcess(
 	if err != nil {
 		return contract.Plan{}, contract.InvalidInput(err)
 	}
-	payload := goInfraProcessPayload{Input: normalized}
+	payload := goInfraProcessPayload{SchemaVersion: goInfraPayloadSchemaVersion, Input: normalized}
 	if normalized.Action == goInfraActionReleaseOnMerge {
 		pullRequest, err := github.GetPullRequest(ctx, pullRequestNumber)
 		if err != nil {
@@ -221,7 +231,7 @@ func executeGoInfraProcess(
 	checkpoint contract.CheckpointFunc,
 	github GitHubService,
 ) error {
-	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
+	payload, err := decodeGoInfraProcessPayload(payloadJSON)
 	if err != nil {
 		return err
 	}
@@ -249,14 +259,14 @@ func resumeGoInfraProcess(
 	checkpoint contract.CheckpointFunc,
 	github GitHubService,
 ) error {
-	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
+	payload, err := decodeGoInfraProcessPayload(payloadJSON)
 	if err != nil {
 		return err
 	}
 	if payload.Input.Action != goInfraActionManualDispatch {
 		return fmt.Errorf("go-infra action %q cannot resume from a workflow run", payload.Input.Action)
 	}
-	run, err := decodeStrictJSON[GoInfraWorkflowRun](state)
+	run, err := decodeGoInfraCheckpoint(state)
 	if err != nil {
 		return err
 	}
@@ -282,7 +292,10 @@ func checkpointGoInfraProcess(ctx context.Context, run GoInfraWorkflowRun, check
 	if err := validateGoInfraWorkflowRun(&run); err != nil {
 		return err
 	}
-	state, err := json.Marshal(run)
+	state, err := json.Marshal(goInfraCheckpoint{
+		SchemaVersion: goInfraCheckpointSchemaVersion,
+		WorkflowRun:   run,
+	})
 	if err != nil {
 		return fmt.Errorf("encode go-infra workflow run: %w", err)
 	}
@@ -296,10 +309,13 @@ func processRunReference(reference contract.Reference) *contract.Reference {
 }
 
 func validateGoInfraProcessRun(run *contract.State) error {
-	if run == nil || run.ProcessID != goInfraProcessID {
+	if err := run.Validate(); err != nil {
+		return fmt.Errorf("validate go-infra process state: %w", err)
+	}
+	if run.ProcessID != goInfraProcessID {
 		return errors.New("go-infra process run has an invalid process ID")
 	}
-	payload, err := decodeStrictJSON[goInfraProcessPayload](run.Payload)
+	payload, err := decodeGoInfraProcessPayload(run.Payload)
 	if err != nil {
 		return fmt.Errorf("decode go-infra process payload: %w", err)
 	}
@@ -344,7 +360,7 @@ func validateGoInfraProcessRun(run *contract.State) error {
 		return errors.New("go-infra process plan does not match its fixed policy")
 	}
 	if len(run.Checkpoint) > 0 {
-		workflowRun, err := decodeStrictJSON[GoInfraWorkflowRun](run.Checkpoint)
+		workflowRun, err := decodeGoInfraCheckpoint(run.Checkpoint)
 		if err != nil {
 			return fmt.Errorf("decode go-infra workflow checkpoint: %w", err)
 		}
@@ -356,6 +372,28 @@ func validateGoInfraProcessRun(run *contract.State) error {
 		}
 	}
 	return nil
+}
+
+func decodeGoInfraProcessPayload(data json.RawMessage) (goInfraProcessPayload, error) {
+	payload, err := decodeStrictJSON[goInfraProcessPayload](data)
+	if err != nil {
+		return goInfraProcessPayload{}, err
+	}
+	if payload.SchemaVersion != goInfraPayloadSchemaVersion {
+		return goInfraProcessPayload{}, fmt.Errorf("unsupported go-infra payload schema %d", payload.SchemaVersion)
+	}
+	return payload, nil
+}
+
+func decodeGoInfraCheckpoint(data json.RawMessage) (GoInfraWorkflowRun, error) {
+	checkpoint, err := decodeStrictJSON[goInfraCheckpoint](data)
+	if err != nil {
+		return GoInfraWorkflowRun{}, err
+	}
+	if checkpoint.SchemaVersion != goInfraCheckpointSchemaVersion {
+		return GoInfraWorkflowRun{}, fmt.Errorf("unsupported go-infra checkpoint schema %d", checkpoint.SchemaVersion)
+	}
+	return checkpoint.WorkflowRun, nil
 }
 
 func goInfraProcessIsTest(input goInfraPlanInput) bool {

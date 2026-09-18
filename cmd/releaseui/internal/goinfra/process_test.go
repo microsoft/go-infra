@@ -848,6 +848,30 @@ func TestGoInfraPlanRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+func TestGoInfraProcessRejectsUnsupportedSchemas(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		decode func(json.RawMessage) error
+	}{
+		{name: "payload", decode: func(data json.RawMessage) error {
+			_, err := decodeGoInfraProcessPayload(data)
+			return err
+		}},
+		{name: "checkpoint", decode: func(data json.RawMessage) error {
+			_, err := decodeGoInfraCheckpoint(data)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, data := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`{"schemaVersion":2}`)} {
+				if err := test.decode(data); err == nil {
+					t.Fatalf("unsupported schema %s was accepted", data)
+				}
+			}
+		})
+	}
+}
+
 func TestGoInfraPlanDoesNotPersistBeforeStart(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}

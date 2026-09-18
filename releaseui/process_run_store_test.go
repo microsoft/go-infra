@@ -91,87 +91,9 @@ func TestProcessRunWorkItemStoreRejectsUnstartedRun(t *testing.T) {
 	}
 }
 
-func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
-	plan := contract.Plan{
-		VariantID: "test",
-		Input:     json.RawMessage(`{"mode":"test"}`),
-		Payload:   json.RawMessage(`{"value":"fixed"}`),
-		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
-			ExecutionButtonLabel: "Run example",
-			Facts:                []contract.PlanFact{{Label: "Version", Value: "1.0"}},
-			Request: &contract.RequestPreview{
-				Title: "Request", Fields: []contract.RequestField{{Name: "mode", Value: "test"}},
-			},
-		},
-		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
-	}
-	state, err := NewReleaseRunState("example", plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan.Input[2] = 'x'
-	plan.View.Facts[0].Value = "changed"
-	plan.View.Request.Fields[0].Value = "changed"
-	if string(state.Input) != `{"mode":"test"}` ||
-		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
-
-		t.Fatalf("state changed with source plan: %#v", state)
-	}
-
-	clone := CloneReleaseRunState(state)
-	clone.Payload[2] = 'x'
-	clone.View.Facts[0].Value = "changed"
-	clone.View.Request.Fields[0].Value = "changed"
-	if string(state.Payload) != `{"value":"fixed"}` ||
-		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
-
-		t.Fatalf("state changed with clone: %#v", state)
-	}
-}
-
-func TestProcessRunDigestBindsVariant(t *testing.T) {
-	run := testProcessRun(t)
-	run.VariantID = "changed"
-	if err := validateProcessRun(run); err == nil {
-		t.Fatal("run with a modified variant unexpectedly passed validation")
-	}
-}
-
-func TestNewReleaseRunStateRequiresVariant(t *testing.T) {
-	plan := contract.Plan{
-		Input:   json.RawMessage(`{}`),
-		Payload: json.RawMessage(`{}`),
-		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
-			ExecutionButtonLabel: "Run example",
-		},
-		Target: contract.Reference{ID: "example", URL: "https://example.com", LinkLabel: "Open example"},
-	}
-	if _, err := NewReleaseRunState("example", plan); err == nil {
-		t.Fatal("plan without a variant unexpectedly passed validation")
-	}
-}
-
-func TestNewReleaseRunStateRequiresExecutionTitle(t *testing.T) {
-	plan := contract.Plan{
-		VariantID: "test",
-		Input:     json.RawMessage(`{}`),
-		Payload:   json.RawMessage(`{}`),
-		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
-			ExecutionButtonLabel: "Run example",
-		},
-		Target: contract.Reference{ID: "example", URL: "https://example.com", LinkLabel: "Open example"},
-	}
-	if _, err := NewReleaseRunState("example", plan); err == nil {
-		t.Fatal("plan without an execution title unexpectedly passed validation")
-	}
-}
-
 func testProcessRun(t *testing.T) *contract.State {
 	t.Helper()
-	run, err := NewReleaseRunState("example", contract.Plan{
+	run, err := contract.NewState("example", contract.Plan{
 		VariantID: "test",
 		Test:      true,
 		Input:     json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
@@ -208,7 +130,7 @@ func (s *memoryProcessRunStore) Create(_ context.Context, run *contract.State) (
 	record := &ReleaseRunRecord{
 		WorkItemID: s.nextID, Revision: 1,
 		URL: fmt.Sprintf("https://example.invalid/workitems/%d", s.nextID),
-		Run: CloneReleaseRunState(run),
+		Run: run.Clone(),
 	}
 	s.records[record.WorkItemID] = record
 	s.nextID++
@@ -241,7 +163,7 @@ func (s *memoryProcessRunStore) Update(
 	}
 	record = &ReleaseRunRecord{
 		WorkItemID: record.WorkItemID, Revision: record.Revision + 1,
-		URL: record.URL, Run: CloneReleaseRunState(run),
+		URL: record.URL, Run: run.Clone(),
 	}
 	s.records[record.WorkItemID] = record
 	return cloneProcessRunRecord(record), nil
@@ -255,7 +177,7 @@ func (s *memoryProcessRunStore) latest(t *testing.T) *contract.State {
 		t.Fatalf("record count = %d, want 1", len(s.records))
 	}
 	for _, record := range s.records {
-		return CloneReleaseRunState(record.Run)
+		return record.Run.Clone()
 	}
 	panic("unreachable")
 }
@@ -268,7 +190,7 @@ func (s *memoryProcessRunStore) count() int {
 
 func cloneProcessRunRecord(record *ReleaseRunRecord) *ReleaseRunRecord {
 	clone := *record
-	clone.Run = CloneReleaseRunState(record.Run)
+	clone.Run = record.Run.Clone()
 	return &clone
 }
 

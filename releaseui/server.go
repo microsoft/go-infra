@@ -358,9 +358,9 @@ func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Req
 
 func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
 	switch summary.Status {
-	case "succeeded":
+	case contract.ResultSucceeded:
 		result.Recent = append(result.Recent, summary)
-	case "failed", "canceled", "uncertain":
+	case contract.ResultFailed, contract.ResultCanceled, contract.ResultUncertain:
 		result.NeedsAttention = append(result.NeedsAttention, summary)
 	default:
 		result.Ongoing = append(result.Ongoing, summary)

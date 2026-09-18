@@ -53,7 +53,7 @@ func (p *fakeProcess) Prepare(ctx context.Context, selection contract.Selection)
 		return nil, err
 	}
 	prepared.VariantID = selection.VariantID
-	state, err := NewReleaseRunState(p.definition.ID, prepared)
+	state, err := contract.NewState(p.definition.ID, prepared)
 	if err != nil {
 		return nil, err
 	}
@@ -68,14 +68,14 @@ func (p *fakeProcess) Restore(state *contract.State) (contract.Run, error) {
 		if err := p.validate(state); err != nil {
 			return nil, err
 		}
-	} else if err := validateProcessRun(state); err != nil {
+	} else if err := state.Validate(); err != nil {
 		return nil, err
 	}
-	return &fakeReleaseRun{process: p, state: CloneReleaseRunState(state)}, nil
+	return &fakeReleaseRun{process: p, state: state.Clone()}, nil
 }
 
 func (r *fakeReleaseRun) Snapshot() *contract.State {
-	return CloneReleaseRunState(r.state)
+	return r.state.Clone()
 }
 
 func (r *fakeReleaseRun) Steps(

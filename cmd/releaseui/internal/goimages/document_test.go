@@ -15,9 +15,6 @@ func TestDocumentOmitsDerivedPlan(t *testing.T) {
 	if err := document.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if document.SchemaVersion != CurrentSchemaVersion {
-		t.Fatalf("schema version = %d, want %d", document.SchemaVersion, CurrentSchemaVersion)
-	}
 	data, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +57,27 @@ func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 	}
 }
 
-func TestDocumentRejectsUnsupportedSchema(t *testing.T) {
-	document := testDocument(t)
-	document.SchemaVersion++
-	if err := document.Validate(); err == nil {
-		t.Fatal("document with an unsupported schema unexpectedly passed validation")
+func TestGoImagesProcessRejectsUnsupportedSchemas(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		decode func(json.RawMessage) error
+	}{
+		{name: "payload", decode: func(data json.RawMessage) error {
+			_, err := decodeGoImagesProcessPayload(data)
+			return err
+		}},
+		{name: "checkpoint", decode: func(data json.RawMessage) error {
+			_, err := decodeGoImagesCheckpoint(data)
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, data := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`{"schemaVersion":2}`)} {
+				if err := test.decode(data); err == nil {
+					t.Fatalf("unsupported schema %s was accepted", data)
+				}
+			}
+		})
 	}
 }
 

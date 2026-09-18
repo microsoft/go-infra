@@ -7,10 +7,13 @@ package contract
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +24,8 @@ import (
 
 // ErrInvalidInput marks an error caused by operator-controlled process input.
 var ErrInvalidInput = errors.New("invalid release input")
+
+var processIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 type invalidInputError struct {
 	err error
@@ -48,13 +53,15 @@ type Process interface {
 	// Definition returns the process metadata and input form shown by the release UI.
 	Definition() Definition
 
-	// Preflight performs non-mutating readiness checks.
+	// Preflight performs non-mutating readiness checks for preparing and starting runs. Readiness
+	// does not gate Restore or continuation of a run that already started.
 	Preflight(context.Context) (Readiness, error)
 
 	// Prepare validates one browser selection and returns a new run that has not started.
 	Prepare(context.Context, Selection) (Run, error)
 
-	// Restore validates persisted state and reconstructs its run.
+	// Restore validates persisted state, including process-owned Payload and Checkpoint schema
+	// versions, and reconstructs its run without mutating an external service.
 	Restore(*State) (Run, error)
 }
 
@@ -71,12 +78,15 @@ type Run interface {
 // CheckpointFunc persists process-specific state before execution continues.
 type CheckpointFunc func(context.Context, Checkpoint) error
 
-// Readiness reports whether a process can plan and execute releases.
+// Readiness reports whether a process can prepare and start releases. PlanningEnabled and
+// ExecutionEnabled are independent; an existing reviewed run may remain executable when new plans
+// cannot be prepared. Neither field gates Restore or continuation of a run that already started.
 type Readiness struct {
-	// PlanningEnabled reports whether Prepare can resolve and validate a plan.
+	// PlanningEnabled reports whether Prepare can resolve and validate a new plan.
 	PlanningEnabled bool
 
-	// ExecutionEnabled reports whether a confirmed run can mutate its external service.
+	// ExecutionEnabled reports whether a confirmed, unstarted run can begin mutating its external
+	// service. It may be true when PlanningEnabled is false.
 	ExecutionEnabled bool
 
 	// Details explains the current readiness result to an operator.
@@ -294,7 +304,8 @@ type Plan struct {
 	// Input is the normalized browser input.
 	Input json.RawMessage
 
-	// Payload is process-specific immutable state needed to restore the run.
+	// Payload is process-specific immutable state needed to restore the run. Its JSON must carry an
+	// explicit process-owned schema version that Restore validates.
 	Payload json.RawMessage
 
 	// SessionID is the process-specific correlation identifier. The UI uses the intent digest when
@@ -307,6 +318,44 @@ type Plan struct {
 	// Target identifies the fixed external target reviewed by the operator.
 	Target Reference
 }
+
+// NewState creates validated durable state from a prepared release plan.
+func NewState(processID string, plan Plan) (*State, error) {
+	state := &State{
+		ProcessID: processID,
+		VariantID: plan.VariantID,
+		Test:      plan.Test,
+		Input:     append(json.RawMessage(nil), plan.Input...),
+		Payload:   append(json.RawMessage(nil), plan.Payload...),
+		SessionID: plan.SessionID,
+		View:      clonePlanView(plan.View),
+		Target:    plan.Target,
+		UpdatedAt: time.Now().UTC(),
+	}
+	digest, err := state.intentDigest()
+	if err != nil {
+		return nil, err
+	}
+	state.Digest = digest
+	if state.SessionID == "" {
+		state.SessionID = digest
+	}
+	if err := state.Validate(); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+const (
+	// ResultSucceeded reports that the external action completed successfully.
+	ResultSucceeded = "succeeded"
+	// ResultFailed reports that the external action completed unsuccessfully.
+	ResultFailed = "failed"
+	// ResultCanceled reports that the external action was canceled.
+	ResultCanceled = "canceled"
+	// ResultUncertain reports that the UI cannot determine whether an external mutation occurred.
+	ResultUncertain = "uncertain"
+)
 
 // State is the durable, process-neutral state of one release run.
 type State struct {
@@ -322,7 +371,8 @@ type State struct {
 	// Input is the normalized browser input used to prepare the run.
 	Input json.RawMessage `json:"input"`
 
-	// Payload is process-specific immutable state needed to validate and restore the run.
+	// Payload is process-specific immutable state needed to validate and restore the run. Its JSON
+	// must carry an explicit process-owned schema version that Restore validates.
 	Payload json.RawMessage `json:"payload"`
 
 	// Digest identifies the immutable release intent.
@@ -340,7 +390,8 @@ type State struct {
 	// External identifies the external run discovered after mutation.
 	External *Reference `json:"external,omitempty"`
 
-	// Checkpoint is process-specific resumable state.
+	// Checkpoint is process-specific resumable state. When present, its JSON must carry an explicit
+	// process-owned schema version that Restore validates.
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 
 	// Started reports whether the operator confirmed the run and the UI created its work item.
@@ -355,6 +406,119 @@ type State struct {
 
 	// UpdatedAt is the work-item update time used for display. It is not stored in the snapshot.
 	UpdatedAt time.Time `json:"-"`
+}
+
+// Validate checks process-neutral state structure and immutable intent integrity. The owning
+// Process validates the meaning and schema versions of Payload and Checkpoint during Restore.
+func (s *State) Validate() error {
+	if s == nil {
+		return errors.New("process run is nil")
+	}
+	if !processIDPattern.MatchString(s.ProcessID) {
+		return fmt.Errorf("process run has invalid process ID %q", s.ProcessID)
+	}
+	if !processIDPattern.MatchString(s.VariantID) {
+		return fmt.Errorf("process run has invalid variant ID %q", s.VariantID)
+	}
+	if !json.Valid(s.Input) || !json.Valid(s.Payload) {
+		return errors.New("process run input or payload is invalid JSON")
+	}
+	if strings.TrimSpace(s.SessionID) == "" {
+		return errors.New("process run session ID is empty")
+	}
+	if strings.TrimSpace(s.View.IntentTitle) == "" || strings.TrimSpace(s.View.ExecutionTitle) == "" ||
+		strings.TrimSpace(s.View.ExecutionConfirmation) == "" ||
+		strings.TrimSpace(s.View.ExecutionButtonLabel) == "" {
+
+		return errors.New("process run view is incomplete")
+	}
+	if err := s.Target.Validate(); err != nil {
+		return fmt.Errorf("validate process run target: %w", err)
+	}
+	if s.External != nil {
+		if !s.Started {
+			return errors.New("process run has an external run before starting")
+		}
+		if len(s.Checkpoint) == 0 {
+			return errors.New("process run has an external run without a checkpoint")
+		}
+		if err := s.External.Validate(); err != nil {
+			return fmt.Errorf("validate external process run: %w", err)
+		}
+	}
+	if len(s.Checkpoint) > 0 && (!s.Started || !json.Valid(s.Checkpoint)) {
+		return errors.New("process run checkpoint is invalid")
+	}
+	digest, err := s.intentDigest()
+	if err != nil || subtle.ConstantTimeCompare([]byte(digest), []byte(s.Digest)) != 1 {
+		return errors.New("process run digest does not match its content")
+	}
+	if s.Complete && !s.Started {
+		return errors.New("process run completed before it started")
+	}
+	if !s.Complete && s.Result != "" {
+		return errors.New("incomplete process run has a result")
+	}
+	if s.Complete && s.Result != ResultSucceeded && s.Result != ResultFailed &&
+		s.Result != ResultCanceled && s.Result != ResultUncertain {
+
+		return fmt.Errorf("completed process run has invalid result %q", s.Result)
+	}
+	if s.Complete && s.External != nil && s.Result != ResultUncertain {
+		if !s.External.Terminal {
+			return errors.New("completed process run has an incomplete external run")
+		}
+		if s.Result == ResultSucceeded && !s.External.Succeeded {
+			return errors.New("successful process run has an unsuccessful external run")
+		}
+		if (s.Result == ResultFailed || s.Result == ResultCanceled) && s.External.Succeeded {
+			return errors.New("failed process run has a successful external run")
+		}
+	}
+	return nil
+}
+
+// Clone returns an independent copy of s.
+func (s *State) Clone() *State {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	clone.Input = append(json.RawMessage(nil), s.Input...)
+	clone.Payload = append(json.RawMessage(nil), s.Payload...)
+	clone.View = clonePlanView(s.View)
+	clone.Checkpoint = append(json.RawMessage(nil), s.Checkpoint...)
+	if s.External != nil {
+		external := *s.External
+		clone.External = &external
+	}
+	return &clone
+}
+
+func (s *State) intentDigest() (string, error) {
+	payload := struct {
+		ProcessID string
+		VariantID string
+		Test      bool
+		Input     json.RawMessage
+		Payload   json.RawMessage
+		View      PlanView
+		Target    Reference
+	}{
+		ProcessID: s.ProcessID,
+		VariantID: s.VariantID,
+		Test:      s.Test,
+		Input:     s.Input,
+		Payload:   s.Payload,
+		View:      s.View,
+		Target:    s.Target,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest), nil
 }
 
 // Reference links to an external target or run.
@@ -376,6 +540,19 @@ type Reference struct {
 
 	// Succeeded reports whether a terminal external run succeeded.
 	Succeeded bool `json:"succeeded,omitempty"`
+}
+
+// Validate checks that the reference is complete and internally consistent.
+func (r Reference) Validate() error {
+	if strings.TrimSpace(r.ID) == "" || !strings.HasPrefix(r.URL, "https://") ||
+		strings.TrimSpace(r.LinkLabel) == "" {
+
+		return errors.New("process run reference is incomplete")
+	}
+	if r.Succeeded && !r.Terminal {
+		return errors.New("process run reference succeeded before reaching a terminal state")
+	}
+	return nil
 }
 
 // Checkpoint contains process-specific resumable state and process-neutral display data.
@@ -405,7 +582,7 @@ type Progress struct {
 	Total int
 }
 
-// PlanView contains process-neutral display data for the review page.
+// PlanView contains semantic review content. The shared UI owns page layout and rendering.
 type PlanView struct {
 	// Subtitle summarizes the process mode, target, or graph size.
 	Subtitle string `json:"subtitle"`
@@ -472,4 +649,15 @@ type RequestField struct {
 
 	// Value is the locked field value.
 	Value string `json:"value"`
+}
+
+func clonePlanView(view PlanView) PlanView {
+	clone := view
+	clone.Facts = append([]PlanFact(nil), view.Facts...)
+	if view.Request != nil {
+		request := *view.Request
+		request.Fields = append([]RequestField(nil), view.Request.Fields...)
+		clone.Request = &request
+	}
+	return clone
 }

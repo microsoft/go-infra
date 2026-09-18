@@ -21,7 +21,7 @@ func snapshotReleaseRun(run contract.Run) (*contract.State, error) {
 		return nil, errors.New("release run is nil")
 	}
 	state := run.Snapshot()
-	if err := validateProcessRun(state); err != nil {
+	if err := state.Validate(); err != nil {
 		return nil, fmt.Errorf("validate release run snapshot: %w", err)
 	}
 	return state, nil
@@ -34,7 +34,7 @@ func restoreReleaseRun(process contract.Process, state *contract.State) (contrac
 	if state.ProcessID != process.Definition().ID {
 		return nil, fmt.Errorf("release run process %q does not match %q", state.ProcessID, process.Definition().ID)
 	}
-	run, err := process.Restore(CloneReleaseRunState(state))
+	run, err := process.Restore(state.Clone())
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 			writeError(response, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if current.Result == "uncertain" {
+		if current.Result == contract.ResultUncertain {
 			s.mu.Unlock()
 			writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and repair its release work item before retrying")
 			return
@@ -276,7 +276,7 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusForbidden, "release tracking is required before starting an external action")
 		return
 	}
-	run := CloneReleaseRunState(current)
+	run := current.Clone()
 	s.processRunning = true
 	s.mu.Unlock()
 
@@ -356,7 +356,7 @@ func (s *Server) processCheckpoint(digest string, process contract.Process) cont
 			return errors.New("process checkpoint state is invalid JSON")
 		}
 		if checkpoint.External != nil {
-			if err := validateProcessRunReference(*checkpoint.External); err != nil {
+			if err := checkpoint.External.Validate(); err != nil {
 				return err
 			}
 		}
@@ -366,7 +366,7 @@ func (s *Server) processCheckpoint(digest string, process contract.Process) cont
 			s.mu.Unlock()
 			return errors.New("external run no longer matches the active process plan")
 		}
-		run := CloneReleaseRunState(current)
+		run := current.Clone()
 		run.Checkpoint = append(json.RawMessage(nil), checkpoint.State...)
 		run.External = nil
 		if checkpoint.External != nil {
@@ -412,33 +412,33 @@ func (s *Server) executeProcessRun(
 	s.mu.Lock()
 	current, stateErr := snapshotReleaseRun(s.processRun)
 	if stateErr == nil && secureEqual(current.Digest, digest) {
-		run := CloneReleaseRunState(current)
+		run := current.Clone()
 		resumable := len(run.Checkpoint) > 0 && !run.Complete &&
 			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 		switch {
 		case err == nil:
 			run.Complete = true
-			run.Result = "succeeded"
+			run.Result = contract.ResultSucceeded
 		case resumable:
 			run.Result = ""
 		default:
 			run.Complete = true
 			if run.External != nil && run.External.Terminal {
-				run.Result = "failed"
+				run.Result = contract.ResultFailed
 			} else {
-				run.Result = "uncertain"
+				run.Result = contract.ResultUncertain
 			}
 		}
 		_, validateErr := restoreReleaseRun(process, run)
 		if validateErr != nil {
 			run.Complete = true
-			run.Result = "uncertain"
+			run.Result = contract.ResultUncertain
 		}
 		var restoredRun contract.Run
 		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, run)
 		if saveErr != nil {
 			run.Complete = true
-			run.Result = "uncertain"
+			run.Result = contract.ResultUncertain
 			restoredRun, _ = restoreReleaseRun(process, run)
 		} else {
 			s.processRunRecord = record
@@ -465,7 +465,7 @@ func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
 	}
 	if run.Started && !run.Complete && len(run.Checkpoint) == 0 {
 		run.Complete = true
-		run.Result = "uncertain"
+		run.Result = contract.ResultUncertain
 		record, err = s.processRunStore.Update(s.ctx, record, run)
 		if err != nil {
 			return fmt.Errorf("mark interrupted process run uncertain: %w", err)
@@ -502,9 +502,9 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 	}
 	steps := describeSteps(s.steps)
 	if run.Complete {
-		status := "succeeded"
-		if run.Result != "succeeded" {
-			status = "failed"
+		status := contract.ResultSucceeded
+		if run.Result != contract.ResultSucceeded {
+			status = contract.ResultFailed
 		}
 		for index := range steps {
 			steps[index].Status = status

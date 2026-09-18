@@ -15,16 +15,17 @@ import (
 	"strings"
 	"time"
 
-	releaseui "github.com/microsoft/go-infra/releaseui"
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 const (
-	goImagesProcessID       = "go-images"
-	goImagesPipelineName    = "microsoft-go-images (official)"
-	goImagesPipelineOrg     = "dnceng"
-	goImagesPipelineProject = "internal"
+	goImagesProcessID               = "go-images"
+	goImagesPipelineName            = "microsoft-go-images (official)"
+	goImagesPipelineOrg             = "dnceng"
+	goImagesPipelineProject         = "internal"
+	goImagesPayloadSchemaVersion    = 1
+	goImagesCheckpointSchemaVersion = 1
 )
 
 // PlanInput is the browser-controlled input for a go-images release.
@@ -73,9 +74,15 @@ type goImagesRun struct {
 }
 
 type goImagesProcessPayload struct {
+	SchemaVersion  int             `json:"schemaVersion"`
 	Document       Document        `json:"document"`
 	Source         Source          `json:"source"`
 	RollbackSource *RollbackSource `json:"rollbackSource,omitempty"`
+}
+
+type goImagesCheckpoint struct {
+	SchemaVersion int   `json:"schemaVersion"`
+	State         State `json:"state"`
 }
 
 // NewProcess creates the fixed pipeline 1023 release process.
@@ -137,7 +144,7 @@ func (p *goImagesProcess) Prepare(ctx context.Context, selection contract.Select
 	if err != nil {
 		return nil, err
 	}
-	state, err := releaseui.NewReleaseRunState(goImagesProcessID, prepared)
+	state, err := contract.NewState(goImagesProcessID, prepared)
 	if err != nil {
 		return nil, fmt.Errorf("create go-images release run: %w", err)
 	}
@@ -199,7 +206,8 @@ func (p *goImagesProcess) prepare(ctx context.Context, variantID string, input P
 		return contract.Plan{}, fmt.Errorf("create durable release session: %w", err)
 	}
 	payloadJSON, err := json.Marshal(goImagesProcessPayload{
-		Document: *document, Source: source, RollbackSource: rollbackSource,
+		SchemaVersion: goImagesPayloadSchemaVersion,
+		Document:      *document, Source: source, RollbackSource: rollbackSource,
 	})
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("encode go-images process plan: %w", err)
@@ -255,11 +263,11 @@ func (p *goImagesProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := p.validate(state); err != nil {
 		return nil, err
 	}
-	return &goImagesRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
+	return &goImagesRun{process: p, state: state.Clone()}, nil
 }
 
 func (r *goImagesRun) Snapshot() *contract.State {
-	return releaseui.CloneReleaseRunState(r.state)
+	return r.state.Clone()
 }
 
 func (r *goImagesRun) Steps(
@@ -270,13 +278,13 @@ func (r *goImagesRun) Steps(
 	if err := r.process.validate(run); err != nil {
 		return nil, err
 	}
-	payload, err := decodeStrictJSON[goImagesProcessPayload](run.Payload)
+	payload, err := decodeGoImagesProcessPayload(run.Payload)
 	if err != nil {
 		return nil, err
 	}
 	state := payload.Document.State
 	if len(run.Checkpoint) > 0 {
-		state, err = decodeStrictJSON[State](run.Checkpoint)
+		state, err = decodeGoImagesCheckpoint(run.Checkpoint)
 		if err != nil {
 			return nil, fmt.Errorf("decode go-images checkpoint: %w", err)
 		}
@@ -309,7 +317,10 @@ func (r *goImagesRun) Steps(
 			return nil, fmt.Errorf("create go-images execution service: %w", err)
 		}
 		workflowCheckpoint = func(ctx context.Context, state *State) error {
-			stateJSON, err := json.Marshal(state)
+			stateJSON, err := json.Marshal(goImagesCheckpoint{
+				SchemaVersion: goImagesCheckpointSchemaVersion,
+				State:         *state,
+			})
 			if err != nil {
 				return fmt.Errorf("encode go-images checkpoint: %w", err)
 			}
@@ -327,10 +338,13 @@ func (r *goImagesRun) Steps(
 }
 
 func (p *goImagesProcess) validate(run *contract.State) error {
-	if run == nil || run.ProcessID != goImagesProcessID {
+	if err := run.Validate(); err != nil {
+		return fmt.Errorf("validate go-images process state: %w", err)
+	}
+	if run.ProcessID != goImagesProcessID {
 		return errors.New("go-images process run has an invalid process ID")
 	}
-	payload, err := decodeStrictJSON[goImagesProcessPayload](run.Payload)
+	payload, err := decodeGoImagesProcessPayload(run.Payload)
 	if err != nil {
 		return fmt.Errorf("decode go-images process payload: %w", err)
 	}
@@ -398,7 +412,7 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 		}
 		return nil
 	}
-	state, err := decodeStrictJSON[State](run.Checkpoint)
+	state, err := decodeGoImagesCheckpoint(run.Checkpoint)
 	if err != nil {
 		return fmt.Errorf("decode go-images process checkpoint: %w", err)
 	}
@@ -416,6 +430,28 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 		return errors.New("go-images process result does not match its state")
 	}
 	return nil
+}
+
+func decodeGoImagesProcessPayload(data json.RawMessage) (goImagesProcessPayload, error) {
+	payload, err := decodeStrictJSON[goImagesProcessPayload](data)
+	if err != nil {
+		return goImagesProcessPayload{}, err
+	}
+	if payload.SchemaVersion != goImagesPayloadSchemaVersion {
+		return goImagesProcessPayload{}, fmt.Errorf("unsupported go-images payload schema %d", payload.SchemaVersion)
+	}
+	return payload, nil
+}
+
+func decodeGoImagesCheckpoint(data json.RawMessage) (State, error) {
+	checkpoint, err := decodeStrictJSON[goImagesCheckpoint](data)
+	if err != nil {
+		return State{}, err
+	}
+	if checkpoint.SchemaVersion != goImagesCheckpointSchemaVersion {
+		return State{}, fmt.Errorf("unsupported go-images checkpoint schema %d", checkpoint.SchemaVersion)
+	}
+	return checkpoint.State, nil
 }
 
 func (p *goImagesProcess) validateConfiguration() error {
