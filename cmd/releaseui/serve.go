@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"
 	releaseui "github.com/microsoft/go-infra/releaseui"
@@ -51,7 +51,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 		TTL:      5 * time.Minute,
 	}
 
-	goInfraService, err := goinfra.New(goinfra.ExecCommandRunner{})
+	github, err := githubclient.New("github.com", githubclient.ExecCommandRunner{})
+	if err != nil {
+		return err
+	}
+	goInfraService, err := goinfra.NewGitHubService(github)
 	if err != nil {
 		return err
 	}
@@ -92,63 +96,18 @@ func handleServe(parse subcmd.ParseFunc) error {
 		options = append(options, releaseui.WithReleaseWorkItem(selected))
 	}
 
-	listener, err := net.Listen("tcp", *listenAddress)
-	if err != nil {
-		return fmt.Errorf("listen on %q: %w", *listenAddress, err)
-	}
-	defer listener.Close()
-	if !listener.Addr().(*net.TCPAddr).IP.IsLoopback() {
-		return fmt.Errorf("refusing to serve release UI on non-loopback address %q", listener.Addr())
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	ui, err := releaseui.New(ctx, options...)
-	if err != nil {
-		return err
-	}
-	baseURL := "http://" + listener.Addr().String()
-	launchURL, err := ui.LaunchURL(baseURL)
-	if err != nil {
-		return err
-	}
-
-	server := &http.Server{
-		Handler:           ui.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		BaseContext: func(net.Listener) context.Context {
-			return ctx
-		},
-	}
-	serverResult := make(chan error, 1)
-	go func() {
-		serverResult <- server.Serve(listener)
-	}()
-
-	fmt.Printf("Release UI listening at %s\n", launchURL)
-	fmt.Println("Go-images pipeline 1023 execution is available for normal, rollback, and dev/ test releases.")
-	if *releaseWorkItem > 0 {
-		fmt.Printf("Restored Azure DevOps work item: %d\n", *releaseWorkItem)
-	}
-	if !*noOpen {
-		if err := releaseui.OpenBrowser(launchURL); err != nil {
-			log.Printf("Unable to open browser automatically: %v", err)
+	return releaseui.ListenAndServe(ctx, *listenAddress, func(launchURL string) {
+		fmt.Printf("Release UI listening at %s\n", launchURL)
+		fmt.Println("Go-images pipeline 1023 execution is available for normal, rollback, and dev/ test releases.")
+		if *releaseWorkItem > 0 {
+			fmt.Printf("Restored Azure DevOps work item: %d\n", *releaseWorkItem)
 		}
-	}
-
-	select {
-	case <-ctx.Done():
-	case err := <-serverResult:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serve release UI: %w", err)
+		if !*noOpen {
+			if err := releaseui.OpenBrowser(launchURL); err != nil {
+				log.Printf("Unable to open browser automatically: %v", err)
+			}
 		}
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shut down release UI: %w", err)
-	}
-	return nil
+	}, options...)
 }

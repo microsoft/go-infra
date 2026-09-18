@@ -7,6 +7,7 @@ package goinfra
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -25,22 +26,15 @@ const (
 	workflowRunName  = "${{ inputs.release-ui-correlation-id || 'Create go-infra patch release' }}"
 )
 
-// CommandRunner executes gh without exposing its authentication token to callers.
-type CommandRunner = githubclient.CommandRunner
-
-// ExecCommandRunner runs the locally authenticated gh executable.
-type ExecCommandRunner = githubclient.ExecCommandRunner
-
 // Service performs allowlisted GitHub reads and mutations for go-infra.
 type Service struct {
 	client *githubclient.Client
 }
 
-// New creates a go-infra GitHub service.
-func New(runner CommandRunner) (*Service, error) {
-	client, err := githubclient.New("github.com", runner)
-	if err != nil {
-		return nil, err
+// NewGitHubService creates the fixed go-infra policy adapter over a generic GitHub client.
+func NewGitHubService(client *githubclient.Client) (*Service, error) {
+	if client == nil {
+		return nil, errors.New("GitHub client is nil")
 	}
 	return &Service{client: client}, nil
 }
