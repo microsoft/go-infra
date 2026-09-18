@@ -13,6 +13,7 @@ import (
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 func TestGoInfraDispatchSuccessWithoutExternalRunFailsPolicyValidation(t *testing.T) {
@@ -156,7 +157,7 @@ func TestGoInfraRestoreSelectionRequiresProcessRunStore(t *testing.T) {
 	}
 }
 
-func testProcessWorkItem(t *testing.T, id int, run *releaseui.ReleaseRunState) *azdoworkitem.WorkItem {
+func testProcessWorkItem(t *testing.T, id int, run *contract.State) *azdoworkitem.WorkItem {
 	t.Helper()
 	payload, err := json.Marshal(run)
 	if err != nil {

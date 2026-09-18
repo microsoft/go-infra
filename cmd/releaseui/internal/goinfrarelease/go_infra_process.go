@@ -14,6 +14,7 @@ import (
 	"strconv"
 
 	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -28,26 +29,26 @@ type goInfraProcess struct {
 
 type goInfraRun struct {
 	process *goInfraProcess
-	state   *releaseui.ReleaseRunState
+	state   *contract.State
 }
 
 // NewProcess creates the fixed microsoft/go-infra release process.
-func NewProcess(integration GoInfraGitHubIntegration) releaseui.ReleaseProcess {
+func NewProcess(integration GoInfraGitHubIntegration) contract.Process {
 	return &goInfraProcess{integration: integration}
 }
 
-func (p *goInfraProcess) Definition() releaseui.ProcessDefinition {
-	return releaseui.ProcessDefinition{
+func (p *goInfraProcess) Definition() contract.Definition {
+	return contract.Definition{
 		ID: goInfraProcessID, Name: "Go infrastructure", Mark: "IN",
 		Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
-		Workflow: releaseui.ProcessWorkflow{
+		Workflow: contract.Workflow{
 			Heading: "Choose release path", Description: "Review a fixed GitHub action before confirming it.",
 			SubmitLabel: "Review GitHub action",
-			Inputs: []releaseui.ProcessInput{
+			Inputs: []contract.Input{
 				{
 					ID: "action", Type: "choice", Label: "Release path", Default: goInfraActionReleaseOnMerge,
-					Options: []releaseui.ProcessInputOption{
+					Options: []contract.InputOption{
 						{
 							Value: goInfraActionReleaseOnMerge, Name: "Release on merge", Mark: "PR",
 							Description: "Add release-on-merge to one open, non-fork PR targeting main.",
@@ -65,12 +66,12 @@ func (p *goInfraProcess) Definition() releaseui.ProcessDefinition {
 				{
 					ID: "pullRequest", Type: "number", Label: "Pull request number", Placeholder: "123",
 					Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
-					VisibleWhen: &releaseui.ProcessCondition{InputID: "action", Equals: goInfraActionReleaseOnMerge},
+					VisibleWhen: &contract.Condition{InputID: "action", Equals: goInfraActionReleaseOnMerge},
 				},
 				{
 					ID: "dispatchMode", Type: "choice", Label: "Dispatch mode", Default: goInfraDispatchModeDryRun,
-					VisibleWhen: &releaseui.ProcessCondition{InputID: "action", Equals: goInfraActionManualDispatch},
-					Options: []releaseui.ProcessInputOption{
+					VisibleWhen: &contract.Condition{InputID: "action", Equals: goInfraActionManualDispatch},
+					Options: []contract.InputOption{
 						{Value: goInfraDispatchModeDryRun, Name: "Dry run", Mark: "D", Description: "Calculate the next v0.0.x version without creating a release."},
 						{Value: goInfraDispatchModePublish, Name: "Publish release", Mark: "P", Description: "Run the workflow on main and create the next patch release."},
 					},
@@ -80,15 +81,15 @@ func (p *goInfraProcess) Definition() releaseui.ProcessDefinition {
 	}
 }
 
-func (p *goInfraProcess) Preflight(ctx context.Context) (releaseui.ProcessReadiness, error) {
+func (p *goInfraProcess) Preflight(ctx context.Context) (contract.Readiness, error) {
 	if err := p.validateConfiguration(); err != nil {
-		return releaseui.ProcessReadiness{Details: "External execution is disabled. Restart with the go-infra integration configured."}, nil
+		return contract.Readiness{Details: "External execution is disabled. Restart with the go-infra integration configured."}, nil
 	}
 	details, err := p.integration.Preflight(ctx)
-	return releaseui.ProcessReadiness{PlanningEnabled: true, ExecutionEnabled: err == nil, Details: details}, err
+	return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: err == nil, Details: details}, err
 }
 
-func (p *goInfraProcess) Prepare(ctx context.Context, input json.RawMessage) (releaseui.ReleaseRun, error) {
+func (p *goInfraProcess) Prepare(ctx context.Context, input json.RawMessage) (contract.Run, error) {
 	if err := p.validateConfiguration(); err != nil {
 		return nil, err
 	}
@@ -103,20 +104,20 @@ func (p *goInfraProcess) Prepare(ctx context.Context, input json.RawMessage) (re
 	return p.Restore(state)
 }
 
-func (p *goInfraProcess) Restore(state *releaseui.ReleaseRunState) (releaseui.ReleaseRun, error) {
+func (p *goInfraProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := validateGoInfraProcessRun(state); err != nil {
 		return nil, err
 	}
 	return &goInfraRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
 }
 
-func (r *goInfraRun) Snapshot() *releaseui.ReleaseRunState {
+func (r *goInfraRun) Snapshot() *contract.State {
 	return releaseui.CloneReleaseRunState(r.state)
 }
 
 func (r *goInfraRun) Steps(
 	_ context.Context,
-	checkpoint releaseui.CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 ) ([]*coordinator.Step, error) {
 	if err := r.process.validateConfiguration(); err != nil {
 		return nil, err
@@ -155,44 +156,44 @@ func prepareGoInfraProcess(
 	ctx context.Context,
 	inputJSON json.RawMessage,
 	integration GoInfraGitHubIntegration,
-) (releaseui.ReleasePlan, error) {
+) (contract.Plan, error) {
 	input, err := decodeStrictJSON[goInfraPlanInput](inputJSON)
 	if err != nil {
-		return releaseui.ReleasePlan{}, releaseui.InvalidProcessInput(err)
+		return contract.Plan{}, contract.InvalidInput(err)
 	}
 	normalized, pullRequestNumber, err := normalizeGoInfraPlanInput(input)
 	if err != nil {
-		return releaseui.ReleasePlan{}, releaseui.InvalidProcessInput(err)
+		return contract.Plan{}, contract.InvalidInput(err)
 	}
 	payload := goInfraProcessPayload{Input: normalized}
 	if normalized.Action == goInfraActionReleaseOnMerge {
 		pullRequest, err := integration.GetPullRequest(ctx, pullRequestNumber)
 		if err != nil {
-			return releaseui.ReleasePlan{}, fmt.Errorf("validate go-infra pull request: %w", err)
+			return contract.Plan{}, fmt.Errorf("validate go-infra pull request: %w", err)
 		}
 		if err := validateGoInfraPullRequest(pullRequest, pullRequestNumber); err != nil {
-			return releaseui.ReleasePlan{}, err
+			return contract.Plan{}, err
 		}
 		payload.PullRequest = &pullRequest
 	}
 	normalizedJSON, err := json.Marshal(normalized)
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("encode normalized go-infra input: %w", err)
+		return contract.Plan{}, fmt.Errorf("encode normalized go-infra input: %w", err)
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("encode go-infra process plan: %w", err)
+		return contract.Plan{}, fmt.Errorf("encode go-infra process plan: %w", err)
 	}
-	return releaseui.ReleasePlan{
+	return contract.Plan{
 		Test: goInfraProcessIsTest(normalized), Input: normalizedJSON, Payload: payloadJSON,
-		Steps: []releaseui.ReleaseStep{goInfraProcessStep(payload)}, View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
+		Steps: []contract.Step{goInfraProcessStep(payload)}, View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
 	}, nil
 }
 
 func executeGoInfraProcess(
 	ctx context.Context,
 	payloadJSON json.RawMessage,
-	checkpoint releaseui.CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 	integration GoInfraGitHubIntegration,
 ) error {
 	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
@@ -220,7 +221,7 @@ func executeGoInfraProcess(
 func resumeGoInfraProcess(
 	ctx context.Context,
 	payloadJSON, state json.RawMessage,
-	checkpoint releaseui.CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 	integration GoInfraGitHubIntegration,
 ) error {
 	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
@@ -243,7 +244,7 @@ func resumeGoInfraProcess(
 func pollGoInfraProcess(
 	ctx context.Context,
 	runID int64,
-	checkpoint releaseui.CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 	integration GoInfraGitHubIntegration,
 ) error {
 	_, err := integration.PollWorkflowRun(ctx, runID, func(run GoInfraWorkflowRun) error {
@@ -252,7 +253,7 @@ func pollGoInfraProcess(
 	return err
 }
 
-func checkpointGoInfraProcess(ctx context.Context, run GoInfraWorkflowRun, checkpoint releaseui.CheckpointFunc) error {
+func checkpointGoInfraProcess(ctx context.Context, run GoInfraWorkflowRun, checkpoint contract.CheckpointFunc) error {
 	if err := validateGoInfraWorkflowRun(&run); err != nil {
 		return err
 	}
@@ -260,16 +261,16 @@ func checkpointGoInfraProcess(ctx context.Context, run GoInfraWorkflowRun, check
 	if err != nil {
 		return fmt.Errorf("encode go-infra workflow run: %w", err)
 	}
-	return checkpoint(ctx, releaseui.ReleaseCheckpoint{
+	return checkpoint(ctx, contract.Checkpoint{
 		State: state, External: processRunReference(goInfraExternalRun(run)), Progress: goInfraProcessProgress(run),
 	})
 }
 
-func processRunReference(reference releaseui.ReleaseReference) *releaseui.ReleaseReference {
+func processRunReference(reference contract.Reference) *contract.Reference {
 	return &reference
 }
 
-func validateGoInfraProcessRun(run *releaseui.ReleaseRunState) error {
+func validateGoInfraProcessRun(run *contract.State) error {
 	if run == nil || run.ProcessID != goInfraProcessID {
 		return errors.New("go-infra process run has an invalid process ID")
 	}
@@ -309,7 +310,7 @@ func validateGoInfraProcessRun(run *releaseui.ReleaseRunState) error {
 	default:
 		return fmt.Errorf("unsupported go-infra action %q", payload.Input.Action)
 	}
-	if !reflect.DeepEqual(run.Steps, []releaseui.ReleaseStep{goInfraProcessStep(payload)}) || run.Target != goInfraProcessTarget(payload) ||
+	if !reflect.DeepEqual(run.Steps, []contract.Step{goInfraProcessStep(payload)}) || run.Target != goInfraProcessTarget(payload) ||
 		!reflect.DeepEqual(run.View, goInfraProcessView(payload)) {
 
 		return errors.New("go-infra process plan does not match its fixed policy")
@@ -333,8 +334,8 @@ func goInfraProcessIsTest(input goInfraPlanInput) bool {
 	return input.Action == goInfraActionManualDispatch && input.DispatchMode == goInfraDispatchModeDryRun
 }
 
-func goInfraProcessStep(payload goInfraProcessPayload) releaseui.ReleaseStep {
-	step := releaseui.ReleaseStep{Name: "Apply release-on-merge label", Timeout: goInfraLabelTimeout}
+func goInfraProcessStep(payload goInfraProcessPayload) contract.Step {
+	step := contract.Step{Name: "Apply release-on-merge label", Timeout: goInfraLabelTimeout}
 	if payload.Input.Action == goInfraActionManualDispatch {
 		step.Timeout = goInfraWorkflowTimeout
 		if payload.Input.DispatchMode == goInfraDispatchModeDryRun {
@@ -346,28 +347,28 @@ func goInfraProcessStep(payload goInfraProcessPayload) releaseui.ReleaseStep {
 	return step
 }
 
-func goInfraProcessTarget(payload goInfraProcessPayload) releaseui.ReleaseReference {
+func goInfraProcessTarget(payload goInfraProcessPayload) contract.Reference {
 	if payload.Input.Action == goInfraActionReleaseOnMerge {
-		return releaseui.ReleaseReference{
+		return contract.Reference{
 			ID: "pr-" + payload.Input.PullRequest, URL: payload.PullRequest.URL,
 			LinkLabel: "Open go-infra PR #" + payload.Input.PullRequest,
 		}
 	}
-	return releaseui.ReleaseReference{
+	return contract.Reference{
 		ID: payload.Input.DispatchMode, URL: goInfraWorkflowURL, LinkLabel: "Open go-infra workflow runs",
 	}
 }
 
-func goInfraExternalRun(run GoInfraWorkflowRun) releaseui.ReleaseReference {
-	return releaseui.ReleaseReference{
+func goInfraExternalRun(run GoInfraWorkflowRun) contract.Reference {
+	return contract.Reference{
 		ID: strconv.FormatInt(run.ID, 10), URL: run.URL,
 		LinkLabel: "Open go-infra workflow run " + strconv.FormatInt(run.ID, 10),
 		Status:    run.Status, Terminal: run.Status == "completed", Succeeded: run.Conclusion == "success",
 	}
 }
 
-func goInfraProcessProgress(run GoInfraWorkflowRun) releaseui.ReleaseProgress {
-	progress := releaseui.ReleaseProgress{
+func goInfraProcessProgress(run GoInfraWorkflowRun) contract.Progress {
+	progress := contract.Progress{
 		Summary: "GitHub workflow is queued",
 		Detail:  fmt.Sprintf("Waiting for run %d to start", run.ID),
 	}
@@ -384,10 +385,10 @@ func goInfraProcessProgress(run GoInfraWorkflowRun) releaseui.ReleaseProgress {
 	return progress
 }
 
-func goInfraProcessView(payload goInfraProcessPayload) releaseui.ProcessPlanView {
-	view := releaseui.ProcessPlanView{
+func goInfraProcessView(payload goInfraProcessPayload) contract.PlanView {
+	view := contract.PlanView{
 		Subtitle: "GitHub action · 1 step",
-		Request: &releaseui.ProcessRequestPreview{
+		Request: &contract.RequestPreview{
 			Eyebrow: "GitHub request preview · not sent",
 			Target:  goInfraRepository,
 		},
@@ -397,12 +398,12 @@ func goInfraProcessView(payload goInfraProcessPayload) releaseui.ProcessPlanView
 		pullRequest := payload.PullRequest
 		view.IntentTitle = fmt.Sprintf("Apply %s to PR #%d", goInfraReleaseLabel, pullRequest.Number)
 		view.IntentBadge = goInfraReleaseLabel
-		view.Facts = []releaseui.ProcessPlanFact{
+		view.Facts = []contract.PlanFact{
 			{Label: "Pull request", Value: fmt.Sprintf("#%d · %s", pullRequest.Number, pullRequest.Title), Href: pullRequest.URL},
 			{Label: "Target", Value: pullRequest.BaseRef, Detail: pullRequest.HeadRef + " @ " + pullRequest.HeadSHA},
 		}
 		view.Request.Title = "Add pull request label"
-		view.Request.Fields = []releaseui.ProcessRequestField{
+		view.Request.Fields = []contract.RequestField{
 			{Name: "pullRequest", Value: strconv.Itoa(pullRequest.Number)},
 			{Name: "expectedHeadSHA", Value: pullRequest.HeadSHA},
 			{Name: "label", Value: goInfraReleaseLabel},
@@ -419,9 +420,9 @@ func goInfraProcessView(payload goInfraProcessPayload) releaseui.ProcessPlanView
 		}
 		view.IntentTitle = mode + " the next go-infra patch release"
 		view.IntentBadge = payload.Input.DispatchMode
-		view.Facts = []releaseui.ProcessPlanFact{{Label: "Workflow", Value: goInfraWorkflowFile, Href: goInfraWorkflowURL}, {Label: "Ref", Value: goInfraDefaultRef}}
+		view.Facts = []contract.PlanFact{{Label: "Workflow", Value: goInfraWorkflowFile, Href: goInfraWorkflowURL}, {Label: "Ref", Value: goInfraDefaultRef}}
 		view.Request.Title = "Dispatch GitHub Actions workflow"
-		view.Request.Fields = []releaseui.ProcessRequestField{{Name: "workflow", Value: goInfraWorkflowFile}, {Name: "ref", Value: goInfraDefaultRef}, {Name: "dry-run", Value: strconv.FormatBool(dryRun)}}
+		view.Request.Fields = []contract.RequestField{{Name: "workflow", Value: goInfraWorkflowFile}, {Name: "ref", Value: goInfraDefaultRef}, {Name: "dry-run", Value: strconv.FormatBool(dryRun)}}
 		if dryRun {
 			view.ExecutionTitle = "Run release dry run"
 			view.ExecutionWarning = "This dispatches the existing workflow with dry-run=true. It calculates the next version but does not create a release."
@@ -451,6 +452,6 @@ func decodeStrictJSON[T any](data json.RawMessage) (T, error) {
 }
 
 var (
-	_ releaseui.ReleaseProcess = (*goInfraProcess)(nil)
-	_ releaseui.ReleaseRun     = (*goInfraRun)(nil)
+	_ contract.Process = (*goInfraProcess)(nil)
+	_ contract.Run     = (*goInfraRun)(nil)
 )

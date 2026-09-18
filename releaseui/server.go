@@ -23,6 +23,7 @@ import (
 	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -36,7 +37,7 @@ type Server struct {
 	ctx                 context.Context
 	token               string
 	demoDelay           time.Duration
-	configuredProcesses []ReleaseProcess
+	configuredProcesses []contract.Process
 	processes           *processRegistry
 	activeProcessID     string
 	processRunStore     ReleaseRunStore
@@ -48,7 +49,7 @@ type Server struct {
 	steps             []*coordinator.Step
 	runner            *coordinator.StepRunner
 	simulationRunning bool
-	processRun        ReleaseRun
+	processRun        contract.Run
 	processRunRecord  *ReleaseRunRecord
 	processRunning    bool
 }
@@ -64,9 +65,9 @@ func WithDemoDelay(delay time.Duration) Option {
 }
 
 // WithProcesses sets the release processes hosted by this server.
-func WithProcesses(processes ...ReleaseProcess) Option {
+func WithProcesses(processes ...contract.Process) Option {
 	return func(server *Server) {
-		server.configuredProcesses = append([]ReleaseProcess(nil), processes...)
+		server.configuredProcesses = append([]contract.Process(nil), processes...)
 	}
 }
 
@@ -246,41 +247,6 @@ type planStep struct {
 	Status    string   `json:"status,omitempty"`
 }
 
-// ProcessPlanView contains process-neutral display data for the shared release page.
-type ProcessPlanView struct {
-	Subtitle              string                 `json:"subtitle"`
-	IntentTitle           string                 `json:"intentTitle"`
-	IntentBadge           string                 `json:"intentBadge,omitempty"`
-	Facts                 []ProcessPlanFact      `json:"facts,omitempty"`
-	Request               *ProcessRequestPreview `json:"request,omitempty"`
-	ExecutionTitle        string                 `json:"executionTitle,omitempty"`
-	ExecutionWarning      string                 `json:"executionWarning,omitempty"`
-	ExecutionConfirmation string                 `json:"executionConfirmation,omitempty"`
-	ExecutionButtonLabel  string                 `json:"executionButtonLabel,omitempty"`
-}
-
-// ProcessPlanFact is one resolved value shown while reviewing a prepared plan.
-type ProcessPlanFact struct {
-	Label  string `json:"label"`
-	Value  string `json:"value"`
-	Detail string `json:"detail,omitempty"`
-	Href   string `json:"href,omitempty"`
-}
-
-// ProcessRequestPreview describes the locked external request without sending it.
-type ProcessRequestPreview struct {
-	Eyebrow string                `json:"eyebrow"`
-	Title   string                `json:"title"`
-	Target  string                `json:"target,omitempty"`
-	Fields  []ProcessRequestField `json:"fields,omitempty"`
-}
-
-// ProcessRequestField is one name/value pair in an external request preview.
-type ProcessRequestField struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
 type pipelineRun struct {
 	BuildID   string `json:"buildId,omitempty"`
 	URL       string `json:"url,omitempty"`
@@ -342,11 +308,11 @@ type processDetail struct {
 }
 
 type workflowDetail struct {
-	Heading     string         `json:"heading"`
-	Description string         `json:"description,omitempty"`
-	SubmitLabel string         `json:"submitLabel"`
-	Inputs      []ProcessInput `json:"inputs"`
-	CanSimulate bool           `json:"canSimulate"`
+	Heading     string           `json:"heading"`
+	Description string           `json:"description,omitempty"`
+	SubmitLabel string           `json:"submitLabel"`
+	Inputs      []contract.Input `json:"inputs"`
+	CanSimulate bool             `json:"canSimulate"`
 }
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
@@ -362,7 +328,7 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 		Workflow: workflowDetail{
 			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
 			SubmitLabel: definition.Workflow.SubmitLabel,
-			Inputs:      append([]ProcessInput(nil), definition.Workflow.Inputs...),
+			Inputs:      append([]contract.Input(nil), definition.Workflow.Inputs...),
 			CanSimulate: definition.Workflow.CanSimulate,
 		},
 	}
@@ -401,7 +367,7 @@ func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
 	}
 }
 
-func (s *Server) processRunSummaryLocked(run *ReleaseRunState) releaseSummary {
+func (s *Server) processRunSummaryLocked(run *contract.State) releaseSummary {
 	registered, _ := s.processes.process(run.ProcessID)
 	definition := registered.definition
 	status := "ready"

@@ -11,45 +11,11 @@ import (
 	"net/http"
 	"reflect"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-// CheckpointFunc durably records process state before execution continues.
-type CheckpointFunc func(context.Context, ReleaseCheckpoint) error
-
-// ReleaseCheckpoint contains process-specific resumable state and optional external-run data.
-type ReleaseCheckpoint struct {
-	State    json.RawMessage
-	External *ReleaseReference
-	Progress ReleaseProgress
-}
-
-// ReleaseProgress is the process-neutral progress reported by an external action.
-type ReleaseProgress struct {
-	Summary   string
-	Detail    string
-	Completed int
-	Total     int
-}
-
-type processInputError struct {
-	err error
-}
-
-func (e *processInputError) Error() string {
-	return e.err.Error()
-}
-
-func (e *processInputError) Unwrap() error {
-	return e.err
-}
-
-// InvalidProcessInput marks a preparation error as invalid browser input.
-func InvalidProcessInput(err error) error {
-	return &processInputError{err: err}
-}
-
-func snapshotReleaseRun(run ReleaseRun) (*ReleaseRunState, error) {
+func snapshotReleaseRun(run contract.Run) (*contract.State, error) {
 	if run == nil {
 		return nil, errors.New("release run is nil")
 	}
@@ -60,7 +26,7 @@ func snapshotReleaseRun(run ReleaseRun) (*ReleaseRunState, error) {
 	return state, nil
 }
 
-func restoreReleaseRun(process ReleaseProcess, state *ReleaseRunState) (ReleaseRun, error) {
+func restoreReleaseRun(process contract.Process, state *contract.State) (contract.Run, error) {
 	if state == nil {
 		return nil, errors.New("release run state is nil")
 	}
@@ -86,7 +52,7 @@ type processRunResponse struct {
 	Steps     []planStep        `json:"steps"`
 	SessionID string            `json:"sessionId"`
 	Execution executionResponse `json:"execution"`
-	View      ProcessPlanView   `json:"view"`
+	View      contract.PlanView `json:"view"`
 }
 
 type releaseStartRequest struct {
@@ -213,8 +179,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 	releaseRun, err := registered.process.Prepare(request.Context(), normalizedInput)
 	if err != nil {
 		status := http.StatusConflict
-		var inputErr *processInputError
-		if errors.As(err, &inputErr) {
+		if errors.Is(err, contract.ErrInvalidInput) {
 			status = http.StatusBadRequest
 		}
 		writeError(response, status, err.Error())
@@ -384,8 +349,8 @@ func (s *Server) stopProcessStart(digest string) {
 	s.mu.Unlock()
 }
 
-func (s *Server) processCheckpoint(digest string, process ReleaseProcess) CheckpointFunc {
-	return func(ctx context.Context, checkpoint ReleaseCheckpoint) error {
+func (s *Server) processCheckpoint(digest string, process contract.Process) contract.CheckpointFunc {
+	return func(ctx context.Context, checkpoint contract.Checkpoint) error {
 		if !json.Valid(checkpoint.State) {
 			return errors.New("process checkpoint state is invalid JSON")
 		}
@@ -440,7 +405,7 @@ func (s *Server) executeProcessRun(
 	digest string,
 	runner *coordinator.StepRunner,
 	steps []*coordinator.Step,
-	process ReleaseProcess,
+	process contract.Process,
 ) {
 	err := runner.Execute(s.ctx, steps)
 	s.mu.Lock()
@@ -468,7 +433,7 @@ func (s *Server) executeProcessRun(
 			run.Complete = true
 			run.Result = "uncertain"
 		}
-		var restoredRun ReleaseRun
+		var restoredRun contract.Run
 		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, run)
 		if saveErr != nil {
 			run.Complete = true
@@ -569,7 +534,7 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 	}
 }
 
-func matchProcessRunGraph(run *ReleaseRunState, steps []*coordinator.Step) error {
+func matchProcessRunGraph(run *contract.State, steps []*coordinator.Step) error {
 	described, err := describeProcessRunSteps(steps)
 	if err != nil {
 		return err
@@ -580,17 +545,17 @@ func matchProcessRunGraph(run *ReleaseRunState, steps []*coordinator.Step) error
 	return nil
 }
 
-func describeProcessRunSteps(steps []*coordinator.Step) ([]ReleaseStep, error) {
+func describeProcessRunSteps(steps []*coordinator.Step) ([]contract.Step, error) {
 	if len(steps) == 0 {
 		return nil, errors.New("process graph has no steps")
 	}
-	described := make([]ReleaseStep, 0, len(steps))
+	described := make([]contract.Step, 0, len(steps))
 	seen := make(map[*coordinator.Step]struct{}, len(steps))
 	for _, step := range steps {
 		if step == nil || step.Func == nil {
 			return nil, errors.New("process graph contains an incomplete step")
 		}
-		entry := ReleaseStep{Name: step.Name, Timeout: step.Timeout}
+		entry := contract.Step{Name: step.Name, Timeout: step.Timeout}
 		if len(step.DependsOn) > 0 {
 			entry.DependsOn = make([]string, len(step.DependsOn))
 		}

@@ -11,9 +11,11 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
-func normalizeProcessInputs(inputs []ProcessInput, data json.RawMessage) (json.RawMessage, error) {
+func normalizeProcessInputs(inputs []contract.Input, data json.RawMessage) (json.RawMessage, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	var encoded map[string]json.RawMessage
 	if err := decoder.Decode(&encoded); err != nil {
@@ -26,7 +28,7 @@ func normalizeProcessInputs(inputs []ProcessInput, data json.RawMessage) (json.R
 		return nil, errors.New("process inputs must contain exactly one JSON value")
 	}
 
-	byID := make(map[string]ProcessInput, len(inputs))
+	byID := make(map[string]contract.Input, len(inputs))
 	values := make(map[string]string, len(inputs))
 	provided := make(map[string]bool, len(encoded))
 	for _, input := range inputs {

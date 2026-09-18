@@ -4,8 +4,6 @@
 package releaseui
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -13,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 var (
@@ -21,78 +19,9 @@ var (
 	inputIDPattern   = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 )
 
-// ReleaseProcess describes one release type and creates or restores its runs.
-type ReleaseProcess interface {
-	Definition() ProcessDefinition
-	Preflight(context.Context) (ProcessReadiness, error)
-	Prepare(context.Context, json.RawMessage) (ReleaseRun, error)
-	Restore(*ReleaseRunState) (ReleaseRun, error)
-}
-
-// ReleaseRun owns one release's validated state and executable step graph.
-type ReleaseRun interface {
-	// Snapshot returns an independent copy suitable for persistence or shared lifecycle updates.
-	Snapshot() *ReleaseRunState
-	Steps(context.Context, CheckpointFunc) ([]*coordinator.Step, error)
-}
-
-// ProcessReadiness reports which non-mutating process operations are currently available.
-type ProcessReadiness struct {
-	PlanningEnabled  bool
-	ExecutionEnabled bool
-	Details          string
-}
-
-// ProcessDefinition describes one release process served at /{ID} through the shared process page.
-type ProcessDefinition struct {
-	ID               string
-	Name             string
-	Mark             string
-	Description      string
-	DocumentationURL string
-	Workflow         ProcessWorkflow
-}
-
-// ProcessWorkflow describes the form and capabilities rendered by the shared process page.
-type ProcessWorkflow struct {
-	Heading     string         `json:"heading"`
-	Description string         `json:"description,omitempty"`
-	SubmitLabel string         `json:"submitLabel,omitempty"`
-	Inputs      []ProcessInput `json:"inputs,omitempty"`
-	CanSimulate bool           `json:"canSimulate"`
-}
-
-// ProcessInput describes one control rendered by the shared process page.
-type ProcessInput struct {
-	ID          string               `json:"id"`
-	Type        string               `json:"type"`
-	Label       string               `json:"label"`
-	Description string               `json:"description,omitempty"`
-	Default     string               `json:"default,omitempty"`
-	Placeholder string               `json:"placeholder,omitempty"`
-	Options     []ProcessInputOption `json:"options,omitempty"`
-	VisibleWhen *ProcessCondition    `json:"visibleWhen,omitempty"`
-}
-
-// ProcessInputOption describes one choice in a choice input.
-type ProcessInputOption struct {
-	Value       string `json:"value"`
-	Name        string `json:"name"`
-	Mark        string `json:"mark,omitempty"`
-	Description string `json:"description"`
-	NoticeTitle string `json:"noticeTitle,omitempty"`
-	Notice      string `json:"notice,omitempty"`
-}
-
-// ProcessCondition conditionally displays an input based on another input's value.
-type ProcessCondition struct {
-	InputID string `json:"inputId"`
-	Equals  string `json:"equals"`
-}
-
 type registeredProcess struct {
-	process    ReleaseProcess
-	definition ProcessDefinition
+	process    contract.Process
+	definition contract.Definition
 }
 
 type processRegistry struct {
@@ -100,7 +29,7 @@ type processRegistry struct {
 	byID    map[string]registeredProcess
 }
 
-func newProcessRegistry(processes ...ReleaseProcess) (*processRegistry, error) {
+func newProcessRegistry(processes ...contract.Process) (*processRegistry, error) {
 	if len(processes) == 0 {
 		return nil, errors.New("release process registry is empty")
 	}
@@ -137,14 +66,14 @@ func newProcessRegistry(processes ...ReleaseProcess) (*processRegistry, error) {
 	return registry, nil
 }
 
-func validateProcessWorkflow(processID string, workflow ProcessWorkflow) error {
+func validateProcessWorkflow(processID string, workflow contract.Workflow) error {
 	if strings.TrimSpace(workflow.Heading) == "" {
 		return fmt.Errorf("release process %q has an incomplete workflow", processID)
 	}
 	if strings.TrimSpace(workflow.SubmitLabel) == "" {
 		return fmt.Errorf("release process %q has no workflow submit label", processID)
 	}
-	inputs := make(map[string]ProcessInput, len(workflow.Inputs))
+	inputs := make(map[string]contract.Input, len(workflow.Inputs))
 	for _, input := range workflow.Inputs {
 		if !inputIDPattern.MatchString(input.ID) || strings.TrimSpace(input.Label) == "" ||
 			input.Type != "choice" && input.Type != "number" {

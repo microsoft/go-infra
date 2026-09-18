@@ -7,20 +7,22 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 func TestNormalizeProcessInputs(t *testing.T) {
-	inputs := []ProcessInput{
+	inputs := []contract.Input{
 		{
 			ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
-			Options: []ProcessInputOption{
+			Options: []contract.InputOption{
 				{Value: "normal", Name: "Normal", Description: "Normal mode"},
 				{Value: "rollback", Name: "Rollback", Description: "Rollback mode"},
 			},
 		},
 		{
 			ID: "build", Type: "number", Label: "Build",
-			VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"},
+			VisibleWhen: &contract.Condition{InputID: "mode", Equals: "rollback"},
 		},
 	}
 	for _, test := range []struct {
@@ -48,14 +50,14 @@ func TestNormalizeProcessInputs(t *testing.T) {
 }
 
 func TestNormalizeProcessInputsRejectsSchemaViolations(t *testing.T) {
-	inputs := []ProcessInput{
+	inputs := []contract.Input{
 		{
 			ID: "mode", Type: "choice", Label: "Mode",
-			Options: []ProcessInputOption{{Value: "normal", Name: "Normal", Description: "Normal mode"}},
+			Options: []contract.InputOption{{Value: "normal", Name: "Normal", Description: "Normal mode"}},
 		},
 		{
 			ID: "build", Type: "number", Label: "Build",
-			VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "normal"},
+			VisibleWhen: &contract.Condition{InputID: "mode", Equals: "normal"},
 		},
 	}
 	for _, input := range []string{
@@ -73,15 +75,15 @@ func TestNormalizeProcessInputsRejectsSchemaViolations(t *testing.T) {
 			t.Fatalf("input %s was accepted", input)
 		}
 	}
-	hidden := []ProcessInput{
+	hidden := []contract.Input{
 		{
 			ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
-			Options: []ProcessInputOption{
+			Options: []contract.InputOption{
 				{Value: "normal", Name: "Normal", Description: "Normal mode"},
 				{Value: "rollback", Name: "Rollback", Description: "Rollback mode"},
 			},
 		},
-		{ID: "build", Type: "number", Label: "Build", VisibleWhen: &ProcessCondition{InputID: "mode", Equals: "rollback"}},
+		{ID: "build", Type: "number", Label: "Build", VisibleWhen: &contract.Condition{InputID: "mode", Equals: "rollback"}},
 	}
 	if _, err := normalizeProcessInputs(hidden, json.RawMessage(`{"mode":"normal","build":"42"}`)); err == nil {
 		t.Fatal("hidden input was accepted")

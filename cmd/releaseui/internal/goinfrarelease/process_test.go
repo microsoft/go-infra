@@ -18,6 +18,7 @@ import (
 	"time"
 
 	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -76,7 +77,7 @@ type goInfraTestPlanResponse struct {
 	Steps     []goInfraTestPlanStep        `json:"steps"`
 	SessionID string                       `json:"sessionId"`
 	Execution goInfraTestExecutionResponse `json:"execution"`
-	View      releaseui.ProcessPlanView    `json:"view"`
+	View      contract.PlanView            `json:"view"`
 }
 
 type goInfraTestUI struct {
@@ -286,7 +287,7 @@ func newMemoryProcessRunStore() *memoryProcessRunStore {
 	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*releaseui.ReleaseRunRecord)}
 }
 
-func (s *memoryProcessRunStore) Create(_ context.Context, run *releaseui.ReleaseRunState) (*releaseui.ReleaseRunRecord, error) {
+func (s *memoryProcessRunStore) Create(_ context.Context, run *contract.State) (*releaseui.ReleaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.createErr != nil {
@@ -319,7 +320,7 @@ func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*releaseui.Relea
 func (s *memoryProcessRunStore) Update(
 	_ context.Context,
 	current *releaseui.ReleaseRunRecord,
-	run *releaseui.ReleaseRunState,
+	run *contract.State,
 ) (*releaseui.ReleaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -343,7 +344,7 @@ func (s *memoryProcessRunStore) Update(
 	return cloneProcessRunRecord(updated), nil
 }
 
-func (s *memoryProcessRunStore) seed(t *testing.T, run *releaseui.ReleaseRunState) int {
+func (s *memoryProcessRunStore) seed(t *testing.T, run *contract.State) int {
 	t.Helper()
 	record, err := s.Create(context.Background(), run)
 	if err != nil {
@@ -352,7 +353,7 @@ func (s *memoryProcessRunStore) seed(t *testing.T, run *releaseui.ReleaseRunStat
 	return record.WorkItemID
 }
 
-func (s *memoryProcessRunStore) latest(t *testing.T) *releaseui.ReleaseRunState {
+func (s *memoryProcessRunStore) latest(t *testing.T) *contract.State {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -365,7 +366,7 @@ func (s *memoryProcessRunStore) latest(t *testing.T) *releaseui.ReleaseRunState 
 	panic("unreachable")
 }
 
-func (s *memoryProcessRunStore) current() (*releaseui.ReleaseRunState, bool) {
+func (s *memoryProcessRunStore) current() (*contract.State, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.records) != 1 {
@@ -392,7 +393,7 @@ func cloneProcessRunRecord(record *releaseui.ReleaseRunRecord) *releaseui.Releas
 	return &cloned
 }
 
-func cloneProcessRun(run *releaseui.ReleaseRunState) *releaseui.ReleaseRunState {
+func cloneProcessRun(run *contract.State) *contract.State {
 	if run == nil {
 		return nil
 	}
@@ -400,14 +401,14 @@ func cloneProcessRun(run *releaseui.ReleaseRunState) *releaseui.ReleaseRunState 
 	cloned.Input = append(json.RawMessage(nil), run.Input...)
 	cloned.Payload = append(json.RawMessage(nil), run.Payload...)
 	cloned.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
-	cloned.Steps = append([]releaseui.ReleaseStep(nil), run.Steps...)
+	cloned.Steps = append([]contract.Step(nil), run.Steps...)
 	for index := range cloned.Steps {
 		cloned.Steps[index].DependsOn = append([]string(nil), run.Steps[index].DependsOn...)
 	}
-	cloned.View.Facts = append([]releaseui.ProcessPlanFact(nil), run.View.Facts...)
+	cloned.View.Facts = append([]contract.PlanFact(nil), run.View.Facts...)
 	if run.View.Request != nil {
 		request := *run.View.Request
-		request.Fields = append([]releaseui.ProcessRequestField(nil), run.View.Request.Fields...)
+		request.Fields = append([]contract.RequestField(nil), run.View.Request.Fields...)
 		cloned.View.Request = &request
 	}
 	if run.External != nil {
@@ -417,7 +418,7 @@ func cloneProcessRun(run *releaseui.ReleaseRunState) *releaseui.ReleaseRunState 
 	return &cloned
 }
 
-func testStoredGoInfraRun(t *testing.T, integration GoInfraGitHubIntegration, input goInfraPlanInput) *releaseui.ReleaseRunState {
+func testStoredGoInfraRun(t *testing.T, integration GoInfraGitHubIntegration, input goInfraPlanInput) *contract.State {
 	t.Helper()
 	process := NewProcess(integration)
 	inputJSON, err := json.Marshal(input)
@@ -435,7 +436,7 @@ func testStoredGoInfraRun(t *testing.T, integration GoInfraGitHubIntegration, in
 	return run
 }
 
-func waitForGoInfraAction(t *testing.T, store *memoryProcessRunStore) *releaseui.ReleaseRunState {
+func waitForGoInfraAction(t *testing.T, store *memoryProcessRunStore) *contract.State {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

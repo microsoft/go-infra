@@ -9,38 +9,39 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-func testDurableWorkflow(heading string) ProcessWorkflow {
-	return ProcessWorkflow{Heading: heading, SubmitLabel: "Review"}
+func testDurableWorkflow(heading string) contract.Workflow {
+	return contract.Workflow{Heading: heading, SubmitLabel: "Review"}
 }
 
 type fakeProcess struct {
-	definition ProcessDefinition
-	preflight  func(context.Context) (ProcessReadiness, error)
-	prepare    func(context.Context, json.RawMessage) (ReleasePlan, error)
-	build      func(context.Context, *ReleaseRunState, CheckpointFunc) ([]*coordinator.Step, error)
-	validate   func(*ReleaseRunState) error
+	definition contract.Definition
+	preflight  func(context.Context) (contract.Readiness, error)
+	prepare    func(context.Context, json.RawMessage) (contract.Plan, error)
+	build      func(context.Context, *contract.State, contract.CheckpointFunc) ([]*coordinator.Step, error)
+	validate   func(*contract.State) error
 }
 
 type fakeReleaseRun struct {
 	process *fakeProcess
-	state   *ReleaseRunState
+	state   *contract.State
 }
 
-func (p *fakeProcess) Definition() ProcessDefinition {
+func (p *fakeProcess) Definition() contract.Definition {
 	return p.definition
 }
 
-func (p *fakeProcess) Preflight(ctx context.Context) (ProcessReadiness, error) {
+func (p *fakeProcess) Preflight(ctx context.Context) (contract.Readiness, error) {
 	if p.preflight == nil {
-		return ProcessReadiness{}, nil
+		return contract.Readiness{}, nil
 	}
 	return p.preflight(ctx)
 }
 
-func (p *fakeProcess) Prepare(ctx context.Context, input json.RawMessage) (ReleaseRun, error) {
+func (p *fakeProcess) Prepare(ctx context.Context, input json.RawMessage) (contract.Run, error) {
 	if p.prepare == nil {
 		return nil, errors.New("fake process preparation is not configured")
 	}
@@ -55,7 +56,7 @@ func (p *fakeProcess) Prepare(ctx context.Context, input json.RawMessage) (Relea
 	return p.Restore(state)
 }
 
-func (p *fakeProcess) Restore(state *ReleaseRunState) (ReleaseRun, error) {
+func (p *fakeProcess) Restore(state *contract.State) (contract.Run, error) {
 	if state == nil || state.ProcessID != p.definition.ID {
 		return nil, errors.New("fake release run has the wrong process ID")
 	}
@@ -69,13 +70,13 @@ func (p *fakeProcess) Restore(state *ReleaseRunState) (ReleaseRun, error) {
 	return &fakeReleaseRun{process: p, state: CloneReleaseRunState(state)}, nil
 }
 
-func (r *fakeReleaseRun) Snapshot() *ReleaseRunState {
+func (r *fakeReleaseRun) Snapshot() *contract.State {
 	return CloneReleaseRunState(r.state)
 }
 
 func (r *fakeReleaseRun) Steps(
 	ctx context.Context,
-	checkpoint CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 ) ([]*coordinator.Step, error) {
 	if r.process.build == nil {
 		return nil, errors.New("fake process graph is not configured")
@@ -85,12 +86,12 @@ func (r *fakeReleaseRun) Steps(
 
 func TestProcessRegistry(t *testing.T) {
 	registry, err := newProcessRegistry(
-		&fakeProcess{definition: ProcessDefinition{
+		&fakeProcess{definition: contract.Definition{
 			ID: "one", Name: "One", Mark: "O", Description: "First process",
 			DocumentationURL: "https://example.com/docs",
 			Workflow:         testDurableWorkflow("Configure one"),
 		}},
-		&fakeProcess{definition: ProcessDefinition{
+		&fakeProcess{definition: contract.Definition{
 			ID: "two", Name: "Two", Mark: "T", Description: "Second process",
 			Workflow: testDurableWorkflow("Configure two"),
 		}},
@@ -114,23 +115,23 @@ func TestProcessRegistry(t *testing.T) {
 }
 
 func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
-	valid := ProcessDefinition{
+	valid := contract.Definition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
 		Workflow: testDurableWorkflow("Configure"),
 	}
 	for _, test := range []struct {
 		name      string
-		processes []ReleaseProcess
+		processes []contract.Process
 	}{
 		{name: "empty"},
-		{name: "nil process", processes: []ReleaseProcess{nil}},
-		{name: "duplicate ID", processes: []ReleaseProcess{
+		{name: "nil process", processes: []contract.Process{nil}},
+		{name: "duplicate ID", processes: []contract.Process{
 			&fakeProcess{definition: valid}, &fakeProcess{definition: valid},
 		}},
-		{name: "invalid ID", processes: []ReleaseProcess{&fakeProcess{definition: ProcessDefinition{
+		{name: "invalid ID", processes: []contract.Process{&fakeProcess{definition: contract.Definition{
 			ID: "One", Name: "One", Mark: "O", Description: "First", Workflow: testDurableWorkflow("Configure"),
 		}}}},
-		{name: "missing workflow", processes: []ReleaseProcess{&fakeProcess{definition: ProcessDefinition{
+		{name: "missing workflow", processes: []contract.Process{&fakeProcess{definition: contract.Definition{
 			ID: "one", Name: "One", Mark: "O", Description: "First",
 		}}}},
 	} {
@@ -143,20 +144,20 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 }
 
 func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
-	definition := ProcessDefinition{
+	definition := contract.Definition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
-		Workflow: ProcessWorkflow{
+		Workflow: contract.Workflow{
 			Heading: "Configure", SubmitLabel: "Prepare",
-			Inputs: []ProcessInput{{
+			Inputs: []contract.Input{{
 				ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
-				Options: []ProcessInputOption{{Value: "normal", Name: "Normal", Description: "Run normally"}},
+				Options: []contract.InputOption{{Value: "normal", Name: "Normal", Description: "Run normally"}},
 			}},
 		},
 	}
 	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err != nil {
 		t.Fatal(err)
 	}
-	definition.Workflow.Inputs = []ProcessInput{{ID: "count", Type: "number", Label: "Count", Default: "many"}}
+	definition.Workflow.Inputs = []contract.Input{{ID: "count", Type: "number", Label: "Count", Default: "many"}}
 	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err == nil {
 		t.Fatal("invalid numeric default was accepted")
 	}
@@ -171,7 +172,7 @@ func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
 }
 
 func TestProcessRegistryValidatesDefinitionMetadata(t *testing.T) {
-	definition := ProcessDefinition{
+	definition := contract.Definition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
 		DocumentationURL: "https://example.com/docs",
 		Workflow:         testDurableWorkflow("Configure"),
@@ -191,6 +192,6 @@ func TestProcessRegistryValidatesDefinitionMetadata(t *testing.T) {
 }
 
 var (
-	_ ReleaseProcess = (*fakeProcess)(nil)
-	_ ReleaseRun     = (*fakeReleaseRun)(nil)
+	_ contract.Process = (*fakeProcess)(nil)
+	_ contract.Run     = (*fakeReleaseRun)(nil)
 )

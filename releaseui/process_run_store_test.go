@@ -11,6 +11,7 @@ import (
 	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 type fakeReleaseWorkItemClient struct {
@@ -92,21 +93,21 @@ func TestProcessRunWorkItemStoreRejectsUnstartedRun(t *testing.T) {
 }
 
 func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
-	plan := ReleasePlan{
+	plan := contract.Plan{
 		Input:   json.RawMessage(`{"mode":"test"}`),
 		Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps:   []ReleaseStep{{Name: "Run example", DependsOn: []string{"Prepare"}, Timeout: time.Minute}},
-		View: ProcessPlanView{
+		Steps:   []contract.Step{{Name: "Run example", DependsOn: []string{"Prepare"}, Timeout: time.Minute}},
+		View: contract.PlanView{
 			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
-			Facts:                []ProcessPlanFact{{Label: "Version", Value: "1.0"}},
-			Request: &ProcessRequestPreview{
-				Title: "Request", Fields: []ProcessRequestField{{Name: "mode", Value: "test"}},
+			Facts:                []contract.PlanFact{{Label: "Version", Value: "1.0"}},
+			Request: &contract.RequestPreview{
+				Title: "Request", Fields: []contract.RequestField{{Name: "mode", Value: "test"}},
 			},
 		},
-		Target: ReleaseReference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
+		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	}
-	plan.Steps = append([]ReleaseStep{{Name: "Prepare", Timeout: time.Minute}}, plan.Steps...)
+	plan.Steps = append([]contract.Step{{Name: "Prepare", Timeout: time.Minute}}, plan.Steps...)
 	state, err := NewReleaseRunState("example", plan)
 	if err != nil {
 		t.Fatal(err)
@@ -133,17 +134,17 @@ func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 	}
 }
 
-func testProcessRun(t *testing.T) *ReleaseRunState {
+func testProcessRun(t *testing.T) *contract.State {
 	t.Helper()
-	run, err := NewReleaseRunState("example", ReleasePlan{
+	run, err := NewReleaseRunState("example", contract.Plan{
 		Test:  true,
 		Input: json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps: []ReleaseStep{{Name: "Run example", Timeout: time.Minute}},
-		View: ProcessPlanView{
+		Steps: []contract.Step{{Name: "Run example", Timeout: time.Minute}},
+		View: contract.PlanView{
 			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
 		},
-		Target: ReleaseReference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
+		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +164,7 @@ func newMemoryProcessRunStore() *memoryProcessRunStore {
 	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*ReleaseRunRecord)}
 }
 
-func (s *memoryProcessRunStore) Create(_ context.Context, run *ReleaseRunState) (*ReleaseRunRecord, error) {
+func (s *memoryProcessRunStore) Create(_ context.Context, run *contract.State) (*ReleaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.createErr != nil {
@@ -192,7 +193,7 @@ func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ReleaseRunRecor
 func (s *memoryProcessRunStore) Update(
 	_ context.Context,
 	current *ReleaseRunRecord,
-	run *ReleaseRunState,
+	run *contract.State,
 ) (*ReleaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,7 +212,7 @@ func (s *memoryProcessRunStore) Update(
 	return cloneProcessRunRecord(record), nil
 }
 
-func (s *memoryProcessRunStore) latest(t *testing.T) *ReleaseRunState {
+func (s *memoryProcessRunStore) latest(t *testing.T) *contract.State {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()

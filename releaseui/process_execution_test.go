@@ -14,35 +14,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-func exampleProcessDefinition() ProcessDefinition {
-	return ProcessDefinition{
+func exampleProcessDefinition() contract.Definition {
+	return contract.Definition{
 		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
-		Workflow: ProcessWorkflow{
+		Workflow: contract.Workflow{
 			Heading: "Run example", SubmitLabel: "Review",
-			Inputs: []ProcessInput{{
+			Inputs: []contract.Input{{
 				ID: "mode", Type: "choice", Label: "Mode",
-				Options: []ProcessInputOption{{Value: "run", Name: "Run", Description: "Run example"}},
+				Options: []contract.InputOption{{Value: "run", Name: "Run", Description: "Run example"}},
 			}},
 		},
 	}
 }
 
-func examplePreparedRun(input json.RawMessage, timeout time.Duration) ReleasePlan {
-	return ReleasePlan{
+func examplePreparedRun(input json.RawMessage, timeout time.Duration) contract.Plan {
+	return contract.Plan{
 		Input: input, Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps: []ReleaseStep{{Name: "Run example", Timeout: timeout}},
-		View: ProcessPlanView{
+		Steps: []contract.Step{{Name: "Run example", Timeout: timeout}},
+		View: contract.PlanView{
 			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
 		},
-		Target: ReleaseReference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
+		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	}
 }
 
-func exampleProcessSteps(run *ReleaseRunState, action func(context.Context) error) []*coordinator.Step {
+func exampleProcessSteps(run *contract.State, action func(context.Context) error) []*coordinator.Step {
 	return []*coordinator.Step{coordinator.NewRootStep(run.Steps[0].Name, run.Steps[0].Timeout, action)}
 }
 
@@ -69,25 +70,25 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 	var workItemCreatedBeforeExecution bool
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (ProcessReadiness, error) {
-			return ProcessReadiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified example"}, nil
+		preflight: func(context.Context) (contract.Readiness, error) {
+			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified example"}, nil
 		},
-		prepare: func(_ context.Context, input json.RawMessage) (ReleasePlan, error) {
+		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
 			return examplePreparedRun(input, time.Minute), nil
 		},
-		build: func(_ context.Context, run *ReleaseRunState, checkpoint CheckpointFunc) ([]*coordinator.Step, error) {
+		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			action := func(context.Context) error { return nil }
 			if checkpoint != nil {
 				action = func(ctx context.Context) error {
 					executed = true
 					workItemCreatedBeforeExecution = store.count() == 1
-					return checkpoint(ctx, ReleaseCheckpoint{
+					return checkpoint(ctx, contract.Checkpoint{
 						State: json.RawMessage(`{"run":7}`),
-						External: &ReleaseReference{
+						External: &contract.Reference{
 							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7",
 							Status: "completed", Terminal: true, Succeeded: true,
 						},
-						Progress: ReleaseProgress{Summary: "Example completed", Completed: 1, Total: 1},
+						Progress: contract.Progress{Summary: "Example completed", Completed: 1, Total: 1},
 					})
 				}
 			}
@@ -148,11 +149,11 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 	executed := false
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (ProcessReadiness, error) {
+		preflight: func(context.Context) (contract.Readiness, error) {
 			preflightCalled = true
-			return ProcessReadiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
+			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
-		build: func(_ context.Context, run *ReleaseRunState, _ CheckpointFunc) ([]*coordinator.Step, error) {
+		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			return exampleProcessSteps(run, func(context.Context) error {
 				executed = true
 				return nil
@@ -191,17 +192,17 @@ func TestConcurrentProcessStartsCreateOneWorkItem(t *testing.T) {
 	var preflightCalls atomic.Int32
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (ProcessReadiness, error) {
+		preflight: func(context.Context) (contract.Readiness, error) {
 			if preflightCalls.Add(1) == 1 {
 				close(preflightEntered)
 				<-releasePreflight
 			}
-			return ProcessReadiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
+			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
-		prepare: func(_ context.Context, input json.RawMessage) (ReleasePlan, error) {
+		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
 			return examplePreparedRun(input, time.Minute), nil
 		},
-		build: func(_ context.Context, run *ReleaseRunState, _ CheckpointFunc) ([]*coordinator.Step, error) {
+		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			return exampleProcessSteps(run, func(context.Context) error { return nil }), nil
 		},
 	}
@@ -254,21 +255,21 @@ func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
 	resumeCalls := 0
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (ProcessReadiness, error) {
-			return ProcessReadiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
+		preflight: func(context.Context) (contract.Readiness, error) {
+			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
-		prepare: func(_ context.Context, input json.RawMessage) (ReleasePlan, error) {
+		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
 			return examplePreparedRun(input, 5*time.Millisecond), nil
 		},
-		build: func(_ context.Context, run *ReleaseRunState, checkpoint CheckpointFunc) ([]*coordinator.Step, error) {
+		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			action := func(context.Context) error { return nil }
 			switch {
 			case checkpoint == nil:
 			case len(run.Checkpoint) == 0:
 				action = func(ctx context.Context) error {
-					if err := checkpoint(ctx, ReleaseCheckpoint{
+					if err := checkpoint(ctx, contract.Checkpoint{
 						State: json.RawMessage(`{"run":7,"status":"queued"}`),
-						External: &ReleaseReference{
+						External: &contract.Reference{
 							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7", Status: "queued",
 						},
 					}); err != nil {
@@ -280,9 +281,9 @@ func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
 			default:
 				action = func(ctx context.Context) error {
 					resumeCalls++
-					return checkpoint(ctx, ReleaseCheckpoint{
+					return checkpoint(ctx, contract.Checkpoint{
 						State: json.RawMessage(`{"run":7,"status":"completed"}`),
-						External: &ReleaseReference{
+						External: &contract.Reference{
 							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7",
 							Status: "completed", Terminal: true, Succeeded: true,
 						},

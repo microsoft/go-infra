@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
-	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 func goImagesPlanView(
@@ -19,18 +19,18 @@ func goImagesPlanView(
 	parameters map[string]string,
 	stepCount int,
 	restored bool,
-) releaseui.ProcessPlanView {
+) contract.PlanView {
 	modeName := string(input.Mode)
 	if modeName != "" {
 		modeName = strings.ToUpper(modeName[:1]) + modeName[1:]
 	}
-	view := releaseui.ProcessPlanView{
+	view := contract.PlanView{
 		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, goimagesworkflow.DefinitionID, stepCount),
 		IntentBadge: parameters["publishRepoPrefix"],
-		Facts: []releaseui.ProcessPlanFact{{
+		Facts: []contract.PlanFact{{
 			Label: "Pipeline source", Value: source.Branch, Detail: source.Commit,
 		}},
-		Request: &releaseui.ProcessRequestPreview{
+		Request: &contract.RequestPreview{
 			Eyebrow: "Azure DevOps request preview · not sent",
 			Title:   fmt.Sprintf("Pipeline %d · %s", goimagesworkflow.DefinitionID, goImagesPipelineName),
 			Target:  goImagesPipelineOrg + "/" + goImagesPipelineProject,
@@ -40,7 +40,7 @@ func goImagesPlanView(
 		view.Subtitle += " · restored from work item"
 	}
 	for _, name := range sortedMapKeys(parameters) {
-		view.Request.Fields = append(view.Request.Fields, releaseui.ProcessRequestField{Name: name, Value: parameters[name]})
+		view.Request.Fields = append(view.Request.Fields, contract.RequestField{Name: name, Value: parameters[name]})
 	}
 	switch input.Mode {
 	case goimagesworkflow.ModeNormal:
@@ -56,7 +56,7 @@ func goImagesPlanView(
 		view.ExecutionConfirmation = "Confirm run to republish artifacts from build " + input.SourceBuildID + " to public/."
 		view.ExecutionButtonLabel = "Run rollback"
 		if rollbackSource != nil {
-			view.Facts = append(view.Facts, releaseui.ProcessPlanFact{
+			view.Facts = append(view.Facts, contract.PlanFact{
 				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", goimagesworkflow.DefinitionID, rollbackSource.BuildID),
 				Href: rollbackSource.URL,
 			})

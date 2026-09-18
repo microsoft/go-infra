@@ -15,12 +15,13 @@ import (
 	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 // ReleaseRunStore persists confirmed release runs as explicitly identified work items.
 type ReleaseRunStore interface {
-	Create(context.Context, *ReleaseRunState) (*ReleaseRunRecord, error)
-	Update(context.Context, *ReleaseRunRecord, *ReleaseRunState) (*ReleaseRunRecord, error)
+	Create(context.Context, *contract.State) (*ReleaseRunRecord, error)
+	Update(context.Context, *ReleaseRunRecord, *contract.State) (*ReleaseRunRecord, error)
 }
 
 // ReleaseRunRecord binds one release run to its Azure DevOps work item revision.
@@ -28,55 +29,8 @@ type ReleaseRunRecord struct {
 	WorkItemID int
 	Revision   int
 	URL        string
-	Run        *ReleaseRunState
+	Run        *contract.State
 	workItem   *azdoworkitem.WorkItem
-}
-
-// ReleaseRunState is the durable, process-neutral state of one reviewed external action.
-type ReleaseRunState struct {
-	ProcessID  string            `json:"processId"`
-	Test       bool              `json:"test,omitempty"`
-	Input      json.RawMessage   `json:"input"`
-	Payload    json.RawMessage   `json:"payload"`
-	Digest     string            `json:"digest"`
-	SessionID  string            `json:"sessionId"`
-	Steps      []ReleaseStep     `json:"steps"`
-	View       ProcessPlanView   `json:"view"`
-	Target     ReleaseReference  `json:"target"`
-	External   *ReleaseReference `json:"external,omitempty"`
-	Checkpoint json.RawMessage   `json:"checkpoint,omitempty"`
-	Started    bool              `json:"started"`
-	Complete   bool              `json:"complete"`
-	Result     string            `json:"result,omitempty"`
-	UpdatedAt  time.Time         `json:"-"`
-}
-
-// ReleaseStep is one node in a reviewed process execution graph.
-type ReleaseStep struct {
-	Name      string        `json:"name"`
-	DependsOn []string      `json:"dependsOn,omitempty"`
-	Timeout   time.Duration `json:"timeout"`
-}
-
-// ReleaseReference is a link and terminal-state summary for an external action.
-type ReleaseReference struct {
-	ID        string `json:"id"`
-	URL       string `json:"url"`
-	LinkLabel string `json:"linkLabel"`
-	Status    string `json:"status,omitempty"`
-	Terminal  bool   `json:"terminal,omitempty"`
-	Succeeded bool   `json:"succeeded,omitempty"`
-}
-
-// ReleasePlan is the immutable plan returned by a process-specific executor.
-type ReleasePlan struct {
-	Test      bool
-	Input     json.RawMessage
-	Payload   json.RawMessage
-	SessionID string
-	Steps     []ReleaseStep
-	View      ProcessPlanView
-	Target    ReleaseReference
 }
 
 type releaseWorkItemClient interface {
@@ -100,7 +54,7 @@ func NewReleaseRunWorkItemStore(client releaseWorkItemClient, assignedTo string)
 	return &processRunWorkItemStore{client: client, assignedTo: assignedTo}, nil
 }
 
-func (s *processRunWorkItemStore) Create(ctx context.Context, run *ReleaseRunState) (*ReleaseRunRecord, error) {
+func (s *processRunWorkItemStore) Create(ctx context.Context, run *contract.State) (*ReleaseRunRecord, error) {
 	snapshot, err := processRunSnapshot(run)
 	if err != nil {
 		return nil, err
@@ -115,7 +69,7 @@ func (s *processRunWorkItemStore) Create(ctx context.Context, run *ReleaseRunSta
 func (s *processRunWorkItemStore) Update(
 	ctx context.Context,
 	current *ReleaseRunRecord,
-	run *ReleaseRunState,
+	run *contract.State,
 ) (*ReleaseRunRecord, error) {
 	if current == nil || current.workItem == nil || current.WorkItemID != current.workItem.ID ||
 		current.Revision != current.workItem.Revision {
@@ -133,7 +87,7 @@ func (s *processRunWorkItemStore) Update(
 	return processRunRecord(workItem)
 }
 
-func processRunSnapshot(run *ReleaseRunState) (*azdoworkitem.Snapshot, error) {
+func processRunSnapshot(run *contract.State) (*azdoworkitem.Snapshot, error) {
 	if err := validateProcessRun(run); err != nil {
 		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
 	}
@@ -156,7 +110,7 @@ func processRunSnapshot(run *ReleaseRunState) (*azdoworkitem.Snapshot, error) {
 	}, nil
 }
 
-func processRunDescription(run *ReleaseRunState) *azdoworkitem.DescriptionSummary {
+func processRunDescription(run *contract.State) *azdoworkitem.DescriptionSummary {
 	words := strings.Split(run.ProcessID, "-")
 	for index, word := range words {
 		if word != "" {
@@ -199,7 +153,7 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	}
 	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
 	decoder.DisallowUnknownFields()
-	var run ReleaseRunState
+	var run contract.State
 	if err := decoder.Decode(&run); err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
 	}
@@ -232,7 +186,7 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	}, nil
 }
 
-func processRunStatus(run *ReleaseRunState) (azdoworkitem.Status, error) {
+func processRunStatus(run *contract.State) (azdoworkitem.Status, error) {
 	if !run.Started {
 		return "", errors.New("process run has not started")
 	}
@@ -257,8 +211,8 @@ func processRunStatus(run *ReleaseRunState) (azdoworkitem.Status, error) {
 }
 
 // NewReleaseRunState creates validated durable state from a prepared release plan.
-func NewReleaseRunState(processID string, prepared ReleasePlan) (*ReleaseRunState, error) {
-	run := &ReleaseRunState{
+func NewReleaseRunState(processID string, prepared contract.Plan) (*contract.State, error) {
+	run := &contract.State{
 		ProcessID: processID,
 		Test:      prepared.Test,
 		Input:     append(json.RawMessage(nil), prepared.Input...),
@@ -283,15 +237,15 @@ func NewReleaseRunState(processID string, prepared ReleasePlan) (*ReleaseRunStat
 	return run, nil
 }
 
-func processRunDigest(run *ReleaseRunState) (string, error) {
+func processRunDigest(run *contract.State) (string, error) {
 	payload := struct {
 		ProcessID string
 		Test      bool
 		Input     json.RawMessage
 		Payload   json.RawMessage
-		Steps     []ReleaseStep
-		View      ProcessPlanView
-		Target    ReleaseReference
+		Steps     []contract.Step
+		View      contract.PlanView
+		Target    contract.Reference
 	}{
 		ProcessID: run.ProcessID,
 		Test:      run.Test,
@@ -309,7 +263,7 @@ func processRunDigest(run *ReleaseRunState) (string, error) {
 	return fmt.Sprintf("%x", digest), nil
 }
 
-func validateProcessRun(run *ReleaseRunState) error {
+func validateProcessRun(run *contract.State) error {
 	if run == nil {
 		return errors.New("process run is nil")
 	}
@@ -374,7 +328,7 @@ func validateProcessRun(run *ReleaseRunState) error {
 	return nil
 }
 
-func validateProcessRunReference(reference ReleaseReference) error {
+func validateProcessRunReference(reference contract.Reference) error {
 	if strings.TrimSpace(reference.ID) == "" || !strings.HasPrefix(reference.URL, "https://") ||
 		strings.TrimSpace(reference.LinkLabel) == "" {
 
@@ -387,7 +341,7 @@ func validateProcessRunReference(reference ReleaseReference) error {
 }
 
 // CloneReleaseRunState returns an independent copy of run.
-func CloneReleaseRunState(run *ReleaseRunState) *ReleaseRunState {
+func CloneReleaseRunState(run *contract.State) *contract.State {
 	if run == nil {
 		return nil
 	}
@@ -404,18 +358,18 @@ func CloneReleaseRunState(run *ReleaseRunState) *ReleaseRunState {
 	return &clone
 }
 
-func cloneProcessPlanView(view ProcessPlanView) ProcessPlanView {
+func cloneProcessPlanView(view contract.PlanView) contract.PlanView {
 	clone := view
-	clone.Facts = append([]ProcessPlanFact(nil), view.Facts...)
+	clone.Facts = append([]contract.PlanFact(nil), view.Facts...)
 	if view.Request != nil {
 		request := *view.Request
-		request.Fields = append([]ProcessRequestField(nil), view.Request.Fields...)
+		request.Fields = append([]contract.RequestField(nil), view.Request.Fields...)
 		clone.Request = &request
 	}
 	return clone
 }
 
-func validateProcessRunSteps(steps []ReleaseStep) error {
+func validateProcessRunSteps(steps []contract.Step) error {
 	if len(steps) == 0 {
 		return errors.New("process run has no steps")
 	}
@@ -444,8 +398,8 @@ func validateProcessRunSteps(steps []ReleaseStep) error {
 	return nil
 }
 
-func cloneProcessRunSteps(steps []ReleaseStep) []ReleaseStep {
-	cloned := append([]ReleaseStep(nil), steps...)
+func cloneProcessRunSteps(steps []contract.Step) []contract.Step {
+	cloned := append([]contract.Step(nil), steps...)
 	for index := range cloned {
 		cloned[index].DependsOn = append([]string(nil), cloned[index].DependsOn...)
 	}

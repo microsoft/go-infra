@@ -18,6 +18,7 @@ import (
 	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -108,7 +109,7 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	t.Helper()
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		build: func(_ context.Context, run *ReleaseRunState, _ CheckpointFunc) ([]*coordinator.Step, error) {
+		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			return exampleProcessSteps(run, func(context.Context) error { return nil }), nil
 		},
 	}
@@ -247,7 +248,7 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	if response.StatusCode != http.StatusOK || exported.ID != 42 || exported.Revision != 1 {
 		t.Fatalf("status = %d, export = %#v", response.StatusCode, exported)
 	}
-	var repaired ReleaseRunState
+	var repaired contract.State
 	if err := json.Unmarshal(exported.Snapshot.Payload, &repaired); err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +358,7 @@ func closeResponse(t *testing.T, response *http.Response) {
 	}
 }
 
-func testReleaseWorkItem(t *testing.T, id int, run *ReleaseRunState, changedAt time.Time) *azdoworkitem.WorkItem {
+func testReleaseWorkItem(t *testing.T, id int, run *contract.State, changedAt time.Time) *azdoworkitem.WorkItem {
 	t.Helper()
 	snapshot, err := processRunSnapshot(run)
 	if err != nil {

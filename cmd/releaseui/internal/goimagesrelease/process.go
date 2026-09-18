@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagessession"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -78,7 +79,7 @@ type goImagesProcess struct {
 
 type goImagesRun struct {
 	process *goImagesProcess
-	state   *releaseui.ReleaseRunState
+	state   *contract.State
 }
 
 type goImagesProcessPayload struct {
@@ -92,22 +93,22 @@ type goImagesProcessPayload struct {
 func NewProcess(
 	readOnly GoImagesReadOnlyIntegration,
 	execution *GoImagesExecutionIntegration,
-) releaseui.ReleaseProcess {
+) contract.Process {
 	return &goImagesProcess{readOnly: readOnly, execution: execution}
 }
 
-func (p *goImagesProcess) Definition() releaseui.ProcessDefinition {
-	return releaseui.ProcessDefinition{
+func (p *goImagesProcess) Definition() contract.Definition {
+	return contract.Definition{
 		ID: goImagesProcessID, Name: "Go images", Mark: "GI",
 		Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images",
-		Workflow: releaseui.ProcessWorkflow{
+		Workflow: contract.Workflow{
 			Heading: "Choose release type", Description: "Only rollback accepts a pipeline input.",
 			SubmitLabel: "Prepare release", CanSimulate: true,
-			Inputs: []releaseui.ProcessInput{
+			Inputs: []contract.Input{
 				{
 					ID: "mode", Type: "choice", Label: "Release type", Default: "normal",
-					Options: []releaseui.ProcessInputOption{
+					Options: []contract.InputOption{
 						{Value: "normal", Name: "Normal release", Mark: "N", Description: "Build current microsoft/main and publish to public/. All parameters are locked.", NoticeTitle: "Normal release is locked.", Notice: "Current main, current-build artifacts, and public/ are selected server-side."},
 						{Value: "rollback", Name: "Rollback / republish", Mark: "R", Description: "Republish artifacts from one successful pipeline 1023 build to public/.", NoticeTitle: "Only the source build is editable.", Notice: "The server locks current main and public/, then validates the selected build."},
 						{Value: "test", Name: "Test release", Mark: "T", Description: "Build current microsoft/main and publish only under the dev/ prefix.", NoticeTitle: "Test release is locked to dev/.", Notice: "Current main is built normally, but publication is isolated under the dev/ prefix."},
@@ -116,19 +117,19 @@ func (p *goImagesProcess) Definition() releaseui.ProcessDefinition {
 				{
 					ID: "sourceBuildId", Type: "number", Label: "Source build ID", Placeholder: "3034159",
 					Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
-					VisibleWhen: &releaseui.ProcessCondition{InputID: "mode", Equals: "rollback"},
+					VisibleWhen: &contract.Condition{InputID: "mode", Equals: "rollback"},
 				},
 			},
 		},
 	}
 }
 
-func (p *goImagesProcess) Preflight(ctx context.Context) (releaseui.ProcessReadiness, error) {
+func (p *goImagesProcess) Preflight(ctx context.Context) (contract.Readiness, error) {
 	if err := p.validateConfiguration(); err != nil {
-		return releaseui.ProcessReadiness{Details: err.Error()}, nil
+		return contract.Readiness{Details: err.Error()}, nil
 	}
 	details, err := p.readOnly.Preflight(ctx)
-	readiness := releaseui.ProcessReadiness{
+	readiness := contract.Readiness{
 		PlanningEnabled: err == nil, ExecutionEnabled: err == nil && p.execution != nil, Details: details,
 	}
 	if err == nil && p.execution == nil {
@@ -137,7 +138,7 @@ func (p *goImagesProcess) Preflight(ctx context.Context) (releaseui.ProcessReadi
 	return readiness, err
 }
 
-func (p *goImagesProcess) Prepare(ctx context.Context, inputJSON json.RawMessage) (releaseui.ReleaseRun, error) {
+func (p *goImagesProcess) Prepare(ctx context.Context, inputJSON json.RawMessage) (contract.Run, error) {
 	prepared, err := p.prepare(ctx, inputJSON)
 	if err != nil {
 		return nil, err
@@ -149,31 +150,31 @@ func (p *goImagesProcess) Prepare(ctx context.Context, inputJSON json.RawMessage
 	return p.Restore(state)
 }
 
-func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage) (releaseui.ReleasePlan, error) {
+func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage) (contract.Plan, error) {
 	if err := p.validateConfiguration(); err != nil {
-		return releaseui.ReleasePlan{}, err
+		return contract.Plan{}, err
 	}
 	input, err := decodeStrictJSON[PlanInput](inputJSON)
 	if err != nil {
-		return releaseui.ReleasePlan{}, releaseui.InvalidProcessInput(err)
+		return contract.Plan{}, contract.InvalidInput(err)
 	}
 	normalized, err := normalizePlanInput(input)
 	if err != nil {
-		return releaseui.ReleasePlan{}, releaseui.InvalidProcessInput(err)
+		return contract.Plan{}, contract.InvalidInput(err)
 	}
 	if _, err := p.readOnly.Preflight(ctx); err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("azure preflight failed: %w", err)
+		return contract.Plan{}, fmt.Errorf("azure preflight failed: %w", err)
 	}
 	source, err := p.readOnly.ResolveCurrentSource(ctx)
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("resolve current microsoft/main: %w", err)
+		return contract.Plan{}, fmt.Errorf("resolve current microsoft/main: %w", err)
 	}
 	if err := validateCurrentSource(source); err != nil {
-		return releaseui.ReleasePlan{}, err
+		return contract.Plan{}, err
 	}
 	source.Versions, err = normalizeResolvedVersions(source.Versions)
 	if err != nil {
-		return releaseui.ReleasePlan{}, err
+		return contract.Plan{}, err
 	}
 	versions := append([]string(nil), source.Versions...)
 	var rollbackSource *GoImagesRollbackSource
@@ -181,14 +182,14 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 		buildID, _ := strconv.Atoi(normalized.SourceBuildID)
 		validated, err := p.readOnly.ValidateRollback(ctx, buildID)
 		if err != nil {
-			return releaseui.ReleasePlan{}, fmt.Errorf("validate rollback source: %w", err)
+			return contract.Plan{}, fmt.Errorf("validate rollback source: %w", err)
 		}
 		if validated.BuildID != buildID {
-			return releaseui.ReleasePlan{}, errors.New("rollback validation returned a different build")
+			return contract.Plan{}, errors.New("rollback validation returned a different build")
 		}
 		validated.Versions, err = normalizeResolvedVersions(validated.Versions)
 		if err != nil {
-			return releaseui.ReleasePlan{}, err
+			return contract.Plan{}, err
 		}
 		rollbackSource = &validated
 		versions = append([]string(nil), validated.Versions...)
@@ -201,28 +202,28 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 		workflowInput, nil, disabledGoImagesService{}, nil,
 	)
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("create go-images plan: %w", err)
+		return contract.Plan{}, fmt.Errorf("create go-images plan: %w", err)
 	}
 	document, err := goimagessession.NewDocument(workflowInput, state, steps, time.Now())
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("create durable release session: %w", err)
+		return contract.Plan{}, fmt.Errorf("create durable release session: %w", err)
 	}
 	payloadJSON, err := json.Marshal(goImagesProcessPayload{
 		Document: *document, Source: source, RollbackSource: rollbackSource,
 	})
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("encode go-images process plan: %w", err)
+		return contract.Plan{}, fmt.Errorf("encode go-images process plan: %w", err)
 	}
 	normalizedJSON, err := json.Marshal(normalized)
 	if err != nil {
-		return releaseui.ReleasePlan{}, fmt.Errorf("encode normalized go-images input: %w", err)
+		return contract.Plan{}, fmt.Errorf("encode normalized go-images input: %w", err)
 	}
 	runSteps := goImagesProcessRunSteps(document.Plan)
 	parameters, err := goimagesworkflow.PipelineParameters(normalized.Mode, normalized.SourceBuildID)
 	if err != nil {
-		return releaseui.ReleasePlan{}, err
+		return contract.Plan{}, err
 	}
-	return releaseui.ReleasePlan{
+	return contract.Plan{
 		Test: normalized.Mode == goimagesworkflow.ModeTest, Input: normalizedJSON, Payload: payloadJSON,
 		SessionID: document.ID, Steps: runSteps,
 		View:   goImagesPlanView(normalized, source, rollbackSource, parameters, len(steps), false),
@@ -230,20 +231,20 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 	}, nil
 }
 
-func (p *goImagesProcess) Restore(state *releaseui.ReleaseRunState) (releaseui.ReleaseRun, error) {
+func (p *goImagesProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := p.validate(state); err != nil {
 		return nil, err
 	}
 	return &goImagesRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
 }
 
-func (r *goImagesRun) Snapshot() *releaseui.ReleaseRunState {
+func (r *goImagesRun) Snapshot() *contract.State {
 	return releaseui.CloneReleaseRunState(r.state)
 }
 
 func (r *goImagesRun) Steps(
 	ctx context.Context,
-	checkpoint releaseui.CheckpointFunc,
+	checkpoint contract.CheckpointFunc,
 ) ([]*coordinator.Step, error) {
 	run := r.Snapshot()
 	if err := r.process.validate(run); err != nil {
@@ -295,7 +296,7 @@ func (r *goImagesRun) Steps(
 			if err != nil {
 				return fmt.Errorf("encode go-images checkpoint: %w", err)
 			}
-			return checkpoint(ctx, releaseui.ReleaseCheckpoint{
+			return checkpoint(ctx, contract.Checkpoint{
 				State: stateJSON, External: goImagesExternalRun(state),
 			})
 		}
@@ -315,7 +316,7 @@ func (r *goImagesRun) Steps(
 	return steps, nil
 }
 
-func (p *goImagesProcess) validate(run *releaseui.ReleaseRunState) error {
+func (p *goImagesProcess) validate(run *contract.State) error {
 	if run == nil || run.ProcessID != goImagesProcessID {
 		return errors.New("go-images process run has an invalid process ID")
 	}
@@ -436,29 +437,29 @@ func validateGoImagesRollbackPayload(input PlanInput, payload goImagesProcessPay
 	return nil
 }
 
-func goImagesProcessRunSteps(plan goimagessession.Plan) []releaseui.ReleaseStep {
-	steps := make([]releaseui.ReleaseStep, len(plan.Steps))
+func goImagesProcessRunSteps(plan goimagessession.Plan) []contract.Step {
+	steps := make([]contract.Step, len(plan.Steps))
 	for index, step := range plan.Steps {
-		steps[index] = releaseui.ReleaseStep{
+		steps[index] = contract.Step{
 			Name: step.Name, DependsOn: append([]string(nil), step.DependsOn...), Timeout: time.Duration(step.TimeoutNanos),
 		}
 	}
 	return steps
 }
 
-func goImagesProcessTarget() releaseui.ReleaseReference {
-	return releaseui.ReleaseReference{
+func goImagesProcessTarget() contract.Reference {
+	return contract.Reference{
 		ID:        strconv.Itoa(goimagesworkflow.DefinitionID),
 		URL:       "https://dev.azure.com/dnceng/internal/_build?definitionId=1023",
 		LinkLabel: "Open go-images pipeline 1023",
 	}
 }
 
-func goImagesExternalRun(state *goimagesworkflow.State) *releaseui.ReleaseReference {
+func goImagesExternalRun(state *goimagesworkflow.State) *contract.Reference {
 	if state == nil || state.BuildID == "" {
 		return nil
 	}
-	reference := &releaseui.ReleaseReference{
+	reference := &contract.Reference{
 		ID:        state.BuildID,
 		URL:       "https://dev.azure.com/dnceng/internal/_build/results?buildId=" + state.BuildID,
 		LinkLabel: "Open Azure DevOps run " + state.BuildID,
@@ -472,7 +473,7 @@ func goImagesExternalRun(state *goimagesworkflow.State) *releaseui.ReleaseRefere
 	return reference
 }
 
-func equalProcessRunReference(left, right *releaseui.ReleaseReference) bool {
+func equalProcessRunReference(left, right *contract.Reference) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -493,6 +494,6 @@ func decodeStrictJSON[T any](data json.RawMessage) (T, error) {
 }
 
 var (
-	_ releaseui.ReleaseProcess = (*goImagesProcess)(nil)
-	_ releaseui.ReleaseRun     = (*goImagesRun)(nil)
+	_ contract.Process = (*goImagesProcess)(nil)
+	_ contract.Run     = (*goImagesRun)(nil)
 )
