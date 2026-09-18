@@ -1,0 +1,348 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+// Package goimagesworkflow defines the focused standalone go-images release workflow.
+package goimages
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/crc32"
+	"regexp"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/microsoft/go-infra/releaseui/coordinator"
+)
+
+// Mode identifies one explicitly allowlisted use of pipeline 1023.
+type Mode string
+
+const (
+	// DefinitionID is the only Azure pipeline this workflow can queue.
+	DefinitionID = 1023
+	// SourceBranch is the only source branch this workflow can release.
+	SourceBranch = "refs/heads/microsoft/main"
+	// ModeNormal builds current microsoft/main and publishes to public/.
+	ModeNormal Mode = "normal"
+	// ModeRollback republishes artifacts from one prior successful build to public/.
+	ModeRollback Mode = "rollback"
+	// ModeTest builds current microsoft/main and publishes under dev/.
+	ModeTest Mode = "test"
+)
+
+var sourceCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// Input is the immutable identity of one standalone go-images release.
+type Input struct {
+	Versions      []string
+	Mode          Mode
+	SourceVersion string
+	SourceBuildID string
+}
+
+func (input Input) checksum() (uint32, error) {
+	data, err := json.Marshal(input)
+	if err != nil {
+		return 0, err
+	}
+	return crc32.ChecksumIEEE(data), nil
+}
+
+// State is the durable execution state of one standalone go-images release.
+type State struct {
+	InputChecksum          uint32
+	VerifiedMirroredCommit string
+	BuildID                string
+	Result                 string
+	Complete               bool
+	QueueAttempted         bool
+}
+
+// RunService is the complete external surface available to the standalone go-images workflow.
+type RunService interface {
+	PollMirror(context.Context, string) error
+	QueuePipeline(context.Context, map[string]string) (string, error)
+	PollPipeline(context.Context, string) error
+}
+
+// PipelineResultError reports a known terminal pipeline outcome.
+type PipelineResultError struct {
+	Result string
+	Err    error
+}
+
+func (e *PipelineResultError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *PipelineResultError) Unwrap() error {
+	return e.Err
+}
+
+// CheckpointFunc durably records State. The state pointer is valid only during the call.
+type CheckpointFunc func(context.Context, *State) error
+
+type stateAccess struct {
+	// Updates hold snapshotMu for reading. This unusual use lets independent graph steps update
+	// different fields concurrently, while snapshot takes the write lock to exclude every update.
+	// The dependency graph must order steps that access the same field. Race tests detect mistakes.
+	snapshotMu   sync.RWMutex
+	checkpointMu sync.Mutex
+	state        *State
+	checkpoint   CheckpointFunc
+	dirty        bool
+}
+
+func (access *stateAccess) update(ctx context.Context, update func()) error {
+	func() {
+		access.snapshotMu.RLock()
+		defer access.snapshotMu.RUnlock()
+		update()
+	}()
+	if access.checkpoint == nil {
+		return nil
+	}
+	access.checkpointMu.Lock()
+	defer access.checkpointMu.Unlock()
+	access.dirty = true
+	return access.flushLocked(ctx)
+}
+
+func (access *stateAccess) flush(ctx context.Context) error {
+	access.checkpointMu.Lock()
+	defer access.checkpointMu.Unlock()
+	return access.flushLocked(ctx)
+}
+
+func (access *stateAccess) flushLocked(ctx context.Context) error {
+	if !access.dirty || access.checkpoint == nil {
+		return nil
+	}
+	snapshot := access.snapshot()
+	if err := access.checkpoint(ctx, &snapshot); err != nil {
+		return err
+	}
+	access.dirty = false
+	return nil
+}
+
+func (access *stateAccess) snapshot() State {
+	access.snapshotMu.Lock()
+	defer access.snapshotMu.Unlock()
+	return *access.state
+}
+
+const (
+	shortTimeout            = 10 * time.Minute
+	internalMirrorTimeout   = 16 * time.Minute
+	officialPipelineTimeout = 2 * time.Hour
+)
+
+// PipelineParameters derives the complete pipeline parameter set from an allowlisted mode.
+func PipelineParameters(mode Mode, sourceBuildID string) (map[string]string, error) {
+	parameters := map[string]string{
+		"sourceBuildPipelineRunId": "$(Build.BuildId)",
+		"publishRepoPrefix":        "public/",
+	}
+	switch mode {
+	case ModeNormal:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("normal go-images release must not specify source build %q", sourceBuildID)
+		}
+	case ModeRollback:
+		buildID, err := strconv.Atoi(sourceBuildID)
+		if err != nil || buildID <= 0 {
+			return nil, fmt.Errorf("rollback source build ID %q must be a positive integer", sourceBuildID)
+		}
+		parameters["sourceBuildPipelineRunId"] = sourceBuildID
+	case ModeTest:
+		if sourceBuildID != "" {
+			return nil, fmt.Errorf("test go-images release must not specify source build %q", sourceBuildID)
+		}
+		parameters["publishRepoPrefix"] = "dev/"
+	default:
+		return nil, fmt.Errorf("unsupported go-images release mode %q", mode)
+	}
+	return parameters, nil
+}
+
+// NewGraphWithCheckpoint creates the workflow and checkpoints mutation intent and results.
+func NewGraphWithCheckpoint(
+	input *Input,
+	state *State,
+	service RunService,
+	checkpoint CheckpointFunc,
+) ([]*coordinator.Step, *State, error) {
+	if input == nil {
+		return nil, nil, fmt.Errorf("go-images input is nil")
+	}
+	if !sourceCommitPattern.MatchString(input.SourceVersion) {
+		return nil, nil, fmt.Errorf("invalid go-images source commit %q", input.SourceVersion)
+	}
+	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if state == nil {
+		state, err = NewState(input)
+	} else {
+		err = ValidateState(input, state)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	access := &stateAccess{state: state, checkpoint: checkpoint}
+
+	verifyMirror := coordinator.NewRootStep(
+		"Verify go-images commit is mirrored internally",
+		internalMirrorTimeout,
+		func(ctx context.Context) error {
+			if state.VerifiedMirroredCommit == input.SourceVersion {
+				return nil
+			}
+			if err := service.PollMirror(ctx, input.SourceVersion); err != nil {
+				return err
+			}
+			return access.update(ctx, func() {
+				state.VerifiedMirroredCommit = input.SourceVersion
+			})
+		},
+	)
+	queue := verifyMirror.Then(
+		"🚀 Queue go-images release",
+		shortTimeout,
+		func(ctx context.Context) error {
+			if state.BuildID != "" {
+				return nil
+			}
+			if !state.QueueAttempted {
+				if err := access.update(ctx, func() { state.QueueAttempted = true }); err != nil {
+					return err
+				}
+			}
+			buildID, err := service.QueuePipeline(ctx, parameters)
+			if err != nil {
+				return err
+			}
+			return access.update(ctx, func() {
+				state.BuildID = buildID
+			})
+		},
+	)
+	wait := queue.Then(
+		"⌚ Wait for go-images release",
+		officialPipelineTimeout,
+		func(ctx context.Context) error {
+			if state.Complete {
+				return nil
+			}
+			buildID := state.BuildID
+			if err := service.PollPipeline(ctx, buildID); err != nil {
+				var resultError *PipelineResultError
+				if !errors.As(err, &resultError) {
+					return err
+				}
+				if resultError.Result != "failed" && resultError.Result != "canceled" {
+					return fmt.Errorf("invalid terminal pipeline result %q: %w", resultError.Result, err)
+				}
+				if checkpointErr := access.update(ctx, func() {
+					state.Complete = true
+					state.Result = resultError.Result
+				}); checkpointErr != nil {
+					return errors.Join(err, fmt.Errorf("checkpoint terminal pipeline result: %w", checkpointErr))
+				}
+				return err
+			}
+			return access.update(ctx, func() {
+				state.Complete = true
+				state.Result = "succeeded"
+			})
+		},
+	)
+	steps, err := wait.TransitiveDependencies()
+	if err != nil {
+		return nil, nil, err
+	}
+	wrapStepsWithStateFlush(steps, access, checkpoint)
+	return steps, state, nil
+}
+
+// NewState creates empty durable state bound to input.
+func NewState(input *Input) (*State, error) {
+	if input == nil || len(input.Versions) == 0 {
+		return nil, fmt.Errorf("no versions to release")
+	}
+	checksum, err := input.checksum()
+	if err != nil {
+		return nil, fmt.Errorf("checksum go-images input: %w", err)
+	}
+	return &State{InputChecksum: checksum}, nil
+}
+
+// ValidateState checks that state can result from this workflow or an explicit uncertain repair.
+func ValidateState(input *Input, state *State) error {
+	if state == nil {
+		return errors.New("go-images state is nil")
+	}
+	initialized, err := NewState(input)
+	if err != nil {
+		return err
+	}
+	checksum := initialized.InputChecksum
+	if state.InputChecksum != checksum {
+		return fmt.Errorf("go-images input does not match initial input: expected checksum %v, got %v", checksum, state.InputChecksum)
+	}
+	if state.VerifiedMirroredCommit != "" && state.VerifiedMirroredCommit != input.SourceVersion {
+		return fmt.Errorf("go-images state has verified mirror commit %q, expected %q", state.VerifiedMirroredCommit, input.SourceVersion)
+	}
+	if state.QueueAttempted && state.VerifiedMirroredCommit != input.SourceVersion {
+		return errors.New("go-images state has queue intent before mirror verification")
+	}
+	if state.BuildID != "" {
+		buildID, err := strconv.Atoi(state.BuildID)
+		if err != nil || buildID <= 0 {
+			return fmt.Errorf("go-images state has invalid build ID %q", state.BuildID)
+		}
+		if !state.QueueAttempted {
+			return errors.New("go-images state has a build before queue intent")
+		}
+	}
+	if !state.Complete {
+		if state.Result != "" {
+			return errors.New("incomplete go-images state has a result")
+		}
+		return nil
+	}
+	if !state.QueueAttempted {
+		return errors.New("completed go-images state has no queue intent")
+	}
+	switch state.Result {
+	case "succeeded", "failed", "canceled":
+		if state.BuildID == "" {
+			return errors.New("completed go-images state has no build ID")
+		}
+	case "uncertain":
+	default:
+		return fmt.Errorf("completed go-images state has invalid result %q", state.Result)
+	}
+	return nil
+}
+
+func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, checkpoint CheckpointFunc) {
+	if checkpoint == nil {
+		return
+	}
+	for _, step := range steps {
+		run := step.Func
+		step.Func = func(ctx context.Context) error {
+			if err := state.flush(ctx); err != nil {
+				return fmt.Errorf("flush pending go-images state before step: %w", err)
+			}
+			return run(ctx)
+		}
+	}
+}
