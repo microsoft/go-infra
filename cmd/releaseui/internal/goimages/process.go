@@ -33,6 +33,10 @@ type PlanInput struct {
 	SourceBuildID string `json:"sourceBuildId,omitempty"`
 }
 
+type rollbackVariantInput struct {
+	SourceBuildID int
+}
+
 // Source is the exact current microsoft/main source selected entirely by the process.
 type Source struct {
 	Branch   string   `json:"branch"`
@@ -80,26 +84,33 @@ func NewProcess(service ProcessService) contract.Process {
 }
 
 func (p *goImagesProcess) Definition() contract.Definition {
+	rollbackInputs := newRollbackInputSet(new(rollbackVariantInput)).Inputs()
 	return contract.Definition{
 		ID: goImagesProcessID, Name: "Go images", Mark: "GI",
 		Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images",
 		Workflow: contract.Workflow{
-			Heading: "Choose release type", Description: "Only rollback accepts a pipeline input.",
+			Heading: "Choose release type", Description: "Select a release process. Only rollback accepts an input.",
 			SubmitLabel: "Prepare release", CanSimulate: true,
-			Inputs: []contract.Input{
+			Variants: []contract.Variant{
 				{
-					ID: "mode", Type: "choice", Label: "Release type", Default: "normal",
-					Options: []contract.InputOption{
-						{Value: "normal", Name: "Normal release", Mark: "N", Description: "Build current microsoft/main and publish to public/. All parameters are locked.", NoticeTitle: "Normal release is locked.", Notice: "Current main, current-build artifacts, and public/ are selected server-side."},
-						{Value: "rollback", Name: "Rollback / republish", Mark: "R", Description: "Republish artifacts from one successful pipeline 1023 build to public/.", NoticeTitle: "Only the source build is editable.", Notice: "The server locks current main and public/, then validates the selected build."},
-						{Value: "test", Name: "Test release", Mark: "T", Description: "Build current microsoft/main and publish only under the dev/ prefix.", NoticeTitle: "Test release is locked to dev/.", Notice: "Current main is built normally, but publication is isolated under the dev/ prefix."},
-					},
+					ID: "normal", Name: "Normal release",
+					Description: "Build current microsoft/main and publish to public/. All parameters are locked.",
+					NoticeTitle: "Normal release is locked.",
+					Notice:      "Current main, current-build artifacts, and public/ are selected server-side.",
 				},
 				{
-					ID: "sourceBuildId", Type: "number", Label: "Source build ID", Placeholder: "3034159",
-					Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
-					VisibleWhen: &contract.Condition{InputID: "mode", Equals: "rollback"},
+					ID: "rollback", Name: "Rollback / republish",
+					Description: "Republish artifacts from one successful pipeline 1023 build to public/.",
+					Inputs:      rollbackInputs,
+					NoticeTitle: "Only the source build is editable.",
+					Notice:      "The server locks current main and public/, then validates the selected build.",
+				},
+				{
+					ID: "test", Name: "Test release",
+					Description: "Build current microsoft/main and publish only under the dev/ prefix.",
+					NoticeTitle: "Test release is locked to dev/.",
+					Notice:      "Current main is built normally, but publication is isolated under the dev/ prefix.",
 				},
 			},
 		},
@@ -117,8 +128,12 @@ func (p *goImagesProcess) Preflight(ctx context.Context) (contract.Readiness, er
 	return readiness, err
 }
 
-func (p *goImagesProcess) Prepare(ctx context.Context, inputJSON json.RawMessage) (contract.Run, error) {
-	prepared, err := p.prepare(ctx, inputJSON)
+func (p *goImagesProcess) Prepare(ctx context.Context, selection contract.Selection) (contract.Run, error) {
+	input, err := goImagesPlanInput(selection)
+	if err != nil {
+		return nil, contract.InvalidInput(err)
+	}
+	prepared, err := p.prepare(ctx, selection.VariantID, input)
 	if err != nil {
 		return nil, err
 	}
@@ -129,13 +144,9 @@ func (p *goImagesProcess) Prepare(ctx context.Context, inputJSON json.RawMessage
 	return p.Restore(state)
 }
 
-func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage) (contract.Plan, error) {
+func (p *goImagesProcess) prepare(ctx context.Context, variantID string, input PlanInput) (contract.Plan, error) {
 	if err := p.validateConfiguration(); err != nil {
 		return contract.Plan{}, err
-	}
-	input, err := decodeStrictJSON[PlanInput](inputJSON)
-	if err != nil {
-		return contract.Plan{}, contract.InvalidInput(err)
 	}
 	normalized, err := normalizePlanInput(input)
 	if err != nil {
@@ -183,7 +194,7 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("create go-images plan: %w", err)
 	}
-	document, err := NewDocument(workflowInput, state, steps, time.Now())
+	document, err := NewDocument(workflowInput, state, time.Now())
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("create durable release session: %w", err)
 	}
@@ -197,24 +208,62 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("encode normalized go-images input: %w", err)
 	}
-	runSteps := goImagesProcessRunSteps(document.Plan)
 	parameters, err := PipelineParameters(normalized.Mode, normalized.SourceBuildID)
 	if err != nil {
 		return contract.Plan{}, err
 	}
 	return contract.Plan{
-		Test: normalized.Mode == ModeTest, Input: normalizedJSON, Payload: payloadJSON,
-		SessionID: document.ID, Steps: runSteps,
-		View:   goImagesPlanView(normalized, source, rollbackSource, parameters, len(steps), false),
-		Target: goImagesProcessTarget(),
+		VariantID: variantID,
+		Test:      normalized.Mode == ModeTest, Input: normalizedJSON, Payload: payloadJSON,
+		SessionID: document.ID,
+		View:      goImagesPlanView(normalized, source, rollbackSource, parameters, len(steps), false),
+		Target:    goImagesProcessTarget(),
 	}, nil
+}
+
+func newRollbackInputSet(input *rollbackVariantInput) *contract.InputSet {
+	inputs := contract.NewInputSet()
+	inputs.PositiveIntVar(&input.SourceBuildID, "sourceBuildId", contract.FieldOptions{
+		Label: "Source build ID", Placeholder: "3034159",
+		Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
+	})
+	return inputs
+}
+
+func goImagesPlanInput(selection contract.Selection) (PlanInput, error) {
+	inputs := contract.NewInputSet()
+	result := PlanInput{Mode: Mode(selection.VariantID)}
+	if result.Mode == ModeRollback {
+		var rollback rollbackVariantInput
+		inputs = newRollbackInputSet(&rollback)
+		if err := inputs.Parse(selection.Input); err != nil {
+			return PlanInput{}, err
+		}
+		result.SourceBuildID = strconv.Itoa(rollback.SourceBuildID)
+		return result, nil
+	}
+	if result.Mode != ModeNormal && result.Mode != ModeTest {
+		return PlanInput{}, fmt.Errorf("unsupported go-images release variant %q", selection.VariantID)
+	}
+	if err := inputs.Parse(selection.Input); err != nil {
+		return PlanInput{}, err
+	}
+	return result, nil
 }
 
 func (p *goImagesProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := p.validate(state); err != nil {
 		return nil, err
 	}
-	return &goImagesRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
+	restored := releaseui.CloneReleaseRunState(state)
+	if restored.VariantID == "" {
+		input, err := decodeStrictJSON[PlanInput](restored.Input)
+		if err != nil {
+			return nil, err
+		}
+		restored.VariantID = string(input.Mode)
+	}
+	return &goImagesRun{process: p, state: restored}, nil
 }
 
 func (r *goImagesRun) Snapshot() *contract.State {
@@ -282,11 +331,7 @@ func (r *goImagesRun) Steps(
 	if err != nil {
 		return nil, err
 	}
-	plan, err := NewPlan(steps)
-	if err != nil {
-		return nil, err
-	}
-	if err := payload.Document.MatchesPlan(plan); err != nil {
+	if err := payload.Document.ValidateGraph(steps); err != nil {
 		return nil, err
 	}
 	return steps, nil
@@ -313,6 +358,9 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 
 		return errors.New("go-images process input is invalid")
 	}
+	if run.VariantID != "" && run.VariantID != string(input.Mode) {
+		return errors.New("go-images process variant does not match its input")
+	}
 	if run.SessionID != payload.Document.ID {
 		return errors.New("go-images process session ID does not match its document")
 	}
@@ -336,13 +384,22 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	if err != nil || *initialState != payload.Document.State {
 		return errors.New("go-images payload document does not contain its initial state")
 	}
-	wantSteps := goImagesProcessRunSteps(payload.Document.Plan)
+	inputCopy := payload.Document.Input
+	expectedSteps, _, err := NewGraphWithCheckpoint(
+		&inputCopy, &payload.Document.State, disabledGoImagesService{}, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("validate go-images process graph: %w", err)
+	}
+	if err := payload.Document.ValidateGraph(expectedSteps); err != nil {
+		return err
+	}
 	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(run.Steps, wantSteps) || run.Target != goImagesProcessTarget() ||
-		!reflect.DeepEqual(run.View, goImagesPlanView(input, payload.Source, payload.RollbackSource, parameters, len(wantSteps), false)) {
+	if run.Target != goImagesProcessTarget() ||
+		!reflect.DeepEqual(run.View, goImagesPlanView(input, payload.Source, payload.RollbackSource, parameters, len(expectedSteps), false)) {
 
 		return errors.New("go-images process plan does not match its fixed policy")
 	}
@@ -359,18 +416,14 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	if err != nil {
 		return fmt.Errorf("decode go-images process checkpoint: %w", err)
 	}
-	inputCopy := payload.Document.Input
-	steps, _, err := NewGraphWithCheckpoint(
-		&inputCopy, &state, disabledGoImagesService{}, nil,
+	checkpointInput := payload.Document.Input
+	checkpointSteps, _, err := NewGraphWithCheckpoint(
+		&checkpointInput, &state, disabledGoImagesService{}, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("validate go-images process checkpoint: %w", err)
 	}
-	plan, err := NewPlan(steps)
-	if err != nil {
-		return err
-	}
-	if err := payload.Document.MatchesPlan(plan); err != nil {
+	if err := payload.Document.ValidateGraph(checkpointSteps); err != nil {
 		return err
 	}
 	wantExternal := goImagesExternalRun(&state)
@@ -408,16 +461,6 @@ func validateGoImagesRollbackPayload(input PlanInput, payload goImagesProcessPay
 		return errors.New("go-images rollback source does not match its document")
 	}
 	return nil
-}
-
-func goImagesProcessRunSteps(plan Plan) []contract.Step {
-	steps := make([]contract.Step, len(plan.Steps))
-	for index, step := range plan.Steps {
-		steps[index] = contract.Step{
-			Name: step.Name, DependsOn: append([]string(nil), step.DependsOn...), Timeout: time.Duration(step.TimeoutNanos),
-		}
-	}
-	return steps
 }
 
 func goImagesProcessTarget() contract.Reference {

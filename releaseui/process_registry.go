@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -73,59 +72,41 @@ func validateProcessWorkflow(processID string, workflow contract.Workflow) error
 	if strings.TrimSpace(workflow.SubmitLabel) == "" {
 		return fmt.Errorf("release process %q has no workflow submit label", processID)
 	}
-	inputs := make(map[string]contract.Input, len(workflow.Inputs))
-	for _, input := range workflow.Inputs {
-		if !inputIDPattern.MatchString(input.ID) || strings.TrimSpace(input.Label) == "" ||
-			input.Type != "choice" && input.Type != "number" {
-
-			return fmt.Errorf("release process %q has an invalid input %q", processID, input.ID)
-		}
-		if _, exists := inputs[input.ID]; exists {
-			return fmt.Errorf("release process %q repeats input %q", processID, input.ID)
-		}
-		if input.Type == "choice" && len(input.Options) == 0 || input.Type != "choice" && len(input.Options) != 0 {
-			return fmt.Errorf("release process %q input %q has invalid options", processID, input.ID)
-		}
-		optionValues := make(map[string]struct{}, len(input.Options))
-		for _, option := range input.Options {
-			if strings.TrimSpace(option.Value) == "" || strings.TrimSpace(option.Name) == "" || strings.TrimSpace(option.Description) == "" {
-				return fmt.Errorf("release process %q input %q has an invalid option", processID, input.ID)
-			}
-			if _, exists := optionValues[option.Value]; exists {
-				return fmt.Errorf("release process %q input %q repeats option %q", processID, input.ID, option.Value)
-			}
-			optionValues[option.Value] = struct{}{}
-		}
-		if input.Default != "" && input.Type == "choice" {
-			if _, exists := optionValues[input.Default]; !exists {
-				return fmt.Errorf("release process %q input %q has an invalid default", processID, input.ID)
-			}
-		}
-		if input.Default != "" && input.Type == "number" {
-			value, err := strconv.ParseUint(input.Default, 10, 64)
-			if err != nil || value == 0 {
-				return fmt.Errorf("release process %q input %q has an invalid default", processID, input.ID)
-			}
-		}
-		inputs[input.ID] = input
+	if len(workflow.Variants) == 0 {
+		return fmt.Errorf("release process %q has no variants", processID)
 	}
-	for _, input := range workflow.Inputs {
-		if input.VisibleWhen == nil {
-			continue
+	variants := make(map[string]struct{}, len(workflow.Variants))
+	for _, variant := range workflow.Variants {
+		if !processIDPattern.MatchString(variant.ID) || strings.TrimSpace(variant.Name) == "" ||
+			strings.TrimSpace(variant.Description) == "" {
+
+			return fmt.Errorf("release process %q has an invalid variant %q", processID, variant.ID)
 		}
-		controlling, exists := inputs[input.VisibleWhen.InputID]
-		if !exists || controlling.Type != "choice" {
-			return fmt.Errorf("release process %q input %q has an invalid condition", processID, input.ID)
+		if _, exists := variants[variant.ID]; exists {
+			return fmt.Errorf("release process %q repeats variant %q", processID, variant.ID)
 		}
-		matched := false
-		for _, option := range controlling.Options {
-			matched = matched || option.Value == input.VisibleWhen.Equals
-		}
-		if !matched {
-			return fmt.Errorf("release process %q input %q has an invalid condition value", processID, input.ID)
+		variants[variant.ID] = struct{}{}
+		inputs := make(map[string]struct{}, len(variant.Inputs))
+		for _, input := range variant.Inputs {
+			if !inputIDPattern.MatchString(input.ID) || input.Type != "number" || strings.TrimSpace(input.Label) == "" {
+				return fmt.Errorf("release process %q variant %q has an invalid input %q", processID, variant.ID, input.ID)
+			}
+			if _, exists := inputs[input.ID]; exists {
+				return fmt.Errorf("release process %q variant %q repeats input %q", processID, variant.ID, input.ID)
+			}
+			inputs[input.ID] = struct{}{}
 		}
 	}
 	return nil
+}
+
+func processVariant(definition contract.Definition, variantID string) (contract.Variant, bool) {
+	for _, variant := range definition.Workflow.Variants {
+		if variant.ID == variantID {
+			return variant, true
+		}
+	}
+	return contract.Variant{}, false
 }
 
 func processPath(id string) string {

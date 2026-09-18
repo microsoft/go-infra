@@ -41,13 +41,18 @@ func restoreReleaseRun(process contract.Process, state *contract.State) (contrac
 	if err != nil {
 		return nil, err
 	}
-	if !reflect.DeepEqual(restored, state) {
+	want := CloneReleaseRunState(state)
+	if want.VariantID == "" {
+		want.VariantID = restored.VariantID
+	}
+	if !reflect.DeepEqual(restored, want) {
 		return nil, errors.New("restored release run changed its durable state")
 	}
 	return run, nil
 }
 
 type processRunResponse struct {
+	VariantID string            `json:"variantId,omitempty"`
 	Input     json.RawMessage   `json:"input"`
 	Steps     []planStep        `json:"steps"`
 	SessionID string            `json:"sessionId"`
@@ -141,8 +146,8 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
 		return
 	}
-	var input json.RawMessage
-	if err := decodeJSON(response, request, &input); err != nil {
+	var selection contract.Selection
+	if err := decodeJSON(response, request, &selection); err != nil {
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -171,12 +176,11 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		}
 	}
 	s.mu.Unlock()
-	normalizedInput, err := normalizeProcessInputs(registered.definition.Workflow.Inputs, input)
-	if err != nil {
-		writeError(response, http.StatusBadRequest, err.Error())
+	if _, ok := processVariant(registered.definition, selection.VariantID); !ok {
+		writeError(response, http.StatusBadRequest, fmt.Sprintf("unknown process variant %q", selection.VariantID))
 		return
 	}
-	releaseRun, err := registered.process.Prepare(request.Context(), normalizedInput)
+	releaseRun, err := registered.process.Prepare(request.Context(), selection)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, contract.ErrInvalidInput) {
@@ -529,7 +533,8 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 		}
 	}
 	return processRunResponse{
-		Input: append(json.RawMessage(nil), run.Input...), Steps: steps, SessionID: run.SessionID,
+		VariantID: run.VariantID,
+		Input:     append(json.RawMessage(nil), run.Input...), Steps: steps, SessionID: run.SessionID,
 		Execution: execution, View: run.View,
 	}
 }
@@ -539,7 +544,7 @@ func matchProcessRunGraph(run *contract.State, steps []*coordinator.Step) error 
 	if err != nil {
 		return err
 	}
-	if !reflect.DeepEqual(run.Steps, described) {
+	if len(run.LegacySteps) > 0 && !reflect.DeepEqual(run.LegacySteps, described) {
 		return errors.New("constructed process graph does not match the reviewed graph")
 	}
 	return nil

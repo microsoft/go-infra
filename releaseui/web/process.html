@@ -52,6 +52,13 @@
         </div>
 
         <form id="plan-form">
+          <label for="process-variant">Release process</label>
+          <select id="process-variant"></select>
+          <p id="variant-description" class="field-help"></p>
+          <div id="variant-notice" class="lock-summary" hidden>
+            <span aria-hidden="true">🔒</span>
+            <p><strong id="variant-notice-title"></strong> <span id="variant-notice-copy"></span></p>
+          </div>
           <div id="process-inputs"></div>
           <button id="plan-button" class="button button-primary" type="submit">
             <span>Prepare release</span>

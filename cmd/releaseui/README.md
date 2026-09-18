@@ -9,15 +9,15 @@ The landing page lists the two implemented release processes. Go images provides
 execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two
 GitHub-owned patch release paths documented by the team.
 
-Each registered `releaseui.ReleaseProcess` owns its dashboard metadata and inputs. It prepares or
-restores a `releaseui.ReleaseRun`, which owns the validated durable state and executable step graph.
+Each registered `contract.Process` owns its dashboard metadata and variants. It prepares or
+restores a `contract.Run`, which owns the validated durable state and reconstructs its executable graph.
 The shared server derives the process page and API routes from those contracts. Browser-editable
-inputs are limited to fixed choices and positive integer IDs.
+values are limited to one variant and that variant's positive integer fields.
 
 ## Adding a release process
 
-Add a package under `cmd/releaseui/internal` that implements `releaseui.ReleaseProcess` and
-`releaseui.ReleaseRun`, then pass the process to `releaseui.WithProcesses`. No HTML, JavaScript, or
+Add a package under `cmd/releaseui/internal` that implements `contract.Process` and returns a
+`contract.Run`, then pass the process to `releaseui.WithProcesses`. No HTML, JavaScript, or
 route change is required.
 
 | Field | Purpose |
@@ -27,30 +27,43 @@ route change is required.
 | `Mark` | Short visual abbreviation shown on the dashboard card, such as `IN`. |
 | `Description` | Brief dashboard explanation of what the process releases. |
 | `DocumentationURL` | Canonical HTTPS release instructions linked from the process page. |
-| `Workflow` | Required in-UI inputs and execution behavior. |
+| `Workflow` | Selectable variants, their inputs, and execution behavior. |
 
 The process returns its catalog and form metadata from `Definition`:
 
 ```go
-ProcessDefinition{
+func exampleInputs(runID *int) *contract.InputSet {
+  inputs := contract.NewInputSet()
+  inputs.PositiveIntVar(runID, "runId", contract.FieldOptions{Label: "Run ID"})
+  return inputs
+}
+
+func (p *exampleProcess) Definition() contract.Definition {
+  inputs := exampleInputs(new(int))
+  return contract.Definition{
     ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
-    Workflow: ProcessWorkflow{
-        Heading: "Configure release", SubmitLabel: "Prepare release",
-        Inputs: []ProcessInput{{ID: "run", Type: "number", Label: "Run ID"}},
+    Workflow: contract.Workflow{
+      Heading: "Configure release", SubmitLabel: "Prepare release",
+      Variants: []contract.Variant{{
+        ID: "run", Name: "Run", Description: "Run one example release.",
+        Inputs: inputs.Inputs(),
+      }},
     },
+  }
 }
 ```
 
-  `ReleaseProcess.Prepare` validates browser input and returns a `ReleaseRun`.
-  `ReleaseProcess.Restore` validates persisted state and reconstructs the same kind of run.
-  `ReleaseRun.Snapshot` returns an independent durable state copy, while `ReleaseRun.Steps` builds the
-  executable graph. Release-specific packages own direct Azure Pipeline and GitHub operations. The
-  server owns confirmation, work-item persistence, duplicate-start protection, checkpoints, restart
-  behavior, state APIs, and event streaming.
+`Process.Prepare` validates a `contract.Selection` and returns a `Run`. A process declares each
+variant's fields with one `InputSet` helper, then calls that helper again with real Go field pointers
+and parses `Selection.Input`. `Process.Restore` validates persisted state and reconstructs the same
+kind of run. `Run.Snapshot` returns an independent durable state copy, while `Run.Steps` builds the
+executable graph. Release-specific packages own direct Azure Pipeline and GitHub operations. The
+server owns confirmation, work-item persistence, duplicate-start protection, checkpoints, restart
+behavior, state APIs, and event streaming.
 
-Before preparation, the shared lifecycle validates request keys, visible and conditional fields,
-choice values, positive integer syntax, and defaults. Each process then applies its semantic and
-fixed-target validation.
+Before preparation, the shared lifecycle validates the selected variant. `InputSet.Parse` rejects
+missing or unknown fields and binds valid positive integers directly to typed Go fields. Each process
+then applies its semantic and fixed-target validation.
 
 ## Go-images release modes
 
@@ -163,13 +176,14 @@ If the process restarts in the queue-response crash window, it reconciles recent
 When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
-The go-images session document is schema-versioned and structurally fingerprinted. The release UI
+The go-images session document is schema-versioned. The release UI
 stores it in the selected Azure DevOps work item and checks the work item revision on every update.
 It contains no credentials.
-Schema version 8 stores only standalone go-images input and state. It intentionally rejects the
-older full-release-shaped prototype documents rather than retaining a second domain model and
-migration path. Workflow revision 8 uses unique step names as graph identity. An incompatible work
-item cannot be restored by the current release UI.
+Schema version 9 stores only standalone go-images input and state. `Run.Steps` reconstructs the
+coordinator graph instead of serializing it. The reader still accepts schema version 8 and validates
+its workflow revision, graph digest, and execution digest before using the reconstructed graph. It
+rejects older full-release-shaped prototype documents. An incompatible work item cannot be restored
+by the current release UI.
 
 The current server runs one selected release at a time. Go-images and generic action state live only
 in the selected Azure DevOps work item. The server creates the work item before calling the target
@@ -187,6 +201,6 @@ refuses a replacement.
 * Go-infra uses the locally authenticated `gh` CLI. JSON mutation bodies are sent through stdin, and the GitHub host, repository, ref, label, and workflow are hardcoded server-side.
 * The generic Azure pipeline client is read-only.
 * The dedicated queue client can only POST definition `1023` on `refs/heads/microsoft/main` with a server-derived normal, rollback, or test parameter set.
-* Release work items store non-secret input, state, structural and execution digests, and no credentials.
+* Release work items store non-secret input, state, and immutable intent digests, and no credentials.
 
 See [ADR 0020: Create UI for release management](https://github.com/microsoft/go-lab/blob/main/docs/adr/0020-microsoft-release-ui-for-go.md) for the accepted local-server design.

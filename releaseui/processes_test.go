@@ -14,7 +14,10 @@ import (
 )
 
 func testDurableWorkflow(heading string) contract.Workflow {
-	return contract.Workflow{Heading: heading, SubmitLabel: "Review"}
+	return contract.Workflow{
+		Heading: heading, SubmitLabel: "Review",
+		Variants: []contract.Variant{{ID: "default", Name: "Default", Description: "Default process"}},
+	}
 }
 
 type fakeProcess struct {
@@ -41,14 +44,15 @@ func (p *fakeProcess) Preflight(ctx context.Context) (contract.Readiness, error)
 	return p.preflight(ctx)
 }
 
-func (p *fakeProcess) Prepare(ctx context.Context, input json.RawMessage) (contract.Run, error) {
+func (p *fakeProcess) Prepare(ctx context.Context, selection contract.Selection) (contract.Run, error) {
 	if p.prepare == nil {
 		return nil, errors.New("fake process preparation is not configured")
 	}
-	prepared, err := p.prepare(ctx, input)
+	prepared, err := p.prepare(ctx, selection.Input)
 	if err != nil {
 		return nil, err
 	}
+	prepared.VariantID = selection.VariantID
 	state, err := NewReleaseRunState(p.definition.ID, prepared)
 	if err != nil {
 		return nil, err
@@ -143,28 +147,34 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 	}
 }
 
-func TestProcessRegistryValidatesWorkflowInputs(t *testing.T) {
+func TestProcessRegistryValidatesWorkflowVariants(t *testing.T) {
 	definition := contract.Definition{
 		ID: "one", Name: "One", Mark: "O", Description: "First process",
 		Workflow: contract.Workflow{
 			Heading: "Configure", SubmitLabel: "Prepare",
-			Inputs: []contract.Input{{
-				ID: "mode", Type: "choice", Label: "Mode", Default: "normal",
-				Options: []contract.InputOption{{Value: "normal", Name: "Normal", Description: "Run normally"}},
+			Variants: []contract.Variant{{
+				ID: "normal", Name: "Normal", Description: "Run normally",
+				Inputs: []contract.Input{{ID: "count", Type: "number", Label: "Count"}},
 			}},
 		},
 	}
 	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err != nil {
 		t.Fatal(err)
 	}
-	definition.Workflow.Inputs = []contract.Input{{ID: "count", Type: "number", Label: "Count", Default: "many"}}
+	definition.Workflow.Variants[0].Inputs[0].Type = "text"
 	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err == nil {
-		t.Fatal("invalid numeric default was accepted")
+		t.Fatal("invalid input type was accepted")
 	}
-	definition.Workflow.Inputs = nil
-	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err != nil {
-		t.Fatalf("direct confirmed workflow was rejected: %v", err)
+	definition.Workflow.Variants[0].Inputs[0].Type = "number"
+	definition.Workflow.Variants = append(definition.Workflow.Variants, definition.Workflow.Variants[0])
+	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err == nil {
+		t.Fatal("duplicate variant was accepted")
 	}
+	definition.Workflow.Variants = nil
+	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err == nil {
+		t.Fatal("workflow without variants was accepted")
+	}
+	definition.Workflow.Variants = []contract.Variant{{ID: "normal", Name: "Normal", Description: "Run normally"}}
 	definition.Workflow.SubmitLabel = ""
 	if _, err := newProcessRegistry(&fakeProcess{definition: definition}); err == nil {
 		t.Fatal("workflow without a submit label was accepted")

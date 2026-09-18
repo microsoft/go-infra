@@ -117,13 +117,9 @@ func processRunDescription(run *contract.State) *azdoworkitem.DescriptionSummary
 			words[index] = strings.ToUpper(word[:1]) + word[1:]
 		}
 	}
-	stepNames := make([]string, len(run.Steps))
-	for index, step := range run.Steps {
-		stepNames[index] = step.Name
-	}
 	fields := []azdoworkitem.DescriptionField{
 		{Label: "Intent", Value: run.View.IntentTitle},
-		{Label: "Actions", Value: strings.Join(stepNames, ", ")},
+		{Label: "Action", Value: run.View.ExecutionTitle},
 	}
 	for _, fact := range run.View.Facts {
 		value := fact.Value
@@ -212,13 +208,16 @@ func processRunStatus(run *contract.State) (azdoworkitem.Status, error) {
 
 // NewReleaseRunState creates validated durable state from a prepared release plan.
 func NewReleaseRunState(processID string, prepared contract.Plan) (*contract.State, error) {
+	if prepared.VariantID == "" {
+		return nil, errors.New("release plan variant ID is empty")
+	}
 	run := &contract.State{
 		ProcessID: processID,
+		VariantID: prepared.VariantID,
 		Test:      prepared.Test,
 		Input:     append(json.RawMessage(nil), prepared.Input...),
 		Payload:   append(json.RawMessage(nil), prepared.Payload...),
 		SessionID: prepared.SessionID,
-		Steps:     cloneProcessRunSteps(prepared.Steps),
 		View:      cloneProcessPlanView(prepared.View),
 		Target:    prepared.Target,
 		UpdatedAt: time.Now().UTC(),
@@ -240,22 +239,44 @@ func NewReleaseRunState(processID string, prepared contract.Plan) (*contract.Sta
 func processRunDigest(run *contract.State) (string, error) {
 	payload := struct {
 		ProcessID string
+		VariantID string
 		Test      bool
 		Input     json.RawMessage
 		Payload   json.RawMessage
-		Steps     []contract.Step
 		View      contract.PlanView
 		Target    contract.Reference
 	}{
 		ProcessID: run.ProcessID,
+		VariantID: run.VariantID,
 		Test:      run.Test,
 		Input:     run.Input,
 		Payload:   run.Payload,
-		Steps:     run.Steps,
 		View:      run.View,
 		Target:    run.Target,
 	}
-	data, err := json.Marshal(payload)
+	var data []byte
+	var err error
+	if len(run.LegacySteps) == 0 {
+		data, err = json.Marshal(payload)
+	} else {
+		data, err = json.Marshal(struct {
+			ProcessID string
+			Test      bool
+			Input     json.RawMessage
+			Payload   json.RawMessage
+			Steps     []contract.Step
+			View      contract.PlanView
+			Target    contract.Reference
+		}{
+			ProcessID: payload.ProcessID,
+			Test:      payload.Test,
+			Input:     payload.Input,
+			Payload:   payload.Payload,
+			Steps:     run.LegacySteps,
+			View:      payload.View,
+			Target:    payload.Target,
+		})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -270,16 +291,22 @@ func validateProcessRun(run *contract.State) error {
 	if !processIDPattern.MatchString(run.ProcessID) {
 		return fmt.Errorf("process run has invalid process ID %q", run.ProcessID)
 	}
+	if run.VariantID != "" && !processIDPattern.MatchString(run.VariantID) {
+		return fmt.Errorf("process run has invalid variant ID %q", run.VariantID)
+	}
 	if !json.Valid(run.Input) || !json.Valid(run.Payload) {
 		return errors.New("process run input or payload is invalid JSON")
 	}
 	if strings.TrimSpace(run.SessionID) == "" {
 		return errors.New("process run session ID is empty")
 	}
-	if err := validateProcessRunSteps(run.Steps); err != nil {
-		return err
+	if len(run.LegacySteps) > 0 {
+		if err := validateProcessRunSteps(run.LegacySteps); err != nil {
+			return err
+		}
 	}
-	if strings.TrimSpace(run.View.IntentTitle) == "" || strings.TrimSpace(run.View.ExecutionConfirmation) == "" ||
+	if strings.TrimSpace(run.View.IntentTitle) == "" || strings.TrimSpace(run.View.ExecutionTitle) == "" ||
+		strings.TrimSpace(run.View.ExecutionConfirmation) == "" ||
 		strings.TrimSpace(run.View.ExecutionButtonLabel) == "" {
 
 		return errors.New("process run view is incomplete")
@@ -348,7 +375,7 @@ func CloneReleaseRunState(run *contract.State) *contract.State {
 	clone := *run
 	clone.Input = append(json.RawMessage(nil), run.Input...)
 	clone.Payload = append(json.RawMessage(nil), run.Payload...)
-	clone.Steps = cloneProcessRunSteps(run.Steps)
+	clone.LegacySteps = cloneProcessRunSteps(run.LegacySteps)
 	clone.View = cloneProcessPlanView(run.View)
 	clone.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
 	if run.External != nil {

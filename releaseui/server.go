@@ -308,11 +308,11 @@ type processDetail struct {
 }
 
 type workflowDetail struct {
-	Heading     string           `json:"heading"`
-	Description string           `json:"description,omitempty"`
-	SubmitLabel string           `json:"submitLabel"`
-	Inputs      []contract.Input `json:"inputs"`
-	CanSimulate bool             `json:"canSimulate"`
+	Heading     string             `json:"heading"`
+	Description string             `json:"description,omitempty"`
+	SubmitLabel string             `json:"submitLabel"`
+	Variants    []contract.Variant `json:"variants"`
+	CanSimulate bool               `json:"canSimulate"`
 }
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
@@ -328,7 +328,7 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 		Workflow: workflowDetail{
 			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
 			SubmitLabel: definition.Workflow.SubmitLabel,
-			Inputs:      append([]contract.Input(nil), definition.Workflow.Inputs...),
+			Variants:    append([]contract.Variant(nil), definition.Workflow.Variants...),
 			CanSimulate: definition.Workflow.CanSimulate,
 		},
 	}

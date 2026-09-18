@@ -51,7 +51,9 @@ func TestInterruptedGoInfraRunRestoresUncertain(t *testing.T) {
 
 		t.Fatalf("restored = %#v", restored)
 	}
-	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	status := response.StatusCode
 	closeResponse(t, response)
 	if status != http.StatusConflict {
@@ -125,7 +127,9 @@ func TestGoInfraExecutionRequiresProcessRunStore(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !report.PlanningEnabled || report.ExternalExecutionEnabled {
 		t.Fatalf("preflight = %#v", report)
 	}
-	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)

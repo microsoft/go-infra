@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimages models durable, non-secret standalone go-images document state.
 package goimages
 
 import (
@@ -18,44 +17,41 @@ import (
 )
 
 const (
-	// CurrentSchemaVersion is the only session document schema understood by this version.
-	CurrentSchemaVersion = 8
-	// CurrentWorkflowRevision changes when step behavior becomes incompatible with saved state,
-	// even if step names and dependencies have not changed.
-	CurrentWorkflowRevision = 8
+	// CurrentSchemaVersion identifies documents that reconstruct their graph from domain state.
+	CurrentSchemaVersion   = 9
+	legacySchemaVersion    = 8
+	legacyWorkflowRevision = 8
 )
 
-// Document is the durable, non-secret state needed to reconstruct a release plan.
+// Document is the durable, non-secret domain state of one Go-images release.
 //
-// Credentials are deliberately excluded. They must be reacquired when the application starts.
+// Credentials and derived graph metadata are excluded. A schema-8 document may contain LegacyPlan
+// so that the release UI can validate work items created before graph reconstruction.
 type Document struct {
-	SchemaVersion   int       `json:"schemaVersion"`
-	ID              string    `json:"id"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	Input           Input     `json:"input"`
-	State           State     `json:"state"`
-	Plan            Plan      `json:"plan"`
-	ExecutionDigest string    `json:"executionDigest"`
+	SchemaVersion   int         `json:"schemaVersion"`
+	ID              string      `json:"id"`
+	CreatedAt       time.Time   `json:"createdAt"`
+	UpdatedAt       time.Time   `json:"updatedAt"`
+	Input           Input       `json:"input"`
+	State           State       `json:"state"`
+	LegacyPlan      *legacyPlan `json:"plan,omitempty"`
+	ExecutionDigest string      `json:"executionDigest"`
 }
 
-// Plan is the persisted structural identity of a release DAG.
-type Plan struct {
-	WorkflowRevision int        `json:"workflowRevision"`
-	Digest           string     `json:"digest"`
-	Steps            []PlanStep `json:"steps"`
+type legacyPlan struct {
+	WorkflowRevision int              `json:"workflowRevision"`
+	Digest           string           `json:"digest"`
+	Steps            []legacyPlanStep `json:"steps"`
 }
 
-// PlanStep contains only properties that affect execution structure. Names identify steps, so a
-// name change intentionally invalidates an existing plan.
-type PlanStep struct {
+type legacyPlanStep struct {
 	Name         string   `json:"name"`
 	DependsOn    []string `json:"dependsOn,omitempty"`
 	TimeoutNanos int64    `json:"timeoutNanos"`
 }
 
-// NewDocument creates and validates a new durable session document.
-func NewDocument(input *Input, state *State, steps []*coordinator.Step, now time.Time) (*Document, error) {
+// NewDocument creates and validates a new document without storing derived graph metadata.
+func NewDocument(input *Input, state *State, now time.Time) (*Document, error) {
 	if input == nil {
 		return nil, errors.New("session input is nil")
 	}
@@ -65,16 +61,10 @@ func NewDocument(input *Input, state *State, steps []*coordinator.Step, now time
 	if now.IsZero() {
 		return nil, errors.New("session creation time is zero")
 	}
-
 	idBytes := make([]byte, 18)
 	if _, err := rand.Read(idBytes); err != nil {
 		return nil, fmt.Errorf("generate session ID: %w", err)
 	}
-	plan, err := NewPlan(steps)
-	if err != nil {
-		return nil, err
-	}
-
 	inputCopy, err := cloneJSON(*input)
 	if err != nil {
 		return nil, fmt.Errorf("copy session input: %w", err)
@@ -91,9 +81,8 @@ func NewDocument(input *Input, state *State, steps []*coordinator.Step, now time
 		UpdatedAt:     now,
 		Input:         inputCopy,
 		State:         stateCopy,
-		Plan:          plan,
 	}
-	document.ExecutionDigest, err = executionDigest(document.Input, document.Plan)
+	document.ExecutionDigest, err = executionDigest(document.Input)
 	if err != nil {
 		return nil, err
 	}
@@ -103,41 +92,13 @@ func NewDocument(input *Input, state *State, steps []*coordinator.Step, now time
 	return document, nil
 }
 
-// NewPlan creates a deterministic structural fingerprint of steps.
-func NewPlan(steps []*coordinator.Step) (Plan, error) {
-	plan := Plan{
-		WorkflowRevision: CurrentWorkflowRevision,
-		Steps:            make([]PlanStep, 0, len(steps)),
-	}
-	for _, step := range steps {
-		planStep := PlanStep{
-			Name:         step.Name,
-			DependsOn:    make([]string, len(step.DependsOn)),
-			TimeoutNanos: int64(step.Timeout),
-		}
-		for i, dependency := range step.DependsOn {
-			planStep.DependsOn[i] = dependency.Name
-		}
-		plan.Steps = append(plan.Steps, planStep)
-	}
-	if err := validatePlanSteps(plan.Steps); err != nil {
-		return Plan{}, err
-	}
-	digest, err := planDigest(plan.Steps)
-	if err != nil {
-		return Plan{}, err
-	}
-	plan.Digest = digest
-	return plan, nil
-}
-
-// Validate checks the document schema and internal structural fingerprint.
+// Validate checks the document schema and immutable execution identity.
 func (d *Document) Validate() error {
 	if d == nil {
 		return errors.New("session document is nil")
 	}
-	if d.SchemaVersion != CurrentSchemaVersion {
-		return fmt.Errorf("unsupported session schema version %d, expected %d", d.SchemaVersion, CurrentSchemaVersion)
+	if d.SchemaVersion != CurrentSchemaVersion && d.SchemaVersion != legacySchemaVersion {
+		return fmt.Errorf("unsupported session schema version %d", d.SchemaVersion)
 	}
 	if d.ID == "" {
 		return errors.New("session ID is empty")
@@ -154,34 +115,100 @@ func (d *Document) Validate() error {
 	if err := ValidateState(&d.Input, &d.State); err != nil {
 		return fmt.Errorf("validate session state: %w", err)
 	}
-	if len(d.Plan.Steps) == 0 {
-		return errors.New("session plan has no steps")
+
+	var digest string
+	var err error
+	if d.SchemaVersion == legacySchemaVersion {
+		if err := validateLegacyPlan(d.LegacyPlan); err != nil {
+			return err
+		}
+		digest, err = legacyExecutionDigest(d.Input, *d.LegacyPlan)
+	} else {
+		if d.LegacyPlan != nil {
+			return errors.New("current session unexpectedly contains a legacy plan")
+		}
+		digest, err = executionDigest(d.Input)
 	}
-	if d.Plan.WorkflowRevision != CurrentWorkflowRevision {
-		return fmt.Errorf("unsupported workflow revision %d, expected %d", d.Plan.WorkflowRevision, CurrentWorkflowRevision)
-	}
-	if err := validatePlanSteps(d.Plan.Steps); err != nil {
-		return err
-	}
-	digest, err := planDigest(d.Plan.Steps)
 	if err != nil {
 		return err
 	}
-	if d.Plan.Digest != digest {
-		return fmt.Errorf("session plan digest mismatch: stored %q, calculated %q", d.Plan.Digest, digest)
-	}
-	executionDigest, err := executionDigest(d.Input, d.Plan)
-	if err != nil {
-		return err
-	}
-	if d.ExecutionDigest != executionDigest {
-		return fmt.Errorf("session execution digest mismatch: stored %q, calculated %q", d.ExecutionDigest, executionDigest)
+	if d.ExecutionDigest != digest {
+		return fmt.Errorf("session execution digest mismatch: stored %q, calculated %q", d.ExecutionDigest, digest)
 	}
 	return nil
 }
 
-func validatePlanSteps(steps []PlanStep) error {
-	byName := make(map[string]PlanStep, len(steps))
+// ValidateGraph checks a reconstructed graph against schema-8 metadata when present.
+func (d *Document) ValidateGraph(steps []*coordinator.Step) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if d.LegacyPlan == nil {
+		return nil
+	}
+	current, err := newLegacyPlan(steps)
+	if err != nil {
+		return err
+	}
+	if current.Digest != d.LegacyPlan.Digest {
+		return fmt.Errorf("release graph changed since session creation: stored digest %q, current digest %q", d.LegacyPlan.Digest, current.Digest)
+	}
+	return nil
+}
+
+func newLegacyPlan(steps []*coordinator.Step) (legacyPlan, error) {
+	plan := legacyPlan{
+		WorkflowRevision: legacyWorkflowRevision,
+		Steps:            make([]legacyPlanStep, 0, len(steps)),
+	}
+	for _, step := range steps {
+		if step == nil {
+			return legacyPlan{}, errors.New("session plan contains a nil step")
+		}
+		entry := legacyPlanStep{
+			Name: step.Name, DependsOn: make([]string, len(step.DependsOn)), TimeoutNanos: int64(step.Timeout),
+		}
+		for index, dependency := range step.DependsOn {
+			if dependency == nil {
+				return legacyPlan{}, fmt.Errorf("session step %q has a nil dependency", step.Name)
+			}
+			entry.DependsOn[index] = dependency.Name
+		}
+		plan.Steps = append(plan.Steps, entry)
+	}
+	if err := validateLegacyPlanSteps(plan.Steps); err != nil {
+		return legacyPlan{}, err
+	}
+	digest, err := legacyPlanDigest(plan.Steps)
+	if err != nil {
+		return legacyPlan{}, err
+	}
+	plan.Digest = digest
+	return plan, nil
+}
+
+func validateLegacyPlan(plan *legacyPlan) error {
+	if plan == nil || len(plan.Steps) == 0 {
+		return errors.New("legacy session plan has no steps")
+	}
+	if plan.WorkflowRevision != legacyWorkflowRevision {
+		return fmt.Errorf("unsupported legacy workflow revision %d", plan.WorkflowRevision)
+	}
+	if err := validateLegacyPlanSteps(plan.Steps); err != nil {
+		return err
+	}
+	digest, err := legacyPlanDigest(plan.Steps)
+	if err != nil {
+		return err
+	}
+	if plan.Digest != digest {
+		return fmt.Errorf("legacy session plan digest mismatch: stored %q, calculated %q", plan.Digest, digest)
+	}
+	return nil
+}
+
+func validateLegacyPlanSteps(steps []legacyPlanStep) error {
+	byName := make(map[string]legacyPlanStep, len(steps))
 	for _, step := range steps {
 		if step.Name == "" {
 			return errors.New("session plan contains an empty step name")
@@ -191,7 +218,6 @@ func validatePlanSteps(steps []PlanStep) error {
 		}
 		byName[step.Name] = step
 	}
-
 	for _, step := range steps {
 		dependencies := make(map[string]struct{}, len(step.DependsOn))
 		for _, dependency := range step.DependsOn {
@@ -220,7 +246,6 @@ func validatePlanSteps(steps []PlanStep) error {
 		case visited:
 			return nil
 		}
-
 		visits[name] = visiting
 		for _, dependency := range byName[name].DependsOn {
 			if err := visit(dependency); err != nil {
@@ -231,42 +256,16 @@ func validatePlanSteps(steps []PlanStep) error {
 		return nil
 	}
 	for name := range byName {
-		if visits[name] != unvisited {
-			continue
-		}
-		if err := visit(name); err != nil {
-			return err
+		if visits[name] == unvisited {
+			if err := visit(name); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-// MatchesPlan reports an error if current is structurally incompatible with the persisted plan.
-func (d *Document) MatchesPlan(current Plan) error {
-	if err := d.Validate(); err != nil {
-		return err
-	}
-	if err := validatePlanSteps(current.Steps); err != nil {
-		return err
-	}
-	if current.WorkflowRevision != CurrentWorkflowRevision {
-		return fmt.Errorf("current workflow revision %d is unsupported, expected %d", current.WorkflowRevision, CurrentWorkflowRevision)
-	}
-	digest, err := planDigest(current.Steps)
-	if err != nil {
-		return err
-	}
-	if current.Digest != digest {
-		return fmt.Errorf("current release plan digest mismatch: stored %q, calculated %q", current.Digest, digest)
-	}
-	if current.Digest != d.Plan.Digest {
-		return fmt.Errorf("release graph changed since session creation: stored digest %q, current digest %q", d.Plan.Digest, current.Digest)
-	}
-	return nil
-}
-
-// WithState returns a detached document containing the latest release domain state. The original
-// document is unchanged, allowing callers to replace it only after durable storage succeeds.
+// WithState returns a detached document containing the latest release domain state.
 func (d *Document) WithState(state *State, now time.Time) (*Document, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
@@ -293,7 +292,7 @@ func (d *Document) WithState(state *State, now time.Time) (*Document, error) {
 	return &document, nil
 }
 
-func planDigest(steps []PlanStep) (string, error) {
+func legacyPlanDigest(steps []legacyPlanStep) (string, error) {
 	data, err := json.Marshal(steps)
 	if err != nil {
 		return "", fmt.Errorf("marshal session plan: %w", err)
@@ -302,15 +301,22 @@ func planDigest(steps []PlanStep) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func executionDigest(input Input, plan Plan) (string, error) {
+func executionDigest(input Input) (string, error) {
+	data, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("marshal session execution identity: %w", err)
+	}
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func legacyExecutionDigest(input Input, plan legacyPlan) (string, error) {
 	data, err := json.Marshal(struct {
 		Input            Input  `json:"input"`
 		PlanDigest       string `json:"planDigest"`
 		WorkflowRevision int    `json:"workflowRevision"`
 	}{
-		Input:            input,
-		PlanDigest:       plan.Digest,
-		WorkflowRevision: plan.WorkflowRevision,
+		Input: input, PlanDigest: plan.Digest, WorkflowRevision: plan.WorkflowRevision,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal session execution identity: %w", err)

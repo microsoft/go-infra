@@ -23,6 +23,10 @@ type goInfraProcessPayload struct {
 	PullRequest *GoInfraPullRequest `json:"pullRequest,omitempty"`
 }
 
+type releaseOnMergeVariantInput struct {
+	PullRequest int
+}
+
 type goInfraProcess struct {
 	github GitHubService
 }
@@ -38,43 +42,33 @@ func NewProcess(github GitHubService) contract.Process {
 }
 
 func (p *goInfraProcess) Definition() contract.Definition {
+	releaseOnMergeInputs := newReleaseOnMergeInputSet(new(releaseOnMergeVariantInput)).Inputs()
 	return contract.Definition{
 		ID: goInfraProcessID, Name: "Go infrastructure", Mark: "IN",
 		Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
 		Workflow: contract.Workflow{
-			Heading: "Choose release path", Description: "Review a fixed GitHub action before confirming it.",
+			Heading: "Choose release path", Description: "Select a release process and review its fixed GitHub action.",
 			SubmitLabel: "Review GitHub action",
-			Inputs: []contract.Input{
+			Variants: []contract.Variant{
 				{
-					ID: "action", Type: "choice", Label: "Release path", Default: goInfraActionReleaseOnMerge,
-					Options: []contract.InputOption{
-						{
-							Value: goInfraActionReleaseOnMerge, Name: "Release on merge", Mark: "PR",
-							Description: "Add release-on-merge to one open, non-fork PR targeting main.",
-							NoticeTitle: "The UI does not merge the PR.",
-							Notice:      "The existing workflow creates the patch release only after the labeled PR is merged.",
-						},
-						{
-							Value: goInfraActionManualDispatch, Name: "Manual workflow dispatch", Mark: "WD",
-							Description: "Dispatch the fixed patch-release workflow on main as a dry run or publish action.",
-							NoticeTitle: "Publishing requires a second confirmation.",
-							Notice:      "Dry run only calculates the next version; publish can create the next patch release.",
-						},
-					},
+					ID: goInfraActionReleaseOnMerge, Name: "Release on merge",
+					Description: "Add release-on-merge to one open, non-fork PR targeting main.",
+					Inputs:      releaseOnMergeInputs,
+					NoticeTitle: "The UI does not merge the PR.",
+					Notice:      "The existing workflow creates the patch release only after the labeled PR is merged.",
 				},
 				{
-					ID: "pullRequest", Type: "number", Label: "Pull request number", Placeholder: "123",
-					Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
-					VisibleWhen: &contract.Condition{InputID: "action", Equals: goInfraActionReleaseOnMerge},
+					ID: goInfraDispatchModeDryRun, Name: "Patch release dry run",
+					Description: "Calculate the next v0.0.x version without creating a release.",
+					NoticeTitle: "Dry run does not create a release.",
+					Notice:      "The fixed patch-release workflow runs on main with dry-run enabled.",
 				},
 				{
-					ID: "dispatchMode", Type: "choice", Label: "Dispatch mode", Default: goInfraDispatchModeDryRun,
-					VisibleWhen: &contract.Condition{InputID: "action", Equals: goInfraActionManualDispatch},
-					Options: []contract.InputOption{
-						{Value: goInfraDispatchModeDryRun, Name: "Dry run", Mark: "D", Description: "Calculate the next v0.0.x version without creating a release."},
-						{Value: goInfraDispatchModePublish, Name: "Publish release", Mark: "P", Description: "Run the workflow on main and create the next patch release."},
-					},
+					ID: goInfraDispatchModePublish, Name: "Publish patch release",
+					Description: "Run the workflow on main and create the next patch release.",
+					NoticeTitle: "Publishing requires confirmation.",
+					Notice:      "The fixed patch-release workflow runs on main and can create the next release.",
 				},
 			},
 		},
@@ -89,11 +83,15 @@ func (p *goInfraProcess) Preflight(ctx context.Context) (contract.Readiness, err
 	return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: err == nil, Details: details}, err
 }
 
-func (p *goInfraProcess) Prepare(ctx context.Context, input json.RawMessage) (contract.Run, error) {
+func (p *goInfraProcess) Prepare(ctx context.Context, selection contract.Selection) (contract.Run, error) {
 	if err := p.validateConfiguration(); err != nil {
 		return nil, err
 	}
-	prepared, err := prepareGoInfraProcess(ctx, input, p.github)
+	input, err := goInfraSelectionInput(selection)
+	if err != nil {
+		return nil, contract.InvalidInput(err)
+	}
+	prepared, err := prepareGoInfraProcess(ctx, selection.VariantID, input, p.github)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +106,15 @@ func (p *goInfraProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := validateGoInfraProcessRun(state); err != nil {
 		return nil, err
 	}
-	return &goInfraRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
+	restored := releaseui.CloneReleaseRunState(state)
+	if restored.VariantID == "" {
+		input, err := decodeStrictJSON[goInfraPlanInput](restored.Input)
+		if err != nil {
+			return nil, err
+		}
+		restored.VariantID = goInfraVariantID(input)
+	}
+	return &goInfraRun{process: p, state: restored}, nil
 }
 
 func (r *goInfraRun) Snapshot() *contract.State {
@@ -151,13 +157,10 @@ func (p *goInfraProcess) validateConfiguration() error {
 
 func prepareGoInfraProcess(
 	ctx context.Context,
-	inputJSON json.RawMessage,
+	variantID string,
+	input goInfraPlanInput,
 	github GitHubService,
 ) (contract.Plan, error) {
-	input, err := decodeStrictJSON[goInfraPlanInput](inputJSON)
-	if err != nil {
-		return contract.Plan{}, contract.InvalidInput(err)
-	}
 	normalized, pullRequestNumber, err := normalizeGoInfraPlanInput(input)
 	if err != nil {
 		return contract.Plan{}, contract.InvalidInput(err)
@@ -182,9 +185,43 @@ func prepareGoInfraProcess(
 		return contract.Plan{}, fmt.Errorf("encode go-infra process plan: %w", err)
 	}
 	return contract.Plan{
-		Test: goInfraProcessIsTest(normalized), Input: normalizedJSON, Payload: payloadJSON,
-		Steps: []contract.Step{goInfraProcessStep(payload)}, View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
+		VariantID: variantID,
+		Test:      goInfraProcessIsTest(normalized), Input: normalizedJSON, Payload: payloadJSON,
+		View: goInfraProcessView(payload), Target: goInfraProcessTarget(payload),
 	}, nil
+}
+
+func newReleaseOnMergeInputSet(input *releaseOnMergeVariantInput) *contract.InputSet {
+	inputs := contract.NewInputSet()
+	inputs.PositiveIntVar(&input.PullRequest, "pullRequest", contract.FieldOptions{
+		Label: "Pull request number", Placeholder: "123",
+		Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
+	})
+	return inputs
+}
+
+func goInfraSelectionInput(selection contract.Selection) (goInfraPlanInput, error) {
+	inputs := contract.NewInputSet()
+	switch selection.VariantID {
+	case goInfraActionReleaseOnMerge:
+		var releaseOnMerge releaseOnMergeVariantInput
+		inputs = newReleaseOnMergeInputSet(&releaseOnMerge)
+		if err := inputs.Parse(selection.Input); err != nil {
+			return goInfraPlanInput{}, err
+		}
+		return goInfraPlanInput{
+			Action: goInfraActionReleaseOnMerge, PullRequest: strconv.Itoa(releaseOnMerge.PullRequest),
+		}, nil
+	case goInfraDispatchModeDryRun, goInfraDispatchModePublish:
+		if err := inputs.Parse(selection.Input); err != nil {
+			return goInfraPlanInput{}, err
+		}
+		return goInfraPlanInput{
+			Action: goInfraActionManualDispatch, DispatchMode: selection.VariantID,
+		}, nil
+	default:
+		return goInfraPlanInput{}, fmt.Errorf("unsupported go-infra release variant %q", selection.VariantID)
+	}
 }
 
 func executeGoInfraProcess(
@@ -286,6 +323,9 @@ func validateGoInfraProcessRun(run *contract.State) error {
 	if run.Test != goInfraProcessIsTest(payload.Input) {
 		return errors.New("go-infra process test classification is invalid")
 	}
+	if run.VariantID != "" && run.VariantID != goInfraVariantID(payload.Input) {
+		return errors.New("go-infra process variant does not match its input")
+	}
 	switch payload.Input.Action {
 	case goInfraActionReleaseOnMerge:
 		if payload.PullRequest == nil {
@@ -307,7 +347,7 @@ func validateGoInfraProcessRun(run *contract.State) error {
 	default:
 		return fmt.Errorf("unsupported go-infra action %q", payload.Input.Action)
 	}
-	if !reflect.DeepEqual(run.Steps, []contract.Step{goInfraProcessStep(payload)}) || run.Target != goInfraProcessTarget(payload) ||
+	if run.Target != goInfraProcessTarget(payload) ||
 		!reflect.DeepEqual(run.View, goInfraProcessView(payload)) {
 
 		return errors.New("go-infra process plan does not match its fixed policy")
@@ -329,6 +369,13 @@ func validateGoInfraProcessRun(run *contract.State) error {
 
 func goInfraProcessIsTest(input goInfraPlanInput) bool {
 	return input.Action == goInfraActionManualDispatch && input.DispatchMode == goInfraDispatchModeDryRun
+}
+
+func goInfraVariantID(input goInfraPlanInput) string {
+	if input.Action == goInfraActionManualDispatch {
+		return input.DispatchMode
+	}
+	return input.Action
 }
 
 func goInfraProcessStep(payload goInfraProcessPayload) contract.Step {

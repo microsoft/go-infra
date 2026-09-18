@@ -23,28 +23,24 @@ func exampleProcessDefinition() contract.Definition {
 		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
 		Workflow: contract.Workflow{
 			Heading: "Run example", SubmitLabel: "Review",
-			Inputs: []contract.Input{{
-				ID: "mode", Type: "choice", Label: "Mode",
-				Options: []contract.InputOption{{Value: "run", Name: "Run", Description: "Run example"}},
-			}},
+			Variants: []contract.Variant{{ID: "run", Name: "Run", Description: "Run example"}},
 		},
 	}
 }
 
-func examplePreparedRun(input json.RawMessage, timeout time.Duration) contract.Plan {
+func examplePreparedRun(input json.RawMessage) contract.Plan {
 	return contract.Plan{
 		Input: input, Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps: []contract.Step{{Name: "Run example", Timeout: timeout}},
 		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
+			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
 		},
 		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	}
 }
 
-func exampleProcessSteps(run *contract.State, action func(context.Context) error) []*coordinator.Step {
-	return []*coordinator.Step{coordinator.NewRootStep(run.Steps[0].Name, run.Steps[0].Timeout, action)}
+func exampleProcessSteps(timeout time.Duration, action func(context.Context) error) []*coordinator.Step {
+	return []*coordinator.Step{coordinator.NewRootStep("Run example", timeout, action)}
 }
 
 func waitForProcessRun(t *testing.T, server *Server) {
@@ -74,7 +70,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified example"}, nil
 		},
 		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input, time.Minute), nil
+			return examplePreparedRun(input), nil
 		},
 		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			action := func(context.Context) error { return nil }
@@ -92,7 +88,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 					})
 				}
 			}
-			return exampleProcessSteps(run, action), nil
+			return exampleProcessSteps(time.Minute, action), nil
 		},
 	}
 	server, err := New(
@@ -105,7 +101,7 @@ func TestDurableProcessUsesSharedLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"mode":"run"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
 	request.Header.Set("Origin", "http://localhost")
 	server.handlePrepareProcessRun("example", prepared, request)
 	if prepared.Code != http.StatusOK {
@@ -154,7 +150,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
 		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(run, func(context.Context) error {
+			return exampleProcessSteps(time.Minute, func(context.Context) error {
 				executed = true
 				return nil
 			}), nil
@@ -169,7 +165,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	server.processRun = releaseRun
-	server.steps = exampleProcessSteps(run, func(context.Context) error { return nil })
+	server.steps = exampleProcessSteps(time.Minute, func(context.Context) error { return nil })
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(
 		http.MethodPost, "http://localhost/api/processes/example/start",
@@ -200,10 +196,10 @@ func TestConcurrentProcessStartsCreateOneWorkItem(t *testing.T) {
 			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
 		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input, time.Minute), nil
+			return examplePreparedRun(input), nil
 		},
 		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(run, func(context.Context) error { return nil }), nil
+			return exampleProcessSteps(time.Minute, func(context.Context) error { return nil }), nil
 		},
 	}
 	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
@@ -211,7 +207,7 @@ func TestConcurrentProcessStartsCreateOneWorkItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"mode":"run"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
 	request.Header.Set("Origin", "http://localhost")
 	server.handlePrepareProcessRun("example", prepared, request)
 	var plan processRunResponse
@@ -259,7 +255,7 @@ func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
 			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
 		},
 		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input, 5*time.Millisecond), nil
+			return examplePreparedRun(input), nil
 		},
 		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
 			action := func(context.Context) error { return nil }
@@ -290,7 +286,7 @@ func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
 					})
 				}
 			}
-			return exampleProcessSteps(run, action), nil
+			return exampleProcessSteps(5*time.Millisecond, action), nil
 		},
 	}
 	first, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
@@ -298,7 +294,7 @@ func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"mode":"run"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
 	request.Header.Set("Origin", "http://localhost")
 	first.handlePrepareProcessRun("example", prepared, request)
 	var plan processRunResponse

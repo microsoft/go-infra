@@ -9,6 +9,11 @@
   const safetyCopy = document.querySelector("#safety-copy");
   const preflightList = document.querySelector("#preflight-list");
   const form = document.querySelector("#plan-form");
+  const processVariant = document.querySelector("#process-variant");
+  const variantDescription = document.querySelector("#variant-description");
+  const variantNotice = document.querySelector("#variant-notice");
+  const variantNoticeTitle = document.querySelector("#variant-notice-title");
+  const variantNoticeCopy = document.querySelector("#variant-notice-copy");
   const processInputs = document.querySelector("#process-inputs");
   const planButton = document.querySelector("#plan-button");
   const demoButton = document.querySelector("#demo-button");
@@ -73,10 +78,15 @@
     demoButton.hidden = !workflow.canSimulate;
     planButton.disabled = true;
 
-    processInputs.replaceChildren(...(workflow.inputs || []).map(createInput));
-    updateInputState();
+    processVariant.replaceChildren(...workflow.variants.map((variant) => {
+      const option = document.createElement("option");
+      option.value = variant.id;
+      option.textContent = variant.name;
+      return option;
+    }));
+    renderVariant();
     form.addEventListener("submit", prepareRelease);
-    form.addEventListener("change", updateInputState);
+    processVariant.addEventListener("change", renderVariant);
     demoButton.addEventListener("click", startSimulation);
     executionButton.addEventListener("click", handleExecutionAction);
     executionCancel.addEventListener("click", cancelRunConfirmation);
@@ -90,150 +100,76 @@
     await loadExistingPlan();
   }
 
-  function createInput(input, inputIndex) {
+  function selectedVariant() {
+    return workflow.variants.find((variant) => variant.id === processVariant.value) || workflow.variants[0];
+  }
+
+  function renderVariant() {
+    const variant = selectedVariant();
+    variantDescription.textContent = variant.description;
+    variantNotice.hidden = !variant.noticeTitle && !variant.notice;
+    variantNoticeTitle.textContent = variant.noticeTitle || "";
+    variantNoticeCopy.textContent = variant.notice || "";
+    inputRecords.clear();
+    processInputs.replaceChildren(...(variant.inputs || []).map(createInput));
+  }
+
+  function createInput(input) {
     const wrapper = document.createElement("div");
     wrapper.dataset.inputId = input.id;
-    const record = { schema: input, wrapper, controls: [], notice: null };
-
-    if (input.type === "choice") {
-      wrapper.className = "process-input-group";
-      const label = document.createElement("p");
-      label.className = "input-group-label";
-      label.textContent = input.label;
-      const list = document.createElement("div");
-      list.className = "mode-list";
-      list.setAttribute("role", "radiogroup");
-      list.setAttribute("aria-label", input.label);
-      for (const [optionIndex, option] of (input.options || []).entries()) {
-        const card = document.createElement("label");
-        card.className = "mode-card";
-        card.dataset.value = option.value;
-        const control = document.createElement("input");
-        control.type = "radio";
-        control.name = input.id;
-        control.value = option.value;
-        control.checked = option.value === input.default || !input.default && optionIndex === 0;
-        const icon = document.createElement("span");
-        icon.className = `mode-icon option-icon-${(optionIndex + inputIndex) % 3}`;
-        icon.setAttribute("aria-hidden", "true");
-        icon.textContent = option.mark || option.name.slice(0, 1).toUpperCase();
-        const copy = document.createElement("span");
-        const name = document.createElement("strong");
-        name.textContent = option.name;
-        const description = document.createElement("small");
-        description.textContent = option.description;
-        copy.append(name, description);
-        card.append(control, icon, copy);
-        list.append(card);
-        record.controls.push(control);
-      }
-      wrapper.append(label, list);
-      if (input.description) {
-        const description = document.createElement("p");
-        description.className = "field-help";
-        description.textContent = input.description;
-        wrapper.append(description);
-      }
-      record.notice = createInputNotice();
-      wrapper.append(record.notice.container);
-    } else {
-      wrapper.className = "mode-inputs";
-      const id = `process-input-${input.id}`;
-      const label = document.createElement("label");
-      label.htmlFor = id;
-      label.textContent = input.label;
-      const control = document.createElement("input");
-      control.id = id;
-      control.name = input.id;
-      control.type = input.type;
-      control.placeholder = input.placeholder || "";
-      control.value = input.default || "";
-      control.autocomplete = "off";
-      if (input.type === "number") {
-        control.inputMode = "numeric";
-        control.min = "1";
-        control.step = "1";
-      }
-      wrapper.append(label, control);
-      record.controls.push(control);
-      if (input.description) {
-        const description = document.createElement("p");
-        description.className = "field-help";
-        description.textContent = input.description;
-        wrapper.append(description);
-      }
+    wrapper.className = "variant-input";
+    const id = `process-input-${input.id}`;
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = input.label;
+    const control = document.createElement("input");
+    control.id = id;
+    control.name = input.id;
+    control.type = input.type;
+    control.placeholder = input.placeholder || "";
+    control.autocomplete = "off";
+    control.required = true;
+    if (input.type === "number") {
+      control.inputMode = "numeric";
+      control.min = "1";
+      control.step = "1";
     }
-
+    wrapper.append(label, control);
+    if (input.description) {
+      const description = document.createElement("p");
+      description.className = "field-help";
+      description.textContent = input.description;
+      wrapper.append(description);
+    }
+    const record = { schema: input, wrapper, control };
     inputRecords.set(input.id, record);
     return wrapper;
-  }
-
-  function createInputNotice() {
-    const container = document.createElement("div");
-    container.className = "lock-summary";
-    container.hidden = true;
-    const icon = document.createElement("span");
-    icon.setAttribute("aria-hidden", "true");
-    icon.textContent = "🔒";
-    const copy = document.createElement("p");
-    const title = document.createElement("strong");
-    const detail = document.createElement("span");
-    copy.append(title, " ", detail);
-    container.append(icon, copy);
-    return { container, title, detail };
-  }
-
-  function updateInputState() {
-    for (const record of inputRecords.values()) {
-      const condition = record.schema.visibleWhen;
-      const visible = !condition || inputValue(condition.inputId) === condition.equals;
-      record.wrapper.hidden = !visible;
-      for (const control of record.controls) control.required = visible;
-    }
-    for (const record of inputRecords.values()) {
-      if (record.schema.type !== "choice") continue;
-      const value = inputValue(record.schema.id);
-      for (const control of record.controls) {
-        control.closest(".mode-card").classList.toggle("selected", control.checked);
-      }
-      const option = (record.schema.options || []).find((candidate) => candidate.value === value);
-      record.notice.container.hidden = !option?.noticeTitle && !option?.notice;
-      record.notice.title.textContent = option?.noticeTitle || "";
-      record.notice.detail.textContent = option?.notice || "";
-    }
   }
 
   function inputValue(id) {
     const record = inputRecords.get(id);
     if (!record) return "";
-    if (record.schema.type === "choice") {
-      return record.controls.find((control) => control.checked)?.value || "";
-    }
-    return record.controls[0]?.value.trim() || "";
+    return record.control.value.trim();
   }
 
   function serializeInputs() {
-    const result = {};
-    for (const [id, record] of inputRecords) {
-      if (record.wrapper.hidden) continue;
-      const value = inputValue(id);
-      result[id] = value;
+    const input = {};
+    for (const id of inputRecords.keys()) {
+      input[id] = inputValue(id);
     }
-    return result;
+    return { variantId: selectedVariant().id, input };
   }
 
-  function restoreInputs(values) {
+  function restoreInputs(variantId, values) {
+    if (workflow.variants.some((variant) => variant.id === variantId)) {
+      processVariant.value = variantId;
+    }
+    renderVariant();
     if (!values) return;
     for (const [id, record] of inputRecords) {
       if (!Object.prototype.hasOwnProperty.call(values, id)) continue;
-      const value = String(values[id] ?? "");
-      if (record.schema.type === "choice") {
-        for (const control of record.controls) control.checked = control.value === value;
-      } else {
-        record.controls[0].value = value;
-      }
+      record.control.value = String(values[id] ?? "");
     }
-    updateInputState();
   }
 
   async function prepareRelease(event) {
@@ -282,7 +218,7 @@
 
   function renderPlan(nextPlan) {
     plan = nextPlan;
-    restoreInputs(nextPlan.input);
+    restoreInputs(nextPlan.variantId, nextPlan.input);
     emptyState.hidden = true;
     planContent.hidden = false;
 

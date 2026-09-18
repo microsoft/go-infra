@@ -4,55 +4,84 @@
 package goimages
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-func TestDocumentPlanFingerprint(t *testing.T) {
+func TestDocumentOmitsDerivedPlan(t *testing.T) {
 	document := testDocument(t)
 	if err := document.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if document.SchemaVersion != CurrentSchemaVersion || document.LegacyPlan != nil {
+		t.Fatalf("new document contains legacy graph metadata: %#v", document)
+	}
+	data, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"plan"`)) {
+		t.Fatalf("new document persisted derived plan: %s", data)
+	}
 
 	steps := testSteps()
-	plan, err := NewPlan(steps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := document.MatchesPlan(plan); err != nil {
-		t.Fatalf("unchanged graph did not match: %v", err)
-	}
 	steps[0].Timeout = time.Second
-	plan, err = NewPlan(steps)
+	if err := document.ValidateGraph(steps); err != nil {
+		t.Fatalf("current document depends on persisted graph metadata: %v", err)
+	}
+}
+
+func TestLegacyDocumentPlanFingerprint(t *testing.T) {
+	document := testLegacyDocument(t)
+	data, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := document.MatchesPlan(plan); err == nil {
-		t.Fatal("changed graph unexpectedly matched persisted plan")
+	var restored Document
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.Validate(); err != nil {
+		t.Fatalf("valid schema-8 document was rejected: %v", err)
+	}
+	if err := restored.ValidateGraph(testSteps()); err != nil {
+		t.Fatalf("unchanged legacy graph did not match: %v", err)
 	}
 
-	document = testDocument(t)
-	document.Plan.WorkflowRevision++
+	steps := testSteps()
+	steps[0].Timeout = time.Second
+	if err := restored.ValidateGraph(steps); err == nil {
+		t.Fatal("changed graph unexpectedly matched legacy plan")
+	}
+
+	document = testLegacyDocument(t)
+	document.LegacyPlan.WorkflowRevision++
 	if err := document.Validate(); err == nil {
 		t.Fatal("unsupported workflow revision unexpectedly passed validation")
 	}
 
-	document = testDocument(t)
-	document.Plan.Steps[0].Name = "tampered"
+	document = testLegacyDocument(t)
+	document.LegacyPlan.Steps[0].Name = "tampered"
 	if err := document.Validate(); err == nil {
 		t.Fatal("tampered plan unexpectedly passed validation")
 	}
 
-	document = testDocument(t)
-	document.Plan.Steps[1].Name = document.Plan.Steps[0].Name
-	digest, err := planDigest(document.Plan.Steps)
+	document = testLegacyDocument(t)
+	document.LegacyPlan.Steps[1].Name = document.LegacyPlan.Steps[0].Name
+	digest, err := legacyPlanDigest(document.LegacyPlan.Steps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	document.Plan.Digest = digest
+	document.LegacyPlan.Digest = digest
+	document.ExecutionDigest, err = legacyExecutionDigest(document.Input, *document.LegacyPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := document.Validate(); err == nil {
 		t.Fatal("duplicate persisted step name unexpectedly passed validation")
 	}
@@ -121,7 +150,23 @@ func testDocument(t *testing.T) *Document {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := NewDocument(input, state, testSteps(), time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
+	document, err := NewDocument(input, state, time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func testLegacyDocument(t *testing.T) *Document {
+	t.Helper()
+	document := testDocument(t)
+	plan, err := newLegacyPlan(testSteps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.SchemaVersion = legacySchemaVersion
+	document.LegacyPlan = &plan
+	document.ExecutionDigest, err = legacyExecutionDigest(document.Input, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -109,8 +109,8 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	t.Helper()
 	process := &fakeProcess{
 		definition: exampleProcessDefinition(),
-		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(run, func(context.Context) error { return nil }), nil
+		build: func(_ context.Context, _ *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
+			return exampleProcessSteps(time.Minute, func(context.Context) error { return nil }), nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -274,7 +274,7 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(description, "<strong>Actions</strong>") {
+	if !strings.Contains(description, "<strong>Action</strong>") {
 		t.Fatalf("description = %s", description)
 	}
 	response = postJSONValue(t, ui, "/api/release-work-items/42/import", exported)

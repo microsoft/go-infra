@@ -94,11 +94,11 @@ func TestProcessRunWorkItemStoreRejectsUnstartedRun(t *testing.T) {
 
 func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 	plan := contract.Plan{
-		Input:   json.RawMessage(`{"mode":"test"}`),
-		Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps:   []contract.Step{{Name: "Run example", DependsOn: []string{"Prepare"}, Timeout: time.Minute}},
+		VariantID: "test",
+		Input:     json.RawMessage(`{"mode":"test"}`),
+		Payload:   json.RawMessage(`{"value":"fixed"}`),
 		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
+			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
 			Facts:                []contract.PlanFact{{Label: "Version", Value: "1.0"}},
 			Request: &contract.RequestPreview{
@@ -107,16 +107,22 @@ func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 		},
 		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
 	}
-	plan.Steps = append([]contract.Step{{Name: "Prepare", Timeout: time.Minute}}, plan.Steps...)
 	state, err := NewReleaseRunState("example", plan)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.LegacySteps = []contract.Step{
+		{Name: "Prepare", Timeout: time.Minute},
+		{Name: "Run example", DependsOn: []string{"Prepare"}, Timeout: time.Minute},
+	}
+	state.Digest, err = processRunDigest(state)
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan.Input[2] = 'x'
-	plan.Steps[1].DependsOn[0] = "changed"
 	plan.View.Facts[0].Value = "changed"
 	plan.View.Request.Fields[0].Value = "changed"
-	if string(state.Input) != `{"mode":"test"}` || state.Steps[1].DependsOn[0] != "Prepare" ||
+	if string(state.Input) != `{"mode":"test"}` || state.LegacySteps[1].DependsOn[0] != "Prepare" ||
 		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
 
 		t.Fatalf("state changed with source plan: %#v", state)
@@ -124,24 +130,48 @@ func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 
 	clone := CloneReleaseRunState(state)
 	clone.Payload[2] = 'x'
-	clone.Steps[1].DependsOn[0] = "changed"
+	clone.LegacySteps[1].DependsOn[0] = "changed"
 	clone.View.Facts[0].Value = "changed"
 	clone.View.Request.Fields[0].Value = "changed"
-	if string(state.Payload) != `{"value":"fixed"}` || state.Steps[1].DependsOn[0] != "Prepare" ||
+	if string(state.Payload) != `{"value":"fixed"}` || state.LegacySteps[1].DependsOn[0] != "Prepare" ||
 		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
 
 		t.Fatalf("state changed with clone: %#v", state)
 	}
 }
 
+func TestProcessRunDigestBindsVariant(t *testing.T) {
+	run := testProcessRun(t)
+	run.VariantID = "changed"
+	if err := validateProcessRun(run); err == nil {
+		t.Fatal("run with a modified variant unexpectedly passed validation")
+	}
+}
+
+func TestNewReleaseRunStateRequiresExecutionTitle(t *testing.T) {
+	plan := contract.Plan{
+		VariantID: "test",
+		Input:     json.RawMessage(`{}`),
+		Payload:   json.RawMessage(`{}`),
+		View: contract.PlanView{
+			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
+			ExecutionButtonLabel: "Run example",
+		},
+		Target: contract.Reference{ID: "example", URL: "https://example.com", LinkLabel: "Open example"},
+	}
+	if _, err := NewReleaseRunState("example", plan); err == nil {
+		t.Fatal("plan without an execution title unexpectedly passed validation")
+	}
+}
+
 func testProcessRun(t *testing.T) *contract.State {
 	t.Helper()
 	run, err := NewReleaseRunState("example", contract.Plan{
-		Test:  true,
-		Input: json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
-		Steps: []contract.Step{{Name: "Run example", Timeout: time.Minute}},
+		VariantID: "test",
+		Test:      true,
+		Input:     json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
 		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionConfirmation: "Confirm example.",
+			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
 			ExecutionButtonLabel: "Run example",
 		},
 		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},

@@ -5,9 +5,15 @@
 package contract
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -45,10 +51,11 @@ type Process interface {
 	// Preflight performs non-mutating readiness checks.
 	Preflight(context.Context) (Readiness, error)
 
-	// Prepare validates normalized browser input and returns a new run that has not started.
-	Prepare(context.Context, json.RawMessage) (Run, error)
+	// Prepare validates one browser selection and returns a new run that has not started.
+	Prepare(context.Context, Selection) (Run, error)
 
-	// Restore validates persisted state and reconstructs its run.
+	// Restore validates persisted state and reconstructs its run. When State.VariantID is empty in
+	// state written before variants were introduced, Restore must infer it from immutable state.
 	Restore(*State) (Run, error)
 }
 
@@ -109,11 +116,42 @@ type Workflow struct {
 	// SubmitLabel labels the command that prepares the release plan.
 	SubmitLabel string `json:"submitLabel,omitempty"`
 
-	// Inputs lists the browser-editable process inputs in display order.
-	Inputs []Input `json:"inputs,omitempty"`
+	// Variants lists the processes displayed within this group. The first variant is selected by
+	// default.
+	Variants []Variant `json:"variants"`
 
 	// CanSimulate reports whether the UI offers a simulation command for this process.
 	CanSimulate bool `json:"canSimulate"`
+}
+
+// Variant describes one selectable process within a display group.
+type Variant struct {
+	// ID is the stable value sent to Process.Prepare.
+	ID string `json:"id"`
+
+	// Name is the variant name shown in the process selector.
+	Name string `json:"name"`
+
+	// Description explains the variant.
+	Description string `json:"description"`
+
+	// Inputs lists only the fields used by this variant.
+	Inputs []Input `json:"inputs,omitempty"`
+
+	// NoticeTitle labels an optional notice shown for this variant.
+	NoticeTitle string `json:"noticeTitle,omitempty"`
+
+	// Notice explains constraints that apply to this variant.
+	Notice string `json:"notice,omitempty"`
+}
+
+// Selection is one process variant and its browser input object.
+type Selection struct {
+	// VariantID identifies one variant from Definition.Workflow.Variants.
+	VariantID string `json:"variantId"`
+
+	// Input contains the selected variant's browser fields.
+	Input json.RawMessage `json:"input"`
 }
 
 // Input describes one browser control.
@@ -121,7 +159,7 @@ type Input struct {
 	// ID is the JSON object key accepted by Process.Prepare.
 	ID string `json:"id"`
 
-	// Type selects the browser control. The release UI currently accepts "choice" and "number".
+	// Type selects the browser control. The release UI currently accepts "number".
 	Type string `json:"type"`
 
 	// Label names the control.
@@ -130,51 +168,127 @@ type Input struct {
 	// Description explains the value expected from the operator.
 	Description string `json:"description,omitempty"`
 
-	// Default is the value used when the browser omits the input.
-	Default string `json:"default,omitempty"`
-
 	// Placeholder is example text shown by an empty number input.
 	Placeholder string `json:"placeholder,omitempty"`
-
-	// Options lists the allowed values for a choice input.
-	Options []InputOption `json:"options,omitempty"`
-
-	// VisibleWhen shows this input only when another choice has the specified value.
-	VisibleWhen *Condition `json:"visibleWhen,omitempty"`
 }
 
-// InputOption describes one allowed value for a choice input.
-type InputOption struct {
-	// Value is the JSON value sent to Process.Prepare.
-	Value string `json:"value"`
+// FieldOptions contains the display text for one bound input field.
+type FieldOptions struct {
+	// Label names the field.
+	Label string
 
-	// Name is the option name shown to the operator.
-	Name string `json:"name"`
+	// Description explains the value expected from the operator.
+	Description string
 
-	// Mark is a short label shown beside the option.
-	Mark string `json:"mark,omitempty"`
-
-	// Description explains the option.
-	Description string `json:"description"`
-
-	// NoticeTitle labels an optional notice shown when the option is selected.
-	NoticeTitle string `json:"noticeTitle,omitempty"`
-
-	// Notice explains constraints that apply to the selected option.
-	Notice string `json:"notice,omitempty"`
+	// Placeholder is example text shown by an empty field.
+	Placeholder string
 }
 
-// Condition controls whether an input is visible.
-type Condition struct {
-	// InputID identifies the choice input that controls visibility.
-	InputID string `json:"inputId"`
+type inputBinding struct {
+	definition Input
+	set        func(json.RawMessage) error
+}
 
-	// Equals is the controlling value that makes the input visible.
-	Equals string `json:"equals"`
+// InputSet binds browser field IDs to Go fields and produces their UI definitions.
+//
+// Use one function to declare a variant's fields. Call Inputs while building Definition and Parse
+// while preparing the variant. This keeps each browser ID beside the Go field it sets.
+type InputSet struct {
+	bindings []inputBinding
+	err      error
+}
+
+// NewInputSet creates an empty input set.
+func NewInputSet() *InputSet {
+	return &InputSet{}
+}
+
+// PositiveIntVar binds id to target and renders it as a positive integer field.
+func (s *InputSet) PositiveIntVar(target *int, id string, options FieldOptions) {
+	if s.err != nil {
+		return
+	}
+	if target == nil {
+		s.err = fmt.Errorf("input %q has a nil target", id)
+		return
+	}
+	for _, binding := range s.bindings {
+		if binding.definition.ID == id {
+			s.err = fmt.Errorf("input %q is bound more than once", id)
+			return
+		}
+	}
+	s.bindings = append(s.bindings, inputBinding{
+		definition: Input{
+			ID: id, Type: "number", Label: options.Label,
+			Description: options.Description, Placeholder: options.Placeholder,
+		},
+		set: func(raw json.RawMessage) error {
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return fmt.Errorf("input %q must be a string", id)
+			}
+			number, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+			if err != nil || number == 0 || uint64(int(number)) != number {
+				return fmt.Errorf("input %q must be a positive integer", id)
+			}
+			*target = int(number)
+			return nil
+		},
+	})
+}
+
+// Inputs returns the UI definitions for the bound fields.
+func (s *InputSet) Inputs() []Input {
+	inputs := make([]Input, len(s.bindings))
+	for index, binding := range s.bindings {
+		inputs[index] = binding.definition
+	}
+	return inputs
+}
+
+// Parse binds one JSON object to the registered Go fields.
+func (s *InputSet) Parse(data json.RawMessage) error {
+	if s.err != nil {
+		return s.err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var encoded map[string]json.RawMessage
+	if err := decoder.Decode(&encoded); err != nil {
+		return fmt.Errorf("decode process inputs: %w", err)
+	}
+	if encoded == nil {
+		return errors.New("process inputs must be a JSON object")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("process inputs must contain exactly one JSON value")
+	}
+	for _, binding := range s.bindings {
+		raw, ok := encoded[binding.definition.ID]
+		if !ok {
+			return fmt.Errorf("input %q is required", binding.definition.ID)
+		}
+		if err := binding.set(raw); err != nil {
+			return err
+		}
+		delete(encoded, binding.definition.ID)
+	}
+	if len(encoded) > 0 {
+		unknown := make([]string, 0, len(encoded))
+		for id := range encoded {
+			unknown = append(unknown, id)
+		}
+		sort.Strings(unknown)
+		return fmt.Errorf("unknown process input %q", unknown[0])
+	}
+	return nil
 }
 
 // Plan contains the immutable data produced while preparing a run.
 type Plan struct {
+	// VariantID identifies the selected process variant.
+	VariantID string
+
 	// Test classifies the run as a test or dry run.
 	Test bool
 
@@ -188,9 +302,6 @@ type Plan struct {
 	// the process leaves SessionID empty.
 	SessionID string
 
-	// Steps records the reviewed graph structure.
-	Steps []Step
-
 	// View contains the resolved plan shown before confirmation.
 	View PlanView
 
@@ -202,6 +313,9 @@ type Plan struct {
 type State struct {
 	// ProcessID identifies the Process that owns Input, Payload, and Checkpoint.
 	ProcessID string `json:"processId"`
+
+	// VariantID identifies the selected process variant.
+	VariantID string `json:"variantId,omitempty"`
 
 	// Test classifies the run as a test or dry run.
 	Test bool `json:"test,omitempty"`
@@ -218,8 +332,9 @@ type State struct {
 	// SessionID is the process-specific correlation identifier.
 	SessionID string `json:"sessionId"`
 
-	// Steps records the reviewed graph structure.
-	Steps []Step `json:"steps"`
+	// LegacySteps contains graph metadata written by older release UI builds. New runs leave this
+	// field empty and reconstruct the graph through Run.Steps.
+	LegacySteps []Step `json:"steps,omitempty"`
 
 	// View contains the resolved plan shown to the operator.
 	View PlanView `json:"view"`
@@ -247,7 +362,7 @@ type State struct {
 	UpdatedAt time.Time `json:"-"`
 }
 
-// Step records one node in the reviewed execution graph.
+// Step records one node in a legacy persisted execution graph.
 type Step struct {
 	// Name is the stable step identifier shown by the UI and referenced by DependsOn.
 	Name string `json:"name"`

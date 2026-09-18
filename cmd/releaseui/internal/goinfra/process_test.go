@@ -411,9 +411,9 @@ func cloneProcessRun(run *contract.State) *contract.State {
 	cloned.Input = append(json.RawMessage(nil), run.Input...)
 	cloned.Payload = append(json.RawMessage(nil), run.Payload...)
 	cloned.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
-	cloned.Steps = append([]contract.Step(nil), run.Steps...)
-	for index := range cloned.Steps {
-		cloned.Steps[index].DependsOn = append([]string(nil), run.Steps[index].DependsOn...)
+	cloned.LegacySteps = append([]contract.Step(nil), run.LegacySteps...)
+	for index := range cloned.LegacySteps {
+		cloned.LegacySteps[index].DependsOn = append([]string(nil), run.LegacySteps[index].DependsOn...)
 	}
 	cloned.View.Facts = append([]contract.PlanFact(nil), run.View.Facts...)
 	if run.View.Request != nil {
@@ -431,11 +431,7 @@ func cloneProcessRun(run *contract.State) *contract.State {
 func testStoredGoInfraRun(t *testing.T, integration GitHubService, input goInfraPlanInput) *contract.State {
 	t.Helper()
 	process := NewProcess(integration)
-	inputJSON, err := json.Marshal(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := process.Prepare(context.Background(), inputJSON)
+	prepared, err := process.Prepare(context.Background(), goInfraTestSelection(t, input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,6 +440,35 @@ func testStoredGoInfraRun(t *testing.T, integration GitHubService, input goInfra
 		t.Fatal(err)
 	}
 	return run
+}
+
+func goInfraTestSelection(t *testing.T, input goInfraPlanInput) contract.Selection {
+	t.Helper()
+	variantID := input.Action
+	values := map[string]string{}
+	switch input.Action {
+	case goInfraActionReleaseOnMerge:
+		values["pullRequest"] = input.PullRequest
+	case goInfraActionManualDispatch:
+		variantID = input.DispatchMode
+		if input.PullRequest != "" {
+			values["pullRequest"] = input.PullRequest
+		}
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contract.Selection{VariantID: variantID, Input: data}
+}
+
+func goInfraTestSelectionJSON(t *testing.T, input goInfraPlanInput) string {
+	t.Helper()
+	data, err := json.Marshal(goInfraTestSelection(t, input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func waitForGoInfraAction(t *testing.T, store *memoryProcessRunStore) *contract.State {
@@ -469,7 +494,9 @@ func TestGoInfraPreflightDisabled(t *testing.T) {
 	if response.StatusCode != http.StatusOK || report.PlanningEnabled || report.ExternalExecutionEnabled {
 		t.Fatalf("report = %#v", report)
 	}
-	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	status := response.StatusCode
 	closeResponse(t, response)
 	if status != http.StatusConflict {
@@ -489,7 +516,9 @@ func TestGoInfraPlanningDoesNotRequireExecutionReadiness(t *testing.T) {
 		t.Fatalf("preflight = %#v", preflight)
 	}
 
-	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)
@@ -522,7 +551,9 @@ func TestGoInfraReleaseOnMergeRequiresExactConfirmation(t *testing.T) {
 		t.Fatalf("preflight = %#v", preflight)
 	}
 
-	response = postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"release-on-merge","pullRequest":"42"}`)
+	response = postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionReleaseOnMerge, PullRequest: "42",
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)
@@ -590,7 +621,9 @@ func TestGoInfraReleaseOnMergeValidatesPullRequest(t *testing.T) {
 				return test.pullRequest, nil
 			}
 			process := NewProcess(github)
-			if _, err := process.Prepare(context.Background(), json.RawMessage(`{"action":"release-on-merge","pullRequest":"42"}`)); err == nil {
+			if _, err := process.Prepare(context.Background(), goInfraTestSelection(t, goInfraPlanInput{
+				Action: goInfraActionReleaseOnMerge, PullRequest: "42",
+			})); err == nil {
 				t.Fatalf("invalid pull request was accepted: %#v", test.pullRequest)
 			}
 		})
@@ -609,7 +642,9 @@ func TestGoInfraWorkflowDispatchModes(t *testing.T) {
 			github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 			store := newMemoryProcessRunStore()
 			ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
-			response := postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"`+test.mode+`"}`)
+			response := postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+				Action: goInfraActionManualDispatch, DispatchMode: test.mode,
+			}))
 			defer response.Body.Close()
 			var plan goInfraTestPlanResponse
 			decodeResponse(t, response, &plan)
@@ -647,15 +682,15 @@ func TestGoInfraTestClassification(t *testing.T) {
 	process := NewProcess(github.integration())
 	for _, test := range []struct {
 		name  string
-		input string
+		input goInfraPlanInput
 		want  bool
 	}{
-		{name: "dry-run", input: `{"action":"manual-dispatch","dispatchMode":"dry-run"}`, want: true},
-		{name: "publish", input: `{"action":"manual-dispatch","dispatchMode":"publish"}`},
-		{name: "release-on-merge", input: `{"action":"release-on-merge","pullRequest":"42"}`},
+		{name: "dry-run", input: goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun}, want: true},
+		{name: "publish", input: goInfraPlanInput{Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModePublish}},
+		{name: "release-on-merge", input: goInfraPlanInput{Action: goInfraActionReleaseOnMerge, PullRequest: "42"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared, err := process.Prepare(context.Background(), json.RawMessage(test.input))
+			prepared, err := process.Prepare(context.Background(), goInfraTestSelection(t, test.input))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -681,7 +716,9 @@ func TestGoInfraStartRejectsRapidSecondConfirmation(t *testing.T) {
 	}
 	store := newMemoryProcessRunStore()
 	ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
-	response := postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response := postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)
@@ -729,7 +766,9 @@ func TestGoInfraMutationFailureIsTerminal(t *testing.T) {
 	}
 	store := newMemoryProcessRunStore()
 	ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
-	response := postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response := postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)
@@ -765,7 +804,9 @@ func TestGoInfraWorkflowFailureIsTerminal(t *testing.T) {
 	}
 	store := newMemoryProcessRunStore()
 	ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
-	response := postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response := postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	defer response.Body.Close()
 	var plan goInfraTestPlanResponse
 	decodeResponse(t, response, &plan)
@@ -792,11 +833,11 @@ func TestGoInfraPlanRejectsUnsafeInputs(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
 	for _, body := range []string{
-		`{"action":"release-on-merge","pullRequest":"0"}`,
-		`{"action":"release-on-merge","pullRequest":"42","dispatchMode":"publish"}`,
-		`{"action":"manual-dispatch","pullRequest":"42","dispatchMode":"publish"}`,
-		`{"action":"manual-dispatch","dispatchMode":"other"}`,
-		`{"action":"other"}`,
+		`{"variantId":"release-on-merge","input":{"pullRequest":"0"}}`,
+		`{"variantId":"release-on-merge","input":{}}`,
+		`{"variantId":"release-on-merge","input":{"pullRequest":"42","dispatchMode":"publish"}}`,
+		`{"variantId":"publish","input":{"pullRequest":"42"}}`,
+		`{"variantId":"other","input":{}}`,
 	} {
 		response := postJSON(t, ui, "/api/processes/go-infra/plan", body)
 		status := response.StatusCode
@@ -815,7 +856,9 @@ func TestGoInfraPlanDoesNotPersistBeforeStart(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 	ui := newGoInfraTestUI(t, github.integration(), releaseui.WithReleaseRunStore(store))
-	response := postJSON(t, ui, "/api/processes/go-infra/plan", `{"action":"manual-dispatch","dispatchMode":"dry-run"}`)
+	response := postJSON(t, ui, "/api/processes/go-infra/plan", goInfraTestSelectionJSON(t, goInfraPlanInput{
+		Action: goInfraActionManualDispatch, DispatchMode: goInfraDispatchModeDryRun,
+	}))
 	status := response.StatusCode
 	closeResponse(t, response)
 	if status != http.StatusOK {
