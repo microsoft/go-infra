@@ -106,15 +106,7 @@ func (p *goInfraProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := validateGoInfraProcessRun(state); err != nil {
 		return nil, err
 	}
-	restored := releaseui.CloneReleaseRunState(state)
-	if restored.VariantID == "" {
-		input, err := decodeStrictJSON[goInfraPlanInput](restored.Input)
-		if err != nil {
-			return nil, err
-		}
-		restored.VariantID = goInfraVariantID(input)
-	}
-	return &goInfraRun{process: p, state: restored}, nil
+	return &goInfraRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
 }
 
 func (r *goInfraRun) Snapshot() *contract.State {
@@ -144,8 +136,7 @@ func (r *goInfraRun) Steps(
 		}
 		return executeGoInfraProcess(ctx, payloadJSON, checkpoint, r.process.github)
 	}
-	step := goInfraProcessStep(payload)
-	return []*coordinator.Step{coordinator.NewRootStep(step.Name, step.Timeout, action)}, nil
+	return []*coordinator.Step{goInfraProcessStep(payload, action)}, nil
 }
 
 func (p *goInfraProcess) validateConfiguration() error {
@@ -323,7 +314,7 @@ func validateGoInfraProcessRun(run *contract.State) error {
 	if run.Test != goInfraProcessIsTest(payload.Input) {
 		return errors.New("go-infra process test classification is invalid")
 	}
-	if run.VariantID != "" && run.VariantID != goInfraVariantID(payload.Input) {
+	if run.VariantID != goInfraVariantID(payload.Input) {
 		return errors.New("go-infra process variant does not match its input")
 	}
 	switch payload.Input.Action {
@@ -378,17 +369,18 @@ func goInfraVariantID(input goInfraPlanInput) string {
 	return input.Action
 }
 
-func goInfraProcessStep(payload goInfraProcessPayload) contract.Step {
-	step := contract.Step{Name: "Apply release-on-merge label", Timeout: goInfraLabelTimeout}
+func goInfraProcessStep(payload goInfraProcessPayload, action func(context.Context) error) *coordinator.Step {
+	name := "Apply release-on-merge label"
+	timeout := goInfraLabelTimeout
 	if payload.Input.Action == goInfraActionManualDispatch {
-		step.Timeout = goInfraWorkflowTimeout
+		timeout = goInfraWorkflowTimeout
 		if payload.Input.DispatchMode == goInfraDispatchModeDryRun {
-			step.Name = "Dispatch patch-release dry run"
+			name = "Dispatch patch-release dry run"
 		} else {
-			step.Name = "Dispatch patch release"
+			name = "Dispatch patch release"
 		}
 	}
-	return step
+	return coordinator.NewRootStep(name, timeout, action)
 }
 
 func goInfraProcessTarget(payload goInfraProcessPayload) contract.Reference {

@@ -299,6 +299,9 @@ func ValidateState(input *Input, state *State) error {
 	if state.VerifiedMirroredCommit != "" && state.VerifiedMirroredCommit != input.SourceVersion {
 		return fmt.Errorf("go-images state has verified mirror commit %q, expected %q", state.VerifiedMirroredCommit, input.SourceVersion)
 	}
+	if state.QueueAttempted && state.VerifiedMirroredCommit != input.SourceVersion {
+		return errors.New("go-images state has queue intent before mirror verification")
+	}
 	if state.BuildID != "" {
 		buildID, err := strconv.Atoi(state.BuildID)
 		if err != nil || buildID <= 0 {

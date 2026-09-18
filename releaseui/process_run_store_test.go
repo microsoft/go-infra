@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -111,18 +110,10 @@ func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state.LegacySteps = []contract.Step{
-		{Name: "Prepare", Timeout: time.Minute},
-		{Name: "Run example", DependsOn: []string{"Prepare"}, Timeout: time.Minute},
-	}
-	state.Digest, err = processRunDigest(state)
-	if err != nil {
-		t.Fatal(err)
-	}
 	plan.Input[2] = 'x'
 	plan.View.Facts[0].Value = "changed"
 	plan.View.Request.Fields[0].Value = "changed"
-	if string(state.Input) != `{"mode":"test"}` || state.LegacySteps[1].DependsOn[0] != "Prepare" ||
+	if string(state.Input) != `{"mode":"test"}` ||
 		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
 
 		t.Fatalf("state changed with source plan: %#v", state)
@@ -130,10 +121,9 @@ func TestReleaseRunStateCopiesAreIndependent(t *testing.T) {
 
 	clone := CloneReleaseRunState(state)
 	clone.Payload[2] = 'x'
-	clone.LegacySteps[1].DependsOn[0] = "changed"
 	clone.View.Facts[0].Value = "changed"
 	clone.View.Request.Fields[0].Value = "changed"
-	if string(state.Payload) != `{"value":"fixed"}` || state.LegacySteps[1].DependsOn[0] != "Prepare" ||
+	if string(state.Payload) != `{"value":"fixed"}` ||
 		state.View.Facts[0].Value != "1.0" || state.View.Request.Fields[0].Value != "test" {
 
 		t.Fatalf("state changed with clone: %#v", state)
@@ -145,6 +135,21 @@ func TestProcessRunDigestBindsVariant(t *testing.T) {
 	run.VariantID = "changed"
 	if err := validateProcessRun(run); err == nil {
 		t.Fatal("run with a modified variant unexpectedly passed validation")
+	}
+}
+
+func TestNewReleaseRunStateRequiresVariant(t *testing.T) {
+	plan := contract.Plan{
+		Input:   json.RawMessage(`{}`),
+		Payload: json.RawMessage(`{}`),
+		View: contract.PlanView{
+			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
+			ExecutionButtonLabel: "Run example",
+		},
+		Target: contract.Reference{ID: "example", URL: "https://example.com", LinkLabel: "Open example"},
+	}
+	if _, err := NewReleaseRunState("example", plan); err == nil {
+		t.Fatal("plan without a variant unexpectedly passed validation")
 	}
 }
 

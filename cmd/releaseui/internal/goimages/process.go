@@ -255,15 +255,7 @@ func (p *goImagesProcess) Restore(state *contract.State) (contract.Run, error) {
 	if err := p.validate(state); err != nil {
 		return nil, err
 	}
-	restored := releaseui.CloneReleaseRunState(state)
-	if restored.VariantID == "" {
-		input, err := decodeStrictJSON[PlanInput](restored.Input)
-		if err != nil {
-			return nil, err
-		}
-		restored.VariantID = string(input.Mode)
-	}
-	return &goImagesRun{process: p, state: restored}, nil
+	return &goImagesRun{process: p, state: releaseui.CloneReleaseRunState(state)}, nil
 }
 
 func (r *goImagesRun) Snapshot() *contract.State {
@@ -331,9 +323,6 @@ func (r *goImagesRun) Steps(
 	if err != nil {
 		return nil, err
 	}
-	if err := payload.Document.ValidateGraph(steps); err != nil {
-		return nil, err
-	}
 	return steps, nil
 }
 
@@ -358,7 +347,7 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 
 		return errors.New("go-images process input is invalid")
 	}
-	if run.VariantID != "" && run.VariantID != string(input.Mode) {
+	if run.VariantID != string(input.Mode) {
 		return errors.New("go-images process variant does not match its input")
 	}
 	if run.SessionID != payload.Document.ID {
@@ -391,9 +380,6 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	if err != nil {
 		return fmt.Errorf("validate go-images process graph: %w", err)
 	}
-	if err := payload.Document.ValidateGraph(expectedSteps); err != nil {
-		return err
-	}
 	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
 	if err != nil {
 		return err
@@ -416,15 +402,8 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	if err != nil {
 		return fmt.Errorf("decode go-images process checkpoint: %w", err)
 	}
-	checkpointInput := payload.Document.Input
-	checkpointSteps, _, err := NewGraphWithCheckpoint(
-		&checkpointInput, &state, disabledGoImagesService{}, nil,
-	)
-	if err != nil {
+	if err := ValidateState(&payload.Document.Input, &state); err != nil {
 		return fmt.Errorf("validate go-images process checkpoint: %w", err)
-	}
-	if err := payload.Document.ValidateGraph(checkpointSteps); err != nil {
-		return err
 	}
 	wantExternal := goImagesExternalRun(&state)
 	if !equalProcessRunReference(run.External, wantExternal) {

@@ -54,8 +54,7 @@ type Process interface {
 	// Prepare validates one browser selection and returns a new run that has not started.
 	Prepare(context.Context, Selection) (Run, error)
 
-	// Restore validates persisted state and reconstructs its run. When State.VariantID is empty in
-	// state written before variants were introduced, Restore must infer it from immutable state.
+	// Restore validates persisted state and reconstructs its run.
 	Restore(*State) (Run, error)
 }
 
@@ -315,7 +314,7 @@ type State struct {
 	ProcessID string `json:"processId"`
 
 	// VariantID identifies the selected process variant.
-	VariantID string `json:"variantId,omitempty"`
+	VariantID string `json:"variantId"`
 
 	// Test classifies the run as a test or dry run.
 	Test bool `json:"test,omitempty"`
@@ -331,10 +330,6 @@ type State struct {
 
 	// SessionID is the process-specific correlation identifier.
 	SessionID string `json:"sessionId"`
-
-	// LegacySteps contains graph metadata written by older release UI builds. New runs leave this
-	// field empty and reconstruct the graph through Run.Steps.
-	LegacySteps []Step `json:"steps,omitempty"`
 
 	// View contains the resolved plan shown to the operator.
 	View PlanView `json:"view"`
@@ -360,18 +355,6 @@ type State struct {
 
 	// UpdatedAt is the work-item update time used for display. It is not stored in the snapshot.
 	UpdatedAt time.Time `json:"-"`
-}
-
-// Step records one node in a legacy persisted execution graph.
-type Step struct {
-	// Name is the stable step identifier shown by the UI and referenced by DependsOn.
-	Name string `json:"name"`
-
-	// DependsOn lists prerequisite step names.
-	DependsOn []string `json:"dependsOn,omitempty"`
-
-	// Timeout limits one execution attempt.
-	Timeout time.Duration `json:"timeout"`
 }
 
 // Reference links to an external target or run.

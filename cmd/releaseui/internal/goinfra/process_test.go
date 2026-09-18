@@ -411,10 +411,6 @@ func cloneProcessRun(run *contract.State) *contract.State {
 	cloned.Input = append(json.RawMessage(nil), run.Input...)
 	cloned.Payload = append(json.RawMessage(nil), run.Payload...)
 	cloned.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
-	cloned.LegacySteps = append([]contract.Step(nil), run.LegacySteps...)
-	for index := range cloned.LegacySteps {
-		cloned.LegacySteps[index].DependsOn = append([]string(nil), run.LegacySteps[index].DependsOn...)
-	}
 	cloned.View.Facts = append([]contract.PlanFact(nil), run.View.Facts...)
 	if run.View.Request != nil {
 		request := *run.View.Request

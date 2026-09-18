@@ -199,26 +199,15 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 }
 
-func TestGraphReverifiesLegacyKnownBuildWithoutQueue(t *testing.T) {
+func TestGraphRejectsKnownBuildWithoutMirrorCheckpoint(t *testing.T) {
 	state, err := NewState(testInput)
 	if err != nil {
 		t.Fatal(err)
 	}
 	state.QueueAttempted = true
 	state.BuildID = "888"
-	service := &fakeService{}
-	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runner coordinator.StepRunner
-	if err := runner.Execute(context.Background(), steps); err != nil {
-		t.Fatal(err)
-	}
-	if service.mirrors != 1 || service.queues != 0 || service.polls != 1 ||
-		state.VerifiedMirroredCommit != workflowTestCommit || !state.Complete {
-
-		t.Fatalf("service = %#v, state = %#v", service, state)
+	if _, _, err := NewGraphWithCheckpoint(testInput, state, &fakeService{}, nil); err == nil {
+		t.Fatal("state with a build but no mirror checkpoint unexpectedly passed validation")
 	}
 }
 
@@ -247,10 +236,11 @@ func TestValidateState(t *testing.T) {
 		})
 	}
 	uncertain := &State{
-		InputChecksum:  initial.InputChecksum,
-		QueueAttempted: true,
-		Complete:       true,
-		Result:         "uncertain",
+		InputChecksum:          initial.InputChecksum,
+		VerifiedMirroredCommit: testInput.SourceVersion,
+		QueueAttempted:         true,
+		Complete:               true,
+		Result:                 "uncertain",
 	}
 	if err := ValidateState(testInput, uncertain); err != nil {
 		t.Fatalf("valid uncertain repair failed validation: %v", err)

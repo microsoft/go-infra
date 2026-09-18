@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -41,18 +42,14 @@ func restoreReleaseRun(process contract.Process, state *contract.State) (contrac
 	if err != nil {
 		return nil, err
 	}
-	want := CloneReleaseRunState(state)
-	if want.VariantID == "" {
-		want.VariantID = restored.VariantID
-	}
-	if !reflect.DeepEqual(restored, want) {
+	if !reflect.DeepEqual(restored, state) {
 		return nil, errors.New("restored release run changed its durable state")
 	}
 	return run, nil
 }
 
 type processRunResponse struct {
-	VariantID string            `json:"variantId,omitempty"`
+	VariantID string            `json:"variantId"`
 	Input     json.RawMessage   `json:"input"`
 	Steps     []planStep        `json:"steps"`
 	SessionID string            `json:"sessionId"`
@@ -208,7 +205,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("build process graph: %v", err))
 		return
 	}
-	if err := matchProcessRunGraph(run, steps); err != nil {
+	if err := validateProcessRunGraph(steps); err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("validate process graph: %v", err))
 		return
 	}
@@ -305,7 +302,7 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusConflict, fmt.Sprintf("build process graph: %v", err))
 		return
 	}
-	if err := matchProcessRunGraph(run, steps); err != nil {
+	if err := validateProcessRunGraph(steps); err != nil {
 		s.stopProcessStart(run.Digest)
 		writeError(response, http.StatusConflict, "execution graph no longer matches the reviewed plan")
 		return
@@ -483,7 +480,7 @@ func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
 	if err != nil {
 		return fmt.Errorf("reconstruct process graph: %w", err)
 	}
-	if err := matchProcessRunGraph(run, steps); err != nil {
+	if err := validateProcessRunGraph(steps); err != nil {
 		return fmt.Errorf("restore process graph: %w", err)
 	}
 	s.processRun = releaseRun
@@ -539,42 +536,31 @@ func (s *Server) processRunResponseLocked() processRunResponse {
 	}
 }
 
-func matchProcessRunGraph(run *contract.State, steps []*coordinator.Step) error {
-	described, err := describeProcessRunSteps(steps)
-	if err != nil {
-		return err
+func validateProcessRunGraph(steps []*coordinator.Step) error {
+	if len(steps) == 0 {
+		return errors.New("process graph has no steps")
 	}
-	if len(run.LegacySteps) > 0 && !reflect.DeepEqual(run.LegacySteps, described) {
-		return errors.New("constructed process graph does not match the reviewed graph")
+	seen := make(map[*coordinator.Step]struct{}, len(steps))
+	names := make(map[string]struct{}, len(steps))
+	for _, step := range steps {
+		if step == nil || step.Func == nil || strings.TrimSpace(step.Name) == "" || step.Timeout <= 0 {
+			return errors.New("process graph contains an incomplete step")
+		}
+		if _, exists := names[step.Name]; exists {
+			return fmt.Errorf("process graph repeats step %q", step.Name)
+		}
+		dependencies := make(map[*coordinator.Step]struct{}, len(step.DependsOn))
+		for _, dependency := range step.DependsOn {
+			if _, ok := seen[dependency]; !ok {
+				return fmt.Errorf("process step %q depends on a missing or later step", step.Name)
+			}
+			if _, exists := dependencies[dependency]; exists {
+				return fmt.Errorf("process step %q repeats dependency %q", step.Name, dependency.Name)
+			}
+			dependencies[dependency] = struct{}{}
+		}
+		seen[step] = struct{}{}
+		names[step.Name] = struct{}{}
 	}
 	return nil
-}
-
-func describeProcessRunSteps(steps []*coordinator.Step) ([]contract.Step, error) {
-	if len(steps) == 0 {
-		return nil, errors.New("process graph has no steps")
-	}
-	described := make([]contract.Step, 0, len(steps))
-	seen := make(map[*coordinator.Step]struct{}, len(steps))
-	for _, step := range steps {
-		if step == nil || step.Func == nil {
-			return nil, errors.New("process graph contains an incomplete step")
-		}
-		entry := contract.Step{Name: step.Name, Timeout: step.Timeout}
-		if len(step.DependsOn) > 0 {
-			entry.DependsOn = make([]string, len(step.DependsOn))
-		}
-		for index, dependency := range step.DependsOn {
-			if _, ok := seen[dependency]; !ok {
-				return nil, fmt.Errorf("process step %q depends on a missing or later step", step.Name)
-			}
-			entry.DependsOn[index] = dependency.Name
-		}
-		described = append(described, entry)
-		seen[step] = struct{}{}
-	}
-	if err := validateProcessRunSteps(described); err != nil {
-		return nil, err
-	}
-	return described, nil
 }

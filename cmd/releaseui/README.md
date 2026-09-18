@@ -179,11 +179,8 @@ The restored path wraps the execution service in a queue-denying adapter, so it 
 The go-images session document is schema-versioned. The release UI
 stores it in the selected Azure DevOps work item and checks the work item revision on every update.
 It contains no credentials.
-Schema version 9 stores only standalone go-images input and state. `Run.Steps` reconstructs the
-coordinator graph instead of serializing it. The reader still accepts schema version 8 and validates
-its workflow revision, graph digest, and execution digest before using the reconstructed graph. It
-rejects older full-release-shaped prototype documents. An incompatible work item cannot be restored
-by the current release UI.
+Schema version 1 stores only standalone go-images input and state. `Run.Steps` reconstructs the
+coordinator graph instead of serializing it. The reader accepts only the current format.
 
 The current server runs one selected release at a time. Go-images and generic action state live only
 in the selected Azure DevOps work item. The server creates the work item before calling the target

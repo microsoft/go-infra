@@ -254,29 +254,7 @@ func processRunDigest(run *contract.State) (string, error) {
 		View:      run.View,
 		Target:    run.Target,
 	}
-	var data []byte
-	var err error
-	if len(run.LegacySteps) == 0 {
-		data, err = json.Marshal(payload)
-	} else {
-		data, err = json.Marshal(struct {
-			ProcessID string
-			Test      bool
-			Input     json.RawMessage
-			Payload   json.RawMessage
-			Steps     []contract.Step
-			View      contract.PlanView
-			Target    contract.Reference
-		}{
-			ProcessID: payload.ProcessID,
-			Test:      payload.Test,
-			Input:     payload.Input,
-			Payload:   payload.Payload,
-			Steps:     run.LegacySteps,
-			View:      payload.View,
-			Target:    payload.Target,
-		})
-	}
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
@@ -291,7 +269,7 @@ func validateProcessRun(run *contract.State) error {
 	if !processIDPattern.MatchString(run.ProcessID) {
 		return fmt.Errorf("process run has invalid process ID %q", run.ProcessID)
 	}
-	if run.VariantID != "" && !processIDPattern.MatchString(run.VariantID) {
+	if !processIDPattern.MatchString(run.VariantID) {
 		return fmt.Errorf("process run has invalid variant ID %q", run.VariantID)
 	}
 	if !json.Valid(run.Input) || !json.Valid(run.Payload) {
@@ -299,11 +277,6 @@ func validateProcessRun(run *contract.State) error {
 	}
 	if strings.TrimSpace(run.SessionID) == "" {
 		return errors.New("process run session ID is empty")
-	}
-	if len(run.LegacySteps) > 0 {
-		if err := validateProcessRunSteps(run.LegacySteps); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(run.View.IntentTitle) == "" || strings.TrimSpace(run.View.ExecutionTitle) == "" ||
 		strings.TrimSpace(run.View.ExecutionConfirmation) == "" ||
@@ -375,7 +348,6 @@ func CloneReleaseRunState(run *contract.State) *contract.State {
 	clone := *run
 	clone.Input = append(json.RawMessage(nil), run.Input...)
 	clone.Payload = append(json.RawMessage(nil), run.Payload...)
-	clone.LegacySteps = cloneProcessRunSteps(run.LegacySteps)
 	clone.View = cloneProcessPlanView(run.View)
 	clone.Checkpoint = append(json.RawMessage(nil), run.Checkpoint...)
 	if run.External != nil {
@@ -394,41 +366,4 @@ func cloneProcessPlanView(view contract.PlanView) contract.PlanView {
 		clone.Request = &request
 	}
 	return clone
-}
-
-func validateProcessRunSteps(steps []contract.Step) error {
-	if len(steps) == 0 {
-		return errors.New("process run has no steps")
-	}
-	names := make(map[string]struct{}, len(steps))
-	for _, step := range steps {
-		if strings.TrimSpace(step.Name) == "" || step.Timeout <= 0 {
-			return errors.New("process run step is invalid")
-		}
-		if _, exists := names[step.Name]; exists {
-			return fmt.Errorf("process run repeats step %q", step.Name)
-		}
-		names[step.Name] = struct{}{}
-	}
-	for _, step := range steps {
-		dependencies := make(map[string]struct{}, len(step.DependsOn))
-		for _, dependency := range step.DependsOn {
-			if _, exists := names[dependency]; !exists || dependency == step.Name {
-				return fmt.Errorf("process run step %q has invalid dependency %q", step.Name, dependency)
-			}
-			if _, exists := dependencies[dependency]; exists {
-				return fmt.Errorf("process run step %q repeats dependency %q", step.Name, dependency)
-			}
-			dependencies[dependency] = struct{}{}
-		}
-	}
-	return nil
-}
-
-func cloneProcessRunSteps(steps []contract.Step) []contract.Step {
-	cloned := append([]contract.Step(nil), steps...)
-	for index := range cloned {
-		cloned[index].DependsOn = append([]string(nil), cloned[index].DependsOn...)
-	}
-	return cloned
 }
