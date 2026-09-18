@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesexecution
+package goimages
 
 import (
 	"context"
@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
+
+const serviceTestCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 
 type fakeReader struct {
 	builds      []*azdopipeline.Build
@@ -64,21 +65,21 @@ func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) 
 
 func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 	for _, test := range []struct {
-		mode          goimagesworkflow.Mode
+		mode          Mode
 		sourceBuildID string
 		wantSource    string
 		wantPrefix    string
 	}{
-		{mode: goimagesworkflow.ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
-		{mode: goimagesworkflow.ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
-		{mode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+		{mode: ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{mode: ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
+		{mode: ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(string(test.mode), func(t *testing.T) {
 			queue := &fakeQueueClient{}
-			service := newTestService(t, &fakeReader{}, queue, Config{
+			service := newTestService(t, &fakeReader{}, queue, PipelineRunConfig{
 				Mode: test.mode, SourceBuildID: test.sourceBuildID,
 			})
-			parameters, err := goimagesworkflow.PipelineParameters(test.mode, test.sourceBuildID)
+			parameters, err := PipelineParameters(test.mode, test.sourceBuildID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,12 +100,12 @@ func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	checks := 0
 	sleeps := 0
-	config := completeConfig(Config{
-		Mode: goimagesworkflow.ModeNormal,
+	config := completeConfig(PipelineRunConfig{
+		Mode: ModeNormal,
 		VerifyMirrorCommit: func(_ context.Context, commit string) error {
 			checks++
-			if commit != testCommit {
-				t.Fatalf("commit = %q, want %q", commit, testCommit)
+			if commit != serviceTestCommit {
+				t.Fatalf("commit = %q, want %q", commit, serviceTestCommit)
 			}
 			if checks < 3 {
 				return errors.New("not mirrored yet")
@@ -112,14 +113,14 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 			return nil
 		},
 	})
-	service, err := New(&fakeReader{}, &fakeQueueClient{}, config, func(context.Context, time.Duration) error {
+	service, err := NewPipelineRunService(&fakeReader{}, &fakeQueueClient{}, config, func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollMirror(context.Background(), testCommit); err != nil {
+	if err := service.PollMirror(context.Background(), serviceTestCommit); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 3 || sleeps != 2 {
@@ -128,15 +129,15 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 }
 
 func TestPollMirrorRejectsUnplannedCommit(t *testing.T) {
-	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
 	if err := service.PollMirror(context.Background(), "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"); err == nil {
 		t.Fatal("service accepted a different mirror commit")
 	}
 }
 
 func TestTriggerRejectsMutatedExecution(t *testing.T) {
-	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
-	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeNormal, "")
+	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
+	parameters, _ := PipelineParameters(ModeNormal, "")
 	parameters["publishRepoPrefix"] = "dev/"
 	if _, err := service.QueuePipeline(context.Background(), parameters); err == nil {
 		t.Fatal("normal service accepted test parameters")
@@ -144,7 +145,7 @@ func TestTriggerRejectsMutatedExecution(t *testing.T) {
 }
 
 func TestTriggerReconcilesExistingRelease(t *testing.T) {
-	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeRollback, "3019035")
+	parameters, _ := PipelineParameters(ModeRollback, "3019035")
 	variables := map[string]string{
 		correlationVariable: "session", executionDigestVariable: testDigest,
 		modeVariable: "rollback", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "3019035",
@@ -154,12 +155,12 @@ func TestTriggerReconcilesExistingRelease(t *testing.T) {
 		template[name] = value
 	}
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{{{
-		ID: 777, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
+		ID: 777, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
 		Parameters: variables, TemplateParameters: template,
 	}}}}
 	queue := &fakeQueueClient{}
-	service := newTestService(t, reader, queue, Config{
-		Mode: goimagesworkflow.ModeRollback, SourceBuildID: "3019035", PreviousQueueAttempt: true,
+	service := newTestService(t, reader, queue, PipelineRunConfig{
+		Mode: ModeRollback, SourceBuildID: "3019035", PreviousQueueAttempt: true,
 	})
 	buildID, err := service.QueuePipeline(context.Background(), parameters)
 	if err != nil {
@@ -171,7 +172,7 @@ func TestTriggerReconcilesExistingRelease(t *testing.T) {
 }
 
 func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
-	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeTest, "")
+	parameters, _ := PipelineParameters(ModeTest, "")
 	variables := map[string]string{
 		correlationVariable: "session", executionDigestVariable: testDigest,
 		modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
@@ -183,14 +184,14 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{
 		nil,
 		{{
-			ID: 778, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
+			ID: 778, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
 			Parameters: variables, TemplateParameters: template,
 		}},
 	}}
 	queue := &fakeQueueClient{}
 	sleeps := 0
-	service, err := New(reader, queue, completeConfig(Config{
-		Mode: goimagesworkflow.ModeTest, PreviousQueueAttempt: true, ReconcileAttempts: 3,
+	service, err := NewPipelineRunService(reader, queue, completeConfig(PipelineRunConfig{
+		Mode: ModeTest, PreviousQueueAttempt: true, ReconcileAttempts: 3,
 	}), func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -208,21 +209,21 @@ func TestTriggerRetriesReconciliationAfterCheckpointedAttempt(t *testing.T) {
 }
 
 func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
-	parameters, _ := goimagesworkflow.PipelineParameters(goimagesworkflow.ModeNormal, "")
+	parameters, _ := PipelineParameters(ModeNormal, "")
 	template := make(map[string]any, len(parameters))
 	for name, value := range parameters {
 		template[name] = value
 	}
 	reader := &fakeReader{recent: [][]*azdopipeline.Build{{{
-		ID: 777, DefinitionID: goimagesworkflow.DefinitionID, SourceBranch: goimagesworkflow.SourceBranch, SourceVersion: testCommit,
+		ID: 777, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
 		Parameters: map[string]string{
 			correlationVariable: "session", executionDigestVariable: testDigest,
 			modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
 		},
 		TemplateParameters: template,
 	}}}}
-	service := newTestService(t, reader, &fakeQueueClient{}, Config{
-		Mode: goimagesworkflow.ModeNormal, PreviousQueueAttempt: true,
+	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{
+		Mode: ModeNormal, PreviousQueueAttempt: true,
 	})
 	_, err := service.QueuePipeline(context.Background(), parameters)
 	if err == nil || !strings.Contains(err.Error(), modeVariable) {
@@ -232,12 +233,12 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 
 func TestPollPipeline(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{
-		{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "inProgress"},
-		{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "succeeded"},
+		{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"},
+		{ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded"},
 	}}
 	sleeps := 0
-	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
-		Mode: goimagesworkflow.ModeNormal,
+	service, err := NewPipelineRunService(reader, &fakeQueueClient{}, completeConfig(PipelineRunConfig{
+		Mode: ModeNormal,
 	}), func(context.Context, time.Duration) error {
 		sleeps++
 		return nil
@@ -255,13 +256,13 @@ func TestPollPipeline(t *testing.T) {
 
 func TestPollPipelineReportsFailure(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
+		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
 	}}, failures: []azdopipeline.BuildFailure{{
 		Path: "Build > Linux arm32 > Build Images", Message: "PowerShell exited with code 1",
 	}}}
-	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
 	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
-	var resultError *goimagesworkflow.PipelineResultError
+	var resultError *PipelineResultError
 	if err == nil || !strings.Contains(err.Error(), "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
 		!strings.Contains(err.Error(), "https://example/build/888") || reader.failureGets != 1 ||
 		!errors.As(err, &resultError) || resultError.Result != "failed" {
@@ -272,11 +273,11 @@ func TestPollPipelineReportsFailure(t *testing.T) {
 
 func TestPollPipelineReportsCancellation(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "canceled", WebURL: "https://example/build/888",
+		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "canceled", WebURL: "https://example/build/888",
 	}}}
-	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeTest})
+	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeTest})
 	err := service.PollPipeline(context.Background(), "888")
-	var resultError *goimagesworkflow.PipelineResultError
+	var resultError *PipelineResultError
 	if err == nil || !errors.As(err, &resultError) || resultError.Result != "canceled" ||
 		!strings.Contains(err.Error(), "go-images release build 888 canceled") || reader.failureGets != 0 {
 
@@ -286,9 +287,9 @@ func TestPollPipelineReportsCancellation(t *testing.T) {
 
 func TestPollPipelineFailureDetailsAreOptional(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
+		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
 	}}, failureErr: errors.New("timeline unavailable")}
-	service := newTestService(t, reader, &fakeQueueClient{}, Config{Mode: goimagesworkflow.ModeNormal})
+	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
 	err := service.PollPipeline(context.Background(), "888")
 	if err == nil || !strings.Contains(err.Error(), `failed with result "failed"`) ||
 		!strings.Contains(err.Error(), "https://example/build/888") {
@@ -298,8 +299,8 @@ func TestPollPipelineFailureDetailsAreOptional(t *testing.T) {
 }
 
 func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
-	_, err := New(&fakeReader{}, &fakeQueueClient{}, completeConfig(Config{
-		Mode: goimagesworkflow.ModeRollback, SourceBuildID: "bad",
+	_, err := NewPipelineRunService(&fakeReader{}, &fakeQueueClient{}, completeConfig(PipelineRunConfig{
+		Mode: ModeRollback, SourceBuildID: "bad",
 	}), nil)
 	if err == nil {
 		t.Fatal("invalid rollback build was accepted")
@@ -307,9 +308,9 @@ func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
 }
 
 func TestPollHonorsCancellation(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, DefinitionID: goimagesworkflow.DefinitionID, Status: "inProgress"}}}
-	service, err := New(reader, &fakeQueueClient{}, completeConfig(Config{
-		Mode: goimagesworkflow.ModeNormal,
+	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"}}}
+	service, err := NewPipelineRunService(reader, &fakeQueueClient{}, completeConfig(PipelineRunConfig{
+		Mode: ModeNormal,
 	}), func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
 	if err != nil {
 		t.Fatal(err)
@@ -321,20 +322,20 @@ func TestPollHonorsCancellation(t *testing.T) {
 	}
 }
 
-func newTestService(t *testing.T, reader PipelineReader, queue QueueClient, config Config) *Service {
+func newTestService(t *testing.T, reader PipelineReader, queue QueueClient, config PipelineRunConfig) *PipelineRunService {
 	t.Helper()
-	service, err := New(reader, queue, completeConfig(config), func(context.Context, time.Duration) error { return nil })
+	service, err := NewPipelineRunService(reader, queue, completeConfig(config), func(context.Context, time.Duration) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service
 }
 
-func completeConfig(config Config) Config {
+func completeConfig(config PipelineRunConfig) PipelineRunConfig {
 	config.SessionID = "session"
 	config.ExecutionDigest = testDigest
 	config.Versions = []string{"1.26.5-2"}
-	config.SourceVersion = testCommit
+	config.SourceVersion = serviceTestCommit
 	if config.VerifyMirrorCommit == nil {
 		config.VerifyMirrorCommit = func(context.Context, string) error { return nil }
 	}

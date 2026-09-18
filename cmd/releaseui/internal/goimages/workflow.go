@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 // Package goimagesworkflow defines the focused standalone go-images release workflow.
-package goimagesworkflow
+package goimages
 
 import (
 	"context"
@@ -34,7 +34,7 @@ const (
 	ModeTest Mode = "test"
 )
 
-var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var sourceCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // Input is the immutable identity of one standalone go-images release.
 type Input struct {
@@ -62,8 +62,8 @@ type State struct {
 	QueueAttempted         bool
 }
 
-// Service is the complete external surface available to the standalone go-images workflow.
-type Service interface {
+// RunService is the complete external surface available to the standalone go-images workflow.
+type RunService interface {
 	PollMirror(context.Context, string) error
 	QueuePipeline(context.Context, map[string]string) (string, error)
 	PollPipeline(context.Context, string) error
@@ -174,13 +174,13 @@ func PipelineParameters(mode Mode, sourceBuildID string) (map[string]string, err
 func NewGraphWithCheckpoint(
 	input *Input,
 	state *State,
-	service Service,
+	service RunService,
 	checkpoint CheckpointFunc,
 ) ([]*coordinator.Step, *State, error) {
 	if input == nil {
 		return nil, nil, fmt.Errorf("go-images input is nil")
 	}
-	if !commitPattern.MatchString(input.SourceVersion) {
+	if !sourceCommitPattern.MatchString(input.SourceVersion) {
 		return nil, nil, fmt.Errorf("invalid go-images source commit %q", input.SourceVersion)
 	}
 	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)

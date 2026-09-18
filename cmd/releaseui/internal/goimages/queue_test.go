@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesexecution
+package goimages
 
 import (
 	"context"
@@ -11,13 +11,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
 
 const (
-	testCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
-	testDigest = "3edb53bc1411c2ec36149fd7015cb2efec1f8fb9428a17366d6a4d71c3c5c954"
+	queueTestCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+	testDigest      = "3edb53bc1411c2ec36149fd7015cb2efec1f8fb9428a17366d6a4d71c3c5c954"
 )
 
 type staticToken string
@@ -26,14 +24,14 @@ func (t staticToken) Token(context.Context) (string, error) { return string(t), 
 
 func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 	for _, test := range []struct {
-		mode          goimagesworkflow.Mode
+		mode          Mode
 		sourceBuildID string
 		wantSource    string
 		wantPrefix    string
 	}{
-		{mode: goimagesworkflow.ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
-		{mode: goimagesworkflow.ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
-		{mode: goimagesworkflow.ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
+		{mode: ModeNormal, wantSource: "$(Build.BuildId)", wantPrefix: "public/"},
+		{mode: ModeRollback, sourceBuildID: "3019035", wantSource: "3019035", wantPrefix: "public/"},
+		{mode: ModeTest, wantSource: "$(Build.BuildId)", wantPrefix: "dev/"},
 	} {
 		t.Run(string(test.mode), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -55,7 +53,7 @@ func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 					t.Fatal(err)
 				}
-				if body.Definition.ID != goimagesworkflow.DefinitionID || body.SourceBranch != goimagesworkflow.SourceBranch || body.SourceVersion != testCommit {
+				if body.Definition.ID != DefinitionID || body.SourceBranch != SourceBranch || body.SourceVersion != queueTestCommit {
 					t.Fatalf("identity = %#v", body)
 				}
 				if body.TemplateParameters["sourceBuildPipelineRunId"] != test.wantSource ||
@@ -80,7 +78,7 @@ func TestQueueReleaseUsesModeDerivedPayload(t *testing.T) {
 				t.Fatal(err)
 			}
 			buildID, err := client.QueueRelease(context.Background(), QueueRequest{
-				Mode: test.mode, SourceVersion: testCommit, SourceBuildID: test.sourceBuildID,
+				Mode: test.mode, SourceVersion: queueTestCommit, SourceBuildID: test.sourceBuildID,
 				SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
 			})
 			if err != nil {
@@ -99,14 +97,14 @@ func TestQueueReleaseRejectsInvalidModeInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := QueueRequest{
-		Mode: goimagesworkflow.ModeNormal, SourceVersion: testCommit,
+		Mode: ModeNormal, SourceVersion: queueTestCommit,
 		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
 	}
 	base.SourceBuildID = "123"
 	if _, err := client.QueueRelease(context.Background(), base); err == nil {
 		t.Fatal("normal release accepted a source build")
 	}
-	base.Mode = goimagesworkflow.ModeRollback
+	base.Mode = ModeRollback
 	base.SourceBuildID = "invalid"
 	if _, err := client.QueueRelease(context.Background(), base); err == nil {
 		t.Fatal("rollback accepted an invalid source build")
@@ -124,7 +122,7 @@ func TestQueueReleaseRedactsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = client.QueueRelease(context.Background(), QueueRequest{
-		Mode: goimagesworkflow.ModeTest, SourceVersion: testCommit,
+		Mode: ModeTest, SourceVersion: queueTestCommit,
 		SessionID: "session", ExecutionDigest: testDigest, VersionSet: `["1.26.5-2"]`,
 	})
 	if err == nil || strings.Contains(err.Error(), "test-token") || !strings.Contains(err.Error(), "[REDACTED]") {

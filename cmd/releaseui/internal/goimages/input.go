@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesrelease
+package goimages
 
 import (
 	"errors"
@@ -9,18 +9,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
 
 func normalizePlanInput(input PlanInput) (PlanInput, error) {
 	input.SourceBuildID = strings.TrimSpace(input.SourceBuildID)
 	switch input.Mode {
-	case goimagesworkflow.ModeNormal, goimagesworkflow.ModeTest:
+	case ModeNormal, ModeTest:
 		if input.SourceBuildID != "" {
 			return PlanInput{}, fmt.Errorf("%s release does not accept a source build ID", input.Mode)
 		}
-	case goimagesworkflow.ModeRollback:
+	case ModeRollback:
 		buildID, err := strconv.Atoi(input.SourceBuildID)
 		if err != nil || buildID <= 0 {
 			return PlanInput{}, errors.New("rollback source build ID must be a positive integer")
@@ -32,8 +30,8 @@ func normalizePlanInput(input PlanInput) (PlanInput, error) {
 	return input, nil
 }
 
-func validateCurrentSource(source GoImagesSource) error {
-	if source.Branch != goimagesworkflow.SourceBranch {
+func validateCurrentSource(source Source) error {
+	if source.Branch != SourceBranch {
 		return fmt.Errorf("resolved go-images branch %q is not allowlisted", source.Branch)
 	}
 	if len(source.Commit) != 40 {

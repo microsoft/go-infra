@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goinfragithub
+package goinfra
 
 import (
 	"context"

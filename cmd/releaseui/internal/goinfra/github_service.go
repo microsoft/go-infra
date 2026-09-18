@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goinfragithub provides the fixed GitHub mutation boundary for go-infra releases.
-package goinfragithub
+// Package goinfra provides the fixed GitHub mutation boundary for go-infra releases.
+package goinfra
 
 import (
 	"context"

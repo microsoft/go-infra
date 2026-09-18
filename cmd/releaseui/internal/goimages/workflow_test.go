@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesworkflow
+package goimages
 
 import (
 	"context"
@@ -13,11 +13,11 @@ import (
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-const testCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
+const workflowTestCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 
 var testInput = &Input{
 	Versions: []string{"1.25.12-1", "1.26.5-2"}, Mode: ModeNormal,
-	SourceVersion: testCommit,
+	SourceVersion: workflowTestCommit,
 }
 
 type fakeService struct {
@@ -30,7 +30,7 @@ type fakeService struct {
 
 func (service *fakeService) PollMirror(_ context.Context, commit string) error {
 	service.mirrors++
-	if commit != testCommit {
+	if commit != workflowTestCommit {
 		return errors.New("unexpected mirror commit")
 	}
 	return service.mirrorErr
@@ -111,7 +111,7 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 	if state.BuildID != "888" || !state.Complete || state.Result != "succeeded" {
 		t.Fatalf("state = %#v", state)
 	}
-	if len(checkpoints) != 4 || checkpoints[0].VerifiedMirroredCommit != testCommit ||
+	if len(checkpoints) != 4 || checkpoints[0].VerifiedMirroredCommit != workflowTestCommit ||
 		checkpoints[0].QueueAttempted || !checkpoints[1].QueueAttempted || checkpoints[1].BuildID != "" ||
 		checkpoints[2].BuildID != "888" || checkpoints[2].Complete || !checkpoints[3].Complete {
 
@@ -184,7 +184,7 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 	}
 	state.QueueAttempted = true
 	state.BuildID = "888"
-	state.VerifiedMirroredCommit = testCommit
+	state.VerifiedMirroredCommit = workflowTestCommit
 	service := &fakeService{}
 	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
 	if err != nil {
@@ -216,7 +216,7 @@ func TestGraphReverifiesLegacyKnownBuildWithoutQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if service.mirrors != 1 || service.queues != 0 || service.polls != 1 ||
-		state.VerifiedMirroredCommit != testCommit || !state.Complete {
+		state.VerifiedMirroredCommit != workflowTestCommit || !state.Complete {
 
 		t.Fatalf("service = %#v, state = %#v", service, state)
 	}

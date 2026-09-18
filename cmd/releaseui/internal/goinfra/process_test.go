@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goinfrarelease
+package goinfra
 
 import (
 	"context"
@@ -37,6 +37,7 @@ type fakeGoInfraGitHub struct {
 	workflowRun     GoInfraWorkflowRun
 	workflowUpdates []GoInfraWorkflowRun
 	pullRequest     GoInfraPullRequest
+	getPullRequest  func(context.Context, int) (GoInfraPullRequest, error)
 	preflightErr    error
 	labelErr        error
 	dispatchErr     error
@@ -94,73 +95,82 @@ type memoryProcessRunStore struct {
 	updateErr error
 }
 
-func (f *fakeGoInfraGitHub) integration() GoInfraGitHubIntegration {
-	return GoInfraGitHubIntegration{
-		Preflight: func(context.Context) (string, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.preflightCalls++
-			return "verified fake GitHub integration", f.preflightErr
-		},
-		GetPullRequest: func(_ context.Context, number int) (GoInfraPullRequest, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.getPRCalls++
-			if number != f.pullRequest.Number {
-				return GoInfraPullRequest{}, errors.New("unexpected pull request")
-			}
-			return f.pullRequest, nil
-		},
-		AddReleaseOnMergeLabel: func(_ context.Context, number int, expectedHeadSHA string) (GoInfraPullRequest, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.labelCalls++
-			if number != f.pullRequest.Number || expectedHeadSHA != f.pullRequest.HeadSHA {
-				return GoInfraPullRequest{}, errors.New("reviewed pull request changed")
-			}
-			return f.pullRequest, f.labelErr
-		},
-		DispatchPatchRelease: func(_ context.Context, dryRun bool) (GoInfraWorkflowRun, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			f.dispatches = append(f.dispatches, dryRun)
-			if f.dispatchErr != nil {
-				return GoInfraWorkflowRun{}, f.dispatchErr
-			}
-			if f.workflowRun.ID == 0 {
-				f.workflowRun = testGoInfraWorkflowRun("queued", "")
-			}
-			return f.workflowRun, nil
-		},
-		PollWorkflowRun: func(_ context.Context, id int64, report func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error) {
-			f.mu.Lock()
-			f.pollCalls++
-			workflowRun := f.workflowRun
-			updates := append([]GoInfraWorkflowRun(nil), f.workflowUpdates...)
-			started := f.pollStarted
-			release := f.pollRelease
-			pollErr := f.pollErr
-			f.mu.Unlock()
-			if id != workflowRun.ID {
-				return GoInfraWorkflowRun{}, errors.New("unexpected workflow run")
-			}
-			if started != nil {
-				close(started)
-			}
-			if release != nil {
-				<-release
-			}
-			if len(updates) == 0 {
-				updates = []GoInfraWorkflowRun{testGoInfraWorkflowRun("completed", "success")}
-			}
-			for _, update := range updates {
-				if err := report(update); err != nil {
-					return GoInfraWorkflowRun{}, err
-				}
-			}
-			return updates[len(updates)-1], pollErr
-		},
+func (f *fakeGoInfraGitHub) integration() GitHubService {
+	return f
+}
+
+func (f *fakeGoInfraGitHub) Preflight(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.preflightCalls++
+	return "verified fake GitHub integration", f.preflightErr
+}
+
+func (f *fakeGoInfraGitHub) GetPullRequest(ctx context.Context, number int) (GoInfraPullRequest, error) {
+	f.mu.Lock()
+	f.getPRCalls++
+	getPullRequest := f.getPullRequest
+	pullRequest := f.pullRequest
+	f.mu.Unlock()
+	if getPullRequest != nil {
+		return getPullRequest(ctx, number)
 	}
+	if number != pullRequest.Number {
+		return GoInfraPullRequest{}, errors.New("unexpected pull request")
+	}
+	return pullRequest, nil
+}
+
+func (f *fakeGoInfraGitHub) AddReleaseOnMergeLabel(_ context.Context, number int, expectedHeadSHA string) (GoInfraPullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.labelCalls++
+	if number != f.pullRequest.Number || expectedHeadSHA != f.pullRequest.HeadSHA {
+		return GoInfraPullRequest{}, errors.New("reviewed pull request changed")
+	}
+	return f.pullRequest, f.labelErr
+}
+
+func (f *fakeGoInfraGitHub) DispatchPatchRelease(_ context.Context, dryRun bool) (GoInfraWorkflowRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dispatches = append(f.dispatches, dryRun)
+	if f.dispatchErr != nil {
+		return GoInfraWorkflowRun{}, f.dispatchErr
+	}
+	if f.workflowRun.ID == 0 {
+		f.workflowRun = testGoInfraWorkflowRun("queued", "")
+	}
+	return f.workflowRun, nil
+}
+
+func (f *fakeGoInfraGitHub) PollWorkflowRun(_ context.Context, id int64, report func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error) {
+	f.mu.Lock()
+	f.pollCalls++
+	workflowRun := f.workflowRun
+	updates := append([]GoInfraWorkflowRun(nil), f.workflowUpdates...)
+	started := f.pollStarted
+	release := f.pollRelease
+	pollErr := f.pollErr
+	f.mu.Unlock()
+	if id != workflowRun.ID {
+		return GoInfraWorkflowRun{}, errors.New("unexpected workflow run")
+	}
+	if started != nil {
+		close(started)
+	}
+	if release != nil {
+		<-release
+	}
+	if len(updates) == 0 {
+		updates = []GoInfraWorkflowRun{testGoInfraWorkflowRun("completed", "success")}
+	}
+	for _, update := range updates {
+		if err := report(update); err != nil {
+			return GoInfraWorkflowRun{}, err
+		}
+	}
+	return updates[len(updates)-1], pollErr
 }
 
 func (f *fakeGoInfraGitHub) stats() fakeGoInfraGitHubStats {
@@ -189,7 +199,7 @@ func testGoInfraPullRequest() GoInfraPullRequest {
 	}
 }
 
-func newGoInfraTestUI(t *testing.T, integration GoInfraGitHubIntegration, options ...releaseui.Option) *goInfraTestUI {
+func newGoInfraTestUI(t *testing.T, integration GitHubService, options ...releaseui.Option) *goInfraTestUI {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	serverOptions := []releaseui.Option{
@@ -418,7 +428,7 @@ func cloneProcessRun(run *contract.State) *contract.State {
 	return &cloned
 }
 
-func testStoredGoInfraRun(t *testing.T, integration GoInfraGitHubIntegration, input goInfraPlanInput) *contract.State {
+func testStoredGoInfraRun(t *testing.T, integration GitHubService, input goInfraPlanInput) *contract.State {
 	t.Helper()
 	process := NewProcess(integration)
 	inputJSON, err := json.Marshal(input)
@@ -451,7 +461,7 @@ func waitForGoInfraAction(t *testing.T, store *memoryProcessRunStore) *contract.
 }
 
 func TestGoInfraPreflightDisabled(t *testing.T) {
-	ui := newGoInfraTestUI(t, GoInfraGitHubIntegration{})
+	ui := newGoInfraTestUI(t, nil)
 	response := getResponse(t, ui, "/api/processes/go-infra/preflight")
 	defer response.Body.Close()
 	var report releaseui.PreflightReport
@@ -576,11 +586,10 @@ func TestGoInfraReleaseOnMergeValidatesPullRequest(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			github := &fakeGoInfraGitHub{pullRequest: valid}
-			integration := github.integration()
-			integration.GetPullRequest = func(context.Context, int) (GoInfraPullRequest, error) {
+			github.getPullRequest = func(context.Context, int) (GoInfraPullRequest, error) {
 				return test.pullRequest, nil
 			}
-			process := NewProcess(integration)
+			process := NewProcess(github)
 			if _, err := process.Prepare(context.Background(), json.RawMessage(`{"action":"release-on-merge","pullRequest":"42"}`)); err == nil {
 				t.Fatalf("invalid pull request was accepted: %#v", test.pullRequest)
 			}

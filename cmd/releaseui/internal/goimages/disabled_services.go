@@ -1,15 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesrelease
+package goimages
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strconv"
-
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
 
 // ErrExternalExecutionDisabled prevents a prepared plan from contacting external services.
@@ -29,7 +27,7 @@ func (disabledGoImagesService) PollPipeline(context.Context, string) error {
 	return ErrExternalExecutionDisabled
 }
 
-var _ goimagesworkflow.Service = disabledGoImagesService{}
+var _ RunService = disabledGoImagesService{}
 
 type restoredRunMonitor struct {
 	buildID int
@@ -52,4 +50,4 @@ func (monitor restoredRunMonitor) PollPipeline(ctx context.Context, buildID stri
 	return monitor.monitor(ctx, id)
 }
 
-var _ goimagesworkflow.Service = restoredRunMonitor{}
+var _ RunService = restoredRunMonitor{}

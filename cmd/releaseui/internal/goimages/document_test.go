@@ -1,14 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagessession
+package goimages
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -94,10 +93,10 @@ func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 func TestDocumentRejectsInvalidState(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		change func(*goimagesworkflow.State)
+		change func(*State)
 	}{
-		{name: "checksum", change: func(state *goimagesworkflow.State) { state.InputChecksum++ }},
-		{name: "build ID", change: func(state *goimagesworkflow.State) {
+		{name: "checksum", change: func(state *State) { state.InputChecksum++ }},
+		{name: "build ID", change: func(state *State) {
 			state.QueueAttempted = true
 			state.BuildID = "invalid"
 		}},
@@ -114,11 +113,11 @@ func TestDocumentRejectsInvalidState(t *testing.T) {
 
 func testDocument(t *testing.T) *Document {
 	t.Helper()
-	input := &goimagesworkflow.Input{
-		Versions: []string{"1.26.1-1"}, Mode: goimagesworkflow.ModeNormal,
+	input := &Input{
+		Versions: []string{"1.26.1-1"}, Mode: ModeNormal,
 		SourceVersion: "81ce9afc2b75ec4e153dd15fc3c7539b12024945",
 	}
-	state, err := goimagesworkflow.NewState(input)
+	state, err := NewState(input)
 	if err != nil {
 		t.Fatal(err)
 	}

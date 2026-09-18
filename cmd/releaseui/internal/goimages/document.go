@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimagessession models durable, non-secret standalone go-images state.
-package goimagessession
+// Package goimages models durable, non-secret standalone go-images document state.
+package goimages
 
 import (
 	"crypto/rand"
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -30,14 +29,14 @@ const (
 //
 // Credentials are deliberately excluded. They must be reacquired when the application starts.
 type Document struct {
-	SchemaVersion   int                    `json:"schemaVersion"`
-	ID              string                 `json:"id"`
-	CreatedAt       time.Time              `json:"createdAt"`
-	UpdatedAt       time.Time              `json:"updatedAt"`
-	Input           goimagesworkflow.Input `json:"input"`
-	State           goimagesworkflow.State `json:"state"`
-	Plan            Plan                   `json:"plan"`
-	ExecutionDigest string                 `json:"executionDigest"`
+	SchemaVersion   int       `json:"schemaVersion"`
+	ID              string    `json:"id"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	Input           Input     `json:"input"`
+	State           State     `json:"state"`
+	Plan            Plan      `json:"plan"`
+	ExecutionDigest string    `json:"executionDigest"`
 }
 
 // Plan is the persisted structural identity of a release DAG.
@@ -56,7 +55,7 @@ type PlanStep struct {
 }
 
 // NewDocument creates and validates a new durable session document.
-func NewDocument(input *goimagesworkflow.Input, state *goimagesworkflow.State, steps []*coordinator.Step, now time.Time) (*Document, error) {
+func NewDocument(input *Input, state *State, steps []*coordinator.Step, now time.Time) (*Document, error) {
 	if input == nil {
 		return nil, errors.New("session input is nil")
 	}
@@ -152,7 +151,7 @@ func (d *Document) Validate() error {
 	if len(d.Input.Versions) == 0 {
 		return errors.New("session has no release versions")
 	}
-	if err := goimagesworkflow.ValidateState(&d.Input, &d.State); err != nil {
+	if err := ValidateState(&d.Input, &d.State); err != nil {
 		return fmt.Errorf("validate session state: %w", err)
 	}
 	if len(d.Plan.Steps) == 0 {
@@ -268,7 +267,7 @@ func (d *Document) MatchesPlan(current Plan) error {
 
 // WithState returns a detached document containing the latest release domain state. The original
 // document is unchanged, allowing callers to replace it only after durable storage succeeds.
-func (d *Document) WithState(state *goimagesworkflow.State, now time.Time) (*Document, error) {
+func (d *Document) WithState(state *State, now time.Time) (*Document, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
@@ -303,11 +302,11 @@ func planDigest(steps []PlanStep) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func executionDigest(input goimagesworkflow.Input, plan Plan) (string, error) {
+func executionDigest(input Input, plan Plan) (string, error) {
 	data, err := json.Marshal(struct {
-		Input            goimagesworkflow.Input `json:"input"`
-		PlanDigest       string                 `json:"planDigest"`
-		WorkflowRevision int                    `json:"workflowRevision"`
+		Input            Input  `json:"input"`
+		PlanDigest       string `json:"planDigest"`
+		WorkflowRevision int    `json:"workflowRevision"`
 	}{
 		Input:            input,
 		PlanDigest:       plan.Digest,

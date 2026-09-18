@@ -1,20 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimagesrelease validates read-only Azure DevOps data used to prepare a go-images release.
-package goimagesrelease
+// Package goimages implements the Go-images release processes and their external operations.
+package goimages
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
 
 // PipelineClient is the Azure DevOps behavior needed to validate a rollback source.
@@ -42,8 +40,6 @@ type RollbackSource struct {
 	Versions []string
 }
 
-var sourceCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-
 // ValidateRollbackSource verifies that buildID is a successful pipeline 1023 run which produced
 // its own artifacts. Versions are informational and come from the build's exact source commit.
 func ValidateRollbackSource(
@@ -62,8 +58,8 @@ func ValidateRollbackSource(
 	if err != nil {
 		return RollbackSource{}, fmt.Errorf("get rollback source build %d: %w", buildID, err)
 	}
-	if build.DefinitionID != goimagesworkflow.DefinitionID {
-		return RollbackSource{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, goimagesworkflow.DefinitionID)
+	if build.DefinitionID != DefinitionID {
+		return RollbackSource{}, fmt.Errorf("build %d belongs to pipeline %d, expected %d", buildID, build.DefinitionID, DefinitionID)
 	}
 	state, err := build.State()
 	if err != nil {
@@ -72,7 +68,7 @@ func ValidateRollbackSource(
 	if state != azdopipeline.RunStateSucceeded || build.Result != "succeeded" {
 		return RollbackSource{}, fmt.Errorf("rollback source build %d must have result succeeded", buildID)
 	}
-	if build.SourceBranch != goimagesworkflow.SourceBranch || !sourceCommitPattern.MatchString(build.SourceVersion) {
+	if build.SourceBranch != SourceBranch || !sourceCommitPattern.MatchString(build.SourceVersion) {
 		return RollbackSource{}, fmt.Errorf(
 			"rollback source build %d has unsupported source %s@%s",
 			buildID,

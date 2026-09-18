@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goinfrarelease
+package goinfra
 
 import (
 	"context"
@@ -36,13 +36,13 @@ type GoInfraPullRequest = githubclient.PullRequest
 // GoInfraWorkflowRun is the validated GitHub Actions run created by manual dispatch.
 type GoInfraWorkflowRun = githubclient.WorkflowRun
 
-// GoInfraGitHubIntegration is the fixed GitHub read and mutation boundary for go-infra releases.
-type GoInfraGitHubIntegration struct {
-	Preflight              func(context.Context) (string, error)
-	GetPullRequest         func(context.Context, int) (GoInfraPullRequest, error)
-	AddReleaseOnMergeLabel func(context.Context, int, string) (GoInfraPullRequest, error)
-	DispatchPatchRelease   func(context.Context, bool) (GoInfraWorkflowRun, error)
-	PollWorkflowRun        func(context.Context, int64, func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error)
+// GitHubService is the GitHub behavior required by the Go-infra release process.
+type GitHubService interface {
+	Preflight(context.Context) (string, error)
+	GetPullRequest(context.Context, int) (GoInfraPullRequest, error)
+	AddReleaseOnMergeLabel(context.Context, int, string) (GoInfraPullRequest, error)
+	DispatchPatchRelease(context.Context, bool) (GoInfraWorkflowRun, error)
+	PollWorkflowRun(context.Context, int64, func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error)
 }
 
 type goInfraPlanInput struct {

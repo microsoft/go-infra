@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesexecution
+package goimages
 
 import (
 	"bytes"
@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 )
 
 const maxResponseSize = 4 << 20
@@ -55,13 +54,13 @@ func NewHTTPQueueClient(
 
 // QueueRelease queues the fixed definition and branch with one mode-derived parameter set.
 func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest) (int, error) {
-	if !commitPattern.MatchString(request.SourceVersion) {
+	if !sourceCommitPattern.MatchString(request.SourceVersion) {
 		return 0, fmt.Errorf("invalid go-images release source commit %q", request.SourceVersion)
 	}
 	if request.SessionID == "" || !digestPattern.MatchString(request.ExecutionDigest) {
 		return 0, errors.New("go-images release session ID and 64-character execution digest are required")
 	}
-	parameters, err := goimagesworkflow.PipelineParameters(request.Mode, request.SourceBuildID)
+	parameters, err := PipelineParameters(request.Mode, request.SourceBuildID)
 	if err != nil {
 		return 0, err
 	}
@@ -80,8 +79,8 @@ func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest
 		return 0, fmt.Errorf("marshal go-images release variables: %w", err)
 	}
 	body, err := json.Marshal(map[string]any{
-		"definition":         map[string]int{"id": goimagesworkflow.DefinitionID},
-		"sourceBranch":       goimagesworkflow.SourceBranch,
+		"definition":         map[string]int{"id": DefinitionID},
+		"sourceBranch":       SourceBranch,
 		"sourceVersion":      request.SourceVersion,
 		"templateParameters": parameters,
 		// The Build API's legacy parameters field carries pipeline variables as a JSON string.
@@ -91,7 +90,7 @@ func (c *HTTPQueueClient) QueueRelease(ctx context.Context, request QueueRequest
 		return 0, fmt.Errorf("marshal go-images release request: %w", err)
 	}
 	endpoint := c.baseURL + "/" + url.PathEscape(c.project) + "/_apis/build/builds?" + url.Values{
-		"definitionId": {strconv.Itoa(goimagesworkflow.DefinitionID)},
+		"definitionId": {strconv.Itoa(DefinitionID)},
 		"api-version":  {"7.1-preview.7"},
 	}.Encode()
 	token, err := c.tokens.Token(ctx)

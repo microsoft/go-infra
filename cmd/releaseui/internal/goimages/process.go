@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goimagesrelease
+package goimages
 
 import (
 	"bytes"
@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagessession"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 	releaseui "github.com/microsoft/go-infra/releaseui"
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -31,39 +29,28 @@ const (
 
 // PlanInput is the browser-controlled input for a go-images release.
 type PlanInput struct {
-	Mode          goimagesworkflow.Mode `json:"mode"`
-	SourceBuildID string                `json:"sourceBuildId,omitempty"`
+	Mode          Mode   `json:"mode"`
+	SourceBuildID string `json:"sourceBuildId,omitempty"`
 }
 
-// GoImagesSource is the exact current microsoft/main source selected entirely by the process.
-type GoImagesSource struct {
+// Source is the exact current microsoft/main source selected entirely by the process.
+type Source struct {
 	Branch   string   `json:"branch"`
 	Commit   string   `json:"commit"`
 	Versions []string `json:"versions,omitempty"`
 }
 
-// GoImagesRollbackSource describes a validated successful build whose artifacts may be republished.
-type GoImagesRollbackSource struct {
-	BuildID  int
-	URL      string
-	Versions []string
+// ProcessService is the Azure behavior required by the Go-images release process.
+type ProcessService interface {
+	Preflight(context.Context) (string, error)
+	ResolveCurrentSource(context.Context) (Source, error)
+	ValidateRollback(context.Context, int) (RollbackSource, error)
+	NewRunService(RunRequest) (RunService, error)
 }
 
-// GoImagesReadOnlyIntegration resolves current main and validates rollback builds without mutation.
-type GoImagesReadOnlyIntegration struct {
-	Preflight            func(context.Context) (string, error)
-	ResolveCurrentSource func(context.Context) (GoImagesSource, error)
-	ValidateRollback     func(context.Context, int) (GoImagesRollbackSource, error)
-}
-
-// GoImagesExecutionIntegration constructs the fixed pipeline 1023 execution service.
-type GoImagesExecutionIntegration struct {
-	NewService func(GoImagesExecutionRequest) (goimagesworkflow.Service, error)
-}
-
-// GoImagesExecutionRequest binds one real run to a confirmed durable plan.
-type GoImagesExecutionRequest struct {
-	Mode                 goimagesworkflow.Mode
+// RunRequest binds one real run to a confirmed durable plan.
+type RunRequest struct {
+	Mode                 Mode
 	SessionID            string
 	ExecutionDigest      string
 	Versions             []string
@@ -73,8 +60,7 @@ type GoImagesExecutionRequest struct {
 }
 
 type goImagesProcess struct {
-	readOnly  GoImagesReadOnlyIntegration
-	execution *GoImagesExecutionIntegration
+	service ProcessService
 }
 
 type goImagesRun struct {
@@ -83,18 +69,14 @@ type goImagesRun struct {
 }
 
 type goImagesProcessPayload struct {
-	Document       goimagessession.Document `json:"document"`
-	Source         GoImagesSource           `json:"source"`
-	RollbackSource *GoImagesRollbackSource  `json:"rollbackSource,omitempty"`
+	Document       Document        `json:"document"`
+	Source         Source          `json:"source"`
+	RollbackSource *RollbackSource `json:"rollbackSource,omitempty"`
 }
 
-// NewProcess creates the fixed pipeline 1023 release process. A nil execution integration keeps
-// planning and simulation available while disabling real pipeline execution.
-func NewProcess(
-	readOnly GoImagesReadOnlyIntegration,
-	execution *GoImagesExecutionIntegration,
-) contract.Process {
-	return &goImagesProcess{readOnly: readOnly, execution: execution}
+// NewProcess creates the fixed pipeline 1023 release process.
+func NewProcess(service ProcessService) contract.Process {
+	return &goImagesProcess{service: service}
 }
 
 func (p *goImagesProcess) Definition() contract.Definition {
@@ -128,12 +110,9 @@ func (p *goImagesProcess) Preflight(ctx context.Context) (contract.Readiness, er
 	if err := p.validateConfiguration(); err != nil {
 		return contract.Readiness{Details: err.Error()}, nil
 	}
-	details, err := p.readOnly.Preflight(ctx)
+	details, err := p.service.Preflight(ctx)
 	readiness := contract.Readiness{
-		PlanningEnabled: err == nil, ExecutionEnabled: err == nil && p.execution != nil, Details: details,
-	}
-	if err == nil && p.execution == nil {
-		readiness.Details = strings.TrimSpace(details + " Real pipeline execution is disabled.")
+		PlanningEnabled: err == nil, ExecutionEnabled: err == nil, Details: details,
 	}
 	return readiness, err
 }
@@ -162,10 +141,10 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 	if err != nil {
 		return contract.Plan{}, contract.InvalidInput(err)
 	}
-	if _, err := p.readOnly.Preflight(ctx); err != nil {
+	if _, err := p.service.Preflight(ctx); err != nil {
 		return contract.Plan{}, fmt.Errorf("azure preflight failed: %w", err)
 	}
-	source, err := p.readOnly.ResolveCurrentSource(ctx)
+	source, err := p.service.ResolveCurrentSource(ctx)
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("resolve current microsoft/main: %w", err)
 	}
@@ -177,10 +156,10 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 		return contract.Plan{}, err
 	}
 	versions := append([]string(nil), source.Versions...)
-	var rollbackSource *GoImagesRollbackSource
-	if normalized.Mode == goimagesworkflow.ModeRollback {
+	var rollbackSource *RollbackSource
+	if normalized.Mode == ModeRollback {
 		buildID, _ := strconv.Atoi(normalized.SourceBuildID)
-		validated, err := p.readOnly.ValidateRollback(ctx, buildID)
+		validated, err := p.service.ValidateRollback(ctx, buildID)
 		if err != nil {
 			return contract.Plan{}, fmt.Errorf("validate rollback source: %w", err)
 		}
@@ -194,17 +173,17 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 		rollbackSource = &validated
 		versions = append([]string(nil), validated.Versions...)
 	}
-	workflowInput := &goimagesworkflow.Input{
+	workflowInput := &Input{
 		Versions: versions, Mode: normalized.Mode, SourceVersion: source.Commit,
 		SourceBuildID: normalized.SourceBuildID,
 	}
-	steps, state, err := goimagesworkflow.NewGraphWithCheckpoint(
+	steps, state, err := NewGraphWithCheckpoint(
 		workflowInput, nil, disabledGoImagesService{}, nil,
 	)
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("create go-images plan: %w", err)
 	}
-	document, err := goimagessession.NewDocument(workflowInput, state, steps, time.Now())
+	document, err := NewDocument(workflowInput, state, steps, time.Now())
 	if err != nil {
 		return contract.Plan{}, fmt.Errorf("create durable release session: %w", err)
 	}
@@ -219,12 +198,12 @@ func (p *goImagesProcess) prepare(ctx context.Context, inputJSON json.RawMessage
 		return contract.Plan{}, fmt.Errorf("encode normalized go-images input: %w", err)
 	}
 	runSteps := goImagesProcessRunSteps(document.Plan)
-	parameters, err := goimagesworkflow.PipelineParameters(normalized.Mode, normalized.SourceBuildID)
+	parameters, err := PipelineParameters(normalized.Mode, normalized.SourceBuildID)
 	if err != nil {
 		return contract.Plan{}, err
 	}
 	return contract.Plan{
-		Test: normalized.Mode == goimagesworkflow.ModeTest, Input: normalizedJSON, Payload: payloadJSON,
+		Test: normalized.Mode == ModeTest, Input: normalizedJSON, Payload: payloadJSON,
 		SessionID: document.ID, Steps: runSteps,
 		View:   goImagesPlanView(normalized, source, rollbackSource, parameters, len(steps), false),
 		Target: goImagesProcessTarget(),
@@ -256,33 +235,30 @@ func (r *goImagesRun) Steps(
 	}
 	state := payload.Document.State
 	if len(run.Checkpoint) > 0 {
-		state, err = decodeStrictJSON[goimagesworkflow.State](run.Checkpoint)
+		state, err = decodeStrictJSON[State](run.Checkpoint)
 		if err != nil {
 			return nil, fmt.Errorf("decode go-images checkpoint: %w", err)
 		}
 	}
-	var service goimagesworkflow.Service = disabledGoImagesService{}
-	workflowCheckpoint := goimagesworkflow.CheckpointFunc(nil)
+	var service RunService = disabledGoImagesService{}
+	workflowCheckpoint := CheckpointFunc(nil)
 	if checkpoint != nil && !run.Complete {
-		if r.process.execution == nil || r.process.execution.NewService == nil {
-			return nil, errors.New("real go-images execution is not enabled")
-		}
 		if state.BuildID == "" {
-			current, err := r.process.readOnly.ResolveCurrentSource(ctx)
+			current, err := r.process.service.ResolveCurrentSource(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("re-resolve current microsoft/main: %w", err)
 			}
-			if current.Branch != goimagesworkflow.SourceBranch || current.Commit != payload.Document.Input.SourceVersion {
+			if current.Branch != SourceBranch || current.Commit != payload.Document.Input.SourceVersion {
 				return nil, errors.New("microsoft/main changed after this plan was prepared; refresh the plan before queueing")
 			}
-			if payload.Document.Input.Mode == goimagesworkflow.ModeRollback {
+			if payload.Document.Input.Mode == ModeRollback {
 				buildID, _ := strconv.Atoi(payload.Document.Input.SourceBuildID)
-				if _, err := r.process.readOnly.ValidateRollback(ctx, buildID); err != nil {
+				if _, err := r.process.service.ValidateRollback(ctx, buildID); err != nil {
 					return nil, fmt.Errorf("revalidate rollback source: %w", err)
 				}
 			}
 		}
-		service, err = r.process.execution.NewService(GoImagesExecutionRequest{
+		service, err = r.process.service.NewRunService(RunRequest{
 			Mode: payload.Document.Input.Mode, SessionID: payload.Document.ID, ExecutionDigest: run.Digest,
 			Versions:      append([]string(nil), payload.Document.Input.Versions...),
 			SourceBuildID: payload.Document.Input.SourceBuildID, SourceVersion: payload.Document.Input.SourceVersion,
@@ -291,7 +267,7 @@ func (r *goImagesRun) Steps(
 		if err != nil {
 			return nil, fmt.Errorf("create go-images execution service: %w", err)
 		}
-		workflowCheckpoint = func(ctx context.Context, state *goimagesworkflow.State) error {
+		workflowCheckpoint = func(ctx context.Context, state *State) error {
 			stateJSON, err := json.Marshal(state)
 			if err != nil {
 				return fmt.Errorf("encode go-images checkpoint: %w", err)
@@ -302,11 +278,11 @@ func (r *goImagesRun) Steps(
 		}
 	}
 	input := payload.Document.Input
-	steps, _, err := goimagesworkflow.NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
+	steps, _, err := NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
 	if err != nil {
 		return nil, err
 	}
-	plan, err := goimagessession.NewPlan(steps)
+	plan, err := NewPlan(steps)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +316,7 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	if run.SessionID != payload.Document.ID {
 		return errors.New("go-images process session ID does not match its document")
 	}
-	if run.Test != (input.Mode == goimagesworkflow.ModeTest) {
+	if run.Test != (input.Mode == ModeTest) {
 		return errors.New("go-images process test classification is invalid")
 	}
 	if err := validateCurrentSource(payload.Source); err != nil {
@@ -349,19 +325,19 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 	normalizedSourceVersions, err := normalizeResolvedVersions(payload.Source.Versions)
 	if err != nil || !reflect.DeepEqual(normalizedSourceVersions, payload.Source.Versions) ||
 		payload.Source.Commit != payload.Document.Input.SourceVersion ||
-		input.Mode != goimagesworkflow.ModeRollback && !reflect.DeepEqual(payload.Source.Versions, payload.Document.Input.Versions) {
+		input.Mode != ModeRollback && !reflect.DeepEqual(payload.Source.Versions, payload.Document.Input.Versions) {
 
 		return errors.New("go-images source does not match its document")
 	}
 	if err := validateGoImagesRollbackPayload(input, payload); err != nil {
 		return err
 	}
-	initialState, err := goimagesworkflow.NewState(&payload.Document.Input)
+	initialState, err := NewState(&payload.Document.Input)
 	if err != nil || *initialState != payload.Document.State {
 		return errors.New("go-images payload document does not contain its initial state")
 	}
 	wantSteps := goImagesProcessRunSteps(payload.Document.Plan)
-	parameters, err := goimagesworkflow.PipelineParameters(input.Mode, input.SourceBuildID)
+	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
 	if err != nil {
 		return err
 	}
@@ -379,18 +355,18 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 		}
 		return nil
 	}
-	state, err := decodeStrictJSON[goimagesworkflow.State](run.Checkpoint)
+	state, err := decodeStrictJSON[State](run.Checkpoint)
 	if err != nil {
 		return fmt.Errorf("decode go-images process checkpoint: %w", err)
 	}
 	inputCopy := payload.Document.Input
-	steps, _, err := goimagesworkflow.NewGraphWithCheckpoint(
+	steps, _, err := NewGraphWithCheckpoint(
 		&inputCopy, &state, disabledGoImagesService{}, nil,
 	)
 	if err != nil {
 		return fmt.Errorf("validate go-images process checkpoint: %w", err)
 	}
-	plan, err := goimagessession.NewPlan(steps)
+	plan, err := NewPlan(steps)
 	if err != nil {
 		return err
 	}
@@ -411,17 +387,14 @@ func (p *goImagesProcess) validate(run *contract.State) error {
 }
 
 func (p *goImagesProcess) validateConfiguration() error {
-	if p.readOnly.Preflight == nil || p.readOnly.ResolveCurrentSource == nil || p.readOnly.ValidateRollback == nil {
-		return errors.New("go-images read-only integration is incomplete")
-	}
-	if p.execution != nil && p.execution.NewService == nil {
-		return errors.New("go-images execution integration is incomplete")
+	if p.service == nil {
+		return errors.New("go-images service is unavailable")
 	}
 	return nil
 }
 
 func validateGoImagesRollbackPayload(input PlanInput, payload goImagesProcessPayload) error {
-	if input.Mode != goimagesworkflow.ModeRollback {
+	if input.Mode != ModeRollback {
 		if payload.RollbackSource != nil {
 			return errors.New("non-rollback go-images process has a rollback source")
 		}
@@ -437,7 +410,7 @@ func validateGoImagesRollbackPayload(input PlanInput, payload goImagesProcessPay
 	return nil
 }
 
-func goImagesProcessRunSteps(plan goimagessession.Plan) []contract.Step {
+func goImagesProcessRunSteps(plan Plan) []contract.Step {
 	steps := make([]contract.Step, len(plan.Steps))
 	for index, step := range plan.Steps {
 		steps[index] = contract.Step{
@@ -449,13 +422,13 @@ func goImagesProcessRunSteps(plan goimagessession.Plan) []contract.Step {
 
 func goImagesProcessTarget() contract.Reference {
 	return contract.Reference{
-		ID:        strconv.Itoa(goimagesworkflow.DefinitionID),
+		ID:        strconv.Itoa(DefinitionID),
 		URL:       "https://dev.azure.com/dnceng/internal/_build?definitionId=1023",
 		LinkLabel: "Open go-images pipeline 1023",
 	}
 }
 
-func goImagesExternalRun(state *goimagesworkflow.State) *contract.Reference {
+func goImagesExternalRun(state *State) *contract.Reference {
 	if state == nil || state.BuildID == "" {
 		return nil
 	}

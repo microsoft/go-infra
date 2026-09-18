@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package goinfrarelease
+package goinfra
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ type goInfraProcessPayload struct {
 }
 
 type goInfraProcess struct {
-	integration GoInfraGitHubIntegration
+	github GitHubService
 }
 
 type goInfraRun struct {
@@ -33,8 +33,8 @@ type goInfraRun struct {
 }
 
 // NewProcess creates the fixed microsoft/go-infra release process.
-func NewProcess(integration GoInfraGitHubIntegration) contract.Process {
-	return &goInfraProcess{integration: integration}
+func NewProcess(github GitHubService) contract.Process {
+	return &goInfraProcess{github: github}
 }
 
 func (p *goInfraProcess) Definition() contract.Definition {
@@ -85,7 +85,7 @@ func (p *goInfraProcess) Preflight(ctx context.Context) (contract.Readiness, err
 	if err := p.validateConfiguration(); err != nil {
 		return contract.Readiness{Details: "External execution is disabled. Restart with the go-infra integration configured."}, nil
 	}
-	details, err := p.integration.Preflight(ctx)
+	details, err := p.github.Preflight(ctx)
 	return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: err == nil, Details: details}, err
 }
 
@@ -93,7 +93,7 @@ func (p *goInfraProcess) Prepare(ctx context.Context, input json.RawMessage) (co
 	if err := p.validateConfiguration(); err != nil {
 		return nil, err
 	}
-	prepared, err := prepareGoInfraProcess(ctx, input, p.integration)
+	prepared, err := prepareGoInfraProcess(ctx, input, p.github)
 	if err != nil {
 		return nil, err
 	}
@@ -134,19 +134,16 @@ func (r *goInfraRun) Steps(
 	state := append(json.RawMessage(nil), run.Checkpoint...)
 	action := func(ctx context.Context) error {
 		if len(state) > 0 {
-			return resumeGoInfraProcess(ctx, payloadJSON, state, checkpoint, r.process.integration)
+			return resumeGoInfraProcess(ctx, payloadJSON, state, checkpoint, r.process.github)
 		}
-		return executeGoInfraProcess(ctx, payloadJSON, checkpoint, r.process.integration)
+		return executeGoInfraProcess(ctx, payloadJSON, checkpoint, r.process.github)
 	}
 	step := goInfraProcessStep(payload)
 	return []*coordinator.Step{coordinator.NewRootStep(step.Name, step.Timeout, action)}, nil
 }
 
 func (p *goInfraProcess) validateConfiguration() error {
-	if p.integration.Preflight == nil || p.integration.GetPullRequest == nil ||
-		p.integration.AddReleaseOnMergeLabel == nil || p.integration.DispatchPatchRelease == nil ||
-		p.integration.PollWorkflowRun == nil {
-
+	if p.github == nil {
 		return errors.New("go-infra integration is incomplete")
 	}
 	return nil
@@ -155,7 +152,7 @@ func (p *goInfraProcess) validateConfiguration() error {
 func prepareGoInfraProcess(
 	ctx context.Context,
 	inputJSON json.RawMessage,
-	integration GoInfraGitHubIntegration,
+	github GitHubService,
 ) (contract.Plan, error) {
 	input, err := decodeStrictJSON[goInfraPlanInput](inputJSON)
 	if err != nil {
@@ -167,7 +164,7 @@ func prepareGoInfraProcess(
 	}
 	payload := goInfraProcessPayload{Input: normalized}
 	if normalized.Action == goInfraActionReleaseOnMerge {
-		pullRequest, err := integration.GetPullRequest(ctx, pullRequestNumber)
+		pullRequest, err := github.GetPullRequest(ctx, pullRequestNumber)
 		if err != nil {
 			return contract.Plan{}, fmt.Errorf("validate go-infra pull request: %w", err)
 		}
@@ -194,7 +191,7 @@ func executeGoInfraProcess(
 	ctx context.Context,
 	payloadJSON json.RawMessage,
 	checkpoint contract.CheckpointFunc,
-	integration GoInfraGitHubIntegration,
+	github GitHubService,
 ) error {
 	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
 	if err != nil {
@@ -202,17 +199,17 @@ func executeGoInfraProcess(
 	}
 	switch payload.Input.Action {
 	case goInfraActionReleaseOnMerge:
-		_, err := integration.AddReleaseOnMergeLabel(ctx, payload.PullRequest.Number, payload.PullRequest.HeadSHA)
+		_, err := github.AddReleaseOnMergeLabel(ctx, payload.PullRequest.Number, payload.PullRequest.HeadSHA)
 		return err
 	case goInfraActionManualDispatch:
-		run, err := integration.DispatchPatchRelease(ctx, payload.Input.DispatchMode == goInfraDispatchModeDryRun)
+		run, err := github.DispatchPatchRelease(ctx, payload.Input.DispatchMode == goInfraDispatchModeDryRun)
 		if err != nil {
 			return err
 		}
 		if err := checkpointGoInfraProcess(ctx, run, checkpoint); err != nil {
 			return err
 		}
-		return pollGoInfraProcess(ctx, run.ID, checkpoint, integration)
+		return pollGoInfraProcess(ctx, run.ID, checkpoint, github)
 	default:
 		return fmt.Errorf("unsupported go-infra action %q", payload.Input.Action)
 	}
@@ -222,7 +219,7 @@ func resumeGoInfraProcess(
 	ctx context.Context,
 	payloadJSON, state json.RawMessage,
 	checkpoint contract.CheckpointFunc,
-	integration GoInfraGitHubIntegration,
+	github GitHubService,
 ) error {
 	payload, err := decodeStrictJSON[goInfraProcessPayload](payloadJSON)
 	if err != nil {
@@ -238,16 +235,16 @@ func resumeGoInfraProcess(
 	if err := validateGoInfraWorkflowRun(&run); err != nil {
 		return err
 	}
-	return pollGoInfraProcess(ctx, run.ID, checkpoint, integration)
+	return pollGoInfraProcess(ctx, run.ID, checkpoint, github)
 }
 
 func pollGoInfraProcess(
 	ctx context.Context,
 	runID int64,
 	checkpoint contract.CheckpointFunc,
-	integration GoInfraGitHubIntegration,
+	github GitHubService,
 ) error {
-	_, err := integration.PollWorkflowRun(ctx, runID, func(run GoInfraWorkflowRun) error {
+	_, err := github.PollWorkflowRun(ctx, runID, func(run GoInfraWorkflowRun) error {
 		return checkpointGoInfraProcess(ctx, run, checkpoint)
 	})
 	return err

@@ -1,24 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package goimagesexecution implements the narrowly allowlisted execution workflow for the
-// official go-images pipeline. It supports normal, rollback, and test releases and cannot target
-// another definition, branch, commit, or arbitrary parameter set.
-package goimagesexecution
+// Package goimages provides the narrowly allowlisted execution service for the official
+// go-images pipeline, including normal, rollback, and test releases.
+package goimages
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesrelease"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -29,8 +25,6 @@ const (
 	versionsVariable        = "ReleaseUIGoImagesVersions"
 	sourceBuildVariable     = "ReleaseUIGoImagesSourceBuildID"
 )
-
-var commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // PipelineReader is the read-only Azure DevOps behavior required for reconciliation and polling.
 type PipelineReader interface {
@@ -46,7 +40,7 @@ type QueueClient interface {
 
 // QueueRequest contains immutable metadata for one allowlisted release run.
 type QueueRequest struct {
-	Mode            goimagesworkflow.Mode
+	Mode            Mode
 	SourceVersion   string
 	SourceBuildID   string
 	SessionID       string
@@ -54,9 +48,9 @@ type QueueRequest struct {
 	VersionSet      string
 }
 
-// Config binds a release run to an exact source commit and durable session.
-type Config struct {
-	Mode                 goimagesworkflow.Mode
+// PipelineRunConfig binds a release run to an exact source commit and durable session.
+type PipelineRunConfig struct {
+	Mode                 Mode
 	SessionID            string
 	ExecutionDigest      string
 	Versions             []string
@@ -73,35 +67,35 @@ type Config struct {
 // Sleeper waits between status checks and is replaceable in tests.
 type Sleeper func(context.Context, time.Duration) error
 
-// Service implements only the queue-and-monitor surface required by the focused DAG.
-type Service struct {
+// PipelineRunService implements only the queue-and-monitor surface required by the focused DAG.
+type PipelineRunService struct {
 	reader     PipelineReader
 	queue      QueueClient
-	config     Config
+	config     PipelineRunConfig
 	parameters map[string]string
 	versionSet string
 	sleep      Sleeper
 }
 
-// New validates and creates a go-images release service.
-func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleeper) (*Service, error) {
+// NewPipelineRunService validates and creates a go-images release service.
+func NewPipelineRunService(reader PipelineReader, queue QueueClient, config PipelineRunConfig, sleeper Sleeper) (*PipelineRunService, error) {
 	if reader == nil || queue == nil {
 		return nil, errors.New("go-images pipeline reader and queue client are required")
 	}
 	if config.SessionID == "" || config.ExecutionDigest == "" {
 		return nil, errors.New("go-images release session ID and execution digest are required")
 	}
-	if !commitPattern.MatchString(config.SourceVersion) {
+	if !sourceCommitPattern.MatchString(config.SourceVersion) {
 		return nil, fmt.Errorf("invalid go-images release source commit %q", config.SourceVersion)
 	}
 	if config.VerifyMirrorCommit == nil {
 		return nil, errors.New("go-images internal mirror verifier is required")
 	}
-	parameters, err := goimagesworkflow.PipelineParameters(config.Mode, config.SourceBuildID)
+	parameters, err := PipelineParameters(config.Mode, config.SourceBuildID)
 	if err != nil {
 		return nil, err
 	}
-	versionSet, err := goimagesrelease.CanonicalVersionSet(config.Versions)
+	versionSet, err := CanonicalVersionSet(config.Versions)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +114,7 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 	if sleeper == nil {
 		sleeper = sleepContext
 	}
-	return &Service{
+	return &PipelineRunService{
 		reader: reader, queue: queue, config: config, parameters: parameters, versionSet: versionSet,
 		sleep: sleeper,
 	}, nil
@@ -128,7 +122,7 @@ func New(reader PipelineReader, queue QueueClient, config Config, sleeper Sleepe
 
 // PollMirror waits until the plan's exact source commit is available in the allowlisted
 // internal microsoft-go-images repository.
-func (s *Service) PollMirror(ctx context.Context, commit string) error {
+func (s *PipelineRunService) PollMirror(ctx context.Context, commit string) error {
 	if commit != s.config.SourceVersion {
 		return fmt.Errorf("go-images mirror commit %q does not match planned source %q", commit, s.config.SourceVersion)
 	}
@@ -152,7 +146,7 @@ func (s *Service) PollMirror(ctx context.Context, commit string) error {
 }
 
 // QueuePipeline reconciles this session before queueing the hardcoded official pipeline.
-func (s *Service) QueuePipeline(
+func (s *PipelineRunService) QueuePipeline(
 	ctx context.Context,
 	parameters map[string]string,
 ) (string, error) {
@@ -193,8 +187,8 @@ func (s *Service) QueuePipeline(
 	return strconv.Itoa(buildID), nil
 }
 
-func (s *Service) findCorrelatedBuild(ctx context.Context) (*azdopipeline.Build, error) {
-	builds, err := s.reader.ListRecent(ctx, goimagesworkflow.DefinitionID)
+func (s *PipelineRunService) findCorrelatedBuild(ctx context.Context) (*azdopipeline.Build, error) {
+	builds, err := s.reader.ListRecent(ctx, DefinitionID)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile go-images release pipeline run: %w", err)
 	}
@@ -210,14 +204,14 @@ func (s *Service) findCorrelatedBuild(ctx context.Context) (*azdopipeline.Build,
 	return nil, nil
 }
 
-func (s *Service) validateCorrelatedBuild(build *azdopipeline.Build) error {
-	if build == nil || build.ID <= 0 || build.DefinitionID != goimagesworkflow.DefinitionID {
+func (s *PipelineRunService) validateCorrelatedBuild(build *azdopipeline.Build) error {
+	if build == nil || build.ID <= 0 || build.DefinitionID != DefinitionID {
 		return fmt.Errorf("correlated go-images release build has invalid identity: %#v", build)
 	}
-	if build.SourceBranch != goimagesworkflow.SourceBranch || build.SourceVersion != s.config.SourceVersion {
+	if build.SourceBranch != SourceBranch || build.SourceVersion != s.config.SourceVersion {
 		return fmt.Errorf(
 			"correlated go-images release build %d has source %s@%s, expected %s@%s",
-			build.ID, build.SourceBranch, build.SourceVersion, goimagesworkflow.SourceBranch, s.config.SourceVersion,
+			build.ID, build.SourceBranch, build.SourceVersion, SourceBranch, s.config.SourceVersion,
 		)
 	}
 	for name, want := range map[string]string{
@@ -245,7 +239,7 @@ func templateParameterString(value any) (string, bool) {
 }
 
 // PollPipeline waits for the correlated release run using read-only GET requests.
-func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
+func (s *PipelineRunService) PollPipeline(ctx context.Context, buildID string) error {
 	id, err := strconv.Atoi(buildID)
 	if err != nil || id <= 0 {
 		return fmt.Errorf("invalid go-images release build ID %q", buildID)
@@ -255,8 +249,8 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 		if err != nil {
 			return fmt.Errorf("get go-images release build %d: %w", id, err)
 		}
-		if build.DefinitionID != goimagesworkflow.DefinitionID {
-			return fmt.Errorf("build %d belongs to pipeline %d, expected %d", id, build.DefinitionID, goimagesworkflow.DefinitionID)
+		if build.DefinitionID != DefinitionID {
+			return fmt.Errorf("build %d belongs to pipeline %d, expected %d", id, build.DefinitionID, DefinitionID)
 		}
 		state, err := build.State()
 		if err != nil {
@@ -289,7 +283,7 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 			if build.WebURL != "" {
 				failure += ". Inspect the Azure run: " + build.WebURL
 			}
-			return &goimagesworkflow.PipelineResultError{Result: string(state), Err: errors.New(failure)}
+			return &PipelineResultError{Result: string(state), Err: errors.New(failure)}
 		case azdopipeline.RunStateWaiting, azdopipeline.RunStateRunning:
 			s.reportPipelineProgress(ctx, id, state)
 			if err := s.sleep(ctx, s.config.PollInterval); err != nil {
@@ -301,7 +295,7 @@ func (s *Service) PollPipeline(ctx context.Context, buildID string) error {
 	}
 }
 
-func (s *Service) failureSummary(ctx context.Context, buildID int) string {
+func (s *PipelineRunService) failureSummary(ctx context.Context, buildID int) string {
 	failures, err := s.reader.GetFailures(ctx, buildID)
 	if err != nil || len(failures) == 0 {
 		return ""
@@ -331,7 +325,7 @@ func truncateFailureMessage(message string) string {
 	return string(runes[:maxRunes]) + "..."
 }
 
-func (s *Service) reportPipelineProgress(ctx context.Context, buildID int, state azdopipeline.RunState) {
+func (s *PipelineRunService) reportPipelineProgress(ctx context.Context, buildID int, state azdopipeline.RunState) {
 	progress := coordinator.StepProgress{
 		Summary: "Azure pipeline is queued",
 		Detail:  fmt.Sprintf("Waiting for build %d to start", buildID),
@@ -354,4 +348,4 @@ func sleepContext(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-var _ goimagesworkflow.Service = (*Service)(nil)
+var _ RunService = (*PipelineRunService)(nil)

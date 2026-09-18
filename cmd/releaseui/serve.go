@@ -13,18 +13,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"time"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
-	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdorepo"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesexecution"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesrelease"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimagesworkflow"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfragithub"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfrarelease"
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"
 	releaseui "github.com/microsoft/go-infra/releaseui"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -57,7 +51,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 		TTL:      5 * time.Minute,
 	}
 
-	service, err := goinfragithub.New(goinfragithub.ExecCommandRunner{})
+	goInfraService, err := goinfra.New(goinfra.ExecCommandRunner{})
 	if err != nil {
 		return err
 	}
@@ -77,118 +71,14 @@ func handleServe(parse subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	goInfraProcess := goinfrarelease.NewProcess(goinfrarelease.GoInfraGitHubIntegration{
-		Preflight: service.Preflight, GetPullRequest: service.GetPullRequest,
-		AddReleaseOnMergeLabel: service.AddReleaseOnMergeLabel,
-		DispatchPatchRelease:   service.DispatchPatchRelease, PollWorkflowRun: service.PollWorkflowRun,
-	})
+	goInfraProcess := goinfra.NewProcess(goInfraService)
 
 	azureHTTPClient := &http.Client{Timeout: 3 * time.Minute}
-	azureClient, err := azdopipeline.NewClient(
-		"https://dev.azure.com/dnceng",
-		"internal",
-		azureHTTPClient,
-		tokenProvider,
-	)
+	goImagesService, err := goimages.NewAzureService(azureHTTPClient, tokenProvider)
 	if err != nil {
 		return err
 	}
-	repoClient, err := azdorepo.NewClient(
-		"https://dev.azure.com/dnceng",
-		"internal",
-		"microsoft-go-images",
-		tokenProvider,
-	)
-	if err != nil {
-		return err
-	}
-	versionResolver := goimagesrelease.VersionResolverFunc(func(ctx context.Context, commit string) ([]string, error) {
-		var model dockerversions.Versions
-		if err := repoClient.GetJSONFileAtCommit(ctx, "/src/microsoft/versions.json", commit, &model); err != nil {
-			return nil, err
-		}
-		versions := make([]string, 0, len(model))
-		for _, version := range model {
-			versions = append(versions, version.GoVersion().Full())
-		}
-		sort.Strings(versions)
-		return versions, nil
-	})
-	resolveCurrentSource := func(ctx context.Context) (goimagesrelease.GoImagesSource, error) {
-		tip, err := repoClient.GetBranchTip(ctx, "refs/heads/microsoft/main")
-		if err != nil {
-			return goimagesrelease.GoImagesSource{}, err
-		}
-		pipelineYAML, err := repoClient.GetFileAtCommit(
-			ctx,
-			"/eng/pipeline/go-docker-rolling-internal-pipeline.yml",
-			tip.ObjectID,
-		)
-		if err != nil {
-			return goimagesrelease.GoImagesSource{}, fmt.Errorf("read pipeline 1023 YAML at %s: %w", tip.ObjectID, err)
-		}
-		if err := goimagesrelease.ValidatePipelineParameterContract(pipelineYAML); err != nil {
-			return goimagesrelease.GoImagesSource{}, fmt.Errorf("verify pipeline 1023 parameters at %s: %w", tip.ObjectID, err)
-		}
-		versions, err := versionResolver.VersionsAtCommit(ctx, tip.ObjectID)
-		if err != nil {
-			return goimagesrelease.GoImagesSource{}, fmt.Errorf("read versions at %s: %w", tip.ObjectID, err)
-		}
-		return goimagesrelease.GoImagesSource{Branch: tip.Name, Commit: tip.ObjectID, Versions: versions}, nil
-	}
-	goImagesReadOnly := goimagesrelease.GoImagesReadOnlyIntegration{
-		Preflight: func(ctx context.Context) (string, error) {
-			definition, err := azureClient.GetDefinition(ctx, goimagesworkflow.DefinitionID)
-			if err != nil {
-				return "", err
-			}
-			if definition.Name != "microsoft-go-images (official)" ||
-				definition.QueueStatus != "enabled" ||
-				definition.DefaultBranch != "refs/heads/microsoft/main" ||
-				definition.Repository != "microsoft-go-images" ||
-				definition.YAMLPath != "eng/pipeline/go-docker-rolling-internal-pipeline.yml" {
-
-				return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
-			}
-			return "Authenticated and verified direct go-images pipeline 1023. Planning is read-only; confirmed execution can queue only this target.", nil
-		},
-		ResolveCurrentSource: resolveCurrentSource,
-		ValidateRollback: func(ctx context.Context, buildID int) (goimagesrelease.GoImagesRollbackSource, error) {
-			source, err := goimagesrelease.ValidateRollbackSource(ctx, azureClient, versionResolver, buildID)
-			if err != nil {
-				return goimagesrelease.GoImagesRollbackSource{}, err
-			}
-			return goimagesrelease.GoImagesRollbackSource(source), nil
-		},
-	}
-	queueClient, err := goimagesexecution.NewHTTPQueueClient(
-		"https://dev.azure.com/dnceng",
-		"internal",
-		azureHTTPClient,
-		tokenProvider,
-	)
-	if err != nil {
-		return err
-	}
-	goImagesExecution := goimagesrelease.GoImagesExecutionIntegration{
-		NewService: func(request goimagesrelease.GoImagesExecutionRequest) (goimagesworkflow.Service, error) {
-			return goimagesexecution.New(azureClient, queueClient, goimagesexecution.Config{
-				Mode:                 request.Mode,
-				SessionID:            request.SessionID,
-				ExecutionDigest:      request.ExecutionDigest,
-				Versions:             request.Versions,
-				SourceBuildID:        request.SourceBuildID,
-				SourceVersion:        request.SourceVersion,
-				VerifyMirrorCommit:   repoClient.VerifyCommit,
-				MirrorPollInterval:   5 * time.Second,
-				PollInterval:         5 * time.Second,
-				PreviousQueueAttempt: request.PreviousQueueAttempt,
-				ReconcileAttempts:    6,
-				ReconcileInterval:    5 * time.Second,
-			}, nil)
-		},
-	}
-	goImagesProcess := goimagesrelease.NewProcess(goImagesReadOnly, &goImagesExecution)
+	goImagesProcess := goimages.NewProcess(goImagesService)
 	options := []releaseui.Option{
 		releaseui.WithProcesses(goImagesProcess, goInfraProcess),
 		releaseui.WithReleaseRunStore(processRunStore),
