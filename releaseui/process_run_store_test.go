@@ -58,23 +58,25 @@ func TestProcessRunWorkItemStoreRoundTrip(t *testing.T) {
 	}
 	run := testProcessRun(t)
 	run.Started = true
-	record, err := store.Create(context.Background(), run)
+	view := &contract.RunView{Test: true, Summary: "Ready"}
+	plan := &contract.Plan{Subtitle: "Run example"}
+	record, err := store.Create(context.Background(), run, view, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if record.WorkItemID != 42 || record.Revision != 1 || record.Run.Digest != run.Digest ||
-		client.item.Snapshot.Status != azdoworkitem.StatusStarting || !client.item.Snapshot.Test ||
+		client.item.Snapshot.Status != azdoworkitem.StatusRunning || !client.item.Snapshot.Test ||
 		client.title != "[releaseagent] Run example" || client.assignedTo != "Release Operator" {
 
 		t.Fatalf("record = %#v, snapshot = %#v", record, client.item.Snapshot)
 	}
 	run.Complete = true
-	run.Result = "succeeded"
-	updated, err := store.Update(context.Background(), record, run)
+	run.Result = resultSucceeded
+	updated, err := store.Update(context.Background(), record, run, view, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Revision != 2 || updated.Run.Result != "succeeded" ||
+	if updated.Revision != 2 || updated.Run.Result != resultSucceeded ||
 		client.item.Snapshot.Status != azdoworkitem.StatusSucceeded {
 
 		t.Fatalf("updated = %#v, snapshot = %#v", updated, client.item.Snapshot)
@@ -86,22 +88,15 @@ func TestProcessRunWorkItemStoreRejectsUnstartedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(context.Background(), testProcessRun(t)); err == nil {
+	if _, err := store.Create(context.Background(), testProcessRun(t), nil, nil); err == nil {
 		t.Fatal("unstarted process run was persisted")
 	}
 }
 
-func testProcessRun(t *testing.T) *contract.State {
+func testProcessRun(t *testing.T) *ReleaseRunState {
 	t.Helper()
-	run, err := contract.NewState("example", contract.Plan{
-		VariantID: "test",
-		Test:      true,
-		Input:     json.RawMessage(`{"mode":"test"}`), Payload: json.RawMessage(`{"value":"fixed"}`),
-		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
-			ExecutionButtonLabel: "Run example",
-		},
-		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
+	run, err := newProcessRunState("example", &contract.StateSnapshot{
+		Input: json.RawMessage(`{}`), State: json.RawMessage(`{"value":"fixed"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -110,18 +105,25 @@ func testProcessRun(t *testing.T) *contract.State {
 }
 
 type memoryProcessRunStore struct {
-	mu        sync.Mutex
-	nextID    int
-	records   map[int]*ReleaseRunRecord
-	createErr error
-	updateErr error
+	mu            sync.Mutex
+	nextID        int
+	records       map[int]*ReleaseRunRecord
+	createErr     error
+	updateErr     error
+	updateStarted chan struct{}
+	updateRelease <-chan struct{}
 }
 
 func newMemoryProcessRunStore() *memoryProcessRunStore {
 	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*ReleaseRunRecord)}
 }
 
-func (s *memoryProcessRunStore) Create(_ context.Context, run *contract.State) (*ReleaseRunRecord, error) {
+func (s *memoryProcessRunStore) Create(
+	_ context.Context,
+	run *ReleaseRunState,
+	_ *contract.RunView,
+	_ *contract.Plan,
+) (*ReleaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.createErr != nil {
@@ -150,8 +152,16 @@ func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ReleaseRunRecor
 func (s *memoryProcessRunStore) Update(
 	_ context.Context,
 	current *ReleaseRunRecord,
-	run *contract.State,
+	run *ReleaseRunState,
+	_ *contract.RunView,
+	_ *contract.Plan,
 ) (*ReleaseRunRecord, error) {
+	if s.updateStarted != nil {
+		close(s.updateStarted)
+	}
+	if s.updateRelease != nil {
+		<-s.updateRelease
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.updateErr != nil {
@@ -169,7 +179,7 @@ func (s *memoryProcessRunStore) Update(
 	return cloneProcessRunRecord(record), nil
 }
 
-func (s *memoryProcessRunStore) latest(t *testing.T) *contract.State {
+func (s *memoryProcessRunStore) latest(t *testing.T) *ReleaseRunState {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()

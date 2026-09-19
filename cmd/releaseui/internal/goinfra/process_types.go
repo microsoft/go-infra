@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	goInfraProcessID            = "go-infra"
 	goInfraActionReleaseOnMerge = "release-on-merge"
 	goInfraActionManualDispatch = "manual-dispatch"
 	goInfraDispatchModeDryRun   = "dry-run"

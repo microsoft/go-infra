@@ -16,7 +16,6 @@
   const variantNoticeCopy = document.querySelector("#variant-notice-copy");
   const processInputs = document.querySelector("#process-inputs");
   const planButton = document.querySelector("#plan-button");
-  const demoButton = document.querySelector("#demo-button");
   const emptyState = document.querySelector("#empty-state");
   const planContent = document.querySelector("#plan-content");
   const planSubtitle = document.querySelector("#plan-subtitle");
@@ -75,7 +74,6 @@
     workflowDescription.textContent = workflow.description || "";
     workflowDescription.hidden = !workflow.description;
     planButton.querySelector("span:first-child").textContent = workflow.submitLabel || "Prepare release";
-    demoButton.hidden = !workflow.canSimulate;
     planButton.disabled = true;
 
     processVariant.replaceChildren(...workflow.variants.map((variant) => {
@@ -84,10 +82,10 @@
       option.textContent = variant.name;
       return option;
     }));
+    processVariant.value = processDefinition.id;
     renderVariant();
     form.addEventListener("submit", prepareRelease);
     processVariant.addEventListener("change", renderVariant);
-    demoButton.addEventListener("click", startSimulation);
     executionButton.addEventListener("click", handleExecutionAction);
     executionCancel.addEventListener("click", cancelRunConfirmation);
     if ("ResizeObserver" in globalThis) {
@@ -106,6 +104,10 @@
 
   function renderVariant() {
     const variant = selectedVariant();
+    endpointBase = `/api/processes/${encodeURIComponent(variant.id)}`;
+    workflowHeading.textContent = variant.preamble || workflow.heading || "Configure release";
+    planButton.querySelector("span:first-child").textContent =
+      variant.submitLabel || workflow.submitLabel || "Prepare release";
     variantDescription.textContent = variant.description;
     variantNotice.hidden = !variant.noticeTitle && !variant.notice;
     variantNoticeTitle.textContent = variant.noticeTitle || "";
@@ -157,7 +159,7 @@
     for (const id of inputRecords.keys()) {
       input[id] = inputValue(id);
     }
-    return { variantId: selectedVariant().id, input };
+    return input;
   }
 
   function restoreInputs(variantId, values) {
@@ -185,19 +187,12 @@
     } catch (error) {
       showError(error.message);
     } finally {
-      setBusy(planButton, false, workflow.submitLabel || "Prepare release");
+      setBusy(
+        planButton,
+        false,
+        selectedVariant().submitLabel || workflow.submitLabel || "Prepare release",
+      );
       if (!preflight?.planningEnabled) planButton.disabled = true;
-    }
-  }
-
-  async function startSimulation() {
-    setBusy(demoButton, true, "Starting simulation…");
-    try {
-      await requestJSON(`${endpointBase}/simulate`, { method: "POST", body: "{}" });
-      connectEvents();
-    } catch (error) {
-      showError(error.message);
-      updateActionButtons();
     }
   }
 
@@ -222,14 +217,14 @@
     emptyState.hidden = true;
     planContent.hidden = false;
 
-    const view = nextPlan.view || {};
-    planSubtitle.textContent = view.subtitle || `${(nextPlan.steps || []).length} workflow steps`;
-    intentBanner.hidden = !view.intentTitle;
-    intentTitle.textContent = view.intentTitle || "";
-    intentBadge.textContent = view.intentBadge || "";
-    intentBadge.hidden = !view.intentBadge;
-    planFacts.replaceChildren(...(view.facts || []).map(createPlanFact));
-    renderRequest(view.request);
+    const review = nextPlan.plan || {};
+    planSubtitle.textContent = review.subtitle || `${(nextPlan.steps || []).length} workflow steps`;
+    intentBanner.hidden = true;
+    intentTitle.textContent = "";
+    intentBadge.textContent = "";
+    intentBadge.hidden = true;
+    planFacts.replaceChildren(...(review.facts || []).map(createPlanFact));
+    renderRequest(null);
 
     const steps = nextPlan.steps || [];
     progressSummary.hidden = steps.length === 0;
@@ -240,7 +235,7 @@
     updateSteps(snapshot);
     updateProgress(snapshot);
     renderLinks(nextPlan.execution);
-    renderExecution(nextPlan.execution, view);
+    renderExecution(nextPlan.execution, review);
     updateActionButtons();
   }
 
@@ -253,8 +248,9 @@
     value.textContent = fact.value;
     card.append(label, value);
     if (fact.detail) {
-      const detail = document.createElement("code");
-      detail.textContent = fact.detail;
+      const detail = document.createElement("div");
+      detail.className = "field-help";
+      detail.innerHTML = fact.detail;
       card.append(detail);
     }
     if (fact.href) {
@@ -284,7 +280,7 @@
     }));
   }
 
-  function renderExecution(execution, view) {
+  function renderExecution(execution, review) {
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
     const visible = Boolean(execution?.enabled && execution?.eligible && preflightReady);
     executionControls.hidden = !visible;
@@ -299,10 +295,10 @@
       runConfirmationPending = false;
       executionControls.dataset.planDigest = execution?.planDigest || "";
     }
-    executionControls.dataset.buttonLabel = view.executionButtonLabel || "Run release";
-    executionControls.dataset.title = view.executionTitle || "Run release";
-    executionWarning.textContent = view.executionWarning || "This starts the configured external release workflow.";
-    runConfirmationCopy.textContent = view.executionConfirmation || "Confirm this release before starting it.";
+    executionControls.dataset.buttonLabel = review.executionButtonLabel || "Run release";
+    executionControls.dataset.title = "Run release";
+    executionWarning.textContent = "This starts the configured external release workflow.";
+    runConfirmationCopy.textContent = "Confirm this release before starting it.";
     updateExecutionButton();
   }
 
@@ -566,8 +562,6 @@
   function updateActionButtons() {
     const hasRun = Boolean(plan?.execution?.run?.buildId);
     const complete = Boolean(plan?.execution?.run?.complete);
-    demoButton.disabled = !plan || executionActive || hasRun || complete;
-    demoButton.textContent = executionActive ? "Workflow running…" : "Simulate workflow";
     updateExecutionButton();
   }
 
@@ -621,7 +615,7 @@
       if (!plan || latest.sessionId !== plan.sessionId) return;
       plan = latest;
       renderLinks(latest.execution);
-      renderExecution(latest.execution, latest.view || {});
+      renderExecution(latest.execution, latest.plan || {});
       updateActionButtons();
     } finally {
       refreshInFlight = false;

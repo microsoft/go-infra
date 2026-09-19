@@ -6,68 +6,45 @@ package goimages
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
-func goImagesPlanView(
+func goImagesPlan(
 	input PlanInput,
 	source Source,
 	rollbackSource *RollbackSource,
 	parameters map[string]string,
 	stepCount int,
-	restored bool,
-) contract.PlanView {
-	modeName := string(input.Mode)
-	if modeName != "" {
-		modeName = strings.ToUpper(modeName[:1]) + modeName[1:]
-	}
-	view := contract.PlanView{
-		Subtitle:    fmt.Sprintf("%s release · pipeline %d · %d steps", modeName, DefinitionID, stepCount),
-		IntentBadge: parameters["publishRepoPrefix"],
+) *contract.Plan {
+	plan := &contract.Plan{
+		Subtitle: fmt.Sprintf("%s · pipeline %d · %d steps", modeName(input.Mode), DefinitionID, stepCount),
 		Facts: []contract.PlanFact{{
 			Label: "Pipeline source", Value: source.Branch, Detail: source.Commit,
 		}},
-		Request: &contract.RequestPreview{
-			Eyebrow: "Azure DevOps request preview · not sent",
-			Title:   fmt.Sprintf("Pipeline %d · %s", DefinitionID, goImagesPipelineName),
-			Target:  goImagesPipelineOrg + "/" + goImagesPipelineProject,
-		},
 	}
-	if restored {
-		view.Subtitle += " · restored from work item"
-	}
+	plan.Facts = append(plan.Facts,
+		contract.PlanFact{Label: "Pipeline", Value: fmt.Sprintf("%d · %s", DefinitionID, goImagesPipelineName)},
+		contract.PlanFact{Label: "Target", Value: goImagesPipelineOrg + "/" + goImagesPipelineProject},
+	)
 	for _, name := range sortedMapKeys(parameters) {
-		view.Request.Fields = append(view.Request.Fields, contract.RequestField{Name: name, Value: parameters[name]})
+		plan.Facts = append(plan.Facts, contract.PlanFact{Label: name, Value: parameters[name]})
 	}
 	switch input.Mode {
 	case ModeNormal:
-		view.IntentTitle = "Build current main and publish production images"
-		view.ExecutionTitle = "Run production release"
-		view.ExecutionWarning = "This builds current main, performs production signing, and publishes production images under public/."
-		view.ExecutionConfirmation = "Confirm run to build, sign, and publish current main to public/."
-		view.ExecutionButtonLabel = "Run production release"
+		plan.ExecutionButtonLabel = "Run production release"
 	case ModeRollback:
-		view.IntentTitle = "Republish artifacts from build " + input.SourceBuildID
-		view.ExecutionTitle = "Run rollback / republish"
-		view.ExecutionWarning = "This republishes artifacts from build " + input.SourceBuildID + " under public/. It does not rebuild those images."
-		view.ExecutionConfirmation = "Confirm run to republish artifacts from build " + input.SourceBuildID + " to public/."
-		view.ExecutionButtonLabel = "Run rollback"
+		plan.ExecutionButtonLabel = "Run rollback"
 		if rollbackSource != nil {
-			view.Facts = append(view.Facts, contract.PlanFact{
+			plan.Facts = append(plan.Facts, contract.PlanFact{
 				Label: "Artifact source", Value: fmt.Sprintf("Pipeline %d build %d", DefinitionID, rollbackSource.BuildID),
-				Href: rollbackSource.URL,
+				Detail: fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">Open build</a>`, rollbackSource.URL),
 			})
 		}
 	case ModeTest:
-		view.IntentTitle = "Build current main and publish a dev/ test release"
-		view.ExecutionTitle = "Run test release"
-		view.ExecutionWarning = "This queues a real build and may use production signing resources, but publication is fixed to dev/ rather than public/."
-		view.ExecutionConfirmation = "Confirm run to queue pipeline 1023 with publication locked to dev/."
-		view.ExecutionButtonLabel = "Run test release"
+		plan.ExecutionButtonLabel = "Run test release"
 	}
-	return view
+	return plan
 }
 
 func sortedMapKeys(values map[string]string) []string {

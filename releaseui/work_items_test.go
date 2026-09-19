@@ -19,7 +19,6 @@ import (
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
-	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 type memoryReleaseWorkItemService struct {
@@ -107,14 +106,9 @@ type testUI struct {
 
 func newTestUI(t *testing.T, options ...Option) *testUI {
 	t.Helper()
-	process := &fakeProcess{
-		definition: exampleProcessDefinition(),
-		build: func(_ context.Context, _ *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(time.Minute, func(context.Context) error { return nil }), nil
-		},
-	}
+	process := exampleProcess()
 	ctx, cancel := context.WithCancel(context.Background())
-	options = append([]Option{WithProcesses(process), WithDemoDelay(0)}, options...)
+	options = append([]Option{WithProcesses(process)}, options...)
 	server, err := New(ctx, options...)
 	if err != nil {
 		cancel()
@@ -180,7 +174,7 @@ func TestDashboardQueriesReleaseWorkItems(t *testing.T) {
 
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
-	if dashboard.Ongoing[0].WorkItemID != 2 || dashboard.Ongoing[0].Status != "starting" ||
+	if dashboard.Ongoing[0].WorkItemID != 2 || dashboard.Ongoing[0].Status != "running" ||
 		dashboard.Recent[0].WorkItemID != 3 || dashboard.Recent[0].Status != "canceled" ||
 		dashboard.Recent[1].WorkItemID != 1 || dashboard.Recent[1].Status != "succeeded" {
 
@@ -248,7 +242,7 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	if response.StatusCode != http.StatusOK || exported.ID != 42 || exported.Revision != 1 {
 		t.Fatalf("status = %d, export = %#v", response.StatusCode, exported)
 	}
-	var repaired contract.State
+	var repaired ReleaseRunState
 	if err := json.Unmarshal(exported.Snapshot.Payload, &repaired); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +268,7 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(description, "<strong>Action</strong>") {
+	if !strings.Contains(description, "<strong>Value</strong>") {
 		t.Fatalf("description = %s", description)
 	}
 	response = postJSONValue(t, ui, "/api/release-work-items/42/import", exported)
@@ -358,9 +352,13 @@ func closeResponse(t *testing.T, response *http.Response) {
 	}
 }
 
-func testReleaseWorkItem(t *testing.T, id int, run *contract.State, changedAt time.Time) *azdoworkitem.WorkItem {
+func testReleaseWorkItem(t *testing.T, id int, run *ReleaseRunState, changedAt time.Time) *azdoworkitem.WorkItem {
 	t.Helper()
-	snapshot, err := processRunSnapshot(run)
+	snapshot, err := processRunSnapshot(
+		run,
+		&contract.RunView{Test: true, Summary: "Ready"},
+		&contract.Plan{Subtitle: "Run example"},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
