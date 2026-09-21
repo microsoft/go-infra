@@ -123,9 +123,11 @@ Insert the result of `pipeline` as YAML-encoded data.
 Inline the `.yml` file at `path`.
 If the file is `gen.yml`, evaluate it and inline the result.
 
-If this node has an object child, it is merged into `data` before evaluating the template.
+Add an object child to pass values to the inlined template.
+These values are merged into `data` before evaluating the template and overwrite existing values with the same key.
 
-More technically: if the node is a key node of a mapping pair, the value node is decoded into `map[string]any` and merged into `data` before evaluating the template.
+In the inlined template, scalar values can be used in expressions.
+Mapping and sequence values can be inserted with `yml`, which preserves their original mapping order.
 
 ### `inlinerange <args...>`
 
