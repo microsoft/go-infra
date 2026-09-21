@@ -106,7 +106,11 @@ type testUI struct {
 
 func newTestUI(t *testing.T, options ...Option) *testUI {
 	t.Helper()
-	process := exampleProcess()
+	return newTestUIWithProcess(t, exampleProcess(), options...)
+}
+
+func newTestUIWithProcess(t *testing.T, process contract.ProcessGroup, options ...Option) *testUI {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	options = append([]Option{WithProcesses(process)}, options...)
 	server, err := New(ctx, options...)
@@ -290,6 +294,18 @@ func TestImportRejectsChangedIntentAndInconsistentStatus(t *testing.T) {
 		{name: "intent", change: func(exported *workItemExport) {
 			exported.Snapshot.IntentDigest = strings.Repeat("b", 64)
 		}},
+		{name: "input", change: func(exported *workItemExport) {
+			var run ReleaseRunState
+			if err := json.Unmarshal(exported.Snapshot.Payload, &run); err != nil {
+				t.Fatal(err)
+			}
+			run.Snapshot.Input = json.RawMessage(`{"changed":true}`)
+			payload, err := json.Marshal(&run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exported.Snapshot.Payload = payload
+		}},
 		{name: "status", change: func(exported *workItemExport) {
 			exported.Snapshot.Status = azdoworkitem.StatusSucceeded
 		}},
@@ -307,6 +323,36 @@ func TestImportRejectsChangedIntentAndInconsistentStatus(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+func TestImportRejectsChangedReviewedPlan(t *testing.T) {
+	run := testProcessRun(t)
+	run.Started = true
+	service := newMemoryReleaseWorkItemService(testReleaseWorkItem(t, 42, run, time.Now().UTC()))
+	process := exampleProcess()
+	process.planForRun = func(snapshot *contract.StateSnapshot) *contract.Plan {
+		return &contract.Plan{Subtitle: string(snapshot.State)}
+	}
+	ui := newTestUIWithProcess(t, process, WithReleaseWorkItems(service))
+	item, err := service.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported := exportWorkItem(item)
+	var repaired ReleaseRunState
+	if err := json.Unmarshal(exported.Snapshot.Payload, &repaired); err != nil {
+		t.Fatal(err)
+	}
+	repaired.Snapshot.State = json.RawMessage(`{"value":"changed"}`)
+	exported.Snapshot.Payload, err = json.Marshal(&repaired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := postJSONValue(t, ui, "/api/release-work-items/42/import", exported)
+	closeResponse(t, response)
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 	}
 }
 

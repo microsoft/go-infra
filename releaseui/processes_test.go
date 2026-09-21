@@ -21,6 +21,7 @@ type fakeProcess struct {
 	prepare    func(context.Context, any) (*contract.StateSnapshot, error)
 	build      func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error)
 	plan       *contract.Plan
+	planForRun func(*contract.StateSnapshot) *contract.Plan
 	view       *contract.RunView
 }
 
@@ -80,6 +81,9 @@ func (r *fakeReleaseRun) TakeView() *contract.RunView {
 }
 
 func (r *fakeReleaseRun) Plan() *contract.Plan {
+	if r.process.planForRun != nil {
+		return r.process.planForRun(r.TakeSnapshot())
+	}
 	if r.process.plan == nil {
 		return nil
 	}

@@ -4,10 +4,12 @@
 package releaseui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
@@ -288,19 +290,33 @@ func (s *Server) handleImportWorkItem(response http.ResponseWriter, request *htt
 }
 
 func (s *Server) validateImportedSnapshot(current *azdoworkitem.WorkItem, snapshot *azdoworkitem.Snapshot) error {
+	currentRecord, err := processRunRecord(current)
+	if err != nil {
+		return err
+	}
 	candidate := *current
 	candidate.Snapshot = snapshot
 	record, err := processRunRecord(&candidate)
 	if err != nil {
 		return err
 	}
+	if !bytes.Equal(currentRecord.Run.Snapshot.Input, record.Run.Snapshot.Input) {
+		return errors.New("import cannot change process input")
+	}
 	registered, ok := s.processes.process(record.Run.ProcessID)
 	if !ok {
 		return fmt.Errorf("release process %q is not configured", record.Run.ProcessID)
 	}
+	currentRun, err := loadReleaseRun(registered.process, currentRecord.Run.Snapshot)
+	if err != nil {
+		return err
+	}
 	run, err := loadReleaseRun(registered.process, record.Run.Snapshot)
 	if err != nil {
 		return err
+	}
+	if !reflect.DeepEqual(currentRun.Plan(), run.Plan()) {
+		return errors.New("import cannot change the reviewed plan")
 	}
 	snapshot.Description = processRunDescription(record.Run, run.TakeView(), run.Plan())
 	return nil

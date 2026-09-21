@@ -124,13 +124,13 @@ type Run interface {
 // CheckpointFunc must be called by a Run's steps after changing state. This allows releaseui to
 // persist the state and, when useful, refresh the view.
 //
-// The CheckpointFunc may schedule [Run.TakeSnapshot] and [Run.TakeView] to be called from another
-// goroutine. These calls do not happen in the current goroutine, and CheckpointFunc doesn't block
-// to wait for persistence to complete.
+// The CheckpointFunc schedules [Run.TakeSnapshot] and [Run.TakeView] to be called from another
+// goroutine and waits for persistence to complete. This lets a step durably record mutation intent
+// before it calls an external service.
 //
-// Multiple steps may call the CheckpointFunc concurrently. If checkpointing or persistence fails,
-// releaseui cancels the context passed to [Run.Build], just as it would for any other cancellation.
-// The step should cooperate with cancellation by checking the context after the func returns.
+// Multiple steps may call the CheckpointFunc concurrently; releaseui serializes their persistence.
+// If checkpointing or persistence fails, releaseui cancels the context passed to [Run.Build]. The
+// step should cooperate with cancellation by checking the context after the func returns.
 type CheckpointFunc func()
 
 // Identity contains the basic identity metadata for a release process or group.

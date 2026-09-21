@@ -93,6 +93,14 @@ func TestProcessRunWorkItemStoreRejectsUnstartedRun(t *testing.T) {
 	}
 }
 
+func TestProcessRunStateRejectsCheckpointBeforeStart(t *testing.T) {
+	run := testProcessRun(t)
+	run.Checkpointed = true
+	if err := run.Validate(); err == nil {
+		t.Fatal("unstarted checkpointed run passed validation")
+	}
+}
+
 func testProcessRun(t *testing.T) *ReleaseRunState {
 	t.Helper()
 	run, err := newProcessRunState("example", &contract.StateSnapshot{

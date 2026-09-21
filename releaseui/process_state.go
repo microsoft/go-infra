@@ -22,13 +22,14 @@ const (
 
 // ReleaseRunState is releaseui-owned state wrapped around a process-owned snapshot.
 type ReleaseRunState struct {
-	ProcessID string                  `json:"processId"`
-	Snapshot  *contract.StateSnapshot `json:"snapshot"`
-	Digest    string                  `json:"digest"`
-	Started   bool                    `json:"started"`
-	Complete  bool                    `json:"complete"`
-	Result    string                  `json:"result,omitempty"`
-	UpdatedAt time.Time               `json:"-"`
+	ProcessID    string                  `json:"processId"`
+	Snapshot     *contract.StateSnapshot `json:"snapshot"`
+	Digest       string                  `json:"digest"`
+	Started      bool                    `json:"started"`
+	Checkpointed bool                    `json:"checkpointed,omitempty"`
+	Complete     bool                    `json:"complete"`
+	Result       string                  `json:"result,omitempty"`
+	UpdatedAt    time.Time               `json:"-"`
 }
 
 func newProcessRunState(processID string, snapshot *contract.StateSnapshot) (*ReleaseRunState, error) {
@@ -74,6 +75,9 @@ func (s *ReleaseRunState) Validate() error {
 	}
 	if s.Digest == "" {
 		return errors.New("process run digest is empty")
+	}
+	if s.Checkpointed && !s.Started {
+		return errors.New("process run checkpointed before it started")
 	}
 	if s.Complete && !s.Started {
 		return errors.New("process run completed before it started")

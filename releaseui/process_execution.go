@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -341,14 +342,16 @@ func (s *Server) stopProcessStart(digest string) {
 }
 
 type processCheckpointer struct {
-	server   *Server
-	digest   string
-	run      contract.Run
-	cancel   context.CancelFunc
-	requests chan struct{}
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
+	server    *Server
+	digest    string
+	run       contract.Run
+	cancel    context.CancelFunc
+	failed    atomic.Bool
+	persisted atomic.Bool
+	requests  chan chan struct{}
+	stop      chan struct{}
+	done      chan struct{}
+	stopOnce  sync.Once
 }
 
 func (s *Server) newProcessCheckpointer(
@@ -358,16 +361,22 @@ func (s *Server) newProcessCheckpointer(
 ) *processCheckpointer {
 	checkpointer := &processCheckpointer{
 		server: s, digest: digest, run: run, cancel: cancel,
-		requests: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		requests: make(chan chan struct{}), stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go checkpointer.runLoop()
 	return checkpointer
 }
 
 func (c *processCheckpointer) Checkpoint() {
+	requestDone := make(chan struct{})
 	select {
-	case c.requests <- struct{}{}:
-	default:
+	case c.requests <- requestDone:
+	case <-c.done:
+		return
+	}
+	select {
+	case <-requestDone:
+	case <-c.done:
 	}
 }
 
@@ -382,14 +391,17 @@ func (c *processCheckpointer) runLoop() {
 	defer close(c.done)
 	for {
 		select {
-		case <-c.requests:
-			if !c.persist() {
+		case requestDone := <-c.requests:
+			persisted := c.persist()
+			close(requestDone)
+			if !persisted {
 				return
 			}
 		case <-c.stop:
 			select {
-			case <-c.requests:
+			case requestDone := <-c.requests:
 				c.persist()
+				close(requestDone)
 			default:
 			}
 			return
@@ -401,6 +413,7 @@ func (c *processCheckpointer) persist() bool {
 	snapshot, snapshotErr := snapshotReleaseRun(c.run)
 	view := c.run.TakeView()
 	if snapshotErr != nil {
+		c.failed.Store(true)
 		c.cancel()
 		return false
 	}
@@ -409,11 +422,13 @@ func (c *processCheckpointer) persist() bool {
 	if c.server.processRunState == nil || c.server.processRunRecord == nil ||
 		!secureEqual(c.server.processRunState.Digest, c.digest) {
 
+		c.failed.Store(true)
 		c.cancel()
 		return false
 	}
 	state := c.server.processRunState.Clone()
 	state.Snapshot = snapshot
+	state.Checkpointed = true
 	if view != nil && !view.UpdatedAt.IsZero() {
 		state.UpdatedAt = view.UpdatedAt
 	}
@@ -421,11 +436,13 @@ func (c *processCheckpointer) persist() bool {
 		c.server.ctx, c.server.processRunRecord, state, view, c.server.processPlan,
 	)
 	if err != nil {
+		c.failed.Store(true)
 		c.cancel()
 		return false
 	}
 	c.server.processRunState = record.Run.Clone()
 	c.server.processRunRecord = record
+	c.persisted.Store(true)
 	return true
 }
 
@@ -448,20 +465,15 @@ func (s *Server) executeProcessRun(
 		if snapshotErr == nil {
 			state.Snapshot = snapshot
 		}
-		state.Complete = true
-		switch {
-		case err == nil && snapshotErr == nil:
-			state.Result = resultSucceeded
-		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-			state.Result = resultCanceled
-		default:
-			state.Result = resultFailed
-		}
+		state.Complete, state.Result = processRunOutcome(
+			err, snapshotErr, checkpointer.failed.Load(), checkpointer.persisted.Load(),
+		)
 		if view != nil && !view.UpdatedAt.IsZero() {
 			state.UpdatedAt = view.UpdatedAt
 		}
 		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, state, view, s.processPlan)
 		if saveErr != nil {
+			state.Complete = true
 			state.Result = resultUncertain
 		} else {
 			s.processRunRecord = record
@@ -471,6 +483,21 @@ func (s *Server) executeProcessRun(
 	}
 	s.processRunning = false
 	s.processCheckpointer = nil
+}
+
+func processRunOutcome(executionErr, snapshotErr error, checkpointFailed, checkpointPersisted bool) (bool, string) {
+	switch {
+	case checkpointFailed || snapshotErr != nil:
+		return true, resultUncertain
+	case executionErr == nil:
+		return true, resultSucceeded
+	case (errors.Is(executionErr, context.Canceled) || errors.Is(executionErr, context.DeadlineExceeded)) && checkpointPersisted:
+		return false, ""
+	case errors.Is(executionErr, context.Canceled) || errors.Is(executionErr, context.DeadlineExceeded):
+		return true, resultUncertain
+	default:
+		return true, resultFailed
+	}
 }
 
 func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
@@ -489,6 +516,9 @@ func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
 	plan := run.Plan()
 	executionContext, cancel := context.WithCancel(s.ctx)
 	checkpointer := s.newProcessCheckpointer(state.Digest, run, cancel)
+	if state.Checkpointed {
+		checkpointer.persisted.Store(true)
+	}
 	steps, err := run.Build(executionContext, checkpointer.Checkpoint)
 	if err != nil {
 		checkpointer.Close()

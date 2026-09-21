@@ -239,9 +239,43 @@ func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
 	if !errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatalf("context error = %v, want cancellation", ctx.Err())
 	}
+	if !checkpointer.failed.Load() {
+		t.Fatal("checkpoint failure was not recorded")
+	}
 }
 
-func TestCheckpointDoesNotWaitForPersistence(t *testing.T) {
+func TestProcessRunOutcome(t *testing.T) {
+	checkpointErr := errors.New("checkpoint failed")
+	for _, test := range []struct {
+		name                string
+		executionErr        error
+		snapshotErr         error
+		checkpointFailed    bool
+		checkpointPersisted bool
+		complete            bool
+		result              string
+	}{
+		{name: "success", complete: true, result: resultSucceeded},
+		{name: "failure", executionErr: errors.New("step failed"), complete: true, result: resultFailed},
+		{name: "canceled before checkpoint", executionErr: context.Canceled, complete: true, result: resultUncertain},
+		{name: "deadline before checkpoint", executionErr: context.DeadlineExceeded, complete: true, result: resultUncertain},
+		{name: "canceled after checkpoint", executionErr: context.Canceled, checkpointPersisted: true},
+		{name: "deadline after checkpoint", executionErr: context.DeadlineExceeded, checkpointPersisted: true},
+		{name: "snapshot", snapshotErr: errors.New("snapshot failed"), complete: true, result: resultUncertain},
+		{name: "checkpoint", executionErr: checkpointErr, checkpointFailed: true, complete: true, result: resultUncertain},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			complete, result := processRunOutcome(
+				test.executionErr, test.snapshotErr, test.checkpointFailed, test.checkpointPersisted,
+			)
+			if complete != test.complete || result != test.result {
+				t.Fatalf("outcome = (%v, %q), want (%v, %q)", complete, result, test.complete, test.result)
+			}
+		})
+	}
+}
+
+func TestCheckpointWaitsForPersistence(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	process := exampleProcess()
 	state := testProcessRun(t)
@@ -271,15 +305,20 @@ func TestCheckpointDoesNotWaitForPersistence(t *testing.T) {
 		close(returned)
 	}()
 	select {
-	case <-returned:
-	case <-time.After(time.Second):
-		t.Fatal("Checkpoint blocked")
-	}
-	select {
 	case <-updateStarted:
 	case <-time.After(time.Second):
 		t.Fatal("persistence did not start")
 	}
+	select {
+	case <-returned:
+		t.Fatal("Checkpoint returned before persistence completed")
+	default:
+	}
 	close(updateRelease)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("Checkpoint did not return after persistence completed")
+	}
 	checkpointer.Close()
 }
