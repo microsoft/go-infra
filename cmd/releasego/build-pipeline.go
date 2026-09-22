@@ -4,19 +4,18 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/stringutil"
 	"github.com/microsoft/go-infra/subcmd"
@@ -47,7 +46,7 @@ Takes extra args defining the parameters and variables to queue the build with:
 }
 
 func handleBuildPipeline(p subcmd.ParseFunc) error {
-	id := flag.String("id", "", "[Required] The ID of the AzDO pipeline to queue.")
+	id := flag.String("id", "", "[Required] The decimal ID of the AzDO pipeline to queue.")
 	commit := flag.String("commit", "", "A specific commit to build.")
 	branch := flag.String("branch", "", "The branch that contains commit. Only necessary if the repo's default branch doesn't contain commit.")
 	setVariable := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the ID of the queued build.")
@@ -57,9 +56,12 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if *id == "" {
+	// Pipeline IDs are decimal, including when supplied with leading zeros.
+	// flag.Int uses base 0 and would interpret those IDs as octal.
+	definitionID, err := strconv.Atoi(*id)
+	if err != nil || definitionID <= 0 {
 		flag.Usage()
-		log.Fatalln("No pipeline ID specified.")
+		return errors.New("a positive decimal pipeline ID is required")
 	}
 	if err := azdoFlags.EnsureAssigned(); err != nil {
 		flag.Usage()
@@ -109,22 +111,23 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 
 	ctx := context.Background()
 
-	// Make our own client. The AzDO library doesn't support the 7.1 API needed to pass parameters:
-	// https://docs.microsoft.com/en-us/rest/api/azure/devops/build/builds/queue?view=azure-devops-rest-7.1
-	client := http.Client{
-		// Generous timeout. Maximum observed time on dev machine during development: 10 seconds.
-		Timeout: time.Minute * 3,
+	connection := azdoFlags.NewConnection()
+	// Generous timeout. Maximum observed time on dev machine during development: 10 seconds.
+	connection.Timeout = new(time.Minute * 3)
+	client, err := build.NewClient(ctx, connection)
+	if err != nil {
+		return err
 	}
 
 	request := &buildPipelineRequest{
-		DefinitionID:  *id,
+		DefinitionID:  definitionID,
 		SourceBranch:  *branch,
 		SourceVersion: *commit,
 		Parameters:    parameters,
 		Variables:     variables,
 	}
 
-	b, err := sendBuildPipelineRunRequest(ctx, &client, azdoFlags, request)
+	b, err := sendBuildPipelineRunRequest(ctx, client, *azdoFlags.Proj, request)
 	if err != nil {
 		var reqErr *errBuildPipelineBadRequest
 		if !errors.As(err, &reqErr) {
@@ -154,9 +157,9 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 		}
 
 		log.Printf("Retrying after removing unexpected parameters %q\n", reqErr.unexpectedParameters)
-		b, err = sendBuildPipelineRunRequest(ctx, &client, azdoFlags, request)
+		b, err = sendBuildPipelineRunRequest(ctx, client, *azdoFlags.Proj, request)
 		if err != nil {
-			return fmt.Errorf("failed retry after removing unexpected parameters: %v", err)
+			return fmt.Errorf("failed retry after removing unexpected parameters: %w", err)
 		}
 	}
 
@@ -175,7 +178,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 }
 
 type buildPipelineRequest struct {
-	DefinitionID  string
+	DefinitionID  int
 	SourceBranch  string
 	SourceVersion string
 	Parameters    map[string]string
@@ -184,91 +187,78 @@ type buildPipelineRequest struct {
 
 type errBuildPipelineBadRequest struct {
 	unexpectedParameters []string
+	cause                error
 }
 
 func (e *errBuildPipelineBadRequest) Error() string {
+	if len(e.unexpectedParameters) == 0 {
+		return fmt.Sprintf("build pipeline request got 400 response: %v", e.cause)
+	}
 	return fmt.Sprintf("build pipeline request got 400 response; unexpected parameters: %#v", e.unexpectedParameters)
 }
 
-func sendBuildPipelineRunRequest(ctx context.Context, client *http.Client, azdoFlags *azdo.ClientFlags, request *buildPipelineRequest) (*build.Build, error) {
+func (e *errBuildPipelineBadRequest) Unwrap() error { return e.cause }
+
+func sendBuildPipelineRunRequest(ctx context.Context, client build.Client, project string, request *buildPipelineRequest) (*build.Build, error) {
 	variablesJSON, err := json.Marshal(request.Variables)
 	if err != nil {
 		return nil, err
 	}
-	body := map[string]any{
-		"definition": map[string]any{
-			"id": request.DefinitionID,
+	log.Printf("Queuing pipeline %d...", request.DefinitionID)
+	b, err := client.QueueBuild(ctx, build.QueueBuildArgs{
+		Project: &project,
+		Build: &build.Build{
+			Definition:         &build.DefinitionReference{Id: &request.DefinitionID},
+			SourceBranch:       &request.SourceBranch,
+			SourceVersion:      &request.SourceVersion,
+			TemplateParameters: &request.Parameters,
+			// The Build API's legacy "parameters" field carries variables as
+			// JSON text, independently of YAML template parameters.
+			Parameters: new(string(variablesJSON)),
 		},
-		"sourceBranch":       request.SourceBranch,
-		"sourceVersion":      request.SourceVersion,
-		"templateParameters": request.Parameters,
-		// Variables is a JSON string of a map[string]string. "parameters" is a legacy name in the
-		// AzDO UI--this is unrelated to the template parameters.
-		"parameters": string(variablesJSON),
-	}
-
-	url := *azdoFlags.Org + *azdoFlags.Proj +
-		"/_apis/build/builds?definitionId=" +
-		request.DefinitionID +
-		"&api-version=7.1-preview.7"
-	bodyJSON, err := json.MarshalIndent(body, "", "  ")
+	})
 	if err != nil {
-		return nil, err
+		return nil, buildPipelineRequestError(err)
 	}
+	if b == nil || b.Id == nil || *b.Id <= 0 {
+		return nil, errors.New("queue build response did not contain a valid build ID")
+	}
+	return b, nil
+}
 
-	log.Printf("Sending body to %q:\n%v\n", url, string(bodyJSON))
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return nil, err
-	}
-
-	// Based on https://github.com/microsoft/azure-devops-go-api/blob/00dac5c867394a3c5ca4e12b6965d7625a1588c6/azuredevops/client.go#L172-L181
-	req.Header.Add("Authorization", azdoFlags.NewConnection().AuthorizationString)
-	req.Header.Add("Accept", "application/json;api-version=7.1-preview.7")
-	req.Header.Add("Content-Type", "application/json;charset=utf-8")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusBadRequest {
-		// Try to parse the error response for specific types of issues the caller is interested in.
-		bodyObj := struct {
-			CustomProperties struct {
-				ValidationResults []struct {
-					Result  string `json:"result"`
-					Message string `json:"message"`
-				}
-			} `json:"customProperties"`
-		}{}
-		if err := json.Unmarshal(bodyBytes, &bodyObj); err != nil {
-			return nil, fmt.Errorf("failed to parse 400 error response: %v", err)
+func buildPipelineRequestError(err error) error {
+	// The SDK returns both value and pointer WrappedErrors, depending on the
+	// response shape. Preserve the original error for non-validation failures.
+	wrapped, ok := errors.AsType[azuredevops.WrappedError](err)
+	if !ok {
+		pointer, found := errors.AsType[*azuredevops.WrappedError](err)
+		if !found || pointer == nil {
+			return err
 		}
-		var reqErr errBuildPipelineBadRequest
-		for _, vr := range bodyObj.CustomProperties.ValidationResults {
-			if vr.Result != "error" {
-				continue
-			}
-			before, name, after, found := stringutil.CutTwice(vr.Message, "Unexpected parameter '", "'")
-			if !found || before != "" || after != "" {
-				continue
-			}
+		wrapped = *pointer
+	}
+	if wrapped.StatusCode == nil || *wrapped.StatusCode != http.StatusBadRequest {
+		return err
+	}
+	reqErr := &errBuildPipelineBadRequest{cause: err}
+	if wrapped.CustomProperties == nil {
+		return reqErr
+	}
+	var properties struct {
+		ValidationResults []build.BuildRequestValidationResult `json:"validationResults"`
+	}
+	data, marshalErr := json.Marshal(wrapped.CustomProperties)
+	if marshalErr != nil || json.Unmarshal(data, &properties) != nil {
+		return err
+	}
+	for _, vr := range properties.ValidationResults {
+		if vr.Result == nil || *vr.Result != build.ValidationResultValues.Error || vr.Message == nil {
+			continue
+		}
+		before, name, after, found := stringutil.CutTwice(*vr.Message, "Unexpected parameter '", "'")
+		if found && before == "" && after == "" {
 			reqErr.unexpectedParameters = append(reqErr.unexpectedParameters, name)
 		}
-		return nil, &reqErr
 	}
-	if resp != nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
-		return nil, fmt.Errorf("non-success status code: %#v\nresponse data: %v", resp, string(bodyBytes))
-	}
-
-	var b build.Build
-	if err := json.Unmarshal(bodyBytes, &b); err != nil {
-		return nil, err
-	}
-	return &b, nil
+	return reqErr
 }

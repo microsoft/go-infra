@@ -13,8 +13,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/microsoft/azure-devops-go-api/azuredevops"
-	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 )
 
 // TestAzDOGetBuildConnectionReset exercises the error returned by the real AzDO

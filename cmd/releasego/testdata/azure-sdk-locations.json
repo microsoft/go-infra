@@ -1,0 +1,55 @@
+{
+  "count": 5,
+  "value": [
+    {
+      "id": "e81700f7-3be2-46de-8624-2eb35882fcaa",
+      "area": "location",
+      "resourceName": "resourceAreas",
+      "routeTemplate": "_apis/resourceAreas/{areaId}",
+      "minVersion": "1.0",
+      "maxVersion": "7.1",
+      "releasedVersion": "7.1",
+      "resourceVersion": 1
+    },
+    {
+      "id": "0cd358e1-9217-4d94-8269-1c1ee6f93dcf",
+      "area": "build",
+      "resourceName": "Builds",
+      "routeTemplate": "{project}/_apis/build/builds/{buildId}",
+      "minVersion": "2.0",
+      "maxVersion": "7.1",
+      "releasedVersion": "7.1",
+      "resourceVersion": 7
+    },
+    {
+      "id": "28e1305e-2afe-47bf-abaf-cbb0e6a91988",
+      "area": "pipelines",
+      "resourceName": "pipelines",
+      "routeTemplate": "{project}/_apis/pipelines/{pipelineId}",
+      "minVersion": "6.0",
+      "maxVersion": "7.1",
+      "releasedVersion": "7.1",
+      "resourceVersion": 1
+    },
+    {
+      "id": "c2570c3b-5b3f-41b8-98bf-5407bfde8d58",
+      "area": "git",
+      "resourceName": "commits",
+      "routeTemplate": "{project}/_apis/git/repositories/{repositoryId}/commits/{commitId}",
+      "minVersion": "1.0",
+      "maxVersion": "7.1",
+      "releasedVersion": "7.1",
+      "resourceVersion": 1
+    },
+    {
+      "id": "428dd4fb-fda5-4722-af02-9313b80305da",
+      "area": "git",
+      "resourceName": "statuses",
+      "routeTemplate": "{project}/_apis/git/repositories/{repositoryId}/commits/{commitId}/statuses/{statusId}",
+      "minVersion": "1.0",
+      "maxVersion": "7.1",
+      "releasedVersion": "7.1",
+      "resourceVersion": 1
+    }
+  ]
+}
