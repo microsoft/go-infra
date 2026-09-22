@@ -88,9 +88,11 @@ type goImagesRun struct {
 	state   goImagesSnapshotState
 }
 
-type normalProcess struct{ goImagesProcessBase }
-type rollbackProcess struct{ goImagesProcessBase }
-type testProcess struct{ goImagesProcessBase }
+type (
+	normalProcess   struct{ goImagesProcessBase }
+	rollbackProcess struct{ goImagesProcessBase }
+	testProcess     struct{ goImagesProcessBase }
+)
 
 // NewProcess creates the Go-images release process group.
 func NewProcess(service ProcessService) contract.ProcessGroup {

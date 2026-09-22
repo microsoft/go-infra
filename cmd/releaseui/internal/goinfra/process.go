@@ -38,10 +38,12 @@ type goInfraProcessGroup struct {
 	github GitHubService
 }
 
-type goInfraProcessBase struct{ github GitHubService }
-type releaseOnMergeProcess struct{ goInfraProcessBase }
-type dryRunProcess struct{ goInfraProcessBase }
-type publishProcess struct{ goInfraProcessBase }
+type (
+	goInfraProcessBase    struct{ github GitHubService }
+	releaseOnMergeProcess struct{ goInfraProcessBase }
+	dryRunProcess         struct{ goInfraProcessBase }
+	publishProcess        struct{ goInfraProcessBase }
+)
 
 type goInfraRun struct {
 	mu     sync.RWMutex
@@ -278,8 +280,10 @@ func (r *goInfraRun) Plan() *contract.Plan {
 		plan.ExecutionButtonLabel = "Apply release-on-merge"
 		plan.Facts = []contract.PlanFact{
 			{Label: "Repository", Value: goInfraRepository},
-			{Label: "Pull request", Value: "#" + r.input.PullRequest,
-				Detail: fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">Open pull request</a>`, r.state.PullRequest.URL)},
+			{
+				Label: "Pull request", Value: "#" + r.input.PullRequest,
+				Detail: fmt.Sprintf(`<a href="%s" target="_blank" rel="noreferrer">Open pull request</a>`, r.state.PullRequest.URL),
+			},
 			{Label: "Action", Value: "Add release-on-merge label"},
 		}
 	case goInfraActionManualDispatch:
