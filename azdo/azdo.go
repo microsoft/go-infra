@@ -10,8 +10,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/microsoft/azure-devops-go-api/azuredevops"
-	"github.com/microsoft/azure-devops-go-api/azuredevops/build"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 )
 
 // ClientFlags is a set of command-line flags always used in go-infra to access the AzDO APIs.
@@ -60,7 +60,7 @@ func (c *ClientFlags) EnsureAssigned() error {
 	return nil
 }
 
-// NewConnection creates an AzDO connection based on the given flags.
+// NewConnection creates an Azure DevOps SDK v7 connection based on the given flags.
 func (c *ClientFlags) NewConnection() *azuredevops.Connection {
 	return azuredevops.NewPatConnection(*c.Org, *c.PAT)
 }
