@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -60,18 +60,10 @@ func handleTag(p subcmd.ParseFunc) error {
 	return githubutil.Retry(func() error {
 		// The GitHub API returns an error code if the tag already exists. We don't need to
 		// check it ourselves.
-		_, _, err := client.Git.CreateRef(ctx, owner, name, &github.Reference{
-			Ref:    &ref,
-			Object: commitObject(*commit),
+		_, _, err := client.Git.CreateRef(ctx, owner, name, github.CreateRef{
+			Ref: ref,
+			SHA: *commit,
 		})
 		return err
 	})
-}
-
-func commitObject(sha string) *github.GitObject {
-	t := "commit"
-	return &github.GitObject{
-		Type: &t,
-		SHA:  &sha,
-	}
 }

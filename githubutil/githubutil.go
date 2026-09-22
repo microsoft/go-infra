@@ -13,19 +13,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"golang.org/x/oauth2"
 )
 
 // tokenSource implements oauth2.TokenSource for GitHub App authentication
 type tokenSource struct {
+	ctx            context.Context
 	ClientID       string
 	InstallationID int64
 	PrivateKey     string
 }
 
 func (t *tokenSource) Token() (*oauth2.Token, error) {
-	token, expiry, err := generateInstallationToken(context.Background(), t.ClientID, t.InstallationID, t.PrivateKey)
+	token, expiry, err := generateInstallationToken(t.ctx, t.ClientID, t.InstallationID, t.PrivateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -51,9 +52,10 @@ func NewClient(ctx context.Context, pat string) (*github.Client, error) {
 	if pat == "" {
 		return nil, errors.New("no GitHub PAT specified")
 	}
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: pat})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
-	return github.NewClient(tokenClient), nil
+	return github.NewClient(
+		github.WithHTTPClient(oauth2.NewClient(ctx, nil)),
+		github.WithAuthToken(pat),
+	)
 }
 
 // newInstallationClient creates a GitHub client using the given GitHub Client ID, installation ID, and private key.
@@ -69,13 +71,14 @@ func newInstallationClient(ctx context.Context, clientID string, installationID 
 	}
 
 	tokenSource := &tokenSource{
+		ctx:            ctx,
 		ClientID:       clientID,
 		InstallationID: installationID,
 		PrivateKey:     privateKey,
 	}
 
 	tokenClient := oauth2.NewClient(ctx, tokenSource)
-	return github.NewClient(tokenClient), nil
+	return github.NewClient(github.WithHTTPClient(tokenClient))
 }
 
 // newAppClient creates a new JWT-based GitHub client using the provided client ID and private key.
@@ -85,11 +88,10 @@ func newAppClient(ctx context.Context, clientID, privateKey string) (*github.Cli
 		return nil, err
 	}
 
-	tokenSource := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwt})
-	tokenClient := oauth2.NewClient(ctx, tokenSource)
-
-	client := github.NewClient(tokenClient)
-	return client, nil
+	return github.NewClient(
+		github.WithHTTPClient(oauth2.NewClient(ctx, nil)),
+		github.WithAuthToken(jwt),
+	)
 }
 
 type GitHubAuthFlags struct {
@@ -297,9 +299,9 @@ func CreateBranch(ctx context.Context, client *github.Client, owner, repo, branc
 
 	// 2) Create the new branch at that SHA
 	if err := Retry(func() error {
-		_, _, err := client.Git.CreateRef(ctx, owner, repo, &github.Reference{
-			Ref:    new("refs/heads/" + branchName),
-			Object: &github.GitObject{SHA: new(baseSHA)},
+		_, _, err := client.Git.CreateRef(ctx, owner, repo, github.CreateRef{
+			Ref: "refs/heads/" + branchName,
+			SHA: baseSHA,
 		})
 		return err
 	}); err != nil {

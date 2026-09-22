@@ -10,7 +10,7 @@ require (
 	github.com/Masterminds/sprig/v3 v3.3.0
 	github.com/go-test/deep v1.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/google/go-github/v65 v65.0.0
+	github.com/google/go-github/v92 v92.0.0
 	github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/crypto v0.57.0
@@ -27,7 +27,7 @@ require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
-	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect

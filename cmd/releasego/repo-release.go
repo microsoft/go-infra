@@ -13,7 +13,7 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/stringutil"
@@ -90,7 +90,7 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 		if release != nil {
 			log.Println("Cleaning up draft release.")
 			if err := githubutil.Retry(func() error {
-				_, err = client.Repositories.DeleteRelease(ctx, owner, name, *release.ID)
+				_, err = client.Repositories.DeleteRelease(ctx, owner, name, release.GetID())
 				return err
 			}); err != nil {
 				// Log error and ignore. We're only trying to clean up.
@@ -112,22 +112,22 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 			_, _, err = client.Repositories.UploadReleaseAsset(
 				ctx,
 				owner, name,
-				*release.ID,
+				release.GetID(),
 				&github.UploadOptions{Name: filename},
 				file)
 			return err
 		}); err != nil {
-			return fmt.Errorf("failed to upload %#q to release %v: %w", p, *release.ID, err)
+			return fmt.Errorf("failed to upload %#q to release %v: %w", p, release.GetID(), err)
 		}
 	}
 
 	log.Println("Marking release as ready (non-draft)...")
 	if err := githubutil.Retry(func() error {
-		r, _, err := client.Repositories.EditRelease(ctx, owner, name, *release.ID, undraftEditRelease())
+		r, _, err := client.Repositories.UpdateRelease(ctx, owner, name, release.GetID(), undraftEditRelease())
 		if err != nil {
 			return err
 		}
-		log.Printf("Created: %v\n", *r.HTMLURL)
+		log.Printf("Created: %v\n", r.GetHTMLURL())
 		return nil
 	}); err != nil {
 		return fmt.Errorf("unable to make release ready: %w", err)
@@ -138,20 +138,20 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 	return nil
 }
 
-func draftRelease(tag *string) *github.RepositoryRelease {
+func draftRelease(tag *string) github.CreateReleaseRequest {
 	body := "Microsoft build of Go " + *tag
 	draft := true
-	return &github.RepositoryRelease{
-		TagName: tag,
+	return github.CreateReleaseRequest{
+		TagName: *tag,
 		Name:    tag,
 		Body:    &body,
 		Draft:   &draft,
 	}
 }
 
-func undraftEditRelease() *github.RepositoryRelease {
+func undraftEditRelease() github.UpdateReleaseRequest {
 	draft := false
-	return &github.RepositoryRelease{
+	return github.UpdateReleaseRequest{
 		Draft: &draft,
 	}
 }

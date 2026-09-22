@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/patch"
@@ -91,12 +91,11 @@ func handleReviewGH(p subcmd.ParseFunc) error {
 
 	var client *github.Client
 	client, err = authFlags.NewClient(ctx)
+	if errors.Is(err, githubutil.ErrNoAuthProvided) {
+		client, err = github.NewClient()
+	}
 	if err != nil {
-		if errors.Is(err, githubutil.ErrNoAuthProvided) {
-			client = github.NewClient(nil)
-		} else {
-			return fmt.Errorf("failed to create GitHub client: %v", err)
-		}
+		return fmt.Errorf("failed to create GitHub client: %v", err)
 	}
 
 	// Get PR information from GitHub

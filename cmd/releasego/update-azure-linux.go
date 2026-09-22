@@ -12,7 +12,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
@@ -89,7 +89,10 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 	}
 
 	// Set custom user agent to help GitHub identify the bot if necessary.
-	client.UserAgent = "microsoft/go-infra update-azure-linux"
+	client, err = client.Clone(github.WithUserAgent("microsoft/go-infra update-azure-linux"))
+	if err != nil {
+		return err
+	}
 
 	// Check that the PAT has the necessary scopes.
 	if *gitHubAuthFlags.GitHubPat != "" {
@@ -162,7 +165,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return &github.TreeEntry{
 				Path:    new(path),
 				Content: new(string(content)),
-				Mode:    github.String(githubutil.TreeModeFile),
+				Mode:    new(githubutil.TreeModeFile),
 			}
 		}
 		tree := []*github.TreeEntry{
@@ -176,7 +179,7 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return err
 		}
 
-		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, &github.Commit{
+		createCommit, _, err := client.Git.CreateCommit(ctx, owner, repo, github.Commit{
 			Message: new(azurelinux.GeneratePRTitleFromAssets(assets, security)),
 			Parents: []*github.Commit{upstreamCommit},
 			Tree:    createTree,
@@ -185,9 +188,9 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 			return err
 		}
 
-		newRef := &github.Reference{
-			Ref:    new(updateBranch),
-			Object: &github.GitObject{SHA: createCommit.SHA},
+		newRef := github.CreateRef{
+			Ref: updateBranch,
+			SHA: createCommit.GetSHA(),
 		}
 		if _, _, err = client.Git.CreateRef(ctx, owner, repo, newRef); err != nil {
 			return fmt.Errorf("failed to create ref: %w", err)
@@ -206,10 +209,10 @@ func updateAzureLinux(p subcmd.ParseFunc) error {
 		if owner != upstream {
 			prHead = owner + ":" + updateBranch
 		}
-		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, &github.NewPullRequest{
+		pr, _, err = client.PullRequests.Create(ctx, upstream, repo, github.CreatePullRequest{
 			Title: new(azurelinux.GeneratePRTitleFromAssets(assets, security)),
-			Head:  &prHead,
-			Base:  new(baseBranch),
+			Head:  prHead,
+			Base:  baseBranch,
 			// We don't know the PR number yet, so pass 0 to use a placeholder.
 			Body:  new(azurelinux.GeneratePRDescription(assets, latestMajor, security, notify, 0)),
 			Draft: new(true),

@@ -21,7 +21,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -196,7 +196,7 @@ func updateDL(p subcmd.ParseFunc) error {
 			treeEntries = append(treeEntries, &github.TreeEntry{
 				Path:    new(f.path),
 				Content: new(string(f.content)),
-				Mode:    github.String(githubutil.TreeModeFile),
+				Mode:    new(githubutil.TreeModeFile),
 			})
 		}
 
@@ -205,7 +205,7 @@ func updateDL(p subcmd.ParseFunc) error {
 			return fmt.Errorf("error creating tree: %w", err)
 		}
 
-		createCommit, _, err := client.Git.CreateCommit(ctx, labOwner, labName, &github.Commit{
+		createCommit, _, err := client.Git.CreateCommit(ctx, labOwner, labName, github.Commit{
 			Message: new(title),
 			Parents: []*github.Commit{baseCommit},
 			Tree:    createTree,
@@ -214,9 +214,9 @@ func updateDL(p subcmd.ParseFunc) error {
 			return fmt.Errorf("error creating commit: %w", err)
 		}
 
-		newRef := &github.Reference{
-			Ref:    new("refs/heads/" + branchName),
-			Object: &github.GitObject{SHA: createCommit.SHA},
+		newRef := github.CreateRef{
+			Ref: "refs/heads/" + branchName,
+			SHA: createCommit.GetSHA(),
 		}
 		if _, _, err = client.Git.CreateRef(ctx, labOwner, labName, newRef); err != nil {
 			return fmt.Errorf("error creating ref %s: %w", branchName, err)
@@ -229,10 +229,10 @@ func updateDL(p subcmd.ParseFunc) error {
 
 	// Create the pull request.
 	if err := githubutil.Retry(func() error {
-		pr, _, err = client.PullRequests.Create(ctx, labOwner, labName, &github.NewPullRequest{
+		pr, _, err = client.PullRequests.Create(ctx, labOwner, labName, github.CreatePullRequest{
 			Title: new(title),
-			Head:  new(branchName),
-			Base:  new("main"),
+			Head:  branchName,
+			Base:  "main",
 			Body:  new(prBody),
 		})
 		if err != nil {

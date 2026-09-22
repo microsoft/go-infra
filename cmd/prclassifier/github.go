@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 )
 
@@ -63,8 +63,8 @@ func (g *githubAPI) ListLabels(ctx context.Context, owner, repo string) ([]strin
 
 func (g *githubAPI) CreateLabel(ctx context.Context, owner, repo string, definition labelDefinition) error {
 	return githubutil.Retry(func() error {
-		_, _, err := g.client.Issues.CreateLabel(ctx, owner, repo, &github.Label{
-			Name:        new(definition.Name),
+		_, _, err := g.client.Issues.CreateLabel(ctx, owner, repo, github.CreateIssueLabelRequest{
+			Name:        definition.Name,
 			Color:       new(definition.Color),
 			Description: new(definition.Description),
 		})
