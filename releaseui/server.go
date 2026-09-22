@@ -36,38 +36,32 @@ var webFiles embed.FS
 type Server struct {
 	ctx                 context.Context
 	token               string
-	demoDelay           time.Duration
-	configuredProcesses []contract.Process
+	configuredProcesses []contract.ProcessGroup
 	processes           *processRegistry
 	activeProcessID     string
 	processRunStore     ReleaseRunStore
 	workItems           releaseWorkItemService
 	initialWorkItem     *azdoworkitem.WorkItem
 
-	selectionMu       sync.Mutex
-	mu                sync.Mutex
-	steps             []*coordinator.Step
-	runner            *coordinator.StepRunner
-	simulationRunning bool
-	processRun        contract.Run
-	processRunRecord  *ReleaseRunRecord
-	processRunning    bool
+	selectionMu         sync.Mutex
+	mu                  sync.Mutex
+	steps               []*coordinator.Step
+	runner              *coordinator.StepRunner
+	processRun          contract.Run
+	processRunState     *ReleaseRunState
+	processPlan         *contract.Plan
+	processRunRecord    *ReleaseRunRecord
+	processRunning      bool
+	processCheckpointer *processCheckpointer
 }
 
 // Option customizes a Server.
 type Option func(*Server)
 
-// WithDemoDelay changes the simulated duration of each step. It is primarily useful in tests.
-func WithDemoDelay(delay time.Duration) Option {
+// WithProcesses sets the release process groups hosted by this server.
+func WithProcesses(processes ...contract.ProcessGroup) Option {
 	return func(server *Server) {
-		server.demoDelay = delay
-	}
-}
-
-// WithProcesses sets the release processes hosted by this server.
-func WithProcesses(processes ...contract.Process) Option {
-	return func(server *Server) {
-		server.configuredProcesses = append([]contract.Process(nil), processes...)
+		server.configuredProcesses = append([]contract.ProcessGroup(nil), processes...)
 	}
 }
 
@@ -82,10 +76,8 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 		return nil, fmt.Errorf("generate session token: %w", err)
 	}
 	server := &Server{
-		ctx:       ctx,
-		token:     base64.RawURLEncoding.EncodeToString(tokenBytes),
-		demoDelay: 250 * time.Millisecond,
-		runner:    &coordinator.StepRunner{},
+		ctx: ctx, token: base64.RawURLEncoding.EncodeToString(tokenBytes),
+		runner: &coordinator.StepRunner{},
 	}
 	for _, option := range options {
 		option(server)
@@ -94,9 +86,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	server.processes, err = newProcessRegistry(server.configuredProcesses...)
 	if err != nil {
 		return nil, err
-	}
-	if server.demoDelay < 0 {
-		return nil, errors.New("demo delay cannot be negative")
 	}
 	if err := server.validateProcessExecutionConfiguration(); err != nil {
 		return nil, err
@@ -145,9 +134,6 @@ func (s *Server) Handler() http.Handler {
 		})
 		mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID))
 		mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID))
-		if definition.Workflow.CanSimulate {
-			mux.HandleFunc("POST "+prefix+"/simulate", s.requireActiveProcess(processID, s.handleDemoStart))
-		}
 		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request) {
 			s.handleStartProcessRun(processID, response, request)
 		}))
@@ -308,11 +294,21 @@ type processDetail struct {
 }
 
 type workflowDetail struct {
-	Heading     string             `json:"heading"`
-	Description string             `json:"description,omitempty"`
-	SubmitLabel string             `json:"submitLabel"`
-	Variants    []contract.Variant `json:"variants"`
-	CanSimulate bool               `json:"canSimulate"`
+	Heading     string            `json:"heading"`
+	Description string            `json:"description,omitempty"`
+	SubmitLabel string            `json:"submitLabel"`
+	Variants    []workflowProcess `json:"variants"`
+}
+
+type workflowProcess struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Preamble    string `json:"preamble,omitempty"`
+	SubmitLabel string `json:"submitLabel,omitempty"`
+	Inputs      any    `json:"inputs,omitempty"`
+	NoticeTitle string `json:"noticeTitle,omitempty"`
+	Notice      string `json:"notice,omitempty"`
 }
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
@@ -321,15 +317,29 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 		http.NotFound(response, request)
 		return
 	}
-	definition := registered.definition
+	group := registered.group
+	definition := group.processes[0].definition
+	variants := make([]workflowProcess, 0, len(group.processes))
+	for _, process := range group.processes {
+		processDefinition := process.definition
+		variant := workflowProcess{
+			ID: processDefinition.ID, Name: processDefinition.Name,
+			Description: processDefinition.Description,
+			Preamble:    processDefinition.InputPreamble, SubmitLabel: processDefinition.InputSubmitLabel,
+			Inputs: process.inputs,
+		}
+		if processDefinition.Notice != nil {
+			variant.NoticeTitle = processDefinition.Notice.Title
+			variant.Notice = processDefinition.Notice.Message
+		}
+		variants = append(variants, variant)
+	}
 	detail := processDetail{
-		ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
-		Description: definition.Description, DocumentationURL: definition.DocumentationURL,
+		ID: registered.definition.ID, Name: group.identity.Name, Mark: group.identity.Mark,
+		Description: group.identity.Description, DocumentationURL: group.identity.DocumentationURL,
 		Workflow: workflowDetail{
-			Heading: definition.Workflow.Heading, Description: definition.Workflow.Description,
-			SubmitLabel: definition.Workflow.SubmitLabel,
-			Variants:    append([]contract.Variant(nil), definition.Workflow.Variants...),
-			CanSimulate: definition.Workflow.CanSimulate,
+			Heading: definition.InputPreamble, SubmitLabel: definition.InputSubmitLabel,
+			Variants: variants,
 		},
 	}
 	writeJSON(response, http.StatusOK, detail)
@@ -348,8 +358,7 @@ func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Req
 		Processes:      s.processes.summaries(),
 	}
 	if s.processRun != nil {
-		run := s.processRun.Snapshot()
-		summary := s.processRunSummaryLocked(run)
+		summary := s.processRunSummaryLocked(s.processRunState, s.processRun.TakeView())
 		addDashboardRelease(&result, summary)
 	}
 	s.mu.Unlock()
@@ -358,37 +367,39 @@ func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Req
 
 func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
 	switch summary.Status {
-	case contract.ResultSucceeded:
+	case resultSucceeded:
 		result.Recent = append(result.Recent, summary)
-	case contract.ResultFailed, contract.ResultCanceled, contract.ResultUncertain:
+	case resultFailed, resultCanceled, resultUncertain:
 		result.NeedsAttention = append(result.NeedsAttention, summary)
 	default:
 		result.Ongoing = append(result.Ongoing, summary)
 	}
 }
 
-func (s *Server) processRunSummaryLocked(run *contract.State) releaseSummary {
+func (s *Server) processRunSummaryLocked(run *ReleaseRunState, view *contract.RunView) releaseSummary {
 	registered, _ := s.processes.process(run.ProcessID)
-	definition := registered.definition
+	identity := registered.group.identity
 	status := "ready"
-	runID := ""
 	if run.Started {
 		status = "starting"
-		runID = run.Target.ID
-		if run.External != nil {
-			runID = run.External.ID
-			status = run.External.Status
-			if status == "" {
-				status = "running"
-			}
+		if view != nil && view.Summary != "" {
+			status = view.Summary
 		}
 	}
 	if run.Complete {
 		status = run.Result
 	}
+	updatedAt := run.UpdatedAt
+	mode := ""
+	if view != nil {
+		mode = view.Detail
+		if !view.UpdatedAt.IsZero() {
+			updatedAt = view.UpdatedAt
+		}
+	}
 	return releaseSummary{
-		Mark: definition.Mark, Name: definition.Name,
-		Status: status, RunID: runID, RunLabel: "Target", UpdatedAt: run.UpdatedAt, Href: processPath(run.ProcessID),
+		Mark: identity.Mark, Name: identity.Name,
+		Mode: mode, Status: status, UpdatedAt: updatedAt, Href: processPath(run.ProcessID),
 	}
 }
 
@@ -402,64 +413,6 @@ func describeSteps(steps []*coordinator.Step) []planStep {
 		descriptions = append(descriptions, description)
 	}
 	return descriptions
-}
-
-func (s *Server) handleDemoStart(response http.ResponseWriter, request *http.Request) {
-	if !sameOrigin(request) {
-		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
-		return
-	}
-	s.mu.Lock()
-	if len(s.steps) == 0 {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "prepare a release before starting the simulation")
-		return
-	}
-	if s.simulationRunning || s.processRunning {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "a workflow is already active")
-		return
-	}
-	s.simulationRunning = true
-	runner := s.runner
-	steps := cloneForDemo(s.steps, s.demoDelay)
-	s.mu.Unlock()
-	go func() {
-		_ = runner.Execute(s.ctx, steps)
-		s.mu.Lock()
-		s.simulationRunning = false
-		s.mu.Unlock()
-	}()
-	writeJSON(response, http.StatusAccepted, map[string]string{"status": "simulation started"})
-}
-
-func cloneForDemo(steps []*coordinator.Step, delay time.Duration) []*coordinator.Step {
-	clones := make(map[*coordinator.Step]*coordinator.Step, len(steps))
-	result := make([]*coordinator.Step, 0, len(steps))
-	for _, step := range steps {
-		clone := &coordinator.Step{
-			Name: step.Name, Timeout: step.Timeout,
-			Func: func(ctx context.Context) error {
-				timer := time.NewTimer(delay)
-				defer timer.Stop()
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-timer.C:
-					return nil
-				}
-			},
-		}
-		clones[step] = clone
-		result = append(result, clone)
-	}
-	for original, clone := range clones {
-		clone.DependsOn = make([]*coordinator.Step, len(original.DependsOn))
-		for i, dependency := range original.DependsOn {
-			clone.DependsOn[i] = clones[dependency]
-		}
-	}
-	return result
 }
 
 func (s *Server) handleState(response http.ResponseWriter, _ *http.Request) {

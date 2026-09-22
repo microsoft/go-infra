@@ -11,39 +11,35 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/releaseflag"
 )
 
-func snapshotReleaseRun(run contract.Run) (*contract.State, error) {
+func snapshotReleaseRun(run contract.Run) (*contract.StateSnapshot, error) {
 	if run == nil {
 		return nil, errors.New("release run is nil")
 	}
-	state := run.Snapshot()
-	if err := state.Validate(); err != nil {
+	snapshot := run.TakeSnapshot()
+	if err := validateStateSnapshot(snapshot); err != nil {
 		return nil, fmt.Errorf("validate release run snapshot: %w", err)
 	}
-	return state, nil
+	return cloneStateSnapshot(snapshot), nil
 }
 
-func restoreReleaseRun(process contract.Process, state *contract.State) (contract.Run, error) {
-	if state == nil {
-		return nil, errors.New("release run state is nil")
+func loadReleaseRun(process contract.Process, snapshot *contract.StateSnapshot) (contract.Run, error) {
+	if err := validateStateSnapshot(snapshot); err != nil {
+		return nil, err
 	}
-	if state.ProcessID != process.Definition().ID {
-		return nil, fmt.Errorf("release run process %q does not match %q", state.ProcessID, process.Definition().ID)
-	}
-	run, err := process.Restore(state.Clone())
+	run, err := process.Load(cloneStateSnapshot(snapshot))
 	if err != nil {
 		return nil, err
 	}
-	restored, err := snapshotReleaseRun(run)
-	if err != nil {
-		return nil, err
-	}
-	if !reflect.DeepEqual(restored, state) {
-		return nil, errors.New("restored release run changed its durable state")
+	if run == nil {
+		return nil, errors.New("process loaded a nil run")
 	}
 	return run, nil
 }
@@ -52,9 +48,9 @@ type processRunResponse struct {
 	VariantID string            `json:"variantId"`
 	Input     json.RawMessage   `json:"input"`
 	Steps     []planStep        `json:"steps"`
-	SessionID string            `json:"sessionId"`
 	Execution executionResponse `json:"execution"`
-	View      contract.PlanView `json:"view"`
+	Plan      *contract.Plan    `json:"plan"`
+	View      *contract.RunView `json:"view"`
 }
 
 type releaseStartRequest struct {
@@ -74,7 +70,7 @@ func (s *Server) validateProcessExecutionConfiguration() error {
 }
 
 func (s *Server) handleProcessRunPreflight(processID string, response http.ResponseWriter, request *http.Request) {
-	report := PreflightReport{Checks: []PreflightCheck{{
+	report := PreflightReport{PlanningEnabled: true, Checks: []PreflightCheck{{
 		ID: "loopback-server", Name: "Loopback-only HTTP server", Status: CheckStatusPassed,
 		Details: "The release UI accepts requests only through a local loopback address.",
 	}}}
@@ -94,48 +90,37 @@ func (s *Server) handleProcessRunPreflight(processID string, response http.Respo
 			Details: "Enabled. Confirmed release state is stored in a revisioned work item; unconfirmed plans remain in memory.",
 		})
 	}
-	readiness, err := registered.process.Preflight(request.Context())
-	report.PlanningEnabled = readiness.PlanningEnabled
-	report.ExternalExecutionEnabled = readiness.ExecutionEnabled && s.processRunStore != nil
-	status := CheckStatusPassed
-	details := readiness.Details
-	if err != nil {
-		status = CheckStatusWarning
-		details = err.Error()
+	warning, blocking := registered.process.Preflight(request.Context())
+	report.ExternalExecutionEnabled = blocking == nil && s.processRunStore != nil
+	switch {
+	case blocking != nil:
+		report.PlanningEnabled = false
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID: processID + "-readiness", Name: registered.definition.Name + " readiness",
+			Status: CheckStatusUnavailable, Details: blocking.Error(),
+		})
+	case warning != nil:
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID: processID + "-readiness", Name: registered.definition.Name + " readiness",
+			Status: CheckStatusWarning, Details: warning.Error(),
+		})
+	default:
+		report.Checks = append(report.Checks, PreflightCheck{
+			ID: processID + "-readiness", Name: registered.definition.Name + " readiness",
+			Status: CheckStatusPassed, Details: "Ready.",
+		})
 	}
-	if !readiness.PlanningEnabled {
-		status = CheckStatusUnavailable
-	}
-	if details == "" {
-		details = "The process is not configured."
-	}
-	report.Checks = append(report.Checks, PreflightCheck{
-		ID: processID + "-readiness", Name: registered.definition.Name + " readiness", Status: status, Details: details,
-	})
 	writeJSON(response, http.StatusOK, report)
 }
 
 func (s *Server) handleGetProcessRun(processID string, response http.ResponseWriter) {
 	s.mu.Lock()
-	if s.processRun == nil {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+	if s.processRun == nil || s.processRunState == nil || s.processRunState.ProcessID != processID {
 		response.WriteHeader(http.StatusNoContent)
 		return
 	}
-	run, err := snapshotReleaseRun(s.processRun)
-	if err != nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if run.ProcessID != processID {
-		s.mu.Unlock()
-		response.WriteHeader(http.StatusNoContent)
-		return
-	}
-	result := s.processRunResponseLocked()
-	s.mu.Unlock()
-	writeJSON(response, http.StatusOK, result)
+	writeJSON(response, http.StatusOK, s.processRunResponseLocked())
 }
 
 func (s *Server) handlePrepareProcessRun(processID string, response http.ResponseWriter, request *http.Request) {
@@ -143,41 +128,39 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
 		return
 	}
-	var selection contract.Selection
-	if err := decodeJSON(response, request, &selection); err != nil {
-		writeError(response, http.StatusBadRequest, err.Error())
-		return
-	}
 	registered, ok := s.processes.process(processID)
 	if !ok {
 		http.NotFound(response, request)
 		return
 	}
+	if _, blocking := registered.process.Preflight(request.Context()); blocking != nil {
+		writeError(response, http.StatusPreconditionFailed, blocking.Error())
+		return
+	}
+	var encoded json.RawMessage
+	if err := decodeJSON(response, request, &encoded); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	inputs := &releaseflag.InputSet{}
+	input := registered.process.InputForm(inputs)
+	if err := inputs.Validate(); err != nil {
+		panic(fmt.Sprintf("release process %q has invalid input declarations: %v", processID, err))
+	}
+	if err := inputs.Parse(encoded); err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	s.mu.Lock()
-	if s.simulationRunning || s.processRunning {
+	if s.processRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot replace the plan while a workflow is running")
 		return
 	}
-	if s.processRun != nil {
-		current, err := snapshotReleaseRun(s.processRun)
-		if err != nil {
-			s.mu.Unlock()
-			writeError(response, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if current.Result == contract.ResultUncertain {
-			s.mu.Unlock()
-			writeError(response, http.StatusConflict, "a previous external action has uncertain status; inspect the target service and repair its release work item before retrying")
-			return
-		}
-	}
 	s.mu.Unlock()
-	if _, ok := processVariant(registered.definition, selection.VariantID); !ok {
-		writeError(response, http.StatusBadRequest, fmt.Sprintf("unknown process variant %q", selection.VariantID))
-		return
-	}
-	releaseRun, err := registered.process.Prepare(request.Context(), selection)
+
+	snapshot, err := registered.process.Prepare(request.Context(), input)
 	if err != nil {
 		status := http.StatusConflict
 		if errors.Is(err, contract.ErrInvalidInput) {
@@ -186,21 +169,14 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, status, err.Error())
 		return
 	}
-	run, err := snapshotReleaseRun(releaseRun)
+	run, err := loadReleaseRun(registered.process, snapshot)
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("snapshot prepared release run: %v", err))
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("load prepared release run: %v", err))
 		return
 	}
-	if run.ProcessID != processID {
-		writeError(response, http.StatusInternalServerError, "prepared release run has the wrong process ID")
-		return
-	}
-	releaseRun, err = restoreReleaseRun(registered.process, run)
-	if err != nil {
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("restore prepared release run: %v", err))
-		return
-	}
-	steps, err := releaseRun.Steps(request.Context(), nil)
+	preparedSnapshot := cloneStateSnapshot(snapshot)
+	plan := run.Plan()
+	steps, err := run.Build(request.Context(), nil)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("build process graph: %v", err))
 		return
@@ -209,17 +185,34 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("validate process graph: %v", err))
 		return
 	}
+	snapshot, err = snapshotReleaseRun(run)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !reflect.DeepEqual(snapshot, preparedSnapshot) {
+		writeError(response, http.StatusInternalServerError, "Plan or Build changed the prepared release state")
+		return
+	}
+	state, err := newProcessRunState(processID, snapshot)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release run state: %v", err))
+		return
+	}
+
 	s.mu.Lock()
-	if s.simulationRunning || s.processRunning {
+	if s.processRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "cannot replace the plan while a workflow is running")
 		return
 	}
-	s.processRun = releaseRun
+	s.processRun = run
+	s.processRunState = state
+	s.processPlan = plan
 	s.processRunRecord = nil
 	s.steps = steps
 	s.runner = &coordinator.StepRunner{}
-	result := s.processRunResponseLocked()
+	result := s.processRunResponseLockedWithPlan(plan)
 	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, result)
 }
@@ -240,23 +233,12 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		return
 	}
 	s.mu.Lock()
-	if s.processRun == nil {
+	if s.processRun == nil || s.processRunState == nil || s.processRunState.ProcessID != processID {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "review this external action first")
 		return
 	}
-	current, err := snapshotReleaseRun(s.processRun)
-	if err != nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if current.ProcessID != processID {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "review this external action first")
-		return
-	}
-	if !secureEqual(start.PlanDigest, current.Digest) {
+	if !secureEqual(start.PlanDigest, s.processRunState.Digest) {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "run request does not match the reviewed external action")
 		return
@@ -266,7 +248,7 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusBadRequest, "confirm the external action before starting it")
 		return
 	}
-	if current.Started || s.processRunning || s.simulationRunning {
+	if s.processRunState.Started || s.processRunning {
 		s.mu.Unlock()
 		writeError(response, http.StatusConflict, "the reviewed external action has already started")
 		return
@@ -276,263 +258,335 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusForbidden, "release tracking is required before starting an external action")
 		return
 	}
-	run := current.Clone()
+	state := s.processRunState.Clone()
 	s.processRunning = true
 	s.mu.Unlock()
 
-	readiness, err := registered.process.Preflight(request.Context())
-	if err != nil || !readiness.ExecutionEnabled {
-		s.stopProcessStart(run.Digest)
-		if err == nil {
-			err = errors.New("external execution is not ready")
-		}
-		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("external action preflight failed before mutation: %v", err))
+	_, blocking := registered.process.Preflight(request.Context())
+	if blocking != nil {
+		s.stopProcessStart(state.Digest)
+		writeError(response, http.StatusPreconditionFailed, fmt.Sprintf("external action preflight failed before mutation: %v", blocking))
 		return
 	}
-	run.Started = true
-	releaseRun, err := restoreReleaseRun(registered.process, run)
+	run, err := loadReleaseRun(registered.process, state.Snapshot)
 	if err != nil {
-		s.stopProcessStart(run.Digest)
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("validate started process run: %v", err))
+		s.stopProcessStart(state.Digest)
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("load process run for execution: %v", err))
 		return
 	}
-	steps, err := releaseRun.Steps(request.Context(), s.processCheckpoint(run.Digest, registered.process))
+	plan := run.Plan()
+	executionContext, cancel := context.WithCancel(s.ctx)
+	checkpointer := s.newProcessCheckpointer(state.Digest, run, cancel)
+	steps, err := run.Build(executionContext, checkpointer.Checkpoint)
 	if err != nil {
-		s.stopProcessStart(run.Digest)
+		checkpointer.Close()
+		cancel()
+		s.stopProcessStart(state.Digest)
 		writeError(response, http.StatusConflict, fmt.Sprintf("build process graph: %v", err))
 		return
 	}
+	builtSnapshot, err := snapshotReleaseRun(run)
+	if err != nil || !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
+		checkpointer.Close()
+		cancel()
+		s.stopProcessStart(state.Digest)
+		writeError(response, http.StatusConflict, "building the execution graph changed the reviewed release state")
+		return
+	}
 	if err := validateProcessRunGraph(steps); err != nil {
-		s.stopProcessStart(run.Digest)
+		checkpointer.Close()
+		cancel()
+		s.stopProcessStart(state.Digest)
 		writeError(response, http.StatusConflict, "execution graph no longer matches the reviewed plan")
 		return
 	}
-	record, err := s.processRunStore.Create(request.Context(), run)
+	state.Started = true
+	state.UpdatedAt = run.TakeView().UpdatedAt
+	record, err := s.processRunStore.Create(request.Context(), state, run.TakeView(), plan)
 	if err != nil {
-		s.stopProcessStart(run.Digest)
+		checkpointer.Close()
+		cancel()
+		s.stopProcessStart(state.Digest)
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release work item before mutation: %v", err))
 		return
 	}
 	s.mu.Lock()
-	current, stateErr := snapshotReleaseRun(s.processRun)
-	if stateErr != nil || current.Started || !secureEqual(current.Digest, run.Digest) {
+	if s.processRunState == nil || s.processRunState.Started || !secureEqual(s.processRunState.Digest, state.Digest) {
 		s.processRunning = false
 		s.mu.Unlock()
+		checkpointer.Close()
+		cancel()
 		writeError(response, http.StatusConflict, "reviewed external action changed before start")
 		return
 	}
-	persistedRun, err := restoreReleaseRun(registered.process, record.Run)
-	if err != nil {
-		s.processRunning = false
-		s.mu.Unlock()
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("restore persisted release run: %v", err))
-		return
-	}
-	s.processRun = persistedRun
+	s.processRun = run
+	s.processRunState = record.Run.Clone()
+	s.processPlan = plan
 	s.processRunRecord = record
 	s.steps = steps
 	s.runner = &coordinator.StepRunner{}
+	s.processCheckpointer = checkpointer
 	runner := s.runner
 	s.mu.Unlock()
 
-	go s.executeProcessRun(run.Digest, runner, steps, registered.process)
+	go s.executeProcessRun(state.Digest, executionContext, runner, steps, run, checkpointer)
 	writeJSON(response, http.StatusAccepted, map[string]string{"status": "external action started"})
 }
 
 func (s *Server) stopProcessStart(digest string) {
 	s.mu.Lock()
-	if s.processRun != nil {
-		run, err := snapshotReleaseRun(s.processRun)
-		if err == nil && secureEqual(run.Digest, digest) && !run.Started {
-			s.processRunning = false
-		}
+	if s.processRunState != nil && secureEqual(s.processRunState.Digest, digest) && !s.processRunState.Started {
+		s.processRunning = false
 	}
 	s.mu.Unlock()
 }
 
-func (s *Server) processCheckpoint(digest string, process contract.Process) contract.CheckpointFunc {
-	return func(ctx context.Context, checkpoint contract.Checkpoint) error {
-		if !json.Valid(checkpoint.State) {
-			return errors.New("process checkpoint state is invalid JSON")
-		}
-		if checkpoint.External != nil {
-			if err := checkpoint.External.Validate(); err != nil {
-				return err
-			}
-		}
-		s.mu.Lock()
-		current, err := snapshotReleaseRun(s.processRun)
-		if err != nil || !secureEqual(current.Digest, digest) {
-			s.mu.Unlock()
-			return errors.New("external run no longer matches the active process plan")
-		}
-		run := current.Clone()
-		run.Checkpoint = append(json.RawMessage(nil), checkpoint.State...)
-		run.External = nil
-		if checkpoint.External != nil {
-			external := *checkpoint.External
-			run.External = &external
-		}
-		if _, err := restoreReleaseRun(process, run); err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		if s.processRunRecord == nil {
-			s.mu.Unlock()
-			return errors.New("external run has no release work item")
-		}
-		record, err := s.processRunStore.Update(ctx, s.processRunRecord, run)
-		if err != nil {
-			s.mu.Unlock()
-			return fmt.Errorf("persist external run checkpoint: %w", err)
-		}
-		persistedRun, err := restoreReleaseRun(process, record.Run)
-		if err != nil {
-			s.mu.Unlock()
-			return fmt.Errorf("restore persisted external run checkpoint: %w", err)
-		}
-		s.processRunRecord = record
-		s.processRun = persistedRun
-		s.mu.Unlock()
-		coordinator.ReportProgress(ctx, coordinator.StepProgress{
-			Summary: checkpoint.Progress.Summary, Detail: checkpoint.Progress.Detail,
-			Completed: checkpoint.Progress.Completed, Total: checkpoint.Progress.Total,
-		})
-		return nil
+type processCheckpointer struct {
+	server    *Server
+	digest    string
+	run       contract.Run
+	cancel    context.CancelFunc
+	failed    atomic.Bool
+	persisted atomic.Bool
+	requests  chan chan struct{}
+	stop      chan struct{}
+	done      chan struct{}
+	stopOnce  sync.Once
+}
+
+func (s *Server) newProcessCheckpointer(
+	digest string,
+	run contract.Run,
+	cancel context.CancelFunc,
+) *processCheckpointer {
+	checkpointer := &processCheckpointer{
+		server: s, digest: digest, run: run, cancel: cancel,
+		requests: make(chan chan struct{}), stop: make(chan struct{}), done: make(chan struct{}),
 	}
+	go checkpointer.runLoop()
+	return checkpointer
+}
+
+func (c *processCheckpointer) Checkpoint() {
+	requestDone := make(chan struct{})
+	select {
+	case c.requests <- requestDone:
+	case <-c.done:
+		return
+	}
+	select {
+	case <-requestDone:
+	case <-c.done:
+	}
+}
+
+func (c *processCheckpointer) Close() {
+	c.stopOnce.Do(func() {
+		close(c.stop)
+	})
+	<-c.done
+}
+
+func (c *processCheckpointer) runLoop() {
+	defer close(c.done)
+	for {
+		select {
+		case requestDone := <-c.requests:
+			persisted := c.persist()
+			close(requestDone)
+			if !persisted {
+				return
+			}
+		case <-c.stop:
+			select {
+			case requestDone := <-c.requests:
+				c.persist()
+				close(requestDone)
+			default:
+			}
+			return
+		}
+	}
+}
+
+func (c *processCheckpointer) persist() bool {
+	snapshot, snapshotErr := snapshotReleaseRun(c.run)
+	view := c.run.TakeView()
+	if snapshotErr != nil {
+		c.failed.Store(true)
+		c.cancel()
+		return false
+	}
+	c.server.mu.Lock()
+	defer c.server.mu.Unlock()
+	if c.server.processRunState == nil || c.server.processRunRecord == nil ||
+		!secureEqual(c.server.processRunState.Digest, c.digest) {
+
+		c.failed.Store(true)
+		c.cancel()
+		return false
+	}
+	state := c.server.processRunState.Clone()
+	state.Snapshot = snapshot
+	state.Checkpointed = true
+	if view != nil && !view.UpdatedAt.IsZero() {
+		state.UpdatedAt = view.UpdatedAt
+	}
+	record, err := c.server.processRunStore.Update(
+		c.server.ctx, c.server.processRunRecord, state, view, c.server.processPlan,
+	)
+	if err != nil {
+		c.failed.Store(true)
+		c.cancel()
+		return false
+	}
+	c.server.processRunState = record.Run.Clone()
+	c.server.processRunRecord = record
+	c.persisted.Store(true)
+	return true
 }
 
 func (s *Server) executeProcessRun(
 	digest string,
+	ctx context.Context,
 	runner *coordinator.StepRunner,
 	steps []*coordinator.Step,
-	process contract.Process,
+	run contract.Run,
+	checkpointer *processCheckpointer,
 ) {
-	err := runner.Execute(s.ctx, steps)
+	err := runner.Execute(ctx, steps)
+	checkpointer.Close()
+	snapshot, snapshotErr := snapshotReleaseRun(run)
+	view := run.TakeView()
 	s.mu.Lock()
-	current, stateErr := snapshotReleaseRun(s.processRun)
-	if stateErr == nil && secureEqual(current.Digest, digest) {
-		run := current.Clone()
-		resumable := len(run.Checkpoint) > 0 && !run.Complete &&
-			(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
-		switch {
-		case err == nil:
-			run.Complete = true
-			run.Result = contract.ResultSucceeded
-		case resumable:
-			run.Result = ""
-		default:
-			run.Complete = true
-			if run.External != nil && run.External.Terminal {
-				run.Result = contract.ResultFailed
-			} else {
-				run.Result = contract.ResultUncertain
-			}
+	defer s.mu.Unlock()
+	if s.processRunState != nil && secureEqual(s.processRunState.Digest, digest) {
+		state := s.processRunState.Clone()
+		if snapshotErr == nil {
+			state.Snapshot = snapshot
 		}
-		_, validateErr := restoreReleaseRun(process, run)
-		if validateErr != nil {
-			run.Complete = true
-			run.Result = contract.ResultUncertain
+		state.Complete, state.Result = processRunOutcome(
+			err, snapshotErr, checkpointer.failed.Load(), checkpointer.persisted.Load(),
+		)
+		if view != nil && !view.UpdatedAt.IsZero() {
+			state.UpdatedAt = view.UpdatedAt
 		}
-		var restoredRun contract.Run
-		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, run)
+		record, saveErr := s.processRunStore.Update(context.Background(), s.processRunRecord, state, view, s.processPlan)
 		if saveErr != nil {
-			run.Complete = true
-			run.Result = contract.ResultUncertain
-			restoredRun, _ = restoreReleaseRun(process, run)
+			state.Complete = true
+			state.Result = resultUncertain
 		} else {
 			s.processRunRecord = record
-			run = record.Run
-			restoredRun, _ = restoreReleaseRun(process, run)
+			state = record.Run
 		}
-		if restoredRun != nil {
-			s.processRun = restoredRun
-		}
+		s.processRunState = state.Clone()
 	}
 	s.processRunning = false
-	s.mu.Unlock()
+	s.processCheckpointer = nil
+}
+
+func processRunOutcome(executionErr, snapshotErr error, checkpointFailed, checkpointPersisted bool) (bool, string) {
+	switch {
+	case checkpointFailed || snapshotErr != nil:
+		return true, resultUncertain
+	case executionErr == nil:
+		return true, resultSucceeded
+	case (errors.Is(executionErr, context.Canceled) || errors.Is(executionErr, context.DeadlineExceeded)) && checkpointPersisted:
+		return false, ""
+	case errors.Is(executionErr, context.Canceled) || errors.Is(executionErr, context.DeadlineExceeded):
+		return true, resultUncertain
+	default:
+		return true, resultFailed
+	}
 }
 
 func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
-	run := record.Run
-	registered, ok := s.processes.process(run.ProcessID)
+	if record == nil || record.Run == nil {
+		return errors.New("release run record is empty")
+	}
+	state := record.Run.Clone()
+	registered, ok := s.processes.process(state.ProcessID)
 	if !ok {
-		return fmt.Errorf("stored process %q is not configured", run.ProcessID)
+		return fmt.Errorf("stored process %q is not configured", state.ProcessID)
 	}
-	releaseRun, err := restoreReleaseRun(registered.process, run)
+	run, err := loadReleaseRun(registered.process, state.Snapshot)
 	if err != nil {
-		return fmt.Errorf("validate stored process run: %w", err)
+		return fmt.Errorf("load stored process run: %w", err)
 	}
-	if run.Started && !run.Complete && len(run.Checkpoint) == 0 {
-		run.Complete = true
-		run.Result = contract.ResultUncertain
-		record, err = s.processRunStore.Update(s.ctx, record, run)
-		if err != nil {
-			return fmt.Errorf("mark interrupted process run uncertain: %w", err)
-		}
-		run = record.Run
-		releaseRun, err = restoreReleaseRun(registered.process, run)
-		if err != nil {
-			return fmt.Errorf("restore interrupted process run: %w", err)
-		}
+	plan := run.Plan()
+	executionContext, cancel := context.WithCancel(s.ctx)
+	checkpointer := s.newProcessCheckpointer(state.Digest, run, cancel)
+	if state.Checkpointed {
+		checkpointer.persisted.Store(true)
 	}
-	steps, err := releaseRun.Steps(s.ctx, s.processCheckpoint(run.Digest, registered.process))
+	steps, err := run.Build(executionContext, checkpointer.Checkpoint)
 	if err != nil {
+		checkpointer.Close()
+		cancel()
 		return fmt.Errorf("reconstruct process graph: %w", err)
 	}
+	builtSnapshot, err := snapshotReleaseRun(run)
+	if err != nil || !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
+		checkpointer.Close()
+		cancel()
+		return errors.New("reconstructing the process graph changed its state")
+	}
 	if err := validateProcessRunGraph(steps); err != nil {
+		checkpointer.Close()
+		cancel()
 		return fmt.Errorf("restore process graph: %w", err)
 	}
-	s.processRun = releaseRun
+	s.processRun = run
+	s.processRunState = state
+	s.processPlan = plan
 	s.processRunRecord = record
 	s.steps = steps
 	s.runner = &coordinator.StepRunner{}
-	s.activeProcessID = run.ProcessID
-	if run.Started && !run.Complete {
+	s.activeProcessID = state.ProcessID
+	if state.Started && !state.Complete {
 		s.processRunning = true
-		go s.executeProcessRun(run.Digest, s.runner, steps, registered.process)
+		s.processCheckpointer = checkpointer
+		go s.executeProcessRun(state.Digest, executionContext, s.runner, steps, run, checkpointer)
+	} else {
+		checkpointer.Close()
+		cancel()
 	}
 	return nil
 }
 
 func (s *Server) processRunResponseLocked() processRunResponse {
-	run, err := snapshotReleaseRun(s.processRun)
-	if err != nil {
+	return s.processRunResponseLockedWithPlan(s.processPlan)
+}
+
+func (s *Server) processRunResponseLockedWithPlan(plan *contract.Plan) processRunResponse {
+	if s.processRun == nil || s.processRunState == nil {
 		return processRunResponse{}
 	}
+	state := s.processRunState
 	steps := describeSteps(s.steps)
-	if run.Complete {
-		status := contract.ResultSucceeded
-		if run.Result != contract.ResultSucceeded {
-			status = contract.ResultFailed
+	if state.Complete {
+		status := resultSucceeded
+		if state.Result != resultSucceeded {
+			status = resultFailed
 		}
 		for index := range steps {
 			steps[index].Status = status
 		}
 	}
 	execution := executionResponse{
-		Enabled: s.processRunStore != nil, Eligible: run.Digest != "", PlanDigest: run.Digest,
+		Enabled: s.processRunStore != nil, Eligible: state.Digest != "", PlanDigest: state.Digest,
+		Run: pipelineRun{Result: state.Result, Complete: state.Complete},
 	}
 	if s.processRunRecord != nil {
 		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
 	}
 	if s.processRunStore == nil {
-		execution.UnavailableReason = "Release tracking is unavailable. The workflow can still be simulated."
-	}
-	if run.Started {
-		reference := run.Target
-		if run.External != nil {
-			reference = *run.External
-		}
-		execution.Run = pipelineRun{
-			BuildID: reference.ID, URL: reference.URL, LinkLabel: reference.LinkLabel,
-			Result: run.Result, Complete: run.Complete,
-		}
+		execution.UnavailableReason = "Release tracking is unavailable."
 	}
 	return processRunResponse{
-		VariantID: run.VariantID,
-		Input:     append(json.RawMessage(nil), run.Input...), Steps: steps, SessionID: run.SessionID,
-		Execution: execution, View: run.View,
+		VariantID: state.ProcessID,
+		Input:     append(json.RawMessage(nil), state.Snapshot.Input...),
+		Steps:     steps, Execution: execution, Plan: plan, View: s.processRun.TakeView(),
 	}
 }
 

@@ -18,8 +18,8 @@ import (
 
 // ReleaseRunStore persists confirmed release runs as explicitly identified work items.
 type ReleaseRunStore interface {
-	Create(context.Context, *contract.State) (*ReleaseRunRecord, error)
-	Update(context.Context, *ReleaseRunRecord, *contract.State) (*ReleaseRunRecord, error)
+	Create(context.Context, *ReleaseRunState, *contract.RunView, *contract.Plan) (*ReleaseRunRecord, error)
+	Update(context.Context, *ReleaseRunRecord, *ReleaseRunState, *contract.RunView, *contract.Plan) (*ReleaseRunRecord, error)
 }
 
 // ReleaseRunRecord binds one release run to its Azure DevOps work item revision.
@@ -27,7 +27,7 @@ type ReleaseRunRecord struct {
 	WorkItemID int
 	Revision   int
 	URL        string
-	Run        *contract.State
+	Run        *ReleaseRunState
 	workItem   *azdoworkitem.WorkItem
 }
 
@@ -52,12 +52,21 @@ func NewReleaseRunWorkItemStore(client releaseWorkItemClient, assignedTo string)
 	return &processRunWorkItemStore{client: client, assignedTo: assignedTo}, nil
 }
 
-func (s *processRunWorkItemStore) Create(ctx context.Context, run *contract.State) (*ReleaseRunRecord, error) {
-	snapshot, err := processRunSnapshot(run)
+func (s *processRunWorkItemStore) Create(
+	ctx context.Context,
+	run *ReleaseRunState,
+	view *contract.RunView,
+	plan *contract.Plan,
+) (*ReleaseRunRecord, error) {
+	snapshot, err := processRunSnapshot(run, view, plan)
 	if err != nil {
 		return nil, err
 	}
-	workItem, err := s.client.Create(ctx, "[releaseagent] "+run.View.IntentTitle, s.assignedTo, snapshot)
+	title := "[releaseagent] " + run.ProcessID
+	if plan != nil && strings.TrimSpace(plan.Subtitle) != "" {
+		title = "[releaseagent] " + plan.Subtitle
+	}
+	workItem, err := s.client.Create(ctx, title, s.assignedTo, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -67,14 +76,16 @@ func (s *processRunWorkItemStore) Create(ctx context.Context, run *contract.Stat
 func (s *processRunWorkItemStore) Update(
 	ctx context.Context,
 	current *ReleaseRunRecord,
-	run *contract.State,
+	run *ReleaseRunState,
+	view *contract.RunView,
+	plan *contract.Plan,
 ) (*ReleaseRunRecord, error) {
 	if current == nil || current.workItem == nil || current.WorkItemID != current.workItem.ID ||
 		current.Revision != current.workItem.Revision {
 
 		return nil, errors.New("current process run record is invalid")
 	}
-	snapshot, err := processRunSnapshot(run)
+	snapshot, err := processRunSnapshot(run, view, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +96,11 @@ func (s *processRunWorkItemStore) Update(
 	return processRunRecord(workItem)
 }
 
-func processRunSnapshot(run *contract.State) (*azdoworkitem.Snapshot, error) {
+func processRunSnapshot(
+	run *ReleaseRunState,
+	view *contract.RunView,
+	plan *contract.Plan,
+) (*azdoworkitem.Snapshot, error) {
 	if err := run.Validate(); err != nil {
 		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
 	}
@@ -97,48 +112,35 @@ func processRunSnapshot(run *contract.State) (*azdoworkitem.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal process run: %w", err)
 	}
+	test := view != nil && view.Test
 	return &azdoworkitem.Snapshot{
 		SchemaVersion: azdoworkitem.CurrentSchemaVersion,
-		ProcessID:     run.ProcessID,
-		Status:        status,
-		Test:          run.Test,
-		IntentDigest:  run.Digest,
-		Payload:       payload,
-		Description:   processRunDescription(run),
+		ProcessID:     run.ProcessID, Status: status, Test: test,
+		IntentDigest: run.Digest, Payload: payload,
+		Description: processRunDescription(run, view, plan),
 	}, nil
 }
 
-func processRunDescription(run *contract.State) *azdoworkitem.DescriptionSummary {
-	words := strings.Split(run.ProcessID, "-")
-	for index, word := range words {
-		if word != "" {
-			words[index] = strings.ToUpper(word[:1]) + word[1:]
+func processRunDescription(
+	run *ReleaseRunState,
+	view *contract.RunView,
+	plan *contract.Plan,
+) *azdoworkitem.DescriptionSummary {
+	fields := make([]azdoworkitem.DescriptionField, 0)
+	if view != nil {
+		if strings.TrimSpace(view.Summary) != "" {
+			fields = append(fields, azdoworkitem.DescriptionField{Label: "Status", Value: view.Summary})
+		}
+		if strings.TrimSpace(view.Detail) != "" {
+			fields = append(fields, azdoworkitem.DescriptionField{Label: "Detail", Value: view.Detail})
 		}
 	}
-	fields := []azdoworkitem.DescriptionField{
-		{Label: "Intent", Value: run.View.IntentTitle},
-		{Label: "Action", Value: run.View.ExecutionTitle},
-	}
-	for _, fact := range run.View.Facts {
-		value := fact.Value
-		if fact.Detail != "" {
-			value += " · " + fact.Detail
+	if plan != nil {
+		for _, fact := range plan.Facts {
+			fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: fact.Value})
 		}
-		fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: value, URL: fact.Href})
 	}
-	fields = append(fields, azdoworkitem.DescriptionField{
-		Label: "Target", Value: strings.TrimPrefix(run.Target.LinkLabel, "Open "), URL: run.Target.URL,
-	})
-	if run.External != nil {
-		value := strings.TrimPrefix(run.External.LinkLabel, "Open ")
-		if run.External.Status != "" {
-			value += " · " + run.External.Status
-		}
-		fields = append(fields, azdoworkitem.DescriptionField{
-			Label: "External run", Value: value, URL: run.External.URL,
-		})
-	}
-	return &azdoworkitem.DescriptionSummary{ProcessName: strings.Join(words, " "), Fields: fields}
+	return &azdoworkitem.DescriptionSummary{ProcessName: run.ProcessID, Fields: fields}
 }
 
 func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error) {
@@ -147,7 +149,7 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	}
 	decoder := json.NewDecoder(bytes.NewReader(workItem.Snapshot.Payload))
 	decoder.DisallowUnknownFields()
-	var run contract.State
+	var run ReleaseRunState
 	if err := decoder.Decode(&run); err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
 	}
@@ -160,9 +162,6 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	if workItem.Snapshot.ProcessID != run.ProcessID || workItem.Snapshot.IntentDigest != run.Digest {
 		return nil, errors.New("release work item identity does not match process run")
 	}
-	if workItem.Snapshot.Test != run.Test {
-		return nil, errors.New("release work item test classification does not match process run")
-	}
 	status, err := processRunStatus(&run)
 	if err != nil {
 		return nil, err
@@ -172,32 +171,26 @@ func processRunRecord(workItem *azdoworkitem.WorkItem) (*ReleaseRunRecord, error
 	}
 	run.UpdatedAt = workItem.ChangedAt
 	return &ReleaseRunRecord{
-		WorkItemID: workItem.ID,
-		Revision:   workItem.Revision,
-		URL:        workItem.URL,
-		Run:        run.Clone(),
-		workItem:   workItem,
+		WorkItemID: workItem.ID, Revision: workItem.Revision, URL: workItem.URL,
+		Run: run.Clone(), workItem: workItem,
 	}, nil
 }
 
-func processRunStatus(run *contract.State) (azdoworkitem.Status, error) {
+func processRunStatus(run *ReleaseRunState) (azdoworkitem.Status, error) {
 	if !run.Started {
 		return "", errors.New("process run has not started")
 	}
 	if !run.Complete {
-		if run.External != nil {
-			return azdoworkitem.StatusRunning, nil
-		}
-		return azdoworkitem.StatusStarting, nil
+		return azdoworkitem.StatusRunning, nil
 	}
 	switch run.Result {
-	case contract.ResultSucceeded:
+	case resultSucceeded:
 		return azdoworkitem.StatusSucceeded, nil
-	case contract.ResultFailed:
+	case resultFailed:
 		return azdoworkitem.StatusFailed, nil
-	case contract.ResultCanceled:
+	case resultCanceled:
 		return azdoworkitem.StatusCanceled, nil
-	case contract.ResultUncertain:
+	case resultUncertain:
 		return azdoworkitem.StatusUncertain, nil
 	default:
 		return "", fmt.Errorf("process run has invalid terminal result %q", run.Result)
