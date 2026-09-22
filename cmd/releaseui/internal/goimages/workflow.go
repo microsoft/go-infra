@@ -83,18 +83,16 @@ func (e *PipelineResultError) Unwrap() error {
 	return e.Err
 }
 
-// CheckpointFunc durably records State. The state pointer is valid only during the call.
-type CheckpointFunc func(context.Context, *State) error
+// CheckpointFunc reports that State changed. The state pointer is valid only during the call.
+type CheckpointFunc func(*State)
 
 type stateAccess struct {
 	// Updates hold snapshotMu for reading. This unusual use lets independent graph steps update
 	// different fields concurrently, while snapshot takes the write lock to exclude every update.
 	// The dependency graph must order steps that access the same field. Race tests detect mistakes.
-	snapshotMu   sync.RWMutex
-	checkpointMu sync.Mutex
-	state        *State
-	checkpoint   CheckpointFunc
-	dirty        bool
+	snapshotMu sync.RWMutex
+	state      *State
+	checkpoint CheckpointFunc
 }
 
 func (access *stateAccess) update(ctx context.Context, update func()) error {
@@ -106,28 +104,9 @@ func (access *stateAccess) update(ctx context.Context, update func()) error {
 	if access.checkpoint == nil {
 		return nil
 	}
-	access.checkpointMu.Lock()
-	defer access.checkpointMu.Unlock()
-	access.dirty = true
-	return access.flushLocked(ctx)
-}
-
-func (access *stateAccess) flush(ctx context.Context) error {
-	access.checkpointMu.Lock()
-	defer access.checkpointMu.Unlock()
-	return access.flushLocked(ctx)
-}
-
-func (access *stateAccess) flushLocked(ctx context.Context) error {
-	if !access.dirty || access.checkpoint == nil {
-		return nil
-	}
 	snapshot := access.snapshot()
-	if err := access.checkpoint(ctx, &snapshot); err != nil {
-		return err
-	}
-	access.dirty = false
-	return nil
+	access.checkpoint(&snapshot)
+	return ctx.Err()
 }
 
 func (access *stateAccess) snapshot() State {
@@ -267,7 +246,6 @@ func NewGraphWithCheckpoint(
 	if err != nil {
 		return nil, nil, err
 	}
-	wrapStepsWithStateFlush(steps, access, checkpoint)
 	return steps, state, nil
 }
 
@@ -330,19 +308,4 @@ func ValidateState(input *Input, state *State) error {
 		return fmt.Errorf("completed go-images state has invalid result %q", state.Result)
 	}
 	return nil
-}
-
-func wrapStepsWithStateFlush(steps []*coordinator.Step, state *stateAccess, checkpoint CheckpointFunc) {
-	if checkpoint == nil {
-		return
-	}
-	for _, step := range steps {
-		run := step.Func
-		step.Func = func(ctx context.Context) error {
-			if err := state.flush(ctx); err != nil {
-				return fmt.Errorf("flush pending go-images state before step: %w", err)
-			}
-			return run(ctx)
-		}
-	}
 }

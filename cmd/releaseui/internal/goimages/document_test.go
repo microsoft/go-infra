@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 func TestDocumentOmitsDerivedPlan(t *testing.T) {
@@ -58,26 +60,11 @@ func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 }
 
 func TestGoImagesProcessRejectsUnsupportedSchemas(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		decode func(json.RawMessage) error
-	}{
-		{name: "payload", decode: func(data json.RawMessage) error {
-			_, err := decodeGoImagesProcessPayload(data)
-			return err
-		}},
-		{name: "checkpoint", decode: func(data json.RawMessage) error {
-			_, err := decodeGoImagesCheckpoint(data)
-			return err
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			for _, data := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`{"schemaVersion":2}`)} {
-				if err := test.decode(data); err == nil {
-					t.Fatalf("unsupported schema %s was accepted", data)
-				}
-			}
-		})
+	input := json.RawMessage(`{"mode":"normal"}`)
+	for _, data := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`{"schemaVersion":2}`)} {
+		if _, _, err := decodeGoImagesSnapshot(&contract.StateSnapshot{Input: input, State: data}); err == nil {
+			t.Fatalf("unsupported schema %s was accepted", data)
+		}
 	}
 }
 

@@ -4,10 +4,12 @@
 package releaseui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strconv"
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
@@ -92,18 +94,15 @@ func (s *Server) workItemSummary(item *azdoworkitem.WorkItem) (releaseSummary, e
 	if !ok {
 		return releaseSummary{}, fmt.Errorf("release work item %d has unknown process %q", item.ID, record.Run.ProcessID)
 	}
-	if _, err := restoreReleaseRun(definition.process, record.Run); err != nil {
+	run, err := loadReleaseRun(definition.process, record.Run.Snapshot)
+	if err != nil {
 		return releaseSummary{}, fmt.Errorf("validate release work item %d: %w", item.ID, err)
 	}
-	summary := releaseSummary{
-		Mark: definition.definition.Mark, Name: definition.definition.Name,
-		Status: string(item.Snapshot.Status), UpdatedAt: item.ChangedAt,
-		Href: processPath(record.Run.ProcessID), WorkItemID: item.ID, WorkItemURL: item.URL,
-		RunLabel: "Target", RunID: record.Run.Target.ID,
-	}
-	if record.Run.External != nil {
-		summary.RunID = record.Run.External.ID
-	}
+	summary := s.processRunSummaryLocked(record.Run, run.TakeView())
+	summary.Status = string(item.Snapshot.Status)
+	summary.UpdatedAt = item.ChangedAt
+	summary.WorkItemID = item.ID
+	summary.WorkItemURL = item.URL
 	return summary, nil
 }
 
@@ -191,7 +190,7 @@ func (s *Server) selectedWorkItemHrefLocked(id int) (string, bool) {
 }
 
 func (s *Server) hasSelectedOrPreparedReleaseLocked() bool {
-	return s.simulationRunning || s.processRunning || len(s.steps) != 0 || s.processRun != nil
+	return s.processRunning || len(s.steps) != 0 || s.processRun != nil
 }
 
 func (s *Server) clearSelectedReleaseLocked() {
@@ -199,6 +198,8 @@ func (s *Server) clearSelectedReleaseLocked() {
 	s.steps = nil
 	s.runner = &coordinator.StepRunner{}
 	s.processRun = nil
+	s.processRunState = nil
+	s.processPlan = nil
 	s.processRunRecord = nil
 }
 
@@ -250,7 +251,7 @@ func (s *Server) handleImportWorkItem(response http.ResponseWriter, request *htt
 	defer s.selectionMu.Unlock()
 	s.mu.Lock()
 	selected := s.processRunRecord != nil && s.processRunRecord.WorkItemID == id
-	running := s.simulationRunning || s.processRunning
+	running := s.processRunning
 	s.mu.Unlock()
 	if selected || running {
 		writeError(response, http.StatusConflict, "restart without selecting this work item before importing repaired state")
@@ -289,20 +290,35 @@ func (s *Server) handleImportWorkItem(response http.ResponseWriter, request *htt
 }
 
 func (s *Server) validateImportedSnapshot(current *azdoworkitem.WorkItem, snapshot *azdoworkitem.Snapshot) error {
+	currentRecord, err := processRunRecord(current)
+	if err != nil {
+		return err
+	}
 	candidate := *current
 	candidate.Snapshot = snapshot
 	record, err := processRunRecord(&candidate)
 	if err != nil {
 		return err
 	}
+	if !bytes.Equal(currentRecord.Run.Snapshot.Input, record.Run.Snapshot.Input) {
+		return errors.New("import cannot change process input")
+	}
 	registered, ok := s.processes.process(record.Run.ProcessID)
 	if !ok {
 		return fmt.Errorf("release process %q is not configured", record.Run.ProcessID)
 	}
-	if _, err := restoreReleaseRun(registered.process, record.Run); err != nil {
+	currentRun, err := loadReleaseRun(registered.process, currentRecord.Run.Snapshot)
+	if err != nil {
 		return err
 	}
-	snapshot.Description = processRunDescription(record.Run)
+	run, err := loadReleaseRun(registered.process, record.Run.Snapshot)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(currentRun.Plan(), run.Plan()) {
+		return errors.New("import cannot change the reviewed plan")
+	}
+	snapshot.Description = processRunDescription(record.Run, run.TakeView(), run.Plan())
 	return nil
 }
 

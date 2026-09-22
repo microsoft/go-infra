@@ -18,29 +18,32 @@ import (
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
-func exampleProcessDefinition() contract.Definition {
-	return contract.Definition{
-		ID: "example", Name: "Example", Mark: "EX", Description: "Example process",
-		Workflow: contract.Workflow{
-			Heading: "Run example", SubmitLabel: "Review",
-			Variants: []contract.Variant{{ID: "run", Name: "Run", Description: "Run example"}},
+func exampleProcess() *fakeProcess {
+	process := &fakeProcess{
+		definition: testProcessDefinition("example"),
+		plan: &contract.Plan{
+			Subtitle: "Run example", ExecutionButtonLabel: "Run example",
+			Facts: []contract.PlanFact{{Label: "Value", Value: "fixed"}},
 		},
+		view: &contract.RunView{Summary: "Ready"},
 	}
+	process.prepare = func(context.Context, any) (*contract.StateSnapshot, error) {
+		return &contract.StateSnapshot{
+			Input: json.RawMessage(`{}`), State: json.RawMessage(`{"value":"fixed"}`),
+		}, nil
+	}
+	process.build = func(
+		_ context.Context,
+		_ *fakeReleaseRun,
+		_ contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		return exampleProcessSteps(func(context.Context) error { return nil }), nil
+	}
+	return process
 }
 
-func examplePreparedRun(input json.RawMessage) contract.Plan {
-	return contract.Plan{
-		Input: input, Payload: json.RawMessage(`{"value":"fixed"}`),
-		View: contract.PlanView{
-			IntentTitle: "Run example", ExecutionTitle: "Run example", ExecutionConfirmation: "Confirm example.",
-			ExecutionButtonLabel: "Run example",
-		},
-		Target: contract.Reference{ID: "example", URL: "https://example.com/runs", LinkLabel: "Open example runs"},
-	}
-}
-
-func exampleProcessSteps(timeout time.Duration, action func(context.Context) error) []*coordinator.Step {
-	return []*coordinator.Step{coordinator.NewRootStep("Run example", timeout, action)}
+func exampleProcessSteps(action func(context.Context) error) []*coordinator.Step {
+	return []*coordinator.Step{coordinator.NewRootStep("Run example", time.Minute, action)}
 }
 
 func waitForProcessRun(t *testing.T, server *Server) {
@@ -60,281 +63,262 @@ func waitForProcessRun(t *testing.T, server *Server) {
 	}
 }
 
-func TestDurableProcessStartsReviewedRunWhenPlanningUnavailable(t *testing.T) {
-	store := newMemoryProcessRunStore()
-	var executed bool
-	var workItemCreatedBeforeExecution bool
-	planningEnabled := true
-	process := &fakeProcess{
-		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (contract.Readiness, error) {
-			return contract.Readiness{PlanningEnabled: planningEnabled, ExecutionEnabled: true, Details: "verified example"}, nil
-		},
-		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input), nil
-		},
-		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			action := func(context.Context) error { return nil }
-			if checkpoint != nil {
-				action = func(ctx context.Context) error {
-					executed = true
-					workItemCreatedBeforeExecution = store.count() == 1
-					return checkpoint(ctx, contract.Checkpoint{
-						State: json.RawMessage(`{"run":7}`),
-						External: &contract.Reference{
-							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7",
-							Status: "completed", Terminal: true, Succeeded: true,
-						},
-						Progress: contract.Progress{Summary: "Example completed", Completed: 1, Total: 1},
-					})
-				}
-			}
-			return exampleProcessSteps(time.Minute, action), nil
-		},
+func prepareExample(t *testing.T, server *Server) processRunResponse {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{}`))
+	request.Header.Set("Origin", "http://localhost")
+	server.handlePrepareProcessRun("example", response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("prepare status = %d, body = %s", response.Code, response.Body.String())
 	}
-	server, err := New(
-		context.Background(),
-		WithProcesses(process),
-		WithReleaseRunStore(store),
-		WithDemoDelay(0),
+	var plan processRunResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func startExample(t *testing.T, server *Server, digest string) *httptest.ResponseRecorder {
+	t.Helper()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost, "http://localhost/api/processes/example/start",
+		strings.NewReader(`{"planDigest":"`+digest+`","confirmed":true}`),
 	)
+	request.Header.Set("Origin", "http://localhost")
+	server.handleStartProcessRun("example", response, request)
+	return response
+}
+
+func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	process := exampleProcess()
+	var builds atomic.Int32
+	var executed atomic.Bool
+	process.build = func(
+		_ context.Context,
+		run *fakeReleaseRun,
+		checkpoint contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		builds.Add(1)
+		return exampleProcessSteps(func(context.Context) error {
+			executed.Store(true)
+			run.setState(json.RawMessage(`{"value":"executed"}`))
+			checkpoint()
+			return nil
+		}), nil
+	}
+	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
-	request.Header.Set("Origin", "http://localhost")
-	server.handlePrepareProcessRun("example", prepared, request)
-	if prepared.Code != http.StatusOK {
-		t.Fatalf("prepare status = %d, body = %s", prepared.Code, prepared.Body.String())
+	plan := prepareExample(t, server)
+	if plan.Plan == nil || plan.Plan.Subtitle != "Run example" || builds.Load() != 1 {
+		t.Fatalf("plan = %#v, builds = %d", plan.Plan, builds.Load())
 	}
-	if count := store.count(); count != 0 {
-		t.Fatalf("work item count after preparation = %d, want 0", count)
-	}
-	var plan processRunResponse
-	if err := json.Unmarshal(prepared.Body.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	planningEnabled = false
-	started := httptest.NewRecorder()
-	request = httptest.NewRequest(
-		http.MethodPost, "http://localhost/api/processes/example/start",
-		strings.NewReader(`{"planDigest":"`+plan.Execution.PlanDigest+`","confirmed":true}`),
-	)
-	request.Header.Set("Origin", "http://localhost")
-	server.handleStartProcessRun("example", started, request)
-	if started.Code != http.StatusAccepted {
-		t.Fatalf("start status = %d, body = %s", started.Code, started.Body.String())
+	response := startExample(t, server, plan.Execution.PlanDigest)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start status = %d, body = %s", response.Code, response.Body.String())
 	}
 	waitForProcessRun(t, server)
-	if !executed {
-		t.Fatal("example process was not executed")
-	}
-	if !workItemCreatedBeforeExecution {
-		t.Fatal("process executed before its release work item was created")
+	if !executed.Load() || builds.Load() != 2 {
+		t.Fatalf("executed = %v, builds = %d", executed.Load(), builds.Load())
 	}
 	persisted := store.latest(t)
-	if !persisted.Complete || persisted.Result != "succeeded" || persisted.External == nil || persisted.External.ID != "7" {
+	if !persisted.Complete || persisted.Result != resultSucceeded ||
+		string(persisted.Snapshot.State) != `{"value":"executed"}` {
+
 		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestBlockingPreflightPreventsPreparation(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	process := exampleProcess()
+	process.preflight = func(context.Context) (error, error) {
+		return nil, errors.New("not configured")
+	}
+	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{}`))
+	request.Header.Set("Origin", "http://localhost")
+	server.handlePrepareProcessRun("example", response, request)
+	if response.Code != http.StatusPreconditionFailed || store.count() != 0 {
+		t.Fatalf("prepare status = %d, records = %d", response.Code, store.count())
 	}
 }
 
 func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	store.createErr = errors.New("tracking unavailable")
-	run := testProcessRun(t)
-	preflightCalled := false
-	executed := false
-	process := &fakeProcess{
-		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (contract.Readiness, error) {
-			preflightCalled = true
-			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
-		},
-		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(time.Minute, func(context.Context) error {
-				executed = true
-				return nil
-			}), nil
-		},
+	process := exampleProcess()
+	var executed atomic.Bool
+	process.build = func(
+		_ context.Context,
+		_ *fakeReleaseRun,
+		_ contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		return exampleProcessSteps(func(context.Context) error {
+			executed.Store(true)
+			return nil
+		}), nil
 	}
 	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseRun, err := process.Restore(run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.processRun = releaseRun
-	server.steps = exampleProcessSteps(time.Minute, func(context.Context) error { return nil })
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(
-		http.MethodPost, "http://localhost/api/processes/example/start",
-		strings.NewReader(`{"planDigest":"`+run.Digest+`","confirmed":true}`),
-	)
-	request.Header.Set("Origin", "http://localhost")
-	server.handleStartProcessRun("example", response, request)
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("start status = %d, body = %s", response.Code, response.Body.String())
-	}
-	if !preflightCalled || executed || server.processRun.Snapshot().Started || store.count() != 0 {
-		t.Fatalf("preflight = %v, executed = %v, run = %#v, records = %d", preflightCalled, executed, server.processRun, store.count())
+	plan := prepareExample(t, server)
+	response := startExample(t, server, plan.Execution.PlanDigest)
+	if response.Code != http.StatusInternalServerError || executed.Load() || store.count() != 0 {
+		t.Fatalf("status = %d, executed = %v, records = %d", response.Code, executed.Load(), store.count())
 	}
 }
 
-func TestConcurrentProcessStartsCreateOneWorkItem(t *testing.T) {
+func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
 	store := newMemoryProcessRunStore()
-	preflightEntered := make(chan struct{})
-	releasePreflight := make(chan struct{})
-	var preflightCalls atomic.Int32
-	process := &fakeProcess{
-		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (contract.Readiness, error) {
-			if preflightCalls.Add(1) == 1 {
-				close(preflightEntered)
-				<-releasePreflight
-			}
-			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
-		},
-		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input), nil
-		},
-		build: func(_ context.Context, run *contract.State, _ contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(time.Minute, func(context.Context) error { return nil }), nil
-		},
+	process := exampleProcess()
+	var executed atomic.Bool
+	process.build = func(
+		_ context.Context,
+		_ *fakeReleaseRun,
+		_ contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		return exampleProcessSteps(func(context.Context) error {
+			executed.Store(true)
+			return nil
+		}), nil
+	}
+
+	state := testProcessRun(t)
+	state.Started = true
+	record, err := store.Create(context.Background(), state, process.view, process.plan)
+	if err != nil {
+		t.Fatal(err)
 	}
 	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
-	request.Header.Set("Origin", "http://localhost")
-	server.handlePrepareProcessRun("example", prepared, request)
-	var plan processRunResponse
-	if err := json.Unmarshal(prepared.Body.Bytes(), &plan); err != nil {
+	if err := server.restoreProcessRunRecord(record); err != nil {
 		t.Fatal(err)
-	}
-
-	start := func() *httptest.ResponseRecorder {
-		response := httptest.NewRecorder()
-		request := httptest.NewRequest(
-			http.MethodPost, "http://localhost/api/processes/example/start",
-			strings.NewReader(`{"planDigest":"`+plan.Execution.PlanDigest+`","confirmed":true}`),
-		)
-		request.Header.Set("Origin", "http://localhost")
-		server.handleStartProcessRun("example", response, request)
-		return response
-	}
-	firstResult := make(chan *httptest.ResponseRecorder, 1)
-	go func() { firstResult <- start() }()
-	<-preflightEntered
-	second := start()
-	if second.Code != http.StatusConflict {
-		t.Fatalf("second start status = %d, body = %s", second.Code, second.Body.String())
-	}
-	close(releasePreflight)
-	first := <-firstResult
-	if first.Code != http.StatusAccepted {
-		t.Fatalf("first start status = %d, body = %s", first.Code, first.Body.String())
 	}
 	waitForProcessRun(t, server)
-	if calls := preflightCalls.Load(); calls != 1 {
-		t.Fatalf("preflight calls = %d, want 1", calls)
-	}
-	if count := store.count(); count != 1 {
-		t.Fatalf("work item count = %d, want 1", count)
+	if !executed.Load() || store.latest(t).Result != resultSucceeded {
+		t.Fatalf("executed = %v, run = %#v", executed.Load(), store.latest(t))
 	}
 }
 
-func TestProcessRunTimeoutRestoresAndResumesKnownRun(t *testing.T) {
+func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
 	store := newMemoryProcessRunStore()
-	resumeCalls := 0
-	process := &fakeProcess{
-		definition: exampleProcessDefinition(),
-		preflight: func(context.Context) (contract.Readiness, error) {
-			return contract.Readiness{PlanningEnabled: true, ExecutionEnabled: true, Details: "verified"}, nil
-		},
-		prepare: func(_ context.Context, input json.RawMessage) (contract.Plan, error) {
-			return examplePreparedRun(input), nil
-		},
-		build: func(_ context.Context, run *contract.State, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
-			action := func(context.Context) error { return nil }
-			switch {
-			case checkpoint == nil:
-			case len(run.Checkpoint) == 0:
-				action = func(ctx context.Context) error {
-					if err := checkpoint(ctx, contract.Checkpoint{
-						State: json.RawMessage(`{"run":7,"status":"queued"}`),
-						External: &contract.Reference{
-							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7", Status: "queued",
-						},
-					}); err != nil {
-						return err
-					}
-					<-ctx.Done()
-					return ctx.Err()
-				}
-			default:
-				action = func(ctx context.Context) error {
-					resumeCalls++
-					return checkpoint(ctx, contract.Checkpoint{
-						State: json.RawMessage(`{"run":7,"status":"completed"}`),
-						External: &contract.Reference{
-							ID: "7", URL: "https://example.com/runs/7", LinkLabel: "Open example run 7",
-							Status: "completed", Terminal: true, Succeeded: true,
-						},
-					})
-				}
-			}
-			return exampleProcessSteps(5*time.Millisecond, action), nil
-		},
-	}
-	first, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	process := exampleProcess()
+	state := testProcessRun(t)
+	state.Started = true
+	record, err := store.Create(context.Background(), state, process.view, process.plan)
 	if err != nil {
 		t.Fatal(err)
-	}
-	prepared := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(`{"variantId":"run","input":{}}`))
-	request.Header.Set("Origin", "http://localhost")
-	first.handlePrepareProcessRun("example", prepared, request)
-	var plan processRunResponse
-	if err := json.Unmarshal(prepared.Body.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	started := httptest.NewRecorder()
-	request = httptest.NewRequest(
-		http.MethodPost, "http://localhost/api/processes/example/start",
-		strings.NewReader(`{"planDigest":"`+plan.Execution.PlanDigest+`","confirmed":true}`),
-	)
-	request.Header.Set("Origin", "http://localhost")
-	first.handleStartProcessRun("example", started, request)
-	if started.Code != http.StatusAccepted {
-		t.Fatalf("start status = %d, body = %s", started.Code, started.Body.String())
-	}
-	waitForProcessRun(t, first)
-	interrupted := store.latest(t)
-	if interrupted.Complete || len(interrupted.Checkpoint) == 0 || interrupted.External == nil {
-		t.Fatalf("interrupted run = %#v", interrupted)
 	}
 
-	selected := testReleaseWorkItem(t, 1, interrupted, time.Now().UTC())
-	store.mu.Lock()
-	selected.Revision = store.records[1].Revision
-	store.mu.Unlock()
-	second, err := New(
-		context.Background(), WithProcesses(process), WithReleaseRunStore(store), WithReleaseWorkItem(selected),
-	)
+	run, err := process.Load(state.Snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForProcessRun(t, second)
-	if resumeCalls != 1 {
-		t.Fatalf("resume calls = %d, want 1", resumeCalls)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := &Server{
+		ctx: ctx, processRun: run, processRunState: state,
+		processRunRecord: record, processRunStore: store, processPlan: process.plan,
 	}
-	persisted := store.latest(t)
-	if !persisted.Complete || persisted.Result != "succeeded" || persisted.External == nil || !persisted.External.Succeeded {
-		t.Fatalf("persisted = %#v", persisted)
+	store.updateErr = errors.New("checkpoint failed")
+	checkpointer := server.newProcessCheckpointer(state.Digest, run, cancel)
+	checkpointer.Checkpoint()
+	checkpointer.Close()
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("context error = %v, want cancellation", ctx.Err())
 	}
+	if !checkpointer.failed.Load() {
+		t.Fatal("checkpoint failure was not recorded")
+	}
+}
+
+func TestProcessRunOutcome(t *testing.T) {
+	checkpointErr := errors.New("checkpoint failed")
+	for _, test := range []struct {
+		name                string
+		executionErr        error
+		snapshotErr         error
+		checkpointFailed    bool
+		checkpointPersisted bool
+		complete            bool
+		result              string
+	}{
+		{name: "success", complete: true, result: resultSucceeded},
+		{name: "failure", executionErr: errors.New("step failed"), complete: true, result: resultFailed},
+		{name: "canceled before checkpoint", executionErr: context.Canceled, complete: true, result: resultUncertain},
+		{name: "deadline before checkpoint", executionErr: context.DeadlineExceeded, complete: true, result: resultUncertain},
+		{name: "canceled after checkpoint", executionErr: context.Canceled, checkpointPersisted: true},
+		{name: "deadline after checkpoint", executionErr: context.DeadlineExceeded, checkpointPersisted: true},
+		{name: "snapshot", snapshotErr: errors.New("snapshot failed"), complete: true, result: resultUncertain},
+		{name: "checkpoint", executionErr: checkpointErr, checkpointFailed: true, complete: true, result: resultUncertain},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			complete, result := processRunOutcome(
+				test.executionErr, test.snapshotErr, test.checkpointFailed, test.checkpointPersisted,
+			)
+			if complete != test.complete || result != test.result {
+				t.Fatalf("outcome = (%v, %q), want (%v, %q)", complete, result, test.complete, test.result)
+			}
+		})
+	}
+}
+
+func TestCheckpointWaitsForPersistence(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	process := exampleProcess()
+	state := testProcessRun(t)
+	state.Started = true
+	record, err := store.Create(context.Background(), state, process.view, process.plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := process.Load(state.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateStarted := make(chan struct{})
+	updateRelease := make(chan struct{})
+	store.updateStarted = updateStarted
+	store.updateRelease = updateRelease
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := &Server{
+		ctx: ctx, processRun: run, processRunState: state,
+		processRunRecord: record, processRunStore: store, processPlan: process.plan,
+	}
+	checkpointer := server.newProcessCheckpointer(state.Digest, run, cancel)
+	returned := make(chan struct{})
+	go func() {
+		checkpointer.Checkpoint()
+		close(returned)
+	}()
+	select {
+	case <-updateStarted:
+	case <-time.After(time.Second):
+		t.Fatal("persistence did not start")
+	}
+	select {
+	case <-returned:
+		t.Fatal("Checkpoint returned before persistence completed")
+	default:
+	}
+	close(updateRelease)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("Checkpoint did not return after persistence completed")
+	}
+	checkpointer.Close()
 }

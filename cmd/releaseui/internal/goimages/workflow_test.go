@@ -5,7 +5,6 @@ package goimages
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -86,17 +85,8 @@ func TestPipelineParameters(t *testing.T) {
 func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 	service := &fakeService{}
 	var checkpoints []State
-	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(_ context.Context, state *State) error {
-		data, err := json.Marshal(state)
-		if err != nil {
-			return err
-		}
-		var clone State
-		if err := json.Unmarshal(data, &clone); err != nil {
-			return err
-		}
-		checkpoints = append(checkpoints, clone)
-		return nil
+	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
+		checkpoints = append(checkpoints, *state)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -125,9 +115,8 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 			terminalErr := errors.New("pipeline " + result)
 			service := &fakeService{pollErr: &PipelineResultError{Result: result, Err: terminalErr}}
 			var checkpoint State
-			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(_ context.Context, state *State) error {
+			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
 				checkpoint = *state
-				return nil
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -146,9 +135,7 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
 	pollErr := errors.New("pipeline read unavailable")
 	service := &fakeService{pollErr: pollErr}
-	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(context.Context, *State) error {
-		return nil
-	})
+	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(*State) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,31 +234,26 @@ func TestValidateState(t *testing.T) {
 	}
 }
 
-func TestStateAccessRetriesDirtyCheckpoint(t *testing.T) {
-	checkpointErr := errors.New("checkpoint unavailable")
-	fail := true
+func TestStateAccessReportsChangeAndObservesCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 	checkpointCalls := 0
 	state := &State{}
 	access := &stateAccess{
 		state: state,
-		checkpoint: func(context.Context, *State) error {
+		checkpoint: func(snapshot *State) {
 			checkpointCalls++
-			if fail {
-				return checkpointErr
+			if !snapshot.QueueAttempted {
+				t.Error("checkpoint did not receive updated state")
 			}
-			return nil
+			cancel()
 		},
 	}
-	if err := access.update(context.Background(), func() {
+	if err := access.update(ctx, func() {
 		state.QueueAttempted = true
-	}); !errors.Is(err, checkpointErr) {
-		t.Fatalf("update error = %v, want checkpoint error", err)
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("update error = %v, want cancellation", err)
 	}
-	fail = false
-	if err := access.flush(context.Background()); err != nil {
-		t.Fatalf("flush failed: %v", err)
-	}
-	if checkpointCalls != 2 || !state.QueueAttempted {
+	if checkpointCalls != 1 || !state.QueueAttempted {
 		t.Fatalf("checkpoint calls = %d, state = %#v", checkpointCalls, state)
 	}
 }

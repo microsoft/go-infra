@@ -20,7 +20,7 @@ func TestListenAndServe(t *testing.T) {
 	go func() {
 		result <- ListenAndServe(ctx, "127.0.0.1:0", func(launchURL string) {
 			ready <- launchURL
-		}, WithProcesses(&fakeProcess{definition: exampleProcessDefinition()}))
+		}, WithProcesses(exampleProcess()))
 	}()
 
 	var launchURL string
@@ -62,7 +62,7 @@ func TestListenAndServe(t *testing.T) {
 func TestListenAndServeRejectsNonLoopbackAddress(t *testing.T) {
 	err := ListenAndServe(
 		context.Background(), "0.0.0.0:0", nil,
-		WithProcesses(&fakeProcess{definition: exampleProcessDefinition()}),
+		WithProcesses(exampleProcess()),
 	)
 	if err == nil || !strings.Contains(err.Error(), "non-loopback") {
 		t.Fatalf("error = %v, want non-loopback rejection", err)

@@ -5,20 +5,20 @@ The server runs on the release runner's machine and opens in their default brows
 
 `releaseui serve` starts the local release UI.
 
-The landing page lists the two implemented release processes. Go images provides planning,
-execution, and monitoring. Go infrastructure provides reviewed, confirmed actions for the two
-GitHub-owned patch release paths documented by the team.
+The landing page lists the two implemented release process groups.
+Go images provides planning, execution, and monitoring.
+Go infrastructure provides reviewed, confirmed actions for the GitHub-owned patch release paths documented by the team.
 
-Each registered `contract.Process` owns its dashboard metadata and variants. It prepares or
-restores a `contract.Run`, which owns the validated durable state and reconstructs its executable graph.
-The shared server derives the process page and API routes from those contracts. Browser-editable
-values are limited to one variant and that variant's positive integer fields.
+Each registered `contract.ProcessGroup` provides related concrete processes and shared dashboard metadata.
+Each `contract.Process` owns one input form and one stable persisted-state identity.
+It prepares a process-owned snapshot and loads a `contract.Run`, which owns mutable execution state and constructs its executable graph.
+The shared server derives process pages and API routes from those contracts.
 
 ## Adding a release process
 
-Add a package under `cmd/releaseui/internal` that implements `contract.Process` and returns a
-`contract.Run`, then pass the process to `releaseui.WithProcesses`. No HTML, JavaScript, or
-route change is required.
+Add a package under `cmd/releaseui/internal` that implements `contract.ProcessGroup`.
+Implement one `contract.Process` for each distinct form and release behavior, then pass the group to `releaseui.WithProcesses`.
+No HTML, JavaScript, or route change is required.
 
 Keep process policy separate from reusable mechanics:
 
@@ -39,57 +39,51 @@ owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
 
 | Field | Purpose |
 | --- | --- |
-| `ID` | Stable machine-readable identifier used by registry lookups and APIs, such as `go-infra`. |
+| `ID` | Stable machine-readable identifier used by registry lookups, persisted state, and APIs, such as `go-infra-publish`. |
 | `Name` | User-facing process name shown on the dashboard and process page. |
 | `Mark` | Short visual abbreviation shown on the dashboard card, such as `IN`. |
 | `Description` | Brief dashboard explanation of what the process releases. |
 | `DocumentationURL` | Canonical HTTPS release instructions linked from the process page. |
-| `Workflow` | Selectable variants, their inputs, and execution behavior. |
+| `InputPreamble` | Text shown above the process input form. |
+| `InputSubmitLabel` | Label for the button that prepares the process. |
 
-The process returns its catalog and form metadata from `Definition`:
+The process returns its metadata from `Definition` and declares its form in `InputForm`:
 
 ```go
-func exampleInputs(runID *int) *contract.InputSet {
-  inputs := contract.NewInputSet()
-  inputs.PositiveIntVar(runID, "runId", contract.FieldOptions{Label: "Run ID"})
-  return inputs
+type exampleInput struct {
+  RunID int
 }
 
-func (p *exampleProcess) Definition() contract.Definition {
-  inputs := exampleInputs(new(int))
-  return contract.Definition{
-    ID: "example", Name: "Example", Mark: "EX", Description: "Release the example.",
-    Workflow: contract.Workflow{
-      Heading: "Configure release", SubmitLabel: "Prepare release",
-      Variants: []contract.Variant{{
-        ID: "run", Name: "Run", Description: "Run one example release.",
-        Inputs: inputs.Inputs(),
-      }},
-    },
+func (p *exampleProcess) Definition() contract.ProcessDefinition {
+  return contract.ProcessDefinition{
+    Identity: contract.Identity{Name: "Example", Description: "Release the example."},
+    ID: "example",
+    InputPreamble: "Configure the release.",
+    InputSubmitLabel: "Prepare release",
   }
+}
+
+func (p *exampleProcess) InputForm(inputs *releaseflag.InputSet) any {
+  result := new(exampleInput)
+  inputs.PositiveIntVar(&result.RunID, "runId", releaseflag.FieldOptions{Label: "Run ID"})
+  return result
 }
 ```
 
-`Process.Prepare` validates a `contract.Selection` and returns a `Run`. A process declares each
-variant's fields with one `InputSet` helper, then calls that helper again with real Go field pointers
-and parses `Selection.Input`. `Process.Restore` validates persisted state and reconstructs the same
-kind of run. `Run.Snapshot` returns an independent durable state copy, while `Run.Steps` builds the
-executable graph. Release-specific packages own target policy and call neutral Azure or GitHub
-clients for transport. The server owns confirmation, work-item persistence, duplicate-start
-protection, checkpoints, restart behavior, state APIs, and event streaming.
+`Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
+`Process.Load` validates a snapshot and constructs a `Run`.
+`Run.TakeSnapshot` returns an independent durable state copy, `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
+Only execution of the returned steps may mutate external state.
+Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
+The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
-`contract.NewState` converts a prepared plan into durable state, creates its immutable intent
-digest, and validates the process-neutral structure. `State.Validate`, `State.Clone`, and
-`Reference.Validate` keep those rules with the contract types. Every process-owned payload and
-checkpoint is a versioned JSON object; `Restore` rejects missing or unsupported versions.
+`Process.Preflight` returns separate warning and blocking errors.
+A warning is displayed but permits a new release.
+A blocking error prevents preparation and starting, but does not prevent restoring or continuing an existing run.
 
-Planning and execution readiness are independent. Planning readiness controls creation of new
-plans. Execution readiness controls starting a confirmed plan and may remain available when new
-planning is unavailable. Neither flag prevents restoring or continuing a run that already started.
-
-Before preparation, the shared lifecycle validates the selected variant. `InputSet.Parse` rejects
-missing or unknown fields and binds valid positive integers directly to typed Go fields. Each process
-then applies its semantic and fixed-target validation.
+Before preparation, the shared lifecycle creates a fresh input value with `InputForm`.
+`InputSet.Parse` rejects missing or unknown fields and binds valid positive integers directly to typed Go fields.
+Each process then applies its semantic and fixed-target validation.
 
 ## Go-images release modes
 
@@ -152,8 +146,9 @@ confirmed execution creates a tagged DEVDIV `Issue` under `DevDiv\GoLang`; this 
 test mode and go-infra dry-run mode. Every item receives its process ID as a tag. Test and dry-run
 items also receive `test`; all release UI queries combine these tags with `releaseagent`. Azure
 DevOps treats tags as case-insensitive and may display the project-canonical casing, such as `Test`.
-Simulations and unconfirmed plans remain in memory and create no work item. To restore one
-explicitly, add `-release-work-item <id>`. Starting the server does not perform an external action.
+Unconfirmed plans remain in memory and create no work item.
+To restore one explicitly, add `-release-work-item <id>`.
+Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.
 
@@ -202,7 +197,7 @@ If the process restarts in the queue-response crash window, it reconciles recent
 When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
 The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
 
-The Go-images document stores only standalone input and state. `Run.Steps` reconstructs the
+The Go-images document stores only standalone input and state. `Run.Build` reconstructs the
 coordinator graph instead of serializing it. The release UI stores the document inside the
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.

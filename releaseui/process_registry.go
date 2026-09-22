@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/internal/webview"
+	"github.com/microsoft/go-infra/releaseui/releaseflag"
 )
 
 var (
@@ -20,93 +22,122 @@ var (
 
 type registeredProcess struct {
 	process    contract.Process
-	definition contract.Definition
+	definition contract.ProcessDefinition
+	inputs     []webview.Input
+	group      *registeredProcessGroup
+}
+
+type registeredProcessGroup struct {
+	identity  contract.Identity
+	processes []*registeredProcess
 }
 
 type processRegistry struct {
-	ordered []registeredProcess
-	byID    map[string]registeredProcess
+	groups  []*registeredProcessGroup
+	ordered []*registeredProcess
+	byID    map[string]*registeredProcess
 }
 
-func newProcessRegistry(processes ...contract.Process) (*processRegistry, error) {
-	if len(processes) == 0 {
+func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, error) {
+	if len(groups) == 0 {
 		return nil, errors.New("release process registry is empty")
 	}
-	registry := &processRegistry{
-		ordered: make([]registeredProcess, 0, len(processes)),
-		byID:    make(map[string]registeredProcess, len(processes)),
-	}
-	for _, process := range processes {
-		if process == nil || reflect.ValueOf(process).Kind() == reflect.Pointer && reflect.ValueOf(process).IsNil() {
-			return nil, errors.New("release process implementation is nil")
+	registry := &processRegistry{byID: make(map[string]*registeredProcess)}
+	for _, group := range groups {
+		if isNil(group) {
+			return nil, errors.New("release process group is nil")
 		}
-		definition := process.Definition()
-		if !processIDPattern.MatchString(definition.ID) {
-			return nil, fmt.Errorf("invalid release process ID %q", definition.ID)
+		processes := group.Processes()
+		if len(processes) == 0 {
+			return nil, errors.New("release process group is empty")
 		}
-		if _, exists := registry.byID[definition.ID]; exists {
-			return nil, fmt.Errorf("duplicate release process ID %q", definition.ID)
+		registeredGroup := &registeredProcessGroup{}
+		for _, process := range processes {
+			entry, err := registry.register(process)
+			if err != nil {
+				return nil, err
+			}
+			entry.group = registeredGroup
+			registeredGroup.processes = append(registeredGroup.processes, entry)
 		}
-		if strings.TrimSpace(definition.Name) == "" || strings.TrimSpace(definition.Mark) == "" ||
-			strings.TrimSpace(definition.Description) == "" {
-
-			return nil, fmt.Errorf("release process %q has incomplete catalog metadata", definition.ID)
+		if identityProvider, ok := group.(contract.ProcessGroupIdentity); ok {
+			identity := identityProvider.ProcessGroupIdentity()
+			if identity == nil {
+				return nil, errors.New("release process group returned a nil identity")
+			}
+			registeredGroup.identity = *identity
+		} else {
+			registeredGroup.identity = registeredGroup.processes[0].definition.Identity
 		}
-		if definition.DocumentationURL != "" && !strings.HasPrefix(definition.DocumentationURL, "https://") {
-			return nil, fmt.Errorf("release process %q has an invalid documentation URL", definition.ID)
-		}
-		if err := validateProcessWorkflow(definition.ID, definition.Workflow); err != nil {
+		if err := validateIdentity("release process group", registeredGroup.identity); err != nil {
 			return nil, err
 		}
-		entry := registeredProcess{process: process, definition: definition}
-		registry.byID[definition.ID] = entry
-		registry.ordered = append(registry.ordered, entry)
+		registry.groups = append(registry.groups, registeredGroup)
 	}
 	return registry, nil
 }
 
-func validateProcessWorkflow(processID string, workflow contract.Workflow) error {
-	if strings.TrimSpace(workflow.Heading) == "" {
-		return fmt.Errorf("release process %q has an incomplete workflow", processID)
+func (r *processRegistry) register(process contract.Process) (*registeredProcess, error) {
+	if isNil(process) {
+		return nil, errors.New("release process implementation is nil")
 	}
-	if strings.TrimSpace(workflow.SubmitLabel) == "" {
-		return fmt.Errorf("release process %q has no workflow submit label", processID)
+	definition := process.Definition()
+	if !processIDPattern.MatchString(definition.ID) {
+		return nil, fmt.Errorf("invalid release process ID %q", definition.ID)
 	}
-	if len(workflow.Variants) == 0 {
-		return fmt.Errorf("release process %q has no variants", processID)
+	if _, exists := r.byID[definition.ID]; exists {
+		return nil, fmt.Errorf("duplicate release process ID %q", definition.ID)
 	}
-	variants := make(map[string]struct{}, len(workflow.Variants))
-	for _, variant := range workflow.Variants {
-		if !processIDPattern.MatchString(variant.ID) || strings.TrimSpace(variant.Name) == "" ||
-			strings.TrimSpace(variant.Description) == "" {
+	if err := validateIdentity("release process "+definition.ID, definition.Identity); err != nil {
+		return nil, err
+	}
+	if definition.DocumentationURL != "" && !strings.HasPrefix(definition.DocumentationURL, "https://") {
+		return nil, fmt.Errorf("release process %q has an invalid documentation URL", definition.ID)
+	}
+	if definition.Notice != nil && strings.TrimSpace(definition.Notice.Title) == "" {
+		return nil, fmt.Errorf("release process %q has a notice without a title", definition.ID)
+	}
+	inputs := releaseflag.InputSet{}
+	result := process.InputForm(&inputs)
+	if err := inputs.Validate(); err != nil {
+		panic(fmt.Sprintf("release process %q has invalid input declarations: %v", definition.ID, err))
+	}
+	definitions := inputs.Inputs()
+	if result == nil && len(definitions) != 0 {
+		panic(fmt.Sprintf("release process %q declares inputs but returns a nil input value", definition.ID))
+	}
+	seen := make(map[string]struct{}, len(definitions))
+	for _, input := range definitions {
+		if !inputIDPattern.MatchString(input.ID) || input.Type != "number" || strings.TrimSpace(input.Label) == "" {
+			panic(fmt.Sprintf("release process %q has invalid input %q", definition.ID, input.ID))
+		}
+		if _, exists := seen[input.ID]; exists {
+			panic(fmt.Sprintf("release process %q repeats input %q", definition.ID, input.ID))
+		}
+		seen[input.ID] = struct{}{}
+	}
+	entry := &registeredProcess{process: process, definition: definition, inputs: definitions}
+	r.byID[definition.ID] = entry
+	r.ordered = append(r.ordered, entry)
+	return entry, nil
+}
 
-			return fmt.Errorf("release process %q has an invalid variant %q", processID, variant.ID)
-		}
-		if _, exists := variants[variant.ID]; exists {
-			return fmt.Errorf("release process %q repeats variant %q", processID, variant.ID)
-		}
-		variants[variant.ID] = struct{}{}
-		inputs := make(map[string]struct{}, len(variant.Inputs))
-		for _, input := range variant.Inputs {
-			if !inputIDPattern.MatchString(input.ID) || input.Type != "number" || strings.TrimSpace(input.Label) == "" {
-				return fmt.Errorf("release process %q variant %q has an invalid input %q", processID, variant.ID, input.ID)
-			}
-			if _, exists := inputs[input.ID]; exists {
-				return fmt.Errorf("release process %q variant %q repeats input %q", processID, variant.ID, input.ID)
-			}
-			inputs[input.ID] = struct{}{}
-		}
+func validateIdentity(subject string, identity contract.Identity) error {
+	if strings.TrimSpace(identity.Name) == "" {
+		return fmt.Errorf("%s has no name", subject)
+	}
+	if identity.DocumentationURL != "" && !strings.HasPrefix(identity.DocumentationURL, "https://") {
+		return fmt.Errorf("%s has an invalid documentation URL", subject)
 	}
 	return nil
 }
 
-func processVariant(definition contract.Definition, variantID string) (contract.Variant, bool) {
-	for _, variant := range definition.Workflow.Variants {
-		if variant.ID == variantID {
-			return variant, true
-		}
+func isNil(value any) bool {
+	if value == nil {
+		return true
 	}
-	return contract.Variant{}, false
+	reflected := reflect.ValueOf(value)
+	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
 }
 
 func processPath(id string) string {
@@ -116,22 +147,22 @@ func processPath(id string) string {
 func (r *processRegistry) page(path string) (string, bool) {
 	id := strings.TrimPrefix(path, "/")
 	_, ok := r.byID[id]
-	ok = ok && path == processPath(id)
-	return "process.html", ok
+	return "process.html", ok && path == processPath(id)
 }
 
-func (r *processRegistry) process(id string) (registeredProcess, bool) {
+func (r *processRegistry) process(id string) (*registeredProcess, bool) {
 	process, ok := r.byID[id]
 	return process, ok
 }
 
 func (r *processRegistry) summaries() []processSummary {
-	summaries := make([]processSummary, 0, len(r.ordered))
-	for _, process := range r.ordered {
-		definition := process.definition
+	summaries := make([]processSummary, 0, len(r.groups))
+	for _, group := range r.groups {
+		defaultProcess := group.processes[0]
 		summaries = append(summaries, processSummary{
-			ID: definition.ID, Name: definition.Name, Mark: definition.Mark,
-			Description: definition.Description, Href: processPath(definition.ID),
+			ID:   defaultProcess.definition.ID,
+			Name: group.identity.Name, Mark: group.identity.Mark,
+			Description: group.identity.Description, Href: processPath(defaultProcess.definition.ID),
 		})
 	}
 	return summaries
