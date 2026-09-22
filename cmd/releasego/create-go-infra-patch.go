@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -87,8 +87,8 @@ func handleCreateGoInfraPatch(p subcmd.ParseFunc) error {
 
 	log.Printf("Creating release %v from %v with generated release notes...\n", nextTag, defaultBranch)
 	generateReleaseNotes := true
-	release := &github.RepositoryRelease{
-		TagName:              new(nextTag),
+	release := github.CreateReleaseRequest{
+		TagName:              nextTag,
 		Name:                 new(nextTag),
 		TargetCommitish:      new(defaultBranch),
 		GenerateReleaseNotes: &generateReleaseNotes,

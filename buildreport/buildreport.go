@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/goversion"
@@ -197,8 +197,12 @@ func UpdateIssueBody(ctx context.Context, owner, repoName string, gitHubAuthFlag
 	// data. The report includes a link to the actual data in case it's important to get the
 	// real data during a release.
 	log.Printf("Copying report to https://github.com/%v/%v/issues/%v description...", owner, repoName, issue)
+	return updateGitHubIssueBody(ctx, client, owner, repoName, issue, body)
+}
+
+func updateGitHubIssueBody(ctx context.Context, client *github.Client, owner, repoName string, issue int, body string) error {
 	return githubutil.Retry(func() error {
-		edit, _, err := client.Issues.Edit(ctx, owner, repoName, issue, &github.IssueRequest{Body: &body})
+		edit, _, err := client.Issues.Update(ctx, owner, repoName, issue, github.UpdateIssueRequest{Body: &body})
 		if err != nil {
 			return err
 		}
@@ -232,7 +236,7 @@ func Notify(ctx context.Context, owner string, repoName string, gitHubAuthFlags 
 			") for the latest build status.</sub>"
 
 		notificationComment, _, err := client.Issues.CreateComment(
-			ctx, owner, repoName, issue, &github.IssueComment{Body: &notification})
+			ctx, owner, repoName, issue, github.IssueCommentRequest{Body: notification})
 		if err != nil {
 			return err
 		}

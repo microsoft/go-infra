@@ -5,14 +5,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"slices"
 	"testing"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 )
 
 func TestListPullRequestFilesPaginates(t *testing.T) {
@@ -67,13 +67,46 @@ func TestRemoveLabelAcceptsNotFound(t *testing.T) {
 	}
 }
 
+func TestCreateLabelRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/r/labels" {
+			t.Errorf("unexpected label request: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct{ Name, Color, Description string }
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.Name != "size/XS" || body.Color != "00ff00" || body.Description != "Small change" {
+			t.Errorf("wrong label request: %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":1,"name":"size/XS","color":"00ff00","description":"Small change"}`)
+	}))
+	defer server.Close()
+	api := testGitHubAPI(t, server)
+	if err := api.CreateLabel(t.Context(), "o", "r", labelDefinition{Name: "size/XS", Color: "00ff00", Description: "Small change"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPullRequestLabelValues(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"number":7,"additions":3,"deletions":1,"changed_files":2,"labels":[{"name":"kind/bug"}]}`)
+	}))
+	defer server.Close()
+	api := testGitHubAPI(t, server)
+	pr, err := api.GetPullRequest(t.Context(), "o", "r", 7)
+	if err != nil || pr.Additions != 3 || pr.Deletions != 1 || pr.ChangedFiles != 2 || !slices.Equal(pr.Labels, []string{"kind/bug"}) {
+		t.Fatalf("pull request = %+v, %v", pr, err)
+	}
+}
+
 func testGitHubAPI(t *testing.T, server *httptest.Server) *githubAPI {
 	t.Helper()
-	baseURL, err := url.Parse(server.URL + "/")
+	client, err := github.NewClient(
+		github.WithHTTPClient(server.Client()),
+		github.WithURLs(new(server.URL+"/"), nil),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := github.NewClient(server.Client())
-	client.BaseURL = baseURL
 	return &githubAPI{client: client}
 }

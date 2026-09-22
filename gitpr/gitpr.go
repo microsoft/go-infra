@@ -5,6 +5,7 @@ package gitpr
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 )
 
@@ -247,70 +249,64 @@ type GitHubRequestError struct {
 	Message string `json:"message"`
 }
 
-// PostGitHub creates a PR on GitHub using pat for the given owner/repo and request details.
+// PostGitHub creates a PR on GitHub using auther for the given owner/repo and request details.
 // If the PR already exists, returns a wrapped [ErrPRAlreadyExists].
 func PostGitHub(ownerRepo string, request *GitHubRequest, auther githubutil.HTTPRequestAuther) (*GitHubResponse, error) {
-	prSubmitContent, err := json.MarshalIndent(request, "", "")
+	owner, repo, ok := strings.Cut(ownerRepo, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return nil, errors.New("GitHub repository must have the form owner/repo")
+	}
+	if request == nil || auther == nil {
+		return nil, errors.New("GitHub request and authentication must be provided")
+	}
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	api, err := github.NewClient(
+		github.WithHTTPClient(&client),
+		github.WithTransport(authTransport{base: base, auther: auther}),
+	)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Submitting payload: %s\n", prSubmitContent)
-
-	httpRequest, err := http.NewRequest("POST", "https://api.github.com/repos/"+ownerRepo+"/pulls", bytes.NewReader(prSubmitContent))
+	pr, response, err := api.PullRequests.Create(context.Background(), owner, repo, github.CreatePullRequest{
+		Head: request.Head, Base: request.Base, Title: &request.Title, Body: &request.Body,
+		MaintainerCanModify: &request.MaintainerCanModify, Draft: &request.Draft,
+	})
 	if err != nil {
-		return nil, err
-	}
-	err = auther.InsertHTTPAuth(httpRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	var response struct {
-		GitHubResponse
-		// GitHub failure response:
-		Message string               `json:"message"`
-		Errors  []GitHubRequestError `json:"errors"`
-	}
-	statusCode, err := sendJSONRequest(httpRequest, &response)
-	if err != nil {
-		return nil, err
-	}
-
-	switch statusCode {
-	case http.StatusCreated:
-		// 201 Created is the expected code if the PR is created. Do nothing.
-
-	case http.StatusUnprocessableEntity:
-		// 422 Unprocessable Entity may indicate the PR already exists. GitHub also gives us a response
-		// that looks like this:
-		/*
-			{
-				"message": "Validation Failed",
-				"errors": [
-					{
-						"resource": "GitHubRequest",
-						"code": "custom",
-						"message": "A pull request already exists for microsoft-golang-bot:auto-merge/microsoft/main."
-					}
-				],
-				"documentation_url": "https://docs.github.com/rest/reference/pulls#create-a-pull-request"
-			}
-		*/
-		for _, e := range response.Errors {
-			if strings.HasPrefix(e.Message, "A pull request already exists for ") {
-				return nil, fmt.Errorf("%w: response message %q", ErrPRAlreadyExists, e.Message)
+		var apiErr *github.ErrorResponse
+		if errors.As(err, &apiErr) && apiErr.Response != nil && apiErr.Response.StatusCode == http.StatusUnprocessableEntity {
+			for _, e := range apiErr.Errors {
+				if strings.HasPrefix(e.Message, "A pull request already exists for ") {
+					return nil, fmt.Errorf("%w: response message %q", ErrPRAlreadyExists, e.Message)
+				}
 			}
 		}
-		return nil, fmt.Errorf(
-			"response code %v may indicate PR already exists, but the error message is not recognized: %v",
-			statusCode,
-			response.Errors,
-		)
-
-	default:
-		return nil, fmt.Errorf("unexpected http status code: %v", statusCode)
+		return nil, err
 	}
-	return &response.GitHubResponse, nil
+	if response == nil || response.StatusCode != http.StatusCreated || pr == nil || pr.GetNumber() <= 0 {
+		return nil, errors.New("GitHub did not return a created pull request")
+	}
+	return &GitHubResponse{HTMLURL: pr.GetHTMLURL(), NodeID: pr.GetNodeID(), Number: pr.GetNumber()}, nil
+}
+
+type authTransport struct {
+	base   http.RoundTripper
+	auther githubutil.HTTPRequestAuther
+}
+
+func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	// Redirected requests must not acquire fresh credentials for another host.
+	if req.URL.Scheme == "https" && req.URL.Host == "api.github.com" {
+		if err := t.auther.InsertHTTPAuth(req); err != nil {
+			return nil, err
+		}
+	} else {
+		req.Header.Del("Authorization")
+	}
+	return t.base.RoundTrip(req)
 }
 
 func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]any, result any) error {

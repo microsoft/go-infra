@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/google/go-github/v65/github"
+	"github.com/google/go-github/v92/github"
 )
 
 func NewRefFS(ctx context.Context, client *github.Client, owner, repo, ref string) *FS {
