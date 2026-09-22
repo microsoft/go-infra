@@ -6,6 +6,7 @@
 package azdopipeline
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -304,6 +305,10 @@ func (c *Client) buildsURL(query url.Values) string {
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error {
+	return c.requestJSON(ctx, http.MethodGet, endpoint, nil, target)
+}
+
+func (c *Client) requestJSON(ctx context.Context, method, endpoint string, body []byte, target any) error {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire Azure DevOps token: %w", err)
@@ -311,12 +316,15 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error
 	if token == "" {
 		return errors.New("azure DevOps token provider returned an empty token")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create Azure DevOps request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("send Azure DevOps request: %w", err)
@@ -334,7 +342,7 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, target any) error
 		responseBody = strings.ReplaceAll(responseBody, token, "[REDACTED]")
 		return &HTTPError{
 			StatusCode: response.StatusCode,
-			Method:     http.MethodGet,
+			Method:     method,
 			URL:        endpoint,
 			Body:       responseBody,
 		}

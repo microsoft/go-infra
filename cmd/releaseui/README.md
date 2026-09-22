@@ -20,6 +20,23 @@ Add a package under `cmd/releaseui/internal` that implements `contract.ProcessGr
 Implement one `contract.Process` for each distinct form and release behavior, then pass the group to `releaseui.WithProcesses`.
 No HTML, JavaScript, or route change is required.
 
+Keep process policy separate from reusable mechanics:
+
+```text
+releaseui/                         Local HTTP lifecycle, UI, execution, and persistence
+releaseui/contract/                Process and durable-state contracts
+cmd/releaseui/internal/azdopipeline/  Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdorepo/      Azure Repos reads
+cmd/releaseui/internal/githubclient/  Authenticated GitHub operations
+cmd/releaseui/internal/goimages/      Go-images targets, allowlists, state, and graph
+cmd/releaseui/internal/goinfra/       Go-infra targets, allowlists, state, and graph
+```
+
+The neutral clients accept service-level requests. A release package decides which repository,
+pipeline, branch, workflow, labels, and parameters are allowed before calling them. The command
+only parses flags, constructs those dependencies, and registers processes. `releaseui.ListenAndServe`
+owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
+
 | Field | Purpose |
 | --- | --- |
 | `ID` | Stable machine-readable identifier used by registry lookups, persisted state, and APIs, such as `go-infra-publish`. |
@@ -57,7 +74,7 @@ func (p *exampleProcess) InputForm(inputs *releaseflag.InputSet) any {
 `Process.Load` validates a snapshot and constructs a `Run`.
 `Run.TakeSnapshot` returns an independent durable state copy, `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
 Only execution of the returned steps may mutate external state.
-Release-specific packages own direct Azure Pipeline and GitHub operations.
+Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
 The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
 `Process.Preflight` returns separate warning and blocking errors.
