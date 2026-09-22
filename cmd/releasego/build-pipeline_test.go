@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +55,7 @@ func TestBuildPipelineSDKRequest(t *testing.T) {
 			t.Error("variables did not use the Build API's legacy parameters field")
 		}
 		queued.Store(true)
-		io.WriteString(w, `{"id":123,"_links":{"web":{"href":"https://dev.azure.com/example/project/_build/results?buildId=123"}}}`)
+		writeAzureSDKResponse(t, w, `{"id":123,"_links":{"web":{"href":"https://dev.azure.com/example/project/_build/results?buildId=123"}}}`)
 	})
 	out, err := captureCommandOutput(t, func() error {
 		return runAzureCommand(t, handleBuildPipeline, azureCommandArgs(s,
@@ -129,9 +128,9 @@ func TestBuildPipelineSDKValidationRetry(t *testing.T) {
 				}
 				if attempt == 1 || tc.secondFail {
 					w.WriteHeader(tc.status)
-					io.WriteString(w, tc.body)
+					writeAzureSDKResponse(t, w, tc.body)
 				} else {
-					io.WriteString(w, `{"id":123}`)
+					writeAzureSDKResponse(t, w, `{"id":123}`)
 				}
 			})
 			err := runAzureCommand(t, handleBuildPipeline, azureCommandArgs(s, "-id=191", "p", "version", "1.26.1", "pOptional", "newFeature", "true", "v", "buildVar", "preserved")...)
@@ -201,7 +200,7 @@ func TestBuildPipelineDecimalDefinitionID(t *testing.T) {
 					t.Errorf("queued definition %d, want %d", body.Definition.ID, tc.want)
 				}
 				queued.Store(true)
-				io.WriteString(w, `{"id":123}`)
+				writeAzureSDKResponse(t, w, `{"id":123}`)
 			})
 			if err := runAzureCommand(t, handleBuildPipeline, azureCommandArgs(s, "-id="+tc.id)...); err != nil {
 				t.Fatal(err)
@@ -225,7 +224,7 @@ func TestBuildPipelineSDKResourceAreaRouting(t *testing.T) {
 			return
 		}
 		queued.Store(true)
-		io.WriteString(w, `{"id":123}`)
+		writeAzureSDKResponse(t, w, `{"id":123}`)
 	})
 	locations, err := os.ReadFile("testdata/azure-sdk-locations.json")
 	if err != nil {
@@ -241,7 +240,7 @@ func TestBuildPipelineSDKResourceAreaRouting(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodOptions && r.URL.Path == "/collection/_apis":
-			w.Write(locations)
+			writeAzureSDKResponse(t, w, string(locations))
 		case r.Method == http.MethodGet && r.URL.Path == "/collection/_apis/resourceAreas":
 			areas := []azuredevops.ResourceAreaInfo{{Id: &build.ResourceAreaId, LocationUrl: new(area.URL + "/collection")}}
 			if err := json.NewEncoder(w).Encode(map[string]any{"count": len(areas), "value": areas}); err != nil {
@@ -283,14 +282,14 @@ func TestBuildPipelineSDKDiscoveryErrors(t *testing.T) {
 				s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					if stage == "resource areas" && r.Method == http.MethodOptions && r.URL.Path == "/collection/_apis" {
-						w.Write(locations)
+						writeAzureSDKResponse(t, w, string(locations))
 						return
 					}
-					if r.Method != http.MethodOptions && !(r.Method == http.MethodGet && r.URL.Path == "/collection/_apis/resourceAreas") {
+					if r.Method != http.MethodOptions && (r.Method != http.MethodGet || r.URL.Path != "/collection/_apis/resourceAreas") {
 						t.Errorf("queueing proceeded after discovery failed: %s %s", r.Method, r.URL.Path)
 					}
 					w.WriteHeader(response.status)
-					io.WriteString(w, response.body)
+					writeAzureSDKResponse(t, w, response.body)
 				}))
 				defer s.Close()
 				if err := runAzureCommand(t, handleBuildPipeline, azureCommandArgs(s, "-id=191")...); err == nil {

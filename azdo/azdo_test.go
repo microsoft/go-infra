@@ -14,7 +14,7 @@ import (
 
 func TestClientFlagsV7Connection(t *testing.T) {
 	flags := ClientFlags{Org: new("https://dev.azure.com/example/"), Proj: new("project"), PAT: new("test-only-pat")}
-	var connection *azuredevops.Connection = flags.NewConnection()
+	connection := flags.NewConnection()
 	client := azuredevops.NewClientWithOptions(connection, connection.BaseUrl, azuredevops.WithHTTPClient(&http.Client{}))
 	req, err := client.CreateRequestMessage(t.Context(), http.MethodGet, connection.BaseUrl+"/_apis", "7.1", nil, "", "application/json", nil)
 	if err != nil {

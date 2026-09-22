@@ -21,6 +21,13 @@ import (
 
 const sdkTestPAT = "test-only-azure-pat"
 
+func writeAzureSDKResponse(t *testing.T, w io.Writer, body string) {
+	t.Helper()
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("writing Azure SDK test response: %v", err)
+	}
+}
+
 // Exercise generated clients, including authenticated API discovery, instead
 // of mocking SDK interfaces. No request leaves this local server.
 func newAzureSDKServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
@@ -42,10 +49,10 @@ func newAzureSDKServer(t *testing.T, handler http.HandlerFunc) *httptest.Server 
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodOptions && r.URL.Path == "/collection/_apis":
-			w.Write(locations)
+			writeAzureSDKResponse(t, w, string(locations))
 		case r.Method == http.MethodGet && r.URL.Path == "/collection/_apis/resourceAreas":
 			// An empty area list uses the configured collection URL.
-			io.WriteString(w, `{"count":0,"value":[]}`)
+			writeAzureSDKResponse(t, w, `{"count":0,"value":[]}`)
 		default:
 			if !strings.Contains(r.Header.Get("Accept"), "api-version=7.1") {
 				t.Errorf("request did not use the v7.1 API: %s", r.Header.Get("Accept"))
@@ -107,7 +114,7 @@ func TestAzureSDKGetBuildInfo(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		io.WriteString(w, `{"id":123,"buildNumber":"20260922.1","sourceBranch":"refs/heads/main","sourceVersion":"abc123"}`)
+		writeAzureSDKResponse(t, w, `{"id":123,"buildNumber":"20260922.1","sourceBranch":"refs/heads/main","sourceVersion":"abc123"}`)
 	})
 	out, err := captureCommandOutput(t, func() error {
 		return runAzureCommand(t, handleGetBuildInfo, azureCommandArgs(s, "-id=123", "-prefix=Next")...)
@@ -141,7 +148,7 @@ func TestAzureSDKRetainBuild(t *testing.T) {
 			return
 		}
 		retained.Store(true)
-		io.WriteString(w, `{"id":123,"keepForever":true}`)
+		writeAzureSDKResponse(t, w, `{"id":123,"keepForever":true}`)
 	})
 	for range 2 {
 		if err := runAzureCommand(t, handleRetainBuild, azureCommandArgs(s, "-id=123")...); err != nil {
@@ -162,7 +169,7 @@ func TestAzureSDKWaitBuild(t *testing.T) {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				fmt.Fprintf(w, `{"id":123,"status":"completed","result":%q}`, result)
+				writeAzureSDKResponse(t, w, fmt.Sprintf(`{"id":123,"status":"completed","result":%q}`, result))
 			})
 			err := runAzureCommand(t, handleWaitBuild, azureCommandArgs(s, "-id=123")...)
 			if result == "failed" {
@@ -181,7 +188,7 @@ func TestAzureSDKWaitCommit(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/collection/My Project/_apis/git/repositories/go/commits/abc123" {
 			t.Errorf("unexpected commit request: %s %s", r.Method, r.URL.Path)
 		}
-		io.WriteString(w, `{"commitId":"abc123"}`)
+		writeAzureSDKResponse(t, w, `{"commitId":"abc123"}`)
 	})
 	if err := runAzureCommand(t, handleWaitAzDOCommit, azureCommandArgs(s, "-name=go", "-commit=abc123")...); err != nil {
 		t.Fatal(err)
@@ -195,12 +202,12 @@ func TestAzureSDKWaitCITrigger(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/collection/My Project/_apis/pipelines/191":
-			io.WriteString(w, `{"id":191,"name":"Go CI"}`)
+			writeAzureSDKResponse(t, w, `{"id":191,"name":"Go CI"}`)
 		case "/collection/My Project/_apis/git/repositories/go/commits/abc123/statuses":
 			if r.URL.Query().Get("latestOnly") != "true" {
 				t.Error("expected latest commit statuses")
 			}
-			io.WriteString(w, `{"count":1,"value":[{"context":{"name":"build/Go CI"},"targetUrl":"vstfs:///Build/Build/123"}]}`)
+			writeAzureSDKResponse(t, w, `{"count":1,"value":[{"context":{"name":"build/Go CI"},"targetUrl":"vstfs:///Build/Build/123"}]}`)
 		default:
 			t.Errorf("unexpected trigger request: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
