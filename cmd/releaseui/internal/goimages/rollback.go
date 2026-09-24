@@ -25,14 +25,6 @@ type VersionResolver interface {
 	VersionsAtCommit(context.Context, string) ([]string, error)
 }
 
-// VersionResolverFunc adapts a function to VersionResolver.
-type VersionResolverFunc func(context.Context, string) ([]string, error)
-
-// VersionsAtCommit calls f.
-func (f VersionResolverFunc) VersionsAtCommit(ctx context.Context, commit string) ([]string, error) {
-	return f(ctx, commit)
-}
-
 // RollbackSource is a validated successful build whose artifacts may be republished.
 type RollbackSource struct {
 	BuildID  int

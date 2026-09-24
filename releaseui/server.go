@@ -87,9 +87,6 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := server.validateProcessExecutionConfiguration(); err != nil {
-		return nil, err
-	}
 	initialWorkItem := server.initialWorkItem
 	server.initialWorkItem = nil
 	if initialWorkItem != nil {
@@ -234,11 +231,7 @@ type planStep struct {
 }
 
 type pipelineRun struct {
-	BuildID   string `json:"buildId,omitempty"`
-	URL       string `json:"url,omitempty"`
-	LinkLabel string `json:"linkLabel,omitempty"`
-	Result    string `json:"result,omitempty"`
-	Complete  bool   `json:"complete"`
+	Complete bool `json:"complete"`
 }
 
 type workItemReference struct {
@@ -248,7 +241,6 @@ type workItemReference struct {
 
 type executionResponse struct {
 	Enabled           bool               `json:"enabled"`
-	Eligible          bool               `json:"eligible"`
 	PlanDigest        string             `json:"planDigest,omitempty"`
 	UnavailableReason string             `json:"unavailableReason,omitempty"`
 	Run               pipelineRun        `json:"run"`
@@ -268,8 +260,6 @@ type releaseSummary struct {
 	Name        string    `json:"name"`
 	Mode        string    `json:"mode,omitempty"`
 	Status      string    `json:"status"`
-	RunID       string    `json:"runId,omitempty"`
-	RunLabel    string    `json:"runLabel,omitempty"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Href        string    `json:"href"`
 	WorkItemID  int       `json:"workItemId,omitempty"`
@@ -295,7 +285,6 @@ type processDetail struct {
 
 type workflowDetail struct {
 	Heading     string            `json:"heading"`
-	Description string            `json:"description,omitempty"`
 	SubmitLabel string            `json:"submitLabel"`
 	Variants    []workflowProcess `json:"variants"`
 }

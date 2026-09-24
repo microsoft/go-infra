@@ -66,8 +66,7 @@ function createReleaseCard(release) {
   top.append(title, status);
 
   const details = document.createElement("p");
-  const run = release.runId ? ` · ${release.runLabel || "Run"} ${release.runId}` : "";
-  details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}${run}`;
+  details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}`;
   body.append(top, details);
 
   const actions = document.createElement("div");

@@ -85,7 +85,7 @@ func TestDescriptionRoundTrip(t *testing.T) {
 			},
 		},
 	}
-	description, err := RenderDescription(want)
+	description, err := testRenderDescription(want)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestDescriptionRejectsInvalidSummary(t *testing.T) {
 			Payload:       json.RawMessage(`{"buildId":"42"}`),
 			Description:   &DescriptionSummary{ProcessName: "Go images", Fields: []DescriptionField{field}},
 		}
-		if _, err := RenderDescription(snapshot); err == nil {
+		if _, err := testRenderDescription(snapshot); err == nil {
 			t.Fatalf("invalid description field unexpectedly rendered: %#v", field)
 		}
 	}
@@ -159,7 +159,7 @@ func TestDescriptionEscapesStateMarkerInSummary(t *testing.T) {
 			}},
 		},
 	}
-	description, err := RenderDescription(snapshot)
+	description, err := testRenderDescription(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestDescriptionEscapesStateMarkerInSummary(t *testing.T) {
 }
 
 func TestDescriptionLabelsTestRun(t *testing.T) {
-	description, err := RenderDescription(&Snapshot{
+	description, err := testRenderDescription(&Snapshot{
 		SchemaVersion: CurrentSchemaVersion,
 		ProcessID:     "go-infra",
 		Status:        StatusUncertain,
@@ -189,7 +189,7 @@ func TestDescriptionLabelsTestRun(t *testing.T) {
 }
 
 func TestDescriptionRejectsInvalidTransport(t *testing.T) {
-	valid, err := RenderDescription(&Snapshot{
+	valid, err := testRenderDescription(&Snapshot{
 		SchemaVersion: CurrentSchemaVersion,
 		ProcessID:     "go-images",
 		Status:        StatusStarting,
@@ -209,4 +209,12 @@ func TestDescriptionRejectsInvalidTransport(t *testing.T) {
 			t.Fatalf("invalid description unexpectedly parsed: %q", description)
 		}
 	}
+}
+
+func testRenderDescription(snapshot *Snapshot) (string, error) {
+	data, err := MarshalSnapshot(snapshot)
+	if err != nil {
+		return "", err
+	}
+	return renderDescription(snapshot, data)
 }

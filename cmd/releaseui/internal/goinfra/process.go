@@ -266,7 +266,6 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 	case "completed":
 		view.Summary = "GitHub workflow completed"
 		view.Detail = fmt.Sprintf("Run %d completed with conclusion %s", run.ID, run.Conclusion)
-		view.Completed, view.Total = 1, 1
 	}
 	return view
 }

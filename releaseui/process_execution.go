@@ -50,7 +50,6 @@ type processRunResponse struct {
 	Steps     []planStep        `json:"steps"`
 	Execution executionResponse `json:"execution"`
 	Plan      *contract.Plan    `json:"plan"`
-	View      *contract.RunView `json:"view"`
 }
 
 type releaseStartRequest struct {
@@ -63,10 +62,6 @@ func WithReleaseRunStore(store ReleaseRunStore) Option {
 	return func(server *Server) {
 		server.processRunStore = store
 	}
-}
-
-func (s *Server) validateProcessExecutionConfiguration() error {
-	return nil
 }
 
 func (s *Server) handleProcessRunPreflight(processID string, response http.ResponseWriter, request *http.Request) {
@@ -574,8 +569,8 @@ func (s *Server) processRunResponseLockedWithPlan(plan *contract.Plan) processRu
 		}
 	}
 	execution := executionResponse{
-		Enabled: s.processRunStore != nil, Eligible: state.Digest != "", PlanDigest: state.Digest,
-		Run: pipelineRun{Result: state.Result, Complete: state.Complete},
+		Enabled: s.processRunStore != nil, PlanDigest: state.Digest,
+		Run: pipelineRun{Complete: state.Complete},
 	}
 	if s.processRunRecord != nil {
 		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
@@ -586,7 +581,7 @@ func (s *Server) processRunResponseLockedWithPlan(plan *contract.Plan) processRu
 	return processRunResponse{
 		VariantID: state.ProcessID,
 		Input:     append(json.RawMessage(nil), state.Snapshot.Input...),
-		Steps:     steps, Execution: execution, Plan: plan, View: s.processRun.TakeView(),
+		Steps:     steps, Execution: execution, Plan: plan,
 	}
 }
 

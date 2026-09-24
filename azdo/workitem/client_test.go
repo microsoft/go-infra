@@ -465,7 +465,7 @@ func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtr
 
 func mustRenderDescription(t *testing.T, snapshot *Snapshot) string {
 	t.Helper()
-	description, err := RenderDescription(snapshot)
+	description, err := testRenderDescription(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -232,7 +232,7 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		t.Fatalf("checkpoint count = %d, want 3", checkpoints)
 	}
 	view := run.TakeView()
-	if !view.Test || view.Completed != 1 || view.Total != 1 {
+	if !view.Test || view.Summary != "GitHub workflow completed" {
 		t.Fatalf("view = %#v", view)
 	}
 }

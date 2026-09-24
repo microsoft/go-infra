@@ -210,13 +210,6 @@ type RunView struct {
 	// working.
 	UpdatedAt time.Time
 
-	// Completed is the number of completed units out of [Total]. A process may use this to report
-	// quantifiable progress.
-	Completed int
-
-	// Total is the total number of units that must complete, or 0 to omit a progress indicator.
-	Total int
-
 	// Some status indicators are derived from the steps or other server state by releaseui, and are
 	// not included here:
 	//
