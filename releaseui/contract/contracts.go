@@ -152,10 +152,10 @@ type Identity struct {
 type ProcessDefinition struct {
 	Identity
 
-	// ID is a stable identifier stored in work items and used in URLs. It must be kebab-case
+	// ID is a stable identifier stored in release records and used in URLs. It must be kebab-case
 	// (lowercase alphanumeric with "-" permitted in the middle as a separator). It must be unique
-	// among all types of release process tracked by releaseui through all time, because this ID is
-	// used to distinguish them as stored in an external location (work items).
+	// among all types of release process tracked by releaseui through all time, because stored
+	// release state uses this ID to select the process that owns it.
 	//
 	// Change ID when a [StateSnapshot] becomes incompatible with previous versions. This prevents
 	// misinterpretation of state stored by older versions.

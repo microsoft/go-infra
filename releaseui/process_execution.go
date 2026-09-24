@@ -64,6 +64,13 @@ func WithReleaseRunStore(store ReleaseRunStore) Option {
 	}
 }
 
+// WithInitialReleaseRun selects one stored release to restore when the server starts.
+func WithInitialReleaseRun(id int) Option {
+	return func(server *Server) {
+		server.initialReleaseRunID = id
+	}
+}
+
 func (s *Server) handleProcessRunPreflight(processID string, response http.ResponseWriter, request *http.Request) {
 	report := PreflightReport{PlanningEnabled: true, Checks: []PreflightCheck{{
 		ID: "loopback-server", Name: "Loopback-only HTTP server", Status: CheckStatusPassed,
@@ -76,13 +83,13 @@ func (s *Server) handleProcessRunPreflight(processID string, response http.Respo
 	}
 	if s.processRunStore == nil {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID: "release-tracking", Name: "Azure DevOps release tracking", Status: CheckStatusWarning,
+			ID: "release-tracking", Name: "Release tracking", Status: CheckStatusWarning,
 			Details: "Not configured. Planning is available, but confirmed releases cannot start or be restored.",
 		})
 	} else {
 		report.Checks = append(report.Checks, PreflightCheck{
-			ID: "release-tracking", Name: "Azure DevOps release tracking", Status: CheckStatusPassed,
-			Details: "Enabled. Confirmed release state is stored in a revisioned work item; unconfirmed plans remain in memory.",
+			ID: "release-tracking", Name: "Release tracking", Status: CheckStatusPassed,
+			Details: "Enabled. Confirmed release state is stored in a revisioned record; unconfirmed plans remain in memory.",
 		})
 	}
 	warning, blocking := registered.process.Preflight(request.Context())
@@ -302,7 +309,7 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		checkpointer.Close()
 		cancel()
 		s.stopProcessStart(state.Digest)
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release work item before mutation: %v", err))
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release record before mutation: %v", err))
 		return
 	}
 	s.mu.Lock()
@@ -573,7 +580,7 @@ func (s *Server) processRunResponseLockedWithPlan(plan *contract.Plan) processRu
 		Run: pipelineRun{Complete: state.Complete},
 	}
 	if s.processRunRecord != nil {
-		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
+		execution.Record = &releaseRecordReference{ID: s.processRunRecord.ID, URL: s.processRunRecord.URL}
 	}
 	if s.processRunStore == nil {
 		execution.UnavailableReason = "Release tracking is unavailable."

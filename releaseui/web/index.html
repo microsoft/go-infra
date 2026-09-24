@@ -18,7 +18,7 @@
     </a>
     <div class="connection" title="This server is available only on this computer">
       <span class="connection-dot"></span>
-      <span>Release work items</span>
+      <span>Tracked releases</span>
     </div>
   </header>
 
@@ -42,11 +42,11 @@
         <div>
           <p class="eyebrow">Live work</p>
           <h2 id="ongoing-title">Ongoing releases</h2>
-          <p>Select a release work item to open its release page.</p>
+          <p>Select a tracked release to open its release page.</p>
         </div>
       </div>
       <div id="ongoing-releases" class="release-list" aria-live="polite">
-        <article class="release-empty loading-card">Loading release work items…</article>
+        <article class="release-empty loading-card">Loading tracked releases…</article>
       </div>
       <p id="tracking-error" class="tracking-error" hidden></p>
     </section>
@@ -93,7 +93,7 @@
       </div>
       <button id="json-close" class="dialog-close" type="button" aria-label="Close JSON editor">×</button>
     </div>
-    <label for="json-editor">Work item export</label>
+    <label for="json-editor">Release record export</label>
     <textarea id="json-editor" spellcheck="false"></textarea>
     <p id="json-error" class="tracking-error" hidden></p>
     <div class="json-dialog-actions">

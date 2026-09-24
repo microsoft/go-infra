@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
@@ -40,8 +39,7 @@ type Server struct {
 	processes           *processRegistry
 	activeProcessID     string
 	processRunStore     ReleaseRunStore
-	workItems           releaseWorkItemService
-	initialWorkItem     *azdoworkitem.WorkItem
+	initialReleaseRunID int
 
 	selectionMu         sync.Mutex
 	mu                  sync.Mutex
@@ -87,11 +85,19 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	initialWorkItem := server.initialWorkItem
-	server.initialWorkItem = nil
-	if initialWorkItem != nil {
-		if _, err := server.restoreReleaseWorkItem(initialWorkItem); err != nil {
-			return nil, fmt.Errorf("restore release work item %d: %w", initialWorkItem.ID, err)
+	if server.initialReleaseRunID < 0 {
+		return nil, errors.New("initial release run ID must not be negative")
+	}
+	if server.initialReleaseRunID > 0 {
+		if server.processRunStore == nil {
+			return nil, errors.New("initial release run requires a release store")
+		}
+		record, err := server.processRunStore.Get(ctx, server.initialReleaseRunID)
+		if err != nil {
+			return nil, fmt.Errorf("load release run %d: %w", server.initialReleaseRunID, err)
+		}
+		if _, err := server.restoreReleaseRunRecord(record); err != nil {
+			return nil, fmt.Errorf("restore release run %d: %w", server.initialReleaseRunID, err)
 		}
 	}
 	return server, nil
@@ -139,9 +145,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
-	mux.HandleFunc("POST /api/release-work-items/{id}/select", s.handleSelectWorkItem)
-	mux.HandleFunc("GET /api/release-work-items/{id}/export", s.handleExportWorkItem)
-	mux.HandleFunc("POST /api/release-work-items/{id}/import", s.handleImportWorkItem)
+	mux.HandleFunc("POST /api/releases/{id}/select", s.handleSelectRelease)
+	mux.HandleFunc("GET /api/releases/{id}/export", s.handleExportRelease)
+	mux.HandleFunc("POST /api/releases/{id}/import", s.handleImportRelease)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
@@ -234,17 +240,17 @@ type pipelineRun struct {
 	Complete bool `json:"complete"`
 }
 
-type workItemReference struct {
+type releaseRecordReference struct {
 	ID  int    `json:"id"`
-	URL string `json:"url"`
+	URL string `json:"url,omitempty"`
 }
 
 type executionResponse struct {
-	Enabled           bool               `json:"enabled"`
-	PlanDigest        string             `json:"planDigest,omitempty"`
-	UnavailableReason string             `json:"unavailableReason,omitempty"`
-	Run               pipelineRun        `json:"run"`
-	WorkItem          *workItemReference `json:"workItem,omitempty"`
+	Enabled           bool                    `json:"enabled"`
+	PlanDigest        string                  `json:"planDigest,omitempty"`
+	UnavailableReason string                  `json:"unavailableReason,omitempty"`
+	Run               pipelineRun             `json:"run"`
+	Record            *releaseRecordReference `json:"record,omitempty"`
 }
 
 type dashboardResponse struct {
@@ -256,14 +262,14 @@ type dashboardResponse struct {
 }
 
 type releaseSummary struct {
-	Mark        string    `json:"mark"`
-	Name        string    `json:"name"`
-	Mode        string    `json:"mode,omitempty"`
-	Status      string    `json:"status"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Href        string    `json:"href"`
-	WorkItemID  int       `json:"workItemId,omitempty"`
-	WorkItemURL string    `json:"workItemUrl,omitempty"`
+	Mark      string    `json:"mark"`
+	Name      string    `json:"name"`
+	Mode      string    `json:"mode,omitempty"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Href      string    `json:"href"`
+	RecordID  int       `json:"recordId,omitempty"`
+	RecordURL string    `json:"recordUrl,omitempty"`
 }
 
 type processSummary struct {
@@ -335,8 +341,8 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
-	if s.workItems != nil {
-		writeJSON(response, http.StatusOK, s.workItemDashboard(request.Context()))
+	if s.processRunStore != nil {
+		writeJSON(response, http.StatusOK, s.releaseDashboard(request.Context()))
 		return
 	}
 	s.mu.Lock()

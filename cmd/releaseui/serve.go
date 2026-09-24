@@ -71,7 +71,7 @@ func handleServe(parse subcmd.ParseFunc) error {
 	if err != nil {
 		return err
 	}
-	processRunStore, err := releaseui.NewReleaseRunWorkItemStore(workItems, assignedTo)
+	processRunStore, err := azdoworkitem.NewStore(workItems, assignedTo)
 	if err != nil {
 		return err
 	}
@@ -86,14 +86,9 @@ func handleServe(parse subcmd.ParseFunc) error {
 	options := []releaseui.Option{
 		releaseui.WithProcesses(goImagesProcess, goInfraProcess),
 		releaseui.WithReleaseRunStore(processRunStore),
-		releaseui.WithReleaseWorkItems(workItems),
 	}
 	if *releaseWorkItem > 0 {
-		selected, err := workItems.Get(context.Background(), *releaseWorkItem)
-		if err != nil {
-			return fmt.Errorf("select release work item %d: %w", *releaseWorkItem, err)
-		}
-		options = append(options, releaseui.WithReleaseWorkItem(selected))
+		options = append(options, releaseui.WithInitialReleaseRun(*releaseWorkItem))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

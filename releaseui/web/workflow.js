@@ -28,7 +28,7 @@
   const stepEdges = document.querySelector("#step-edges");
   const stepList = document.querySelector("#step-list");
   const executionLinks = document.querySelector("#execution-links");
-  const workItemLink = document.querySelector("#work-item-link");
+  const recordLink = document.querySelector("#record-link");
   const executionControls = document.querySelector("#execution-controls");
   const executionUnavailable = document.querySelector("#execution-unavailable");
   const executionTitle = document.querySelector("#execution-title");
@@ -485,16 +485,16 @@
   }
 
   function renderLinks(execution) {
-    const workItem = execution?.workItem;
-    workItemLink.hidden = !workItem?.id;
-    if (workItem?.id) {
-      workItemLink.href = workItem.url;
-      workItemLink.textContent = `Open work item ${workItem.id} ↗`;
+    const record = execution?.record;
+    recordLink.hidden = !record?.url;
+    if (record?.url) {
+      recordLink.href = record.url;
+      recordLink.textContent = `Open tracking record ${record.id} ↗`;
     } else {
-      workItemLink.removeAttribute("href");
+      recordLink.removeAttribute("href");
     }
 
-    executionLinks.hidden = workItemLink.hidden;
+    executionLinks.hidden = recordLink.hidden;
   }
 
   function updateActionButtons() {
