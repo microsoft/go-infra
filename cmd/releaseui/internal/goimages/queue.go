@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 )
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)

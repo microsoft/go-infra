@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 )
 
 // PipelineClient is the Azure DevOps behavior needed to validate a rollback source.
