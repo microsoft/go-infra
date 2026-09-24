@@ -14,8 +14,8 @@ import (
 	"os/signal"
 	"time"
 
-	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
+	azdoworkitem "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/workitem"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"

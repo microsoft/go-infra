@@ -25,9 +25,9 @@ Keep process policy separate from reusable mechanics:
 ```text
 releaseui/                           Local HTTP lifecycle, UI, execution, and storage contracts
 releaseui/contract/                  Process and durable-state contracts
-azdo/workitem/                       Azure Boards release-store adapter
-cmd/releaseui/internal/azdopipeline/ Azure Pipeline reads and queue transport
-cmd/releaseui/internal/azdorepo/     Azure Repos reads
+cmd/releaseui/internal/azdo/pipeline/ Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdo/repo/     Azure Repos reads
+cmd/releaseui/internal/azdo/workitem/ Azure Boards release-store adapter
 cmd/releaseui/internal/githubclient/ Authenticated GitHub operations
 cmd/releaseui/internal/goimages/     Go-images targets, allowlists, state, and graph
 cmd/releaseui/internal/goinfra/      Go-infra targets, allowlists, state, and graph
