@@ -327,13 +327,27 @@ func (s *memoryProcessRunStore) Create(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := &releaseui.ReleaseRunRecord{
-		WorkItemID: s.nextID, Revision: 1,
-		URL: fmt.Sprintf("https://example.invalid/workitems/%d", s.nextID),
-		Run: run.Clone(),
+		ID: s.nextID, Revision: 1,
+		URL:       fmt.Sprintf("https://example.invalid/releases/%d", s.nextID),
+		UpdatedAt: run.UpdatedAt, Run: run.Clone(),
 	}
-	s.records[record.WorkItemID] = record
+	s.records[record.ID] = record
 	s.nextID++
 	return cloneRecord(record), nil
+}
+
+func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*releaseui.ReleaseRunRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[id]
+	if !ok {
+		return nil, errors.New("release record not found")
+	}
+	return cloneRecord(record), nil
+}
+
+func (s *memoryProcessRunStore) Query(context.Context, bool, int) ([]*releaseui.ReleaseRunRecord, error) {
+	return []*releaseui.ReleaseRunRecord{}, nil
 }
 
 func (s *memoryProcessRunStore) Update(
@@ -346,10 +360,10 @@ func (s *memoryProcessRunStore) Update(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record := &releaseui.ReleaseRunRecord{
-		WorkItemID: current.WorkItemID, Revision: current.Revision + 1,
-		URL: current.URL, Run: run.Clone(),
+		ID: current.ID, Revision: current.Revision + 1,
+		URL: current.URL, UpdatedAt: time.Now().UTC(), Run: run.Clone(),
 	}
-	s.records[record.WorkItemID] = record
+	s.records[record.ID] = record
 	return cloneRecord(record), nil
 }
 

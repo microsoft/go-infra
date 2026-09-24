@@ -23,16 +23,18 @@ No HTML, JavaScript, or route change is required.
 Keep process policy separate from reusable mechanics:
 
 ```text
-releaseui/                         Local HTTP lifecycle, UI, execution, and persistence
-releaseui/contract/                Process and durable-state contracts
-cmd/releaseui/internal/azdopipeline/  Azure Pipeline reads and queue transport
-cmd/releaseui/internal/azdorepo/      Azure Repos reads
-cmd/releaseui/internal/githubclient/  Authenticated GitHub operations
-cmd/releaseui/internal/goimages/      Go-images targets, allowlists, state, and graph
-cmd/releaseui/internal/goinfra/       Go-infra targets, allowlists, state, and graph
+releaseui/                           Local HTTP lifecycle, UI, execution, and storage contracts
+releaseui/contract/                  Process and durable-state contracts
+azdo/workitem/                       Azure Boards release-store adapter
+cmd/releaseui/internal/azdopipeline/ Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdorepo/     Azure Repos reads
+cmd/releaseui/internal/githubclient/ Authenticated GitHub operations
+cmd/releaseui/internal/goimages/     Go-images targets, allowlists, state, and graph
+cmd/releaseui/internal/goinfra/      Go-infra targets, allowlists, state, and graph
 ```
 
-The neutral clients accept service-level requests. A release package decides which repository,
+The reusable host sees only revisioned release records through `releaseui.ReleaseRunStore`; the
+command supplies the Azure Boards implementation. The neutral clients accept service-level requests. A release package decides which repository,
 pipeline, branch, workflow, labels, and parameters are allowed before calling them. The command
 only parses flags, constructs those dependencies, and registers processes. `releaseui.ListenAndServe`
 owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
@@ -154,7 +156,7 @@ the exact request and confirming it.
 
 The release UI owns `System.Description` on these work items. It shows status and release type plus
 useful process details. Go-images work items include mode, versions, publication prefix, source
-commit, Azure build, and checkpoint timestamps. Generic actions include their intent, action,
+commit, Azure build, and checkpoint timestamps. Go-infra work items include their intent, action,
 reviewed facts, target, and external run. Links open the underlying commit, build, pull request, or
 workflow run. The base64url-encoded canonical JSON remains in a collapsed managed-state section so
 Azure DevOps HTML normalization cannot alter release state. Add operator notes as work-item comments
@@ -202,7 +204,7 @@ coordinator graph instead of serializing it. The release UI stores the document 
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
 
-The current server runs one selected release at a time. Go-images and generic action state live only
+The current server runs one selected release at a time. Go-images and Go-infra state live only
 in the selected Azure DevOps work item. The server creates the work item before calling the target
 service, updates it with an Azure DevOps revision check, and resumes monitoring a known external run
 after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and

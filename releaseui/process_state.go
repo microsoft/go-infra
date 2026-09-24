@@ -14,10 +14,22 @@ import (
 )
 
 const (
+	resultRunning   = "running"
 	resultSucceeded = "succeeded"
 	resultFailed    = "failed"
 	resultCanceled  = "canceled"
 	resultUncertain = "uncertain"
+)
+
+// ReleaseRunStatus is the storage-neutral lifecycle status of a started release run.
+type ReleaseRunStatus string
+
+const (
+	ReleaseRunStatusRunning   ReleaseRunStatus = resultRunning
+	ReleaseRunStatusSucceeded ReleaseRunStatus = resultSucceeded
+	ReleaseRunStatusFailed    ReleaseRunStatus = resultFailed
+	ReleaseRunStatusCanceled  ReleaseRunStatus = resultCanceled
+	ReleaseRunStatusUncertain ReleaseRunStatus = resultUncertain
 )
 
 // ReleaseRunState is releaseui-owned state wrapped around a process-owned snapshot.
@@ -91,6 +103,20 @@ func (s *ReleaseRunState) Validate() error {
 		return fmt.Errorf("completed process run has invalid result %q", s.Result)
 	}
 	return nil
+}
+
+// Status returns the lifecycle status persisted by a release store.
+func (s *ReleaseRunState) Status() (ReleaseRunStatus, error) {
+	if err := s.Validate(); err != nil {
+		return "", err
+	}
+	if !s.Started {
+		return "", errors.New("process run has not started")
+	}
+	if !s.Complete {
+		return ReleaseRunStatusRunning, nil
+	}
+	return ReleaseRunStatus(s.Result), nil
 }
 
 func validateStateSnapshot(snapshot *contract.StateSnapshot) error {
