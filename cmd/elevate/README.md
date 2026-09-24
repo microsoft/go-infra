@@ -5,7 +5,8 @@ the Microsoft Open Source Management Portal.
 
 By default, the command inspects the current Git repository. It prefers a
 `github.com` remote named `upstream`, then `origin`, then any other unambiguous
-GitHub remote. Use `-repo OWNER/REPO` when the repository cannot be inferred.
+GitHub remote. Pass `OWNER/REPO` to target a repository explicitly. The
+`-repo OWNER/REPO` flag is also supported.
 
 ## Install
 
@@ -55,3 +56,9 @@ location. The command creates that directory with user-only permissions. Use
 
 The command never submits an elevation until both a non-empty description and an
 explicit `y` or `yes` confirmation have been provided.
+
+To elevate a repository other than the one in the current directory:
+
+```console
+elevate microsoft/go-infra
+```

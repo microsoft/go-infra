@@ -121,6 +121,40 @@ func TestRunCLIRepositoryOverride(t *testing.T) {
 	}
 }
 
+func TestRunCLIRepositoryPositionalArgument(t *testing.T) {
+	var got repository
+	deps := cliDependencies{
+		getwd: func() (string, error) {
+			t.Fatal("getwd was called with a positional repository")
+			return "", nil
+		},
+		detect: func(context.Context, string) (repository, error) {
+			t.Fatal("detect was called with a positional repository")
+			return repository{}, nil
+		},
+		elevate: func(ctx context.Context, request elevationRequest, options browserOptions) error {
+			got = request.Repository
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	err := runCLI(
+		context.Background(),
+		[]string{"Azure/azure-sdk-for-go"},
+		strings.NewReader("Debug package publishing\ny\n"),
+		&stdout,
+		&stderr,
+		deps,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := repository{Owner: "Azure", Name: "azure-sdk-for-go"}
+	if got != want {
+		t.Errorf("repository = %v, want %v", got, want)
+	}
+}
+
 func TestRunCLIRequiresDescription(t *testing.T) {
 	deps := cliDependencies{
 		getwd: func() (string, error) {
@@ -175,6 +209,13 @@ func TestRunCLIPropagatesElevationError(t *testing.T) {
 func TestParseFlagsRejectsNonPositiveTimeout(t *testing.T) {
 	_, err := parseFlags([]string{"-timeout", "0s"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "greater than zero") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseFlagsRejectsDuplicateRepository(t *testing.T) {
+	_, err := parseFlags([]string{"-repo", "microsoft/go", "microsoft/go-infra"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "not both") {
 		t.Fatalf("error = %v", err)
 	}
 }

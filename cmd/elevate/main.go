@@ -148,7 +148,7 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	fs.StringVar(&options.ProfileDir, "profile-dir", "", "Browser profile directory; defaults to an OS user cache directory")
 	fs.DurationVar(&options.Timeout, "timeout", defaultTimeout, "Overall timeout, including interactive browser sign-in")
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: %s [-repo OWNER/REPO]\n\n", fs.Name())
+		fmt.Fprintf(fs.Output(), "Usage: %s [OWNER/REPO]\n\n", fs.Name())
 		fmt.Fprintln(fs.Output(), "Requests temporary administrator access through the Microsoft OSS portal.")
 		fmt.Fprintln(fs.Output(), "The command always prompts for a description and confirmation before submitting.")
 		fmt.Fprintln(fs.Output(), "\nOptions:")
@@ -157,8 +157,14 @@ func parseFlags(args []string, stderr io.Writer) (cliOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() > 1 {
 		return cliOptions{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if fs.NArg() == 1 {
+		if options.Repository != "" {
+			return cliOptions{}, errors.New("specify the repository either as OWNER/REPO or with -repo, not both")
+		}
+		options.Repository = fs.Arg(0)
 	}
 	if options.Timeout <= 0 {
 		return cliOptions{}, errors.New("-timeout must be greater than zero")
