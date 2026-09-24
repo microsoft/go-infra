@@ -87,7 +87,7 @@ func TestPortalResponseError(t *testing.T) {
 	}
 }
 
-func TestElevationDOMScripts(t *testing.T) {
+func TestGrantFormDOMScripts(t *testing.T) {
 	executable, err := findBrowserExecutable()
 	if err != nil {
 		t.Skip(err)

@@ -82,7 +82,7 @@ func parseGitHubRemote(value string) (repository, bool) {
 	return target, err == nil
 }
 
-func detectGitHubRepository(ctx context.Context, workingDirectory string) (repository, error) {
+func detectRepository(ctx context.Context, workingDirectory string) (repository, error) {
 	root, err := runGit(ctx, workingDirectory, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return repository{}, fmt.Errorf("find Git repository: %w", err)

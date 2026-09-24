@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestParseGitHubRemote(t *testing.T) {
+func TestParseRemoteRepository(t *testing.T) {
 	tests := []struct {
 		name  string
 		value string

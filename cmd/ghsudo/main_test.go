@@ -87,7 +87,7 @@ func TestRunCLICancelled(t *testing.T) {
 	}
 }
 
-func TestRunCLIRepositoryOverride(t *testing.T) {
+func TestRunCLIRepositoryFlag(t *testing.T) {
 	var got repository
 	deps := cliDependencies{
 		getwd: func() (string, error) {

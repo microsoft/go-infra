@@ -1,6 +1,6 @@
-# Microsoft OSS repository JIT elevation
+# ghsudo
 
-`elevate` requests temporary administrator access to a GitHub repository through
+`ghsudo` requests temporary administrator access to a GitHub repository through
 the Microsoft Open Source Management Portal.
 
 By default, the command inspects the current Git repository. It prefers a
@@ -13,10 +13,10 @@ GitHub remote. Pass `OWNER/REPO` to target a repository explicitly. The
 Install the latest version with Go:
 
 ```console
-go install github.com/microsoft/go-infra/cmd/elevate@latest
+go install github.com/microsoft/go-infra/cmd/ghsudo@latest
 ```
 
-Go installs the `elevate` executable in `GOBIN`. When `GOBIN` is unset, the
+Go installs the `ghsudo` executable in `GOBIN`. When `GOBIN` is unset, the
 default location is `$(go env GOPATH)/bin`. Ensure that directory is on `PATH`.
 For example, on macOS or Linux:
 
@@ -27,13 +27,13 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 Confirm the installation:
 
 ```console
-elevate -h
+ghsudo -h
 ```
 
 ## Usage
 
 ```console
-elevate
+ghsudo
 Brief description for the JIT elevation: Investigate a release pipeline failure
 
 Repository:  microsoft/go-infra
@@ -60,5 +60,5 @@ explicit `y` or `yes` confirmation have been provided.
 To elevate a repository other than the one in the current directory:
 
 ```console
-elevate microsoft/go-infra
+ghsudo microsoft/go-infra
 ```

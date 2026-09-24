@@ -203,7 +203,7 @@ func findBrowserExecutable() (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", errors.New("Chrome, Edge, or Chromium was not found; install a supported browser or specify -browser")
+	return "", errors.New("chrome, Edge, or Chromium was not found; install a supported browser or specify -browser")
 }
 
 func waitForScript(ctx context.Context, script, action string) error {
@@ -274,6 +274,7 @@ func listenForElevationResponse(
 				capturePortalMutation.Load(),
 				descriptionMatched,
 			) {
+
 				tracked[event.RequestID] = trackedRequest{url: event.Request.URL}
 			}
 		case *network.EventResponseReceived:
@@ -281,7 +282,7 @@ func listenForElevationResponse(
 			if !ok {
 				return
 			}
-			request.status = int64(event.Response.Status)
+			request.status = event.Response.Status
 			tracked[event.RequestID] = request
 		case *network.EventLoadingFinished:
 			request, ok := tracked[event.RequestID]

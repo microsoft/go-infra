@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Elevate requests just-in-time administrator access to a GitHub repository
+// ghsudo requests just-in-time administrator access to a GitHub repository
 // through Microsoft's Open Source Management Portal.
 package main
 
@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	commandName       = "elevate"
+	commandName       = "ghsudo"
 	defaultTimeout    = 15 * time.Minute
 	maxDescriptionLen = 4096
 )
@@ -54,7 +54,7 @@ func main() {
 
 	deps := cliDependencies{
 		getwd:  os.Getwd,
-		detect: detectGitHubRepository,
+		detect: detectRepository,
 		elevate: func(ctx context.Context, request elevationRequest, options browserOptions) error {
 			return newBrowserElevator(options, os.Stdout).elevate(ctx, request)
 		},
