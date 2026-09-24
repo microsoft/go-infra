@@ -268,12 +268,15 @@ func TestExportImportReleaseWorkItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	description, err := azdoworkitem.RenderDescription(item.Snapshot)
-	if err != nil {
-		t.Fatal(err)
+	description := item.Snapshot.Description
+	foundValue := false
+	if description != nil {
+		for _, field := range description.Fields {
+			foundValue = foundValue || field.Label == "Value" && field.Value == "fixed"
+		}
 	}
-	if !strings.Contains(description, "<strong>Value</strong>") {
-		t.Fatalf("description = %s", description)
+	if !foundValue {
+		t.Fatalf("description = %#v", description)
 	}
 	response = postJSONValue(t, ui, "/api/release-work-items/42/import", exported)
 	closeResponse(t, response)

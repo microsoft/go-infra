@@ -3,7 +3,6 @@
 (() => {
   const workflowSection = document.querySelector("#workflow-section");
   const workflowHeading = document.querySelector("#workflow-heading");
-  const workflowDescription = document.querySelector("#workflow-description");
   const processSafety = document.querySelector("#process-safety");
   const safetyTitle = document.querySelector("#safety-title");
   const safetyCopy = document.querySelector("#safety-copy");
@@ -19,15 +18,7 @@
   const emptyState = document.querySelector("#empty-state");
   const planContent = document.querySelector("#plan-content");
   const planSubtitle = document.querySelector("#plan-subtitle");
-  const intentBanner = document.querySelector("#intent-banner");
-  const intentTitle = document.querySelector("#intent-title");
-  const intentBadge = document.querySelector("#intent-badge");
   const planFacts = document.querySelector("#plan-facts");
-  const requestPreview = document.querySelector("#request-preview");
-  const requestPreviewEyebrow = document.querySelector("#request-preview-eyebrow");
-  const requestPreviewTitle = document.querySelector("#request-preview-title");
-  const requestPreviewTarget = document.querySelector("#request-preview-target");
-  const requestPreviewFields = document.querySelector("#request-preview-fields");
   const progressSummary = document.querySelector(".progress-summary");
   const progressLabel = document.querySelector("#progress-label");
   const progressCount = document.querySelector("#progress-count");
@@ -38,7 +29,6 @@
   const stepList = document.querySelector("#step-list");
   const executionLinks = document.querySelector("#execution-links");
   const workItemLink = document.querySelector("#work-item-link");
-  const pipelineRunLink = document.querySelector("#pipeline-run-link");
   const executionControls = document.querySelector("#execution-controls");
   const executionUnavailable = document.querySelector("#execution-unavailable");
   const executionTitle = document.querySelector("#execution-title");
@@ -71,8 +61,6 @@
     endpointBase = `/api/processes/${encodeURIComponent(processDefinition.id)}`;
     workflowSection.hidden = false;
     workflowHeading.textContent = workflow.heading;
-    workflowDescription.textContent = workflow.description || "";
-    workflowDescription.hidden = !workflow.description;
     planButton.querySelector("span:first-child").textContent = workflow.submitLabel || "Prepare release";
     planButton.disabled = true;
 
@@ -143,15 +131,13 @@
       description.textContent = input.description;
       wrapper.append(description);
     }
-    const record = { schema: input, wrapper, control };
-    inputRecords.set(input.id, record);
+    inputRecords.set(input.id, control);
     return wrapper;
   }
 
   function inputValue(id) {
-    const record = inputRecords.get(id);
-    if (!record) return "";
-    return record.control.value.trim();
+    const control = inputRecords.get(id);
+    return control ? control.value.trim() : "";
   }
 
   function serializeInputs() {
@@ -168,9 +154,9 @@
     }
     renderVariant();
     if (!values) return;
-    for (const [id, record] of inputRecords) {
+    for (const [id, control] of inputRecords) {
       if (!Object.prototype.hasOwnProperty.call(values, id)) continue;
-      record.control.value = String(values[id] ?? "");
+      control.value = String(values[id] ?? "");
     }
   }
 
@@ -197,7 +183,7 @@
   }
 
   async function startRelease() {
-    setBusy(executionButton, true, plan?.execution?.run?.buildId ? "Resuming monitoring…" : "Starting release…");
+    setBusy(executionButton, true, "Starting release…");
     try {
       await requestJSON(`${endpointBase}/start`, {
         method: "POST",
@@ -219,12 +205,7 @@
 
     const review = nextPlan.plan || {};
     planSubtitle.textContent = review.subtitle || `${(nextPlan.steps || []).length} workflow steps`;
-    intentBanner.hidden = true;
-    intentTitle.textContent = "";
-    intentBadge.textContent = "";
-    intentBadge.hidden = true;
     planFacts.replaceChildren(...(review.facts || []).map(createPlanFact));
-    renderRequest(null);
 
     const steps = nextPlan.steps || [];
     progressSummary.hidden = steps.length === 0;
@@ -253,36 +234,12 @@
       detail.innerHTML = fact.detail;
       card.append(detail);
     }
-    if (fact.href) {
-      const link = document.createElement("a");
-      link.href = fact.href;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = "Open details ↗";
-      card.append(link);
-    }
     return card;
-  }
-
-  function renderRequest(request) {
-    requestPreview.hidden = !request;
-    if (!request) return;
-    requestPreviewEyebrow.textContent = request.eyebrow || "Request preview";
-    requestPreviewTitle.textContent = request.title || "External request";
-    requestPreviewTarget.textContent = request.target || "";
-    requestPreviewTarget.hidden = !request.target;
-    requestPreviewFields.replaceChildren(...(request.fields || []).flatMap((field) => {
-      const term = document.createElement("dt");
-      term.textContent = field.name;
-      const description = document.createElement("dd");
-      description.textContent = field.value;
-      return [term, description];
-    }));
   }
 
   function renderExecution(execution, review) {
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const visible = Boolean(execution?.enabled && execution?.eligible && preflightReady);
+    const visible = Boolean(execution?.enabled && preflightReady);
     executionControls.hidden = !visible;
     const unavailableReason = execution?.unavailableReason ||
       (execution?.enabled && !preflightReady
@@ -309,10 +266,6 @@
   }
 
   function handleExecutionAction() {
-    if (plan?.execution?.run?.buildId) {
-      startRelease();
-      return;
-    }
     if (!runConfirmationPending) {
       runConfirmationPending = true;
       updateExecutionButton();
@@ -328,8 +281,7 @@
 
   function initialSnapshot(nextPlan) {
     const steps = (nextPlan.steps || []).map((step) => ({ ...step, status: step.status || "waiting" }));
-    const monitoring = Boolean(nextPlan.execution?.run?.buildId && !nextPlan.execution.run.complete);
-    return { active: monitoring, steps };
+    return { active: false, steps };
   }
 
   function createStepCard(step) {
@@ -542,33 +494,17 @@
       workItemLink.removeAttribute("href");
     }
 
-    const run = execution?.run;
-    if (!run?.buildId) {
-      pipelineRunLink.hidden = true;
-      pipelineRunLink.removeAttribute("href");
-    } else {
-      pipelineRunLink.href = run.url;
-      const outcome = run.complete
-        ? run.result === "failed" ? "Failed"
-          : run.result === "canceled" ? "Canceled"
-            : run.result === "uncertain" ? "Needs attention" : "Completed"
-        : "In progress";
-      pipelineRunLink.textContent = `${run.linkLabel || `Open external run ${run.buildId}`} ↗ · ${outcome}`;
-      pipelineRunLink.hidden = false;
-    }
-    executionLinks.hidden = workItemLink.hidden && pipelineRunLink.hidden;
+    executionLinks.hidden = workItemLink.hidden;
   }
 
   function updateActionButtons() {
-    const hasRun = Boolean(plan?.execution?.run?.buildId);
-    const complete = Boolean(plan?.execution?.run?.complete);
     updateExecutionButton();
   }
 
   function updateExecutionButton() {
     const execution = plan?.execution;
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const enabled = Boolean(execution?.enabled && execution?.eligible && preflightReady);
+    const enabled = Boolean(execution?.enabled && preflightReady);
     const complete = Boolean(execution?.run?.complete);
     runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;
@@ -578,9 +514,7 @@
       ? "Release completed"
       : executionActive
         ? "Monitoring release…"
-        : execution?.run?.buildId
-          ? "Resume release monitoring"
-          : runConfirmationPending ? "Confirm run" : executionControls.dataset.buttonLabel || "Run release";
+        : runConfirmationPending ? "Confirm run" : executionControls.dataset.buttonLabel || "Run release";
   }
 
   function connectEvents() {
@@ -612,7 +546,7 @@
       if (response.status === 204) return;
       const latest = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(latest.error || `${response.status} ${response.statusText}`);
-      if (!plan || latest.sessionId !== plan.sessionId) return;
+      if (!plan || latest.variantId !== plan.variantId) return;
       plan = latest;
       renderLinks(latest.execution);
       renderExecution(latest.execution, latest.plan || {});

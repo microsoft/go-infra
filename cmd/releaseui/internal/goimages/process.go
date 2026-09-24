@@ -325,7 +325,6 @@ func (r *goImagesRun) TakeView() *contract.RunView {
 	if r.state.Workflow.Complete {
 		view.Summary = "Azure DevOps pipeline completed"
 		view.Detail = "Build " + r.state.Workflow.BuildID + " finished with result " + r.state.Workflow.Result
-		view.Completed, view.Total = 1, 1
 	}
 	return view
 }
@@ -354,6 +353,7 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 	state := r.state.Workflow
 	source := r.state.Source
 	sessionID := r.state.Document.ID
+	executionDigest := r.state.Document.ExecutionDigest
 	r.mu.RUnlock()
 
 	var service RunService = disabledGoImagesService{}
@@ -376,7 +376,7 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 		}
 		var err error
 		service, err = r.service.NewRunService(RunRequest{
-			Mode: input.Mode, SessionID: sessionID, ExecutionDigest: sessionID,
+			Mode: input.Mode, SessionID: sessionID, ExecutionDigest: executionDigest,
 			Versions: append([]string(nil), input.Versions...), SourceBuildID: input.SourceBuildID,
 			SourceVersion: source.Commit, PreviousQueueAttempt: state.QueueAttempted,
 		})

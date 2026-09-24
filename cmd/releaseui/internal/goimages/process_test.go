@@ -15,6 +15,11 @@ const processTestCommit = "0123456789abcdef0123456789abcdef01234567"
 
 type fakeProcessService struct{}
 
+type recordingProcessService struct {
+	fakeProcessService
+	request *RunRequest
+}
+
 func (fakeProcessService) Preflight(context.Context) (string, error) {
 	return "ready", nil
 }
@@ -31,6 +36,11 @@ func (fakeProcessService) ValidateRollback(context.Context, int) (RollbackSource
 }
 
 func (fakeProcessService) NewRunService(RunRequest) (RunService, error) {
+	return disabledGoImagesService{}, nil
+}
+
+func (service *recordingProcessService) NewRunService(request RunRequest) (RunService, error) {
+	service.request = &request
 	return disabledGoImagesService{}, nil
 }
 
@@ -64,6 +74,32 @@ func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {
 	}
 	if view := run.TakeView(); view.Test || view.Summary != "Ready" {
 		t.Fatalf("view = %#v", view)
+	}
+}
+
+func TestProcessBuildUsesDocumentExecutionIdentity(t *testing.T) {
+	service := new(recordingProcessService)
+	process := NewProcess(service).Processes()[0]
+	snapshot, err := process.Prepare(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, state, err := decodeGoImagesSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := process.Load(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.Build(context.Background(), func() {}); err != nil {
+		t.Fatal(err)
+	}
+	if service.request == nil || service.request.SessionID != state.Document.ID ||
+		service.request.ExecutionDigest != state.Document.ExecutionDigest ||
+		!digestPattern.MatchString(service.request.ExecutionDigest) {
+
+		t.Fatalf("run request = %#v, document = %#v", service.request, state.Document)
 	}
 }
 

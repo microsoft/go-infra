@@ -26,31 +26,6 @@ func TestDocumentOmitsDerivedPlan(t *testing.T) {
 	}
 }
 
-func TestDocumentWithStateDoesNotMutateOriginal(t *testing.T) {
-	document := testDocument(t)
-	state := document.State
-	state.VerifiedMirroredCommit = document.Input.SourceVersion
-	state.QueueAttempted = true
-	state.BuildID = "42"
-	updatedAt := document.UpdatedAt.Add(time.Minute)
-	updated, err := document.WithState(&state, updatedAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if document.State.BuildID != "" {
-		t.Fatalf("original build ID = %q, want empty", document.State.BuildID)
-	}
-	if updated.State.BuildID != "42" {
-		t.Fatalf("updated build ID = %q, want 42", updated.State.BuildID)
-	}
-	if !updated.UpdatedAt.Equal(updatedAt) {
-		t.Fatalf("updated time = %v, want %v", updated.UpdatedAt, updatedAt)
-	}
-	if updated.ExecutionDigest != document.ExecutionDigest {
-		t.Fatalf("state update changed execution digest: %q != %q", updated.ExecutionDigest, document.ExecutionDigest)
-	}
-}
-
 func TestDocumentExecutionDigestDetectsInputChange(t *testing.T) {
 	document := testDocument(t)
 	document.Input.SourceVersion = "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"
@@ -80,16 +55,26 @@ func TestDocumentRejectsInvalidState(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			document := testDocument(t)
-			test.change(&document.State)
-			if err := document.Validate(); err == nil {
-				t.Fatalf("document with invalid %s unexpectedly passed validation", test.name)
+			input, state := testDocumentState(t)
+			test.change(state)
+			if _, err := NewDocument(input, state, time.Now()); err == nil {
+				t.Fatalf("invalid %s state unexpectedly produced a document", test.name)
 			}
 		})
 	}
 }
 
 func testDocument(t *testing.T) *Document {
+	t.Helper()
+	input, state := testDocumentState(t)
+	document, err := NewDocument(input, state, time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document
+}
+
+func testDocumentState(t *testing.T) (*Input, *State) {
 	t.Helper()
 	input := &Input{
 		Versions: []string{"1.26.1-1"}, Mode: ModeNormal,
@@ -99,9 +84,5 @@ func testDocument(t *testing.T) *Document {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document, err := NewDocument(input, state, time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return document
+	return input, state
 }

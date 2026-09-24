@@ -17,6 +17,12 @@ type fakePipelineClient struct {
 	build *azdopipeline.Build
 }
 
+type versionResolverFunc func(context.Context, string) ([]string, error)
+
+func (f versionResolverFunc) VersionsAtCommit(ctx context.Context, commit string) ([]string, error) {
+	return f(ctx, commit)
+}
+
 func (c *fakePipelineClient) Get(context.Context, int) (*azdopipeline.Build, error) {
 	return c.build, nil
 }
@@ -34,7 +40,7 @@ func TestValidateRollbackSource(t *testing.T) {
 	source, err := ValidateRollbackSource(
 		context.Background(),
 		client,
-		VersionResolverFunc(func(context.Context, string) ([]string, error) {
+		versionResolverFunc(func(context.Context, string) ([]string, error) {
 			return []string{"1.26.5-2", "1.25.12-1"}, nil
 		}),
 		3019035,
@@ -76,7 +82,7 @@ func TestValidateRollbackSourceRejectsUnsafeBuilds(t *testing.T) {
 			_, err := ValidateRollbackSource(
 				context.Background(),
 				&fakePipelineClient{build: test.build},
-				VersionResolverFunc(func(context.Context, string) ([]string, error) {
+				versionResolverFunc(func(context.Context, string) ([]string, error) {
 					return []string{"1.26.5-2"}, nil
 				}),
 				test.build.ID,

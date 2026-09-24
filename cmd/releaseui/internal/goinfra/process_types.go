@@ -20,13 +20,11 @@ const (
 	goInfraActionManualDispatch = "manual-dispatch"
 	goInfraDispatchModeDryRun   = "dry-run"
 	goInfraDispatchModePublish  = "publish"
-	goInfraReleaseLabel         = "release-on-merge"
 	goInfraWorkflowFile         = "create-go-infra-patch-release.yml"
 	goInfraRepository           = "microsoft/go-infra"
 	goInfraDefaultRef           = "main"
 	goInfraLabelTimeout         = 2 * time.Minute
 	goInfraWorkflowTimeout      = 30 * time.Minute
-	goInfraWorkflowURL          = "https://github.com/microsoft/go-infra/actions/workflows/create-go-infra-patch-release.yml"
 )
 
 // GoInfraPullRequest is the immutable pull request metadata reviewed before applying a release label.

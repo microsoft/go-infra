@@ -160,15 +160,6 @@ func ParseSnapshot(data []byte) (*Snapshot, error) {
 	return &snapshot, nil
 }
 
-// RenderDescription encodes a snapshot for the Azure DevOps HTML Description field.
-func RenderDescription(snapshot *Snapshot) (string, error) {
-	data, err := MarshalSnapshot(snapshot)
-	if err != nil {
-		return "", err
-	}
-	return renderDescription(snapshot, data)
-}
-
 func renderDescription(snapshot *Snapshot, data []byte) (string, error) {
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 	releaseType := "Release"
