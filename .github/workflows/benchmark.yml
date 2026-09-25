@@ -28,10 +28,10 @@ on:
         type: string
         default: ""
       go-version:
-        description: "Go toolchain version used to build benchcheck in the conclude job and to run the benchmarks."
+        description: "Go toolchain version used to build benchcheck in the conclude job."
         required: false
         type: string
-        default: "1.25.x"
+        default: "1.26.x"
 
 permissions:
   actions: read
