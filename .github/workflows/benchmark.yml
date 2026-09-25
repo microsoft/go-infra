@@ -27,6 +27,12 @@ on:
         required: false
         type: string
         default: ""
+      go-version:
+        description: "Go toolchain version used to build benchcheck in the conclude job and to run the benchmarks."
+        required: false
+        type: string
+        default: "1.25.x"
+
 permissions:
   actions: read
   contents: read
@@ -208,7 +214,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: _go-infra/go.mod
+          go-version: ${{ inputs.go-version }}
           cache-dependency-path: _go-infra/go.sum
 
       - name: Build benchcheck
