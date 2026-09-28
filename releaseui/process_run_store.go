@@ -5,45 +5,26 @@ package releaseui
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
-// ErrReleaseRunConflict reports that a stored release changed before an update completed.
-var ErrReleaseRunConflict = errors.New("release run revision changed")
-
 // ReleaseRunStore persists and discovers confirmed release runs.
+//
+// Implementations must use revision checks in Update and return [ErrReleaseRunConflict] when the
+// record changed after the caller read it. Implementations must not retain or mutate arguments.
 type ReleaseRunStore interface {
-	Create(context.Context, *ReleaseRunState, *contract.RunView, *contract.Plan) (*ReleaseRunRecord, error)
-	Get(context.Context, int) (*ReleaseRunRecord, error)
-	Update(context.Context, *ReleaseRunRecord, *ReleaseRunState, *contract.RunView, *contract.Plan) (*ReleaseRunRecord, error)
-	Query(context.Context, bool, int) ([]*ReleaseRunRecord, error)
-}
+	// Create stores run before releaseui starts external execution. view and plan contain derived
+	// display data for the same run and may be nil.
+	Create(ctx context.Context, run *ReleaseRunState, view *contract.RunView, plan *contract.Plan) (*ReleaseRunRecord, error)
 
-// ReleaseRunRecord is one revisioned release run returned by a ReleaseRunStore.
-type ReleaseRunRecord struct {
-	ID        int
-	Revision  int
-	URL       string
-	Closed    bool
-	UpdatedAt time.Time
-	Run       *ReleaseRunState
-}
+	// Get returns the record identified by id.
+	Get(ctx context.Context, id int) (*ReleaseRunRecord, error)
 
-func validateReleaseRunRecord(record *ReleaseRunRecord) error {
-	if record == nil || record.ID <= 0 || record.Revision <= 0 || record.Run == nil {
-		return errors.New("release run record is invalid")
-	}
-	if err := record.Run.Validate(); err != nil {
-		return err
-	}
-	if record.Closed && !record.Run.Complete {
-		return errors.New("closed release run record is incomplete")
-	}
-	if record.UpdatedAt.IsZero() {
-		return errors.New("release run record update time is zero")
-	}
-	return nil
+	// Update replaces current with run when current.Revision still matches storage. view and plan
+	// contain derived display data for run and may be nil.
+	Update(ctx context.Context, current *ReleaseRunRecord, run *ReleaseRunState, view *contract.RunView, plan *contract.Plan) (*ReleaseRunRecord, error)
+
+	// Query returns at most limit records whose closed state equals closed, newest first.
+	Query(ctx context.Context, closed bool, limit int) ([]*ReleaseRunRecord, error)
 }

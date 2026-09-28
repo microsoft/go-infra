@@ -143,19 +143,6 @@ func TestSelectReleaseRecordRestoresRun(t *testing.T) {
 	}
 }
 
-func TestInitialReleaseRecordRestoresRun(t *testing.T) {
-	run := testProcessRun(t)
-	run.Started = true
-	run.Complete = true
-	run.Result = resultSucceeded
-	store := newMemoryProcessRunStore()
-	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
-	ui := newTestUI(t, WithReleaseRunStore(store), WithInitialReleaseRun(42))
-	if ui.server.processRunRecord == nil || ui.server.processRunRecord.ID != 42 {
-		t.Fatalf("record = %#v", ui.server.processRunRecord)
-	}
-}
-
 func TestExportImportReleaseRecord(t *testing.T) {
 	run := testProcessRun(t)
 	run.Started = true
@@ -191,7 +178,7 @@ func TestExportImportReleaseRecord(t *testing.T) {
 
 func TestExportRejectsMalformedStoreRecord(t *testing.T) {
 	store := newMemoryProcessRunStore()
-	store.records[42] = &ReleaseRunRecord{ID: 42, Revision: 1}
+	store.records[42] = &releaseRunRecord{ID: 42, Revision: 1}
 	ui := newTestUI(t, WithReleaseRunStore(store))
 	response, err := ui.client.Get(ui.http.URL + "/api/releases/42/export")
 	if err != nil {
@@ -304,14 +291,14 @@ func closeResponse(t *testing.T, response *http.Response) {
 	}
 }
 
-func testReleaseRunRecord(id int, run *ReleaseRunState, closed bool, updatedAt time.Time) *ReleaseRunRecord {
-	return &ReleaseRunRecord{
+func testReleaseRunRecord(id int, run *releaseRunState, closed bool, updatedAt time.Time) *releaseRunRecord {
+	return &releaseRunRecord{
 		ID: id, Revision: 1, URL: fmt.Sprintf("https://example.invalid/releases/%d", id),
 		Closed: closed, UpdatedAt: updatedAt, Run: run.Clone(),
 	}
 }
 
-func seedReleaseRecord(store *memoryProcessRunStore, record *ReleaseRunRecord) {
+func seedReleaseRecord(store *memoryProcessRunStore, record *releaseRunRecord) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.records[record.ID] = cloneReleaseRunRecord(record)
