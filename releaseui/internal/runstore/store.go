@@ -15,10 +15,22 @@ import (
 var ErrConflict = errors.New("release run revision changed")
 
 // Store persists and discovers confirmed release runs.
+//
+// Implementations must use revision checks in Update and return [ErrConflict] when the record
+// changed after the caller read it. Implementations must not retain or mutate arguments.
 type Store interface {
+	// Create stores run before releaseui starts external execution. view and plan contain derived
+	// display data for the same run and may be nil.
 	Create(context.Context, *State, *contract.RunView, *contract.Plan) (*Record, error)
+
+	// Get returns the record identified by id.
 	Get(context.Context, int) (*Record, error)
+
+	// Update replaces current with run when current.Revision still matches storage. view and plan
+	// contain derived display data for run and may be nil.
 	Update(context.Context, *Record, *State, *contract.RunView, *contract.Plan) (*Record, error)
+
+	// Query returns at most limit records whose closed state equals closed, newest first.
 	Query(context.Context, bool, int) ([]*Record, error)
 }
 

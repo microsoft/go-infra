@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package azdorepo adapts the Azure DevOps Git SDK to the narrow read-only repository surface
+// Package repo adapts the Azure DevOps Git SDK to the narrow read-only repository surface
 // needed by release UI workflows. It does not log tokens or authorization headers.
-package azdorepo
+package repo
 
 import (
 	"context"
