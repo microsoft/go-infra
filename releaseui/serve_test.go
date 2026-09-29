@@ -20,7 +20,7 @@ func TestListenAndServe(t *testing.T) {
 	go func() {
 		result <- ListenAndServe(ctx, "127.0.0.1:0", func(launchURL string) {
 			ready <- launchURL
-		}, WithProcesses(exampleProcess()))
+		}, WithProcesses(exampleProcess()), WithReleaseRunStore(newMemoryProcessRunStore()))
 	}()
 
 	var launchURL string

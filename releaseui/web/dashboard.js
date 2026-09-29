@@ -15,7 +15,7 @@ const jsonClose = document.querySelector("#json-close");
 const jsonCopy = document.querySelector("#json-copy");
 const jsonSave = document.querySelector("#json-save");
 
-let editingWorkItem = 0;
+let editingRecord = 0;
 
 loadDashboard();
 jsonClose.addEventListener("click", () => jsonDialog.close());
@@ -71,14 +71,7 @@ function createReleaseCard(release) {
 
   const actions = document.createElement("div");
   actions.className = "release-card-actions";
-  if (release.workItemId) {
-    const workItemLink = document.createElement("a");
-    workItemLink.className = "button button-secondary compact-button";
-    workItemLink.href = release.workItemUrl;
-    workItemLink.target = "_blank";
-    workItemLink.rel = "noreferrer";
-    workItemLink.textContent = `Work item ${release.workItemId}`;
-
+  if (release.recordId) {
     const edit = document.createElement("button");
     edit.className = "button button-secondary compact-button";
     edit.type = "button";
@@ -90,7 +83,7 @@ function createReleaseCard(release) {
     open.type = "button";
     open.textContent = "Open";
     const openRelease = () => {
-      if (!open.disabled) selectWorkItem(release, open, "Open");
+      if (!open.disabled) selectRelease(release, open, "Open");
     };
     open.addEventListener("click", openRelease);
     card.classList.add("release-card-selectable");
@@ -103,7 +96,16 @@ function createReleaseCard(release) {
       event.preventDefault();
       openRelease();
     });
-    actions.append(workItemLink, edit, open);
+    if (release.recordUrl) {
+      const recordLink = document.createElement("a");
+      recordLink.className = "button button-secondary compact-button";
+      recordLink.href = release.recordUrl;
+      recordLink.target = "_blank";
+      recordLink.rel = "noreferrer";
+      recordLink.textContent = `Tracking record ${release.recordId}`;
+      actions.append(recordLink);
+    }
+    actions.append(edit, open);
   } else {
     const link = document.createElement("a");
     link.className = "button button-secondary compact-button";
@@ -115,10 +117,10 @@ function createReleaseCard(release) {
   return card;
 }
 
-async function selectWorkItem(release, button, label) {
+async function selectRelease(release, button, label) {
   setButtonBusy(button, true, "Opening…");
   try {
-    const selected = await requestJSON(`/api/release-work-items/${release.workItemId}/select`, {
+    const selected = await requestJSON(`/api/releases/${release.recordId}/select`, {
       method: "POST",
       body: "{}",
     });
@@ -131,9 +133,9 @@ async function selectWorkItem(release, button, label) {
 
 async function openJSON(release) {
   try {
-    const exported = await requestJSON(`/api/release-work-items/${release.workItemId}/export`);
-    editingWorkItem = release.workItemId;
-    jsonDialogTitle.textContent = `Work item ${release.workItemId} state`;
+    const exported = await requestJSON(`/api/releases/${release.recordId}/export`);
+    editingRecord = release.recordId;
+    jsonDialogTitle.textContent = `Release ${release.recordId} state`;
     jsonEditor.value = JSON.stringify(exported, null, 2);
     jsonError.hidden = true;
     jsonDialog.showModal();
@@ -160,11 +162,11 @@ async function saveJSON() {
     showJSONError(`Invalid JSON: ${error.message}`);
     return;
   }
-  if (!confirm(`Replace the stored state for work item ${editingWorkItem}?`)) return;
+  if (!confirm(`Replace the stored state for release ${editingRecord}?`)) return;
 
   setButtonBusy(jsonSave, true, "Saving…");
   try {
-    const updated = await requestJSON(`/api/release-work-items/${editingWorkItem}/import`, {
+    const updated = await requestJSON(`/api/releases/${editingRecord}/import`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(value),

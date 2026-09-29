@@ -13,9 +13,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 	"github.com/microsoft/go-infra/releaseui/releaseflag"
 )
 
@@ -57,7 +59,8 @@ type releaseStartRequest struct {
 	Confirmed  bool   `json:"confirmed"`
 }
 
-// WithReleaseRunStore enables durable intent, checkpoint, and result persistence.
+// WithReleaseRunStore replaces the built-in Azure-backed release store.
+// Most callers should omit this option.
 func WithReleaseRunStore(store ReleaseRunStore) Option {
 	return func(server *Server) {
 		server.processRunStore = store
@@ -74,19 +77,12 @@ func (s *Server) handleProcessRunPreflight(processID string, response http.Respo
 		http.NotFound(response, request)
 		return
 	}
-	if s.processRunStore == nil {
-		report.Checks = append(report.Checks, PreflightCheck{
-			ID: "release-tracking", Name: "Azure DevOps release tracking", Status: CheckStatusWarning,
-			Details: "Not configured. Planning is available, but confirmed releases cannot start or be restored.",
-		})
-	} else {
-		report.Checks = append(report.Checks, PreflightCheck{
-			ID: "release-tracking", Name: "Azure DevOps release tracking", Status: CheckStatusPassed,
-			Details: "Enabled. Confirmed release state is stored in a revisioned work item; unconfirmed plans remain in memory.",
-		})
-	}
+	report.Checks = append(report.Checks, PreflightCheck{
+		ID: "release-tracking", Name: "Release tracking", Status: CheckStatusPassed,
+		Details: "Confirmed release state is stored in a revisioned record; unconfirmed plans remain in memory.",
+	})
 	warning, blocking := registered.process.Preflight(request.Context())
-	report.ExternalExecutionEnabled = blocking == nil && s.processRunStore != nil
+	report.ExternalExecutionEnabled = blocking == nil
 	switch {
 	case blocking != nil:
 		report.PlanningEnabled = false
@@ -189,7 +185,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusInternalServerError, "Plan or Build changed the prepared release state")
 		return
 	}
-	state, err := newProcessRunState(processID, snapshot)
+	state, err := runstore.NewState(processID, snapshot, time.Now().UTC())
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release run state: %v", err))
 		return
@@ -248,11 +244,6 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		writeError(response, http.StatusConflict, "the reviewed external action has already started")
 		return
 	}
-	if s.processRunStore == nil {
-		s.mu.Unlock()
-		writeError(response, http.StatusForbidden, "release tracking is required before starting an external action")
-		return
-	}
 	state := s.processRunState.Clone()
 	s.processRunning = true
 	s.mu.Unlock()
@@ -302,7 +293,7 @@ func (s *Server) handleStartProcessRun(processID string, response http.ResponseW
 		checkpointer.Close()
 		cancel()
 		s.stopProcessStart(state.Digest)
-		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release work item before mutation: %v", err))
+		writeError(response, http.StatusInternalServerError, fmt.Sprintf("create release record before mutation: %v", err))
 		return
 	}
 	s.mu.Lock()
@@ -495,7 +486,7 @@ func processRunOutcome(executionErr, snapshotErr error, checkpointFailed, checkp
 	}
 }
 
-func (s *Server) restoreProcessRunRecord(record *ReleaseRunRecord) error {
+func (s *Server) restoreProcessRunRecord(record *runstore.Record) error {
 	if record == nil || record.Run == nil {
 		return errors.New("release run record is empty")
 	}
@@ -568,15 +559,9 @@ func (s *Server) processRunResponseLockedWithPlan(plan *contract.Plan) processRu
 			steps[index].Status = status
 		}
 	}
-	execution := executionResponse{
-		Enabled: s.processRunStore != nil, PlanDigest: state.Digest,
-		Run: pipelineRun{Complete: state.Complete},
-	}
+	execution := executionResponse{PlanDigest: state.Digest, Run: pipelineRun{Complete: state.Complete}}
 	if s.processRunRecord != nil {
-		execution.WorkItem = &workItemReference{ID: s.processRunRecord.WorkItemID, URL: s.processRunRecord.URL}
-	}
-	if s.processRunStore == nil {
-		execution.UnavailableReason = "Release tracking is unavailable."
+		execution.Record = &releaseRecordReference{ID: s.processRunRecord.ID, URL: s.processRunRecord.URL}
 	}
 	return processRunResponse{
 		VariantID: state.ProcessID,

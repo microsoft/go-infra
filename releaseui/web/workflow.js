@@ -28,7 +28,7 @@
   const stepEdges = document.querySelector("#step-edges");
   const stepList = document.querySelector("#step-list");
   const executionLinks = document.querySelector("#execution-links");
-  const workItemLink = document.querySelector("#work-item-link");
+  const recordLink = document.querySelector("#record-link");
   const executionControls = document.querySelector("#execution-controls");
   const executionUnavailable = document.querySelector("#execution-unavailable");
   const executionTitle = document.querySelector("#execution-title");
@@ -239,12 +239,9 @@
 
   function renderExecution(execution, review) {
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const visible = Boolean(execution?.enabled && preflightReady);
+    const visible = preflightReady;
     executionControls.hidden = !visible;
-    const unavailableReason = execution?.unavailableReason ||
-      (execution?.enabled && !preflightReady
-        ? preflightFailureSummary()
-        : "");
+    const unavailableReason = preflightReady ? "" : preflightFailureSummary();
     executionUnavailable.hidden = visible || !unavailableReason;
     executionUnavailable.textContent = unavailableReason;
 
@@ -485,16 +482,16 @@
   }
 
   function renderLinks(execution) {
-    const workItem = execution?.workItem;
-    workItemLink.hidden = !workItem?.id;
-    if (workItem?.id) {
-      workItemLink.href = workItem.url;
-      workItemLink.textContent = `Open work item ${workItem.id} ↗`;
+    const record = execution?.record;
+    recordLink.hidden = !record?.url;
+    if (record?.url) {
+      recordLink.href = record.url;
+      recordLink.textContent = `Open tracking record ${record.id} ↗`;
     } else {
-      workItemLink.removeAttribute("href");
+      recordLink.removeAttribute("href");
     }
 
-    executionLinks.hidden = workItemLink.hidden;
+    executionLinks.hidden = recordLink.hidden;
   }
 
   function updateActionButtons() {
@@ -504,7 +501,7 @@
   function updateExecutionButton() {
     const execution = plan?.execution;
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const enabled = Boolean(execution?.enabled && preflightReady);
+    const enabled = preflightReady;
     const complete = Boolean(execution?.run?.complete);
     runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;

@@ -23,16 +23,21 @@ No HTML, JavaScript, or route change is required.
 Keep process policy separate from reusable mechanics:
 
 ```text
-releaseui/                         Local HTTP lifecycle, UI, execution, and persistence
-releaseui/contract/                Process and durable-state contracts
-cmd/releaseui/internal/azdopipeline/  Azure Pipeline reads and queue transport
-cmd/releaseui/internal/azdorepo/      Azure Repos reads
-cmd/releaseui/internal/githubclient/  Authenticated GitHub operations
-cmd/releaseui/internal/goimages/      Go-images targets, allowlists, state, and graph
-cmd/releaseui/internal/goinfra/       Go-infra targets, allowlists, state, and graph
+releaseui/                           Local HTTP lifecycle, UI, execution, and built-in storage
+releaseui/contract/                  Process and durable-state contracts
+releaseui/internal/azdorunstore/     Azure Boards release storage
+releaseui/internal/runstore/         Private durable-state and storage contracts
+azdo/token/                          Azure CLI token acquisition and caching
+azdo/workitem/                       General Azure Boards work-item client
+cmd/releaseui/internal/azdopipeline/ Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdorepo/     Azure Repos reads
+cmd/releaseui/internal/githubclient/ Authenticated GitHub operations
+cmd/releaseui/internal/goimages/     Go-images targets, allowlists, state, and graph
+cmd/releaseui/internal/goinfra/      Go-infra targets, allowlists, state, and graph
 ```
 
-The neutral clients accept service-level requests. A release package decides which repository,
+The reusable host uses its private Azure Boards store by default. Callers that need another backend
+can supply `releaseui.WithReleaseRunStore`. The neutral clients accept service-level requests. A release package decides which repository,
 pipeline, branch, workflow, labels, and parameters are allowed before calling them. The command
 only parses flags, constructs those dependencies, and registers processes. `releaseui.ListenAndServe`
 owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
@@ -147,14 +152,13 @@ test mode and go-infra dry-run mode. Every item receives its process ID as a tag
 items also receive `test`; all release UI queries combine these tags with `releaseagent`. Azure
 DevOps treats tags as case-insensitive and may display the project-canonical casing, such as `Test`.
 Unconfirmed plans remain in memory and create no work item.
-To restore one explicitly, add `-release-work-item <id>`.
 Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.
 
 The release UI owns `System.Description` on these work items. It shows status and release type plus
 useful process details. Go-images work items include mode, versions, publication prefix, source
-commit, Azure build, and checkpoint timestamps. Generic actions include their intent, action,
+commit, Azure build, and checkpoint timestamps. Go-infra work items include their intent, action,
 reviewed facts, target, and external run. Links open the underlying commit, build, pull request, or
 workflow run. The base64url-encoded canonical JSON remains in a collapsed managed-state section so
 Azure DevOps HTML normalization cannot alter release state. Add operator notes as work-item comments
@@ -202,7 +206,7 @@ coordinator graph instead of serializing it. The release UI stores the document 
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
 
-The current server runs one selected release at a time. Go-images and generic action state live only
+The current server runs one selected release at a time. Go-images and Go-infra state live only
 in the selected Azure DevOps work item. The server creates the work item before calling the target
 service, updates it with an Azure DevOps revision check, and resumes monitoring a known external run
 after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and

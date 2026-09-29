@@ -22,9 +22,10 @@ import (
 	"sync"
 	"time"
 
-	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/azdorunstore"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 )
 
 const sessionCookieName = "releaseui_session"
@@ -39,18 +40,16 @@ type Server struct {
 	configuredProcesses []contract.ProcessGroup
 	processes           *processRegistry
 	activeProcessID     string
-	processRunStore     ReleaseRunStore
-	workItems           releaseWorkItemService
-	initialWorkItem     *azdoworkitem.WorkItem
+	processRunStore     runstore.Store
 
 	selectionMu         sync.Mutex
 	mu                  sync.Mutex
 	steps               []*coordinator.Step
 	runner              *coordinator.StepRunner
 	processRun          contract.Run
-	processRunState     *ReleaseRunState
+	processRunState     *runstore.State
 	processPlan         *contract.Plan
-	processRunRecord    *ReleaseRunRecord
+	processRunRecord    *runstore.Record
 	processRunning      bool
 	processCheckpointer *processCheckpointer
 }
@@ -65,8 +64,7 @@ func WithProcesses(processes ...contract.ProcessGroup) Option {
 	}
 }
 
-// New creates a local release UI server. External execution exists only when the explicit
-// execution option is supplied and all server-side safety boundaries validate.
+// New creates a local release UI server with built-in release persistence.
 func New(ctx context.Context, options ...Option) (*Server, error) {
 	if ctx == nil {
 		return nil, errors.New("server context is nil")
@@ -87,11 +85,10 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	initialWorkItem := server.initialWorkItem
-	server.initialWorkItem = nil
-	if initialWorkItem != nil {
-		if _, err := server.restoreReleaseWorkItem(initialWorkItem); err != nil {
-			return nil, fmt.Errorf("restore release work item %d: %w", initialWorkItem.ID, err)
+	if server.processRunStore == nil {
+		server.processRunStore, err = azdorunstore.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("create release store: %w", err)
 		}
 	}
 	return server, nil
@@ -139,9 +136,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
-	mux.HandleFunc("POST /api/release-work-items/{id}/select", s.handleSelectWorkItem)
-	mux.HandleFunc("GET /api/release-work-items/{id}/export", s.handleExportWorkItem)
-	mux.HandleFunc("POST /api/release-work-items/{id}/import", s.handleImportWorkItem)
+	mux.HandleFunc("POST /api/releases/{id}/select", s.handleSelectRelease)
+	mux.HandleFunc("GET /api/releases/{id}/export", s.handleExportRelease)
+	mux.HandleFunc("POST /api/releases/{id}/import", s.handleImportRelease)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
@@ -234,17 +231,15 @@ type pipelineRun struct {
 	Complete bool `json:"complete"`
 }
 
-type workItemReference struct {
+type releaseRecordReference struct {
 	ID  int    `json:"id"`
-	URL string `json:"url"`
+	URL string `json:"url,omitempty"`
 }
 
 type executionResponse struct {
-	Enabled           bool               `json:"enabled"`
-	PlanDigest        string             `json:"planDigest,omitempty"`
-	UnavailableReason string             `json:"unavailableReason,omitempty"`
-	Run               pipelineRun        `json:"run"`
-	WorkItem          *workItemReference `json:"workItem,omitempty"`
+	PlanDigest string                  `json:"planDigest,omitempty"`
+	Run        pipelineRun             `json:"run"`
+	Record     *releaseRecordReference `json:"record,omitempty"`
 }
 
 type dashboardResponse struct {
@@ -256,14 +251,14 @@ type dashboardResponse struct {
 }
 
 type releaseSummary struct {
-	Mark        string    `json:"mark"`
-	Name        string    `json:"name"`
-	Mode        string    `json:"mode,omitempty"`
-	Status      string    `json:"status"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Href        string    `json:"href"`
-	WorkItemID  int       `json:"workItemId,omitempty"`
-	WorkItemURL string    `json:"workItemUrl,omitempty"`
+	Mark      string    `json:"mark"`
+	Name      string    `json:"name"`
+	Mode      string    `json:"mode,omitempty"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Href      string    `json:"href"`
+	RecordID  int       `json:"recordId,omitempty"`
+	RecordURL string    `json:"recordUrl,omitempty"`
 }
 
 type processSummary struct {
@@ -335,23 +330,7 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
-	if s.workItems != nil {
-		writeJSON(response, http.StatusOK, s.workItemDashboard(request.Context()))
-		return
-	}
-	s.mu.Lock()
-	result := dashboardResponse{
-		Ongoing:        make([]releaseSummary, 0),
-		NeedsAttention: make([]releaseSummary, 0),
-		Recent:         make([]releaseSummary, 0),
-		Processes:      s.processes.summaries(),
-	}
-	if s.processRun != nil {
-		summary := s.processRunSummaryLocked(s.processRunState, s.processRun.TakeView())
-		addDashboardRelease(&result, summary)
-	}
-	s.mu.Unlock()
-	writeJSON(response, http.StatusOK, result)
+	writeJSON(response, http.StatusOK, s.releaseDashboard(request.Context()))
 }
 
 func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
@@ -365,7 +344,7 @@ func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
 	}
 }
 
-func (s *Server) processRunSummaryLocked(run *ReleaseRunState, view *contract.RunView) releaseSummary {
+func (s *Server) processRunSummaryLocked(run *releaseRunState, view *contract.RunView) releaseSummary {
 	registered, _ := s.processes.process(run.ProcessID)
 	identity := registered.group.identity
 	status := "ready"
