@@ -14,7 +14,6 @@ import (
 	"time"
 
 	azdotoken "github.com/microsoft/go-infra/azdo/token"
-	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"
