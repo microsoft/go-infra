@@ -4,140 +4,53 @@
 package releaseui
 
 import (
-	"crypto/sha256"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"time"
-
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 )
 
 const (
-	resultRunning   = "running"
-	resultSucceeded = "succeeded"
-	resultFailed    = "failed"
-	resultCanceled  = "canceled"
-	resultUncertain = "uncertain"
+	resultRunning   = string(runstore.StatusRunning)
+	resultSucceeded = string(runstore.StatusSucceeded)
+	resultFailed    = string(runstore.StatusFailed)
+	resultCanceled  = string(runstore.StatusCanceled)
+	resultUncertain = string(runstore.StatusUncertain)
 )
 
-// ReleaseRunStatus is the storage-neutral lifecycle status of a started release run.
-type ReleaseRunStatus string
+type (
+	// ReleaseRunStatus is the lifecycle status of a started release run.
+	ReleaseRunStatus = runstore.Status
+
+	// ReleaseRunState is releaseui-owned state wrapped around a process-owned snapshot.
+	ReleaseRunState = runstore.State
+
+	// ReleaseRunRecord is one revisioned release run returned by a ReleaseRunStore.
+	ReleaseRunRecord = runstore.Record
+
+	releaseRunState  = runstore.State
+	releaseRunRecord = runstore.Record
+)
 
 const (
-	ReleaseRunStatusRunning   ReleaseRunStatus = resultRunning
-	ReleaseRunStatusSucceeded ReleaseRunStatus = resultSucceeded
-	ReleaseRunStatusFailed    ReleaseRunStatus = resultFailed
-	ReleaseRunStatusCanceled  ReleaseRunStatus = resultCanceled
-	ReleaseRunStatusUncertain ReleaseRunStatus = resultUncertain
+	ReleaseRunStatusRunning   = runstore.StatusRunning
+	ReleaseRunStatusSucceeded = runstore.StatusSucceeded
+	ReleaseRunStatusFailed    = runstore.StatusFailed
+	ReleaseRunStatusCanceled  = runstore.StatusCanceled
+	ReleaseRunStatusUncertain = runstore.StatusUncertain
 )
 
-// ReleaseRunState is releaseui-owned state wrapped around a process-owned snapshot.
-type ReleaseRunState struct {
-	ProcessID    string                  `json:"processId"`
-	Snapshot     *contract.StateSnapshot `json:"snapshot"`
-	Digest       string                  `json:"digest"`
-	Started      bool                    `json:"started"`
-	Checkpointed bool                    `json:"checkpointed,omitempty"`
-	Complete     bool                    `json:"complete"`
-	Result       string                  `json:"result,omitempty"`
-	UpdatedAt    time.Time               `json:"-"`
-}
+// ErrReleaseRunConflict reports that a stored release changed before an update completed.
+var ErrReleaseRunConflict = runstore.ErrConflict
 
-func newProcessRunState(processID string, snapshot *contract.StateSnapshot) (*ReleaseRunState, error) {
-	if err := validateStateSnapshot(snapshot); err != nil {
-		return nil, err
-	}
-	digestSource, err := json.Marshal(struct {
-		ProcessID string
-		Snapshot  *contract.StateSnapshot
-	}{ProcessID: processID, Snapshot: snapshot})
-	if err != nil {
-		return nil, fmt.Errorf("encode release intent: %w", err)
-	}
-	digest := sha256.Sum256(digestSource)
-	return &ReleaseRunState{
-		ProcessID: processID,
-		Snapshot:  cloneStateSnapshot(snapshot),
-		Digest:    fmt.Sprintf("%x", digest),
-		UpdatedAt: time.Now().UTC(),
-	}, nil
-}
+var errReleaseRunConflict = ErrReleaseRunConflict
 
-// Clone returns an independent copy of the release run state.
-func (s *ReleaseRunState) Clone() *ReleaseRunState {
-	if s == nil {
-		return nil
-	}
-	clone := *s
-	clone.Snapshot = cloneStateSnapshot(s.Snapshot)
-	return &clone
-}
-
-// Validate checks the releaseui-owned state and its process snapshot.
-func (s *ReleaseRunState) Validate() error {
-	if s == nil {
-		return errors.New("process run is nil")
-	}
-	if !processIDPattern.MatchString(s.ProcessID) {
-		return fmt.Errorf("process run has invalid process ID %q", s.ProcessID)
-	}
-	if err := validateStateSnapshot(s.Snapshot); err != nil {
-		return err
-	}
-	if s.Digest == "" {
-		return errors.New("process run digest is empty")
-	}
-	if s.Checkpointed && !s.Started {
-		return errors.New("process run checkpointed before it started")
-	}
-	if s.Complete && !s.Started {
-		return errors.New("process run completed before it started")
-	}
-	if !s.Complete && s.Result != "" {
-		return errors.New("incomplete process run has a result")
-	}
-	if s.Complete && s.Result != resultSucceeded && s.Result != resultFailed &&
-		s.Result != resultCanceled && s.Result != resultUncertain {
-
-		return fmt.Errorf("completed process run has invalid result %q", s.Result)
-	}
-	return nil
-}
-
-// Status returns the lifecycle status persisted by a release store.
-func (s *ReleaseRunState) Status() (ReleaseRunStatus, error) {
-	if err := s.Validate(); err != nil {
-		return "", err
-	}
-	if !s.Started {
-		return "", errors.New("process run has not started")
-	}
-	if !s.Complete {
-		return ReleaseRunStatusRunning, nil
-	}
-	return ReleaseRunStatus(s.Result), nil
+func validateReleaseRunRecord(record *releaseRunRecord) error {
+	return runstore.ValidateRecord(record)
 }
 
 func validateStateSnapshot(snapshot *contract.StateSnapshot) error {
-	if snapshot == nil {
-		return errors.New("process snapshot is nil")
-	}
-	if !json.Valid(snapshot.Input) {
-		return errors.New("process snapshot input is invalid JSON")
-	}
-	if !json.Valid(snapshot.State) {
-		return errors.New("process snapshot state is invalid JSON")
-	}
-	return nil
+	return runstore.ValidateSnapshot(snapshot)
 }
 
 func cloneStateSnapshot(snapshot *contract.StateSnapshot) *contract.StateSnapshot {
-	if snapshot == nil {
-		return nil
-	}
-	return &contract.StateSnapshot{
-		Input: append(json.RawMessage(nil), snapshot.Input...),
-		State: append(json.RawMessage(nil), snapshot.State...),
-	}
+	return runstore.CloneSnapshot(snapshot)
 }

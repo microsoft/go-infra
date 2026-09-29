@@ -24,6 +24,8 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/azdorunstore"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 )
 
 const sessionCookieName = "releaseui_session"
@@ -38,17 +40,16 @@ type Server struct {
 	configuredProcesses []contract.ProcessGroup
 	processes           *processRegistry
 	activeProcessID     string
-	processRunStore     ReleaseRunStore
-	initialReleaseRunID int
+	processRunStore     runstore.Store
 
 	selectionMu         sync.Mutex
 	mu                  sync.Mutex
 	steps               []*coordinator.Step
 	runner              *coordinator.StepRunner
 	processRun          contract.Run
-	processRunState     *ReleaseRunState
+	processRunState     *runstore.State
 	processPlan         *contract.Plan
-	processRunRecord    *ReleaseRunRecord
+	processRunRecord    *runstore.Record
 	processRunning      bool
 	processCheckpointer *processCheckpointer
 }
@@ -63,8 +64,7 @@ func WithProcesses(processes ...contract.ProcessGroup) Option {
 	}
 }
 
-// New creates a local release UI server. External execution exists only when the explicit
-// execution option is supplied and all server-side safety boundaries validate.
+// New creates a local release UI server with built-in release persistence.
 func New(ctx context.Context, options ...Option) (*Server, error) {
 	if ctx == nil {
 		return nil, errors.New("server context is nil")
@@ -85,19 +85,10 @@ func New(ctx context.Context, options ...Option) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if server.initialReleaseRunID < 0 {
-		return nil, errors.New("initial release run ID must not be negative")
-	}
-	if server.initialReleaseRunID > 0 {
-		if server.processRunStore == nil {
-			return nil, errors.New("initial release run requires a release store")
-		}
-		record, err := server.processRunStore.Get(ctx, server.initialReleaseRunID)
+	if server.processRunStore == nil {
+		server.processRunStore, err = azdorunstore.New(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("load release run %d: %w", server.initialReleaseRunID, err)
-		}
-		if _, err := server.restoreReleaseRunRecord(record); err != nil {
-			return nil, fmt.Errorf("restore release run %d: %w", server.initialReleaseRunID, err)
+			return nil, fmt.Errorf("create release store: %w", err)
 		}
 	}
 	return server, nil
@@ -246,11 +237,9 @@ type releaseRecordReference struct {
 }
 
 type executionResponse struct {
-	Enabled           bool                    `json:"enabled"`
-	PlanDigest        string                  `json:"planDigest,omitempty"`
-	UnavailableReason string                  `json:"unavailableReason,omitempty"`
-	Run               pipelineRun             `json:"run"`
-	Record            *releaseRecordReference `json:"record,omitempty"`
+	PlanDigest string                  `json:"planDigest,omitempty"`
+	Run        pipelineRun             `json:"run"`
+	Record     *releaseRecordReference `json:"record,omitempty"`
 }
 
 type dashboardResponse struct {
@@ -341,23 +330,7 @@ func (s *Server) handleProcess(response http.ResponseWriter, request *http.Reque
 }
 
 func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
-	if s.processRunStore != nil {
-		writeJSON(response, http.StatusOK, s.releaseDashboard(request.Context()))
-		return
-	}
-	s.mu.Lock()
-	result := dashboardResponse{
-		Ongoing:        make([]releaseSummary, 0),
-		NeedsAttention: make([]releaseSummary, 0),
-		Recent:         make([]releaseSummary, 0),
-		Processes:      s.processes.summaries(),
-	}
-	if s.processRun != nil {
-		summary := s.processRunSummaryLocked(s.processRunState, s.processRun.TakeView())
-		addDashboardRelease(&result, summary)
-	}
-	s.mu.Unlock()
-	writeJSON(response, http.StatusOK, result)
+	writeJSON(response, http.StatusOK, s.releaseDashboard(request.Context()))
 }
 
 func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
@@ -371,7 +344,7 @@ func addDashboardRelease(result *dashboardResponse, summary releaseSummary) {
 	}
 }
 
-func (s *Server) processRunSummaryLocked(run *ReleaseRunState, view *contract.RunView) releaseSummary {
+func (s *Server) processRunSummaryLocked(run *releaseRunState, view *contract.RunView) releaseSummary {
 	registered, _ := s.processes.process(run.ProcessID)
 	identity := registered.group.identity
 	status := "ready"

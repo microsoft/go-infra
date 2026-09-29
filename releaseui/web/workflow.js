@@ -239,12 +239,9 @@
 
   function renderExecution(execution, review) {
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const visible = Boolean(execution?.enabled && preflightReady);
+    const visible = preflightReady;
     executionControls.hidden = !visible;
-    const unavailableReason = execution?.unavailableReason ||
-      (execution?.enabled && !preflightReady
-        ? preflightFailureSummary()
-        : "");
+    const unavailableReason = preflightReady ? "" : preflightFailureSummary();
     executionUnavailable.hidden = visible || !unavailableReason;
     executionUnavailable.textContent = unavailableReason;
 
@@ -504,7 +501,7 @@
   function updateExecutionButton() {
     const execution = plan?.execution;
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const enabled = Boolean(execution?.enabled && preflightReady);
+    const enabled = preflightReady;
     const complete = Boolean(execution?.run?.complete);
     runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;

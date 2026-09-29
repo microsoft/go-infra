@@ -23,18 +23,21 @@ No HTML, JavaScript, or route change is required.
 Keep process policy separate from reusable mechanics:
 
 ```text
-releaseui/                           Local HTTP lifecycle, UI, execution, and storage contracts
+releaseui/                           Local HTTP lifecycle, UI, execution, and built-in storage
 releaseui/contract/                  Process and durable-state contracts
+releaseui/internal/azdorunstore/     Azure Boards release storage
+releaseui/internal/runstore/         Private durable-state and storage contracts
+azdo/token/                          Azure CLI token acquisition and caching
+azdo/workitem/                       General Azure Boards work-item client
 cmd/releaseui/internal/azdo/pipeline/ Azure Pipeline reads and queue transport
 cmd/releaseui/internal/azdo/repo/     Azure Repos reads
-cmd/releaseui/internal/azdo/workitem/ Azure Boards release-store adapter
 cmd/releaseui/internal/githubclient/ Authenticated GitHub operations
 cmd/releaseui/internal/goimages/     Go-images targets, allowlists, state, and graph
 cmd/releaseui/internal/goinfra/      Go-infra targets, allowlists, state, and graph
 ```
 
-The reusable host sees only revisioned release records through `releaseui.ReleaseRunStore`; the
-command supplies the Azure Boards implementation. The neutral clients accept service-level requests. A release package decides which repository,
+The reusable host uses its private Azure Boards store by default. Callers that need another backend
+can supply `releaseui.WithReleaseRunStore`. The neutral clients accept service-level requests. A release package decides which repository,
 pipeline, branch, workflow, labels, and parameters are allowed before calling them. The command
 only parses flags, constructs those dependencies, and registers processes. `releaseui.ListenAndServe`
 owns loopback binding, HTTP timeouts, serving, and graceful shutdown.
@@ -149,7 +152,6 @@ test mode and go-infra dry-run mode. Every item receives its process ID as a tag
 items also receive `test`; all release UI queries combine these tags with `releaseagent`. Azure
 DevOps treats tags as case-insensitive and may display the project-canonical casing, such as `Test`.
 Unconfirmed plans remain in memory and create no work item.
-To restore one explicitly, add `-release-work-item <id>`.
 Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.

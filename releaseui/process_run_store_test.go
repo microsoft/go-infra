@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 )
 
 func TestProcessRunStateRejectsCheckpointBeforeStart(t *testing.T) {
@@ -31,11 +32,11 @@ func TestReleaseRunRecordRejectsClosedIncompleteRun(t *testing.T) {
 	}
 }
 
-func testProcessRun(t *testing.T) *ReleaseRunState {
+func testProcessRun(t *testing.T) *releaseRunState {
 	t.Helper()
-	run, err := newProcessRunState("example", &contract.StateSnapshot{
+	run, err := runstore.NewState("example", &contract.StateSnapshot{
 		Input: json.RawMessage(`{}`), State: json.RawMessage(`{"value":"fixed"}`),
-	})
+	}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func testProcessRun(t *testing.T) *ReleaseRunState {
 type memoryProcessRunStore struct {
 	mu            sync.Mutex
 	nextID        int
-	records       map[int]*ReleaseRunRecord
+	records       map[int]*releaseRunRecord
 	createErr     error
 	queryErr      error
 	updateErr     error
@@ -54,21 +55,21 @@ type memoryProcessRunStore struct {
 }
 
 func newMemoryProcessRunStore() *memoryProcessRunStore {
-	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*ReleaseRunRecord)}
+	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*releaseRunRecord)}
 }
 
 func (s *memoryProcessRunStore) Create(
 	_ context.Context,
-	run *ReleaseRunState,
+	run *releaseRunState,
 	_ *contract.RunView,
 	_ *contract.Plan,
-) (*ReleaseRunRecord, error) {
+) (*releaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.createErr != nil {
 		return nil, s.createErr
 	}
-	record := &ReleaseRunRecord{
+	record := &releaseRunRecord{
 		ID: s.nextID, Revision: 1,
 		URL:       fmt.Sprintf("https://example.invalid/releases/%d", s.nextID),
 		UpdatedAt: run.UpdatedAt, Run: run.Clone(),
@@ -78,7 +79,7 @@ func (s *memoryProcessRunStore) Create(
 	return cloneReleaseRunRecord(record), nil
 }
 
-func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ReleaseRunRecord, error) {
+func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*releaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	record, ok := s.records[id]
@@ -88,13 +89,13 @@ func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*ReleaseRunRecor
 	return cloneReleaseRunRecord(record), nil
 }
 
-func (s *memoryProcessRunStore) Query(_ context.Context, closed bool, limit int) ([]*ReleaseRunRecord, error) {
+func (s *memoryProcessRunStore) Query(_ context.Context, closed bool, limit int) ([]*releaseRunRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.queryErr != nil {
 		return nil, s.queryErr
 	}
-	records := make([]*ReleaseRunRecord, 0, len(s.records))
+	records := make([]*releaseRunRecord, 0, len(s.records))
 	for _, record := range s.records {
 		if record.Closed == closed {
 			records = append(records, cloneReleaseRunRecord(record))
@@ -109,11 +110,11 @@ func (s *memoryProcessRunStore) Query(_ context.Context, closed bool, limit int)
 
 func (s *memoryProcessRunStore) Update(
 	_ context.Context,
-	current *ReleaseRunRecord,
-	run *ReleaseRunState,
+	current *releaseRunRecord,
+	run *releaseRunState,
 	_ *contract.RunView,
 	_ *contract.Plan,
-) (*ReleaseRunRecord, error) {
+) (*releaseRunRecord, error) {
 	if s.updateStarted != nil {
 		close(s.updateStarted)
 	}
@@ -127,9 +128,9 @@ func (s *memoryProcessRunStore) Update(
 	}
 	record, ok := s.records[current.ID]
 	if !ok || record.Revision != current.Revision {
-		return nil, ErrReleaseRunConflict
+		return nil, errReleaseRunConflict
 	}
-	record = &ReleaseRunRecord{
+	record = &releaseRunRecord{
 		ID: record.ID, Revision: record.Revision + 1,
 		URL: record.URL, Closed: record.Closed,
 		UpdatedAt: time.Now().UTC(), Run: run.Clone(),
@@ -138,7 +139,7 @@ func (s *memoryProcessRunStore) Update(
 	return cloneReleaseRunRecord(record), nil
 }
 
-func (s *memoryProcessRunStore) latest(t *testing.T) *ReleaseRunState {
+func (s *memoryProcessRunStore) latest(t *testing.T) *releaseRunState {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,7 +158,7 @@ func (s *memoryProcessRunStore) count() int {
 	return len(s.records)
 }
 
-func cloneReleaseRunRecord(record *ReleaseRunRecord) *ReleaseRunRecord {
+func cloneReleaseRunRecord(record *releaseRunRecord) *releaseRunRecord {
 	if record == nil {
 		return nil
 	}
@@ -166,4 +167,4 @@ func cloneReleaseRunRecord(record *ReleaseRunRecord) *ReleaseRunRecord {
 	return &clone
 }
 
-var _ ReleaseRunStore = (*memoryProcessRunStore)(nil)
+var _ runstore.Store = (*memoryProcessRunStore)(nil)

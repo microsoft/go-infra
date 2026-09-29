@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package azdopipeline
+package azdotoken
 
 import (
 	"context"
@@ -15,6 +15,11 @@ import (
 
 // AzureDevOpsResourceID is the Microsoft Entra resource used by Azure DevOps.
 const AzureDevOpsResourceID = "499b84ac-1321-427f-aa17-267ca6975798"
+
+// TokenProvider acquires an Azure DevOps bearer token when a request is made.
+type TokenProvider interface {
+	Token(context.Context) (string, error)
+}
 
 // CommandRunner runs a non-interactive local command and returns stdout.
 type CommandRunner interface {

@@ -26,7 +26,7 @@ type releaseRecordExport struct {
 	ID       int              `json:"id"`
 	Revision int              `json:"revision"`
 	URL      string           `json:"url"`
-	Run      *ReleaseRunState `json:"run"`
+	Run      *releaseRunState `json:"run"`
 }
 
 func (s *Server) releaseDashboard(ctx context.Context) dashboardResponse {
@@ -62,7 +62,7 @@ func (s *Server) releaseDashboard(ctx context.Context) dashboardResponse {
 	return result
 }
 
-func (s *Server) releaseRunSummary(record *ReleaseRunRecord) (releaseSummary, error) {
+func (s *Server) releaseRunSummary(record *releaseRunRecord) (releaseSummary, error) {
 	if err := validateReleaseRunRecord(record); err != nil {
 		return releaseSummary{}, err
 	}
@@ -95,11 +95,6 @@ func (s *Server) handleSelectRelease(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	if s.processRunStore == nil {
-		writeError(response, http.StatusServiceUnavailable, "release discovery is unavailable")
-		return
-	}
-
 	s.selectionMu.Lock()
 	defer s.selectionMu.Unlock()
 	s.mu.Lock()
@@ -141,12 +136,9 @@ func (s *Server) handleSelectRelease(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, map[string]string{"href": href})
 }
 
-func (s *Server) restoreReleaseRunRecord(record *ReleaseRunRecord) (string, error) {
+func (s *Server) restoreReleaseRunRecord(record *releaseRunRecord) (string, error) {
 	if err := validateReleaseRunRecord(record); err != nil {
 		return "", err
-	}
-	if s.processRunStore == nil {
-		return "", errors.New("release selection requires a release store")
 	}
 	if err := s.restoreProcessRunRecord(record); err != nil {
 		return "", err
@@ -180,10 +172,6 @@ func (s *Server) handleExportRelease(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	if s.processRunStore == nil {
-		writeError(response, http.StatusServiceUnavailable, "release discovery is unavailable")
-		return
-	}
 	record, err := s.processRunStore.Get(request.Context(), id)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, fmt.Sprintf("load release record: %v", err))
@@ -203,10 +191,6 @@ func (s *Server) handleImportRelease(response http.ResponseWriter, request *http
 	}
 	id, ok := releaseRecordID(response, request)
 	if !ok {
-		return
-	}
-	if s.processRunStore == nil {
-		writeError(response, http.StatusServiceUnavailable, "release discovery is unavailable")
 		return
 	}
 	var imported releaseRecordExport
@@ -257,7 +241,7 @@ func (s *Server) handleImportRelease(response http.ResponseWriter, request *http
 		return
 	}
 	updated, err := s.processRunStore.Update(request.Context(), current, imported.Run, run.TakeView(), run.Plan())
-	if errors.Is(err, ErrReleaseRunConflict) {
+	if errors.Is(err, errReleaseRunConflict) {
 		writeError(response, http.StatusConflict, "release record changed; export it again before importing")
 		return
 	}
@@ -268,7 +252,7 @@ func (s *Server) handleImportRelease(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, exportReleaseRunRecord(updated))
 }
 
-func (s *Server) validateImportedRelease(current, candidate *ReleaseRunState) (contract.Run, error) {
+func (s *Server) validateImportedRelease(current, candidate *releaseRunState) (contract.Run, error) {
 	if err := current.Validate(); err != nil {
 		return nil, err
 	}
@@ -296,7 +280,7 @@ func (s *Server) validateImportedRelease(current, candidate *ReleaseRunState) (c
 	return run, nil
 }
 
-func exportReleaseRunRecord(record *ReleaseRunRecord) releaseRecordExport {
+func exportReleaseRunRecord(record *releaseRunRecord) releaseRecordExport {
 	if record == nil {
 		return releaseRecordExport{}
 	}

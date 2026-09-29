@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package azdoworkitem
+// Package azdorunstore persists release UI runs in Azure DevOps work items.
+package azdorunstore
 
 import (
 	"bytes"
@@ -11,34 +12,69 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
-	"github.com/microsoft/go-infra/releaseui"
+	azdotoken "github.com/microsoft/go-infra/azdo/token"
+	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/internal/runstore"
 )
 
-// Store adapts Azure DevOps work items to releaseui's storage contract.
-type Store struct {
-	client     *Client
+const (
+	azureBaseURL    = "https://dev.azure.com/devdiv"
+	azureProject    = "DEVDIV"
+	azureItemType   = "Issue"
+	azureTokenCache = 5 * time.Minute
+)
+
+type workItemClient interface {
+	Create(context.Context, string, string, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
+	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
+	Update(context.Context, *azdoworkitem.WorkItem, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
+	Query(context.Context, bool, int) ([]*azdoworkitem.WorkItem, error)
+}
+
+type store struct {
+	client     workItemClient
 	assignedTo string
 }
 
-// NewStore creates a release store backed by Azure DevOps work items.
-func NewStore(client *Client, assignedTo string) (*Store, error) {
+// New creates the built-in release store.
+func New(ctx context.Context) (runstore.Store, error) {
+	tokens := &azdotoken.CachingTokenProvider{
+		Provider: azdotoken.AzureCLITokenProvider{Runner: azdotoken.ExecCommandRunner{}},
+		TTL:      azureTokenCache,
+	}
+	client, err := azdoworkitem.NewClient(azdoworkitem.Config{
+		BaseURL: azureBaseURL, Project: azureProject, WorkItemType: azureItemType,
+	}, tokens)
+	if err != nil {
+		return nil, err
+	}
+	assignedTo, err := client.CurrentUser(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return newStore(client, assignedTo)
+}
+
+func newStore(client workItemClient, assignedTo string) (*store, error) {
 	if client == nil {
 		return nil, errors.New("release work item client is nil")
 	}
-	if strings.TrimSpace(assignedTo) == "" {
+	assignedTo = strings.TrimSpace(assignedTo)
+	if assignedTo == "" {
 		return nil, errors.New("release work item assignee is empty")
 	}
-	return &Store{client: client, assignedTo: assignedTo}, nil
+	return &store{client: client, assignedTo: assignedTo}, nil
 }
 
-func (s *Store) Create(
+func (s *store) Create(
 	ctx context.Context,
-	run *releaseui.ReleaseRunState,
+	run *runstore.State,
 	view *contract.RunView,
 	plan *contract.Plan,
-) (*releaseui.ReleaseRunRecord, error) {
+) (*runstore.Record, error) {
 	snapshot, err := releaseRunSnapshot(run, view, plan)
 	if err != nil {
 		return nil, err
@@ -54,7 +90,7 @@ func (s *Store) Create(
 	return releaseRunRecord(item)
 }
 
-func (s *Store) Get(ctx context.Context, id int) (*releaseui.ReleaseRunRecord, error) {
+func (s *store) Get(ctx context.Context, id int) (*runstore.Record, error) {
 	item, err := s.client.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -62,13 +98,13 @@ func (s *Store) Get(ctx context.Context, id int) (*releaseui.ReleaseRunRecord, e
 	return releaseRunRecord(item)
 }
 
-func (s *Store) Update(
+func (s *store) Update(
 	ctx context.Context,
-	current *releaseui.ReleaseRunRecord,
-	run *releaseui.ReleaseRunState,
+	current *runstore.Record,
+	run *runstore.State,
 	view *contract.RunView,
 	plan *contract.Plan,
-) (*releaseui.ReleaseRunRecord, error) {
+) (*runstore.Record, error) {
 	if current == nil || current.ID <= 0 || current.Revision <= 0 {
 		return nil, errors.New("current release run record is invalid")
 	}
@@ -80,11 +116,11 @@ func (s *Store) Update(
 	if current.Closed {
 		state = "Closed"
 	}
-	item, err := s.client.Update(ctx, &WorkItem{
+	item, err := s.client.Update(ctx, &azdoworkitem.WorkItem{
 		ID: current.ID, Revision: current.Revision, State: state,
 	}, snapshot)
-	if errors.Is(err, ErrRevisionConflict) {
-		return nil, fmt.Errorf("%w: %v", releaseui.ErrReleaseRunConflict, err)
+	if errors.Is(err, azdoworkitem.ErrRevisionConflict) {
+		return nil, fmt.Errorf("%w: %v", runstore.ErrConflict, err)
 	}
 	if err != nil {
 		return nil, err
@@ -92,12 +128,12 @@ func (s *Store) Update(
 	return releaseRunRecord(item)
 }
 
-func (s *Store) Query(ctx context.Context, closed bool, limit int) ([]*releaseui.ReleaseRunRecord, error) {
+func (s *store) Query(ctx context.Context, closed bool, limit int) ([]*runstore.Record, error) {
 	items, err := s.client.Query(ctx, closed, limit)
 	if err != nil {
 		return nil, err
 	}
-	records := make([]*releaseui.ReleaseRunRecord, 0, len(items))
+	records := make([]*runstore.Record, 0, len(items))
 	for _, item := range items {
 		record, err := releaseRunRecord(item)
 		if err != nil {
@@ -109,10 +145,10 @@ func (s *Store) Query(ctx context.Context, closed bool, limit int) ([]*releaseui
 }
 
 func releaseRunSnapshot(
-	run *releaseui.ReleaseRunState,
+	run *runstore.State,
 	view *contract.RunView,
 	plan *contract.Plan,
-) (*Snapshot, error) {
+) (*azdoworkitem.Snapshot, error) {
 	status, err := run.Status()
 	if err != nil {
 		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
@@ -121,10 +157,10 @@ func releaseRunSnapshot(
 	if err != nil {
 		return nil, fmt.Errorf("marshal process run: %w", err)
 	}
-	return &Snapshot{
-		SchemaVersion: CurrentSchemaVersion,
+	return &azdoworkitem.Snapshot{
+		SchemaVersion: azdoworkitem.CurrentSchemaVersion,
 		ProcessID:     run.ProcessID,
-		Status:        Status(status),
+		Status:        azdoworkitem.Status(status),
 		Test:          view != nil && view.Test,
 		IntentDigest:  run.Digest,
 		Payload:       payload,
@@ -133,34 +169,34 @@ func releaseRunSnapshot(
 }
 
 func releaseRunDescription(
-	run *releaseui.ReleaseRunState,
+	run *runstore.State,
 	view *contract.RunView,
 	plan *contract.Plan,
-) *DescriptionSummary {
-	fields := make([]DescriptionField, 0)
+) *azdoworkitem.DescriptionSummary {
+	fields := make([]azdoworkitem.DescriptionField, 0)
 	if view != nil {
 		if strings.TrimSpace(view.Summary) != "" {
-			fields = append(fields, DescriptionField{Label: "Status", Value: view.Summary})
+			fields = append(fields, azdoworkitem.DescriptionField{Label: "Status", Value: view.Summary})
 		}
 		if strings.TrimSpace(view.Detail) != "" {
-			fields = append(fields, DescriptionField{Label: "Detail", Value: view.Detail})
+			fields = append(fields, azdoworkitem.DescriptionField{Label: "Detail", Value: view.Detail})
 		}
 	}
 	if plan != nil {
 		for _, fact := range plan.Facts {
-			fields = append(fields, DescriptionField{Label: fact.Label, Value: fact.Value})
+			fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: fact.Value})
 		}
 	}
-	return &DescriptionSummary{ProcessName: run.ProcessID, Fields: fields}
+	return &azdoworkitem.DescriptionSummary{ProcessName: run.ProcessID, Fields: fields}
 }
 
-func releaseRunRecord(item *WorkItem) (*releaseui.ReleaseRunRecord, error) {
+func releaseRunRecord(item *azdoworkitem.WorkItem) (*runstore.Record, error) {
 	if item == nil || item.Snapshot == nil {
 		return nil, errors.New("release work item is empty")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(item.Snapshot.Payload))
 	decoder.DisallowUnknownFields()
-	var run releaseui.ReleaseRunState
+	var run runstore.State
 	if err := decoder.Decode(&run); err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
 	}
@@ -174,14 +210,14 @@ func releaseRunRecord(item *WorkItem) (*releaseui.ReleaseRunRecord, error) {
 	if item.Snapshot.ProcessID != run.ProcessID || item.Snapshot.IntentDigest != run.Digest {
 		return nil, errors.New("release work item identity does not match process run")
 	}
-	if item.Snapshot.Status != Status(status) {
+	if item.Snapshot.Status != azdoworkitem.Status(status) {
 		return nil, errors.New("release work item status does not match process run")
 	}
 	run.UpdatedAt = item.ChangedAt
-	return &releaseui.ReleaseRunRecord{
+	return &runstore.Record{
 		ID: item.ID, Revision: item.Revision, URL: item.URL,
 		Closed: item.State == "Closed", UpdatedAt: item.ChangedAt, Run: run.Clone(),
 	}, nil
 }
 
-var _ releaseui.ReleaseRunStore = (*Store)(nil)
+var _ runstore.Store = (*store)(nil)
