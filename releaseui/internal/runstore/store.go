@@ -21,17 +21,17 @@ var ErrConflict = errors.New("release run revision changed")
 type Store interface {
 	// Create stores run before releaseui starts external execution. view and plan contain derived
 	// display data for the same run and may be nil.
-	Create(context.Context, *State, *contract.RunView, *contract.Plan) (*Record, error)
+	Create(ctx context.Context, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
 
 	// Get returns the record identified by id.
-	Get(context.Context, int) (*Record, error)
+	Get(ctx context.Context, id int) (*Record, error)
 
 	// Update replaces current with run when current.Revision still matches storage. view and plan
 	// contain derived display data for run and may be nil.
-	Update(context.Context, *Record, *State, *contract.RunView, *contract.Plan) (*Record, error)
+	Update(ctx context.Context, current *Record, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
 
 	// Query returns at most limit records whose closed state equals closed, newest first.
-	Query(context.Context, bool, int) ([]*Record, error)
+	Query(ctx context.Context, closed bool, limit int) ([]*Record, error)
 }
 
 // Record is one revisioned release run returned by a Store.
