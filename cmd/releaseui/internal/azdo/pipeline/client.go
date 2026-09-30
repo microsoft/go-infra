@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package azdopipeline adapts the Azure DevOps Build SDK and provides the few additional REST
+// Package pipeline adapts the Azure DevOps Build SDK and provides the few additional REST
 // operations needed by release UI workflows. It does not log tokens or authorization headers.
-package azdopipeline
+package pipeline
 
 import (
 	"bytes"

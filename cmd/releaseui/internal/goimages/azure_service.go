@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdorepo"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
+	azdorepo "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/repo"
 )
 
 const (

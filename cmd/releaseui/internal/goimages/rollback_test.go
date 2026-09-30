@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 )
 
 const rollbackTestCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"

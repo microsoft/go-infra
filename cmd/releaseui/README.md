@@ -29,8 +29,8 @@ releaseui/internal/azdorunstore/     Azure Boards release storage
 releaseui/internal/runstore/         Private durable-state and storage contracts
 azdo/token/                          Azure CLI token acquisition and caching
 azdo/workitem/                       General Azure Boards work-item client
-cmd/releaseui/internal/azdopipeline/ Azure Pipeline reads and queue transport
-cmd/releaseui/internal/azdorepo/     Azure Repos reads
+cmd/releaseui/internal/azdo/pipeline/ Azure Pipeline reads and queue transport
+cmd/releaseui/internal/azdo/repo/     Azure Repos reads
 cmd/releaseui/internal/githubclient/ Authenticated GitHub operations
 cmd/releaseui/internal/goimages/     Go-images targets, allowlists, state, and graph
 cmd/releaseui/internal/goinfra/      Go-infra targets, allowlists, state, and graph

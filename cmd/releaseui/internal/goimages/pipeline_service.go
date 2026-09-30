@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/microsoft/go-infra/cmd/releaseui/internal/azdopipeline"
+	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
