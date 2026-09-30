@@ -12,6 +12,16 @@ import (
 )
 
 // GoVersion is the parsed representation of a Microsoft-built Go toolset version.
+//
+// Uses names based on Semantic Versioning. Specifically, "1.26" is Major 1, Minor 26. This is
+// different from upstream Go versioning, where the major version is 26.
+//
+// It doesn't include a "go" prefix in its outputs, and expects there to be no "go" prefix in the
+// input string.
+//
+// Be careful when using GoVersion to parse other versions such as upstream Go versions. The
+// difference in meaning in "major version" between Semantic Versioning and toolset versioning may
+// be significant.
 type GoVersion struct {
 	// Original is the source data, without any defaults filled in.
 	Original string
@@ -36,6 +46,9 @@ type GoVersion struct {
 }
 
 // New parses a version string. Any parts left blank are filled in with default values.
+//
+// If a "go" prefix is included, it is preserved in the Major field. This is not intended and is not
+// likely to be useful: do not include a "go" prefix.
 func New(v string) *GoVersion {
 	dashParts := strings.Split(v, "-")
 	majorMinorPatch := dashParts[0]
