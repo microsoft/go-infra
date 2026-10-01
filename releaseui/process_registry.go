@@ -51,7 +51,11 @@ func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, erro
 		if len(processes) == 0 {
 			return nil, errors.New("release process group is empty")
 		}
-		registeredGroup := &registeredProcessGroup{identity: group.Identity()}
+		identity := group.Identity()
+		if identity == nil {
+			return nil, errors.New("release process group returned a nil identity")
+		}
+		registeredGroup := &registeredProcessGroup{identity: *identity}
 		for _, process := range processes {
 			entry, err := registry.register(process)
 			if err != nil {

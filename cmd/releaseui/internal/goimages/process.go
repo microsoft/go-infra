@@ -107,8 +107,8 @@ func (g *goImagesProcessGroup) Processes() []contract.Process {
 	}
 }
 
-func (g *goImagesProcessGroup) Identity() contract.Identity {
-	return contract.Identity{
+func (g *goImagesProcessGroup) Identity() *contract.Identity {
+	return &contract.Identity{
 		Name: "Go images", Mark: "GI",
 		Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#golang-toolset-images",

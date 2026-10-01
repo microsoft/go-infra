@@ -82,7 +82,7 @@ func prepareExample(t *testing.T, server *Server) processRunResponse {
 func TestProcessPlanUsesBrowserJSONShape(t *testing.T) {
 	server, err := New(
 		context.Background(),
-		WithProcesses(exampleProcess()),
+		WithProcesses(newFakeProcessGroup(exampleProcess())),
 		WithReleaseRunStore(newMemoryProcessRunStore()),
 	)
 	if err != nil {
@@ -110,32 +110,32 @@ func TestProcessPlanUsesBrowserJSONShape(t *testing.T) {
 	if err := json.Unmarshal(payload.Plan, &plan); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"subtitle", "facts", "executionButtonLabel"} {
+	for _, key := range []string{"Subtitle", "Facts", "ExecutionButtonLabel"} {
 		if _, ok := plan[key]; !ok {
 			t.Errorf("plan JSON has no %q field: %s", key, payload.Plan)
 		}
 	}
-	for _, key := range []string{"Subtitle", "Facts", "ExecutionButtonLabel"} {
+	for _, key := range []string{"subtitle", "facts", "executionButtonLabel"} {
 		if _, ok := plan[key]; ok {
 			t.Errorf("plan JSON unexpectedly has %q field: %s", key, payload.Plan)
 		}
 	}
 
 	var facts []map[string]json.RawMessage
-	if err := json.Unmarshal(plan["facts"], &facts); err != nil {
+	if err := json.Unmarshal(plan["Facts"], &facts); err != nil {
 		t.Fatal(err)
 	}
 	if len(facts) != 1 {
-		t.Fatalf("plan facts = %s", plan["facts"])
-	}
-	for _, key := range []string{"label", "value", "detail"} {
-		if _, ok := facts[0][key]; !ok {
-			t.Errorf("plan fact JSON has no %q field: %s", key, plan["facts"])
-		}
+		t.Fatalf("plan facts = %s", plan["Facts"])
 	}
 	for _, key := range []string{"Label", "Value", "Detail"} {
+		if _, ok := facts[0][key]; !ok {
+			t.Errorf("plan fact JSON has no %q field: %s", key, plan["Facts"])
+		}
+	}
+	for _, key := range []string{"label", "value", "detail"} {
 		if _, ok := facts[0][key]; ok {
-			t.Errorf("plan fact JSON unexpectedly has %q field: %s", key, plan["facts"])
+			t.Errorf("plan fact JSON unexpectedly has %q field: %s", key, plan["Facts"])
 		}
 	}
 }
@@ -170,7 +170,11 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 			return nil
 		}), nil
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +204,11 @@ func TestBlockingPreflightPreventsPreparation(t *testing.T) {
 	process.preflight = func(context.Context) (error, error) {
 		return nil, errors.New("not configured")
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +236,11 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 			return nil
 		}), nil
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +272,11 @@ func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

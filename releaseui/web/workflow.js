@@ -204,8 +204,8 @@
     planContent.hidden = false;
 
     const review = nextPlan.plan || {};
-    planSubtitle.textContent = review.subtitle || `${(nextPlan.steps || []).length} workflow steps`;
-    planFacts.replaceChildren(...(review.facts || []).map(createPlanFact));
+    planSubtitle.textContent = review.Subtitle || `${(nextPlan.steps || []).length} workflow steps`;
+    planFacts.replaceChildren(...(review.Facts || []).map(createPlanFact));
 
     const steps = nextPlan.steps || [];
     progressSummary.hidden = steps.length === 0;
@@ -224,14 +224,14 @@
     const card = document.createElement("article");
     card.className = "source-card";
     const label = document.createElement("span");
-    label.textContent = fact.label;
+    label.textContent = fact.Label;
     const value = document.createElement("strong");
-    value.textContent = fact.value;
+    value.textContent = fact.Value;
     card.append(label, value);
-    if (fact.detail) {
+    if (fact.Detail) {
       const detail = document.createElement("div");
       detail.className = "field-help";
-      detail.innerHTML = fact.detail;
+      detail.innerHTML = fact.Detail;
       card.append(detail);
     }
     return card;
@@ -249,7 +249,7 @@
       runConfirmationPending = false;
       executionControls.dataset.planDigest = execution?.planDigest || "";
     }
-    executionControls.dataset.buttonLabel = review.executionButtonLabel || "Run release";
+    executionControls.dataset.buttonLabel = review.ExecutionButtonLabel || "Run release";
     executionControls.dataset.title = "Run release";
     executionWarning.textContent = "This starts the configured external release workflow.";
     runConfirmationCopy.textContent = "Confirm this release before starting it.";

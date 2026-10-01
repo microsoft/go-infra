@@ -65,8 +65,8 @@ func (g *goInfraProcessGroup) Processes() []contract.Process {
 	}
 }
 
-func (g *goInfraProcessGroup) Identity() contract.Identity {
-	return contract.Identity{
+func (g *goInfraProcessGroup) Identity() *contract.Identity {
+	return &contract.Identity{
 		Name: "Go infrastructure", Mark: "IN",
 		Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",

@@ -26,14 +26,10 @@ var ErrInvalidInput = errors.New("invalid release input")
 // Processes in a group may have significantly different sets of steps and significantly different
 // inputs, so there may be very little shared between them despite the shared topic.
 type ProcessGroup interface {
-	// Identity returns the metadata shown for the process group.
-	Identity() Identity
+	// Identity returns the metadata shown for the process group. Not nil.
+	Identity() *Identity
 
 	// Processes returns the list of release processes in the group.
-	//
-	// A struct may implement both ProcessGroup and Process and return itself as the sole element of
-	// the list, as a shortcut for single-process groups. Its Identity method can return the
-	// Identity embedded in its ProcessDefinition.
 	//
 	// The slice is presented in order, with the first considered the default if necessary.
 	Processes() []Process
@@ -219,24 +215,24 @@ type RunView struct {
 // execute a Run.
 type Plan struct {
 	// Subtitle summarizes the content.
-	Subtitle string `json:"subtitle"`
+	Subtitle string
 
 	// Facts lists a series of facts about what the release will do.
-	Facts []PlanFact `json:"facts,omitempty"`
+	Facts []PlanFact
 
 	// ExecutionButtonLabel labels the final command that starts the run.
-	ExecutionButtonLabel string `json:"executionButtonLabel,omitempty"`
+	ExecutionButtonLabel string
 }
 
 // PlanFact is one resolved value shown while reviewing a plan.
 type PlanFact struct {
 	// Label names the fact.
-	Label string `json:"label"`
+	Label string
 
 	// Value is the primary resolved value.
-	Value string `json:"value"`
+	Value string
 
 	// Detail adds supporting information. Include HTML-formatted links if relevant.
 	// Process implementations are trusted, so releaseui renders this content as trusted HTML.
-	Detail string `json:"detail,omitempty"`
+	Detail string
 }
