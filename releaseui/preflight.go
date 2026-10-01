@@ -20,7 +20,7 @@ type PreflightCheck struct {
 	Details string      `json:"details"`
 }
 
-// PreflightReport describes local readiness without authenticating or contacting any service.
+// PreflightReport describes non-mutating readiness checks performed before planning or execution.
 type PreflightReport struct {
 	ExternalExecutionEnabled bool             `json:"externalExecutionEnabled"`
 	PlanningEnabled          bool             `json:"planningEnabled"`
