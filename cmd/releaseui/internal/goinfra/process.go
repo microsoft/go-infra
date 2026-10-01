@@ -16,7 +16,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 const (
@@ -65,8 +65,8 @@ func (g *goInfraProcessGroup) Processes() []contract.Process {
 	}
 }
 
-func (g *goInfraProcessGroup) ProcessGroupIdentity() *contract.Identity {
-	return &contract.Identity{
+func (g *goInfraProcessGroup) Identity() contract.Identity {
+	return contract.Identity{
 		Name: "Go infrastructure", Mark: "IN",
 		Description:      "Create the next microsoft/go-infra patch release through its GitHub release workflow.",
 		DocumentationURL: "https://github.com/microsoft/go-lab/tree/main/docs/release#microsoftgo-infra",
@@ -129,17 +129,17 @@ func (p goInfraProcessBase) Preflight(ctx context.Context) (warning error, block
 	return nil, err
 }
 
-func (p *releaseOnMergeProcess) InputForm(inputs *releaseflag.InputSet) any {
+func (p *releaseOnMergeProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(releaseOnMergeInput)
-	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseflag.FieldOptions{
+	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseinput.FieldOptions{
 		Label: "Pull request number", Placeholder: "123",
 		Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
 	})
 	return result
 }
 
-func (p *dryRunProcess) InputForm(*releaseflag.InputSet) any  { return nil }
-func (p *publishProcess) InputForm(*releaseflag.InputSet) any { return nil }
+func (p *dryRunProcess) InputForm(*releaseinput.Set) any  { return nil }
+func (p *publishProcess) InputForm(*releaseinput.Set) any { return nil }
 
 func (p *releaseOnMergeProcess) Prepare(
 	ctx context.Context,

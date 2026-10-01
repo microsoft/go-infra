@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 const testGoInfraHeadSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -161,7 +161,7 @@ func TestProcessGroupDefinesConcreteReleaseProcesses(t *testing.T) {
 func TestReleaseOnMergeProcess(t *testing.T) {
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 	process := NewProcess(github.integration()).Processes()[0]
-	inputs := &releaseflag.InputSet{}
+	inputs := &releaseinput.Set{}
 	form := process.InputForm(inputs).(*releaseOnMergeInput)
 	if err := inputs.Parse(json.RawMessage(`{"pullRequest":"42"}`)); err != nil {
 		t.Fatal(err)

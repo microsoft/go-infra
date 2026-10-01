@@ -12,7 +12,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 var (
@@ -51,7 +51,7 @@ func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, erro
 		if len(processes) == 0 {
 			return nil, errors.New("release process group is empty")
 		}
-		registeredGroup := &registeredProcessGroup{}
+		registeredGroup := &registeredProcessGroup{identity: group.Identity()}
 		for _, process := range processes {
 			entry, err := registry.register(process)
 			if err != nil {
@@ -59,15 +59,6 @@ func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, erro
 			}
 			entry.group = registeredGroup
 			registeredGroup.processes = append(registeredGroup.processes, entry)
-		}
-		if identityProvider, ok := group.(contract.ProcessGroupIdentity); ok {
-			identity := identityProvider.ProcessGroupIdentity()
-			if identity == nil {
-				return nil, errors.New("release process group returned a nil identity")
-			}
-			registeredGroup.identity = *identity
-		} else {
-			registeredGroup.identity = registeredGroup.processes[0].definition.Identity
 		}
 		if err := validateIdentity("release process group", registeredGroup.identity); err != nil {
 			return nil, err
@@ -97,7 +88,7 @@ func (r *processRegistry) register(process contract.Process) (*registeredProcess
 	if definition.Notice != nil && strings.TrimSpace(definition.Notice.Title) == "" {
 		return nil, fmt.Errorf("release process %q has a notice without a title", definition.ID)
 	}
-	inputs := releaseflag.InputSet{}
+	inputs := releaseinput.Set{}
 	result := process.InputForm(&inputs)
 	if err := inputs.Validate(); err != nil {
 		panic(fmt.Sprintf("release process %q has invalid input declarations: %v", definition.ID, err))

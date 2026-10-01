@@ -18,7 +18,7 @@ import (
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/internal/runstore"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 func snapshotReleaseRun(run contract.Run) (*contract.StateSnapshot, error) {
@@ -133,7 +133,7 @@ func (s *Server) handlePrepareProcessRun(processID string, response http.Respons
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	inputs := &releaseflag.InputSet{}
+	inputs := &releaseinput.Set{}
 	input := registered.process.InputForm(inputs)
 	if err := inputs.Validate(); err != nil {
 		panic(fmt.Sprintf("release process %q has invalid input declarations: %v", processID, err))
