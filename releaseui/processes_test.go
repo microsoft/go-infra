@@ -12,7 +12,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 type fakeProcess struct {
@@ -31,10 +31,6 @@ type fakeReleaseRun struct {
 	state   *contract.StateSnapshot
 }
 
-func (p *fakeProcess) Processes() []contract.Process {
-	return []contract.Process{p}
-}
-
 func (p *fakeProcess) Definition() contract.ProcessDefinition {
 	return p.definition
 }
@@ -46,7 +42,7 @@ func (p *fakeProcess) Preflight(ctx context.Context) (error, error) {
 	return p.preflight(ctx)
 }
 
-func (p *fakeProcess) InputForm(*releaseflag.InputSet) any {
+func (p *fakeProcess) InputForm(*releaseinput.Set) any {
 	return nil
 }
 
@@ -120,18 +116,27 @@ type fakeProcessGroup struct {
 	processes []contract.Process
 }
 
+func newFakeProcessGroup(processes ...contract.Process) *fakeProcessGroup {
+	return &fakeProcessGroup{
+		identity: &contract.Identity{
+			Name: "Examples", Mark: "EG", Description: "Example processes",
+		},
+		processes: append([]contract.Process(nil), processes...),
+	}
+}
+
 func (g *fakeProcessGroup) Processes() []contract.Process {
 	return append([]contract.Process(nil), g.processes...)
 }
 
-func (g *fakeProcessGroup) ProcessGroupIdentity() *contract.Identity {
+func (g *fakeProcessGroup) Identity() *contract.Identity {
 	return g.identity
 }
 
 func TestProcessRegistry(t *testing.T) {
 	one := &fakeProcess{definition: testProcessDefinition("one")}
 	two := &fakeProcess{definition: testProcessDefinition("two")}
-	registry, err := newProcessRegistry(one, two)
+	registry, err := newProcessRegistry(newFakeProcessGroup(one), newFakeProcessGroup(two))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,9 +181,14 @@ func TestProcessRegistryRejectsInvalidDefinitions(t *testing.T) {
 		{name: "empty"},
 		{name: "nil group", groups: []contract.ProcessGroup{nil}},
 		{name: "empty group", groups: []contract.ProcessGroup{&fakeProcessGroup{}}},
-		{name: "duplicate ID", groups: []contract.ProcessGroup{valid, valid}},
+		{name: "empty group identity", groups: []contract.ProcessGroup{
+			&fakeProcessGroup{processes: []contract.Process{valid}},
+		}},
+		{name: "duplicate ID", groups: []contract.ProcessGroup{
+			newFakeProcessGroup(valid), newFakeProcessGroup(valid),
+		}},
 		{name: "invalid ID", groups: []contract.ProcessGroup{
-			&fakeProcess{definition: testProcessDefinition("One")},
+			newFakeProcessGroup(&fakeProcess{definition: testProcessDefinition("One")}),
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

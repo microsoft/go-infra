@@ -18,7 +18,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 const (
@@ -107,7 +107,7 @@ func (g *goImagesProcessGroup) Processes() []contract.Process {
 	}
 }
 
-func (g *goImagesProcessGroup) ProcessGroupIdentity() *contract.Identity {
+func (g *goImagesProcessGroup) Identity() *contract.Identity {
 	return &contract.Identity{
 		Name: "Go images", Mark: "GI",
 		Description:      "Build, sign, publish, test, or republish the Microsoft Build of Go container images.",
@@ -171,12 +171,12 @@ func (p goImagesProcessBase) Preflight(ctx context.Context) (warning error, bloc
 	return nil, err
 }
 
-func (p *normalProcess) InputForm(*releaseflag.InputSet) any { return nil }
-func (p *testProcess) InputForm(*releaseflag.InputSet) any   { return nil }
+func (p *normalProcess) InputForm(*releaseinput.Set) any { return nil }
+func (p *testProcess) InputForm(*releaseinput.Set) any   { return nil }
 
-func (p *rollbackProcess) InputForm(inputs *releaseflag.InputSet) any {
+func (p *rollbackProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(rollbackInput)
-	inputs.PositiveIntVar(&result.SourceBuildID, "sourceBuildId", releaseflag.FieldOptions{
+	inputs.PositiveIntVar(&result.SourceBuildID, "sourceBuildId", releaseinput.FieldOptions{
 		Label: "Source build ID", Placeholder: "3034159",
 		Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
 	})

@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package releaseflag provides the model for defining release UI inputs and utilities for setting
+// Package releaseinput provides the model for defining release UI inputs and utilities for setting
 // up input bindings.
-package releaseflag
+package releaseinput
 
 import (
 	"bytes"
@@ -30,20 +30,19 @@ type FieldOptions struct {
 	Placeholder string
 }
 
-// InputSet is the set of inputs presented to the release runner to determine how the release will
-// run. It contains the bindings between browser fields and Go fields.
-type InputSet struct {
+// Set contains the inputs presented to the release runner and their Go field bindings.
+type Set struct {
 	bindings []inputBinding
 	err      error
 }
 
 // Validate reports errors in the input declarations without parsing user input.
-func (s *InputSet) Validate() error {
+func (s *Set) Validate() error {
 	return s.err
 }
 
 // PositiveIntVar binds id to target and renders it as a positive integer field.
-func (s *InputSet) PositiveIntVar(target *int, id string, options FieldOptions) {
+func (s *Set) PositiveIntVar(target *int, id string, options FieldOptions) {
 	if s.err != nil {
 		return
 	}
@@ -78,7 +77,7 @@ func (s *InputSet) PositiveIntVar(target *int, id string, options FieldOptions) 
 }
 
 // Inputs returns the UI definitions for the bound fields.
-func (s *InputSet) Inputs() []webview.Input {
+func (s *Set) Inputs() []webview.Input {
 	inputs := make([]webview.Input, len(s.bindings))
 	for index, binding := range s.bindings {
 		inputs[index] = binding.definition
@@ -87,7 +86,7 @@ func (s *InputSet) Inputs() []webview.Input {
 }
 
 // Parse binds one JSON object to the registered Go fields.
-func (s *InputSet) Parse(data json.RawMessage) error {
+func (s *Set) Parse(data json.RawMessage) error {
 	if s.err != nil {
 		return s.err
 	}

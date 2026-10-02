@@ -17,7 +17,9 @@ The shared server derives process pages and API routes from those contracts.
 ## Adding a release process
 
 Add a package under `cmd/releaseui/internal` that implements `contract.ProcessGroup`.
-Implement one `contract.Process` for each distinct form and release behavior, then pass the group to `releaseui.WithProcesses`.
+Its `Identity` method provides shared dashboard metadata, and `Processes` returns one
+`contract.Process` for each distinct form and release behavior.
+Pass the group to `releaseui.WithProcesses`.
 No HTML, JavaScript, or route change is required.
 
 Keep process policy separate from reusable mechanics:
@@ -25,6 +27,7 @@ Keep process policy separate from reusable mechanics:
 ```text
 releaseui/                           Local HTTP lifecycle, UI, execution, and built-in storage
 releaseui/contract/                  Process and durable-state contracts
+releaseui/releaseinput/              Process input definitions, parsing, and Go field bindings
 releaseui/internal/azdorunstore/     Azure Boards release storage
 releaseui/internal/runstore/         Private durable-state and storage contracts
 azdo/token/                          Azure CLI token acquisition and caching
@@ -68,9 +71,9 @@ func (p *exampleProcess) Definition() contract.ProcessDefinition {
   }
 }
 
-func (p *exampleProcess) InputForm(inputs *releaseflag.InputSet) any {
+func (p *exampleProcess) InputForm(inputs *releaseinput.Set) any {
   result := new(exampleInput)
-  inputs.PositiveIntVar(&result.RunID, "runId", releaseflag.FieldOptions{Label: "Run ID"})
+  inputs.PositiveIntVar(&result.RunID, "runId", releaseinput.FieldOptions{Label: "Run ID"})
   return result
 }
 ```
@@ -87,7 +90,7 @@ A warning is displayed but permits a new release.
 A blocking error prevents preparation and starting, but does not prevent restoring or continuing an existing run.
 
 Before preparation, the shared lifecycle creates a fresh input value with `InputForm`.
-`InputSet.Parse` rejects missing or unknown fields and binds valid positive integers directly to typed Go fields.
+`releaseinput.Set.Parse` rejects missing or unknown fields and binds valid positive integers directly to typed Go fields.
 Each process then applies its semantic and fixed-target validation.
 
 ## Go-images release modes

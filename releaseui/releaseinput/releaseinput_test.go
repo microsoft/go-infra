@@ -1,16 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releaseflag
+package releaseinput
 
 import (
 	"encoding/json"
 	"testing"
 )
 
-func TestInputSetBindsPositiveInteger(t *testing.T) {
+func TestSetBindsPositiveInteger(t *testing.T) {
 	var buildID int
-	inputs := &InputSet{}
+	inputs := &Set{}
 	inputs.PositiveIntVar(&buildID, "sourceBuildId", FieldOptions{
 		Label: "Source build ID", Description: "A successful build.", Placeholder: "123",
 	})
@@ -28,7 +28,7 @@ func TestInputSetBindsPositiveInteger(t *testing.T) {
 	}
 }
 
-func TestInputSetRejectsInvalidInput(t *testing.T) {
+func TestSetRejectsInvalidInput(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		data string
@@ -42,7 +42,7 @@ func TestInputSetRejectsInvalidInput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var buildID int
-			inputs := &InputSet{}
+			inputs := &Set{}
 			inputs.PositiveIntVar(&buildID, "sourceBuildId", FieldOptions{Label: "Source build ID"})
 			if err := inputs.Parse(json.RawMessage(test.data)); err == nil {
 				t.Fatalf("invalid input %s was accepted", test.data)
@@ -51,8 +51,8 @@ func TestInputSetRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestInputSetAcceptsEmptyObjectWithoutFields(t *testing.T) {
-	if err := (&InputSet{}).Parse(json.RawMessage(`{}`)); err != nil {
+func TestSetAcceptsEmptyObjectWithoutFields(t *testing.T) {
+	if err := (&Set{}).Parse(json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 }

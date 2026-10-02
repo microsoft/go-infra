@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/releaseflag"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
 // ErrInvalidInput marks an error caused by operator-controlled process input. When
@@ -26,20 +26,13 @@ var ErrInvalidInput = errors.New("invalid release input")
 // Processes in a group may have significantly different sets of steps and significantly different
 // inputs, so there may be very little shared between them despite the shared topic.
 type ProcessGroup interface {
+	// Identity returns the metadata shown for the process group. Not nil.
+	Identity() *Identity
+
 	// Processes returns the list of release processes in the group.
-	//
-	// A struct may implement both ProcessGroup and Process and return itself as the sole element of
-	// the list, as a shortcut for single-process groups.
 	//
 	// The slice is presented in order, with the first considered the default if necessary.
 	Processes() []Process
-}
-
-// ProcessGroupIdentity is implemented by a ProcessGroup if it has an identity that is distinct from
-// the identity of the default (first) process in the group.
-type ProcessGroupIdentity interface {
-	// ProcessGroupIdentity returns the identity of the process group. Not nil.
-	ProcessGroupIdentity() *Identity
 }
 
 // Process describes one kind of release, such as a Go-images test release.
@@ -58,11 +51,12 @@ type Process interface {
 	// advise against it.
 	Preflight(context.Context) (warning error, blocking error)
 
-	// InputForm binds a process-specific input struct to the given InputSet and returns the input
-	// struct. The fn is called multiple times, and each call must produce unrelated instances.
+	// InputForm binds a process-specific input struct to the given [releaseinput.Set] and returns
+	// the input struct. The fn is called multiple times, and each call must produce unrelated
+	// instances.
 	//
 	// The output of this function may be passed back into [Process.Prepare].
-	InputForm(*releaseflag.InputSet) any
+	InputForm(*releaseinput.Set) any
 
 	// Prepare validates the user's selections and returns a StateSnapshot of a run that has not yet
 	// started.

@@ -23,7 +23,7 @@ func exampleProcess() *fakeProcess {
 		definition: testProcessDefinition("example"),
 		plan: &contract.Plan{
 			Subtitle: "Run example", ExecutionButtonLabel: "Run example",
-			Facts: []contract.PlanFact{{Label: "Value", Value: "fixed"}},
+			Facts: []contract.PlanFact{{Label: "Value", Value: "fixed", Detail: "More information"}},
 		},
 		view: &contract.RunView{Summary: "Ready"},
 	}
@@ -79,6 +79,67 @@ func prepareExample(t *testing.T, server *Server) processRunResponse {
 	return plan
 }
 
+func TestProcessPlanUsesBrowserJSONShape(t *testing.T) {
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(exampleProcess())),
+		WithReleaseRunStore(newMemoryProcessRunStore()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"http://localhost/api/processes/example/plan",
+		strings.NewReader(`{}`),
+	)
+	request.Header.Set("Origin", "http://localhost")
+	server.handlePrepareProcessRun("example", response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("prepare status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	var payload struct {
+		Plan json.RawMessage `json:"plan"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var plan map[string]json.RawMessage
+	if err := json.Unmarshal(payload.Plan, &plan); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Subtitle", "Facts", "ExecutionButtonLabel"} {
+		if _, ok := plan[key]; !ok {
+			t.Errorf("plan JSON has no %q field: %s", key, payload.Plan)
+		}
+	}
+	for _, key := range []string{"subtitle", "facts", "executionButtonLabel"} {
+		if _, ok := plan[key]; ok {
+			t.Errorf("plan JSON unexpectedly has %q field: %s", key, payload.Plan)
+		}
+	}
+
+	var facts []map[string]json.RawMessage
+	if err := json.Unmarshal(plan["Facts"], &facts); err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("plan facts = %s", plan["Facts"])
+	}
+	for _, key := range []string{"Label", "Value", "Detail"} {
+		if _, ok := facts[0][key]; !ok {
+			t.Errorf("plan fact JSON has no %q field: %s", key, plan["Facts"])
+		}
+	}
+	for _, key := range []string{"label", "value", "detail"} {
+		if _, ok := facts[0][key]; ok {
+			t.Errorf("plan fact JSON unexpectedly has %q field: %s", key, plan["Facts"])
+		}
+	}
+}
+
 func startExample(t *testing.T, server *Server, digest string) *httptest.ResponseRecorder {
 	t.Helper()
 	response := httptest.NewRecorder()
@@ -109,7 +170,11 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 			return nil
 		}), nil
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +204,11 @@ func TestBlockingPreflightPreventsPreparation(t *testing.T) {
 	process.preflight = func(context.Context) (error, error) {
 		return nil, errors.New("not configured")
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +236,11 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 			return nil
 		}), nil
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +272,11 @@ func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(context.Background(), WithProcesses(process), WithReleaseRunStore(store))
+	server, err := New(
+		context.Background(),
+		WithProcesses(newFakeProcessGroup(process)),
+		WithReleaseRunStore(store),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,10 +29,10 @@ func newTestUI(t *testing.T, options ...Option) *testUI {
 	return newTestUIWithProcess(t, exampleProcess(), options...)
 }
 
-func newTestUIWithProcess(t *testing.T, process contract.ProcessGroup, options ...Option) *testUI {
+func newTestUIWithProcess(t *testing.T, process contract.Process, options ...Option) *testUI {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	options = append([]Option{WithProcesses(process)}, options...)
+	options = append([]Option{WithProcesses(newFakeProcessGroup(process))}, options...)
 	server, err := New(ctx, options...)
 	if err != nil {
 		cancel()
