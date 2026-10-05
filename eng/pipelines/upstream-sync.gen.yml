@@ -88,11 +88,11 @@ extends:
                   go run ./cmd/sync `
                     -git-auth api `
                     -github-user bot-for-go `
-                    -github-app-client-id $(BotAccount-bot-for-go-client-id) `
-                    -github-app-installation $(BotAccount-bot-for-go-installation) `
-                    -github-app-private-key '$(BotAccount-bot-for-go-private-key)' `
-                    -github-reviewer-app-client-id $(BotAccount-review-bot-for-go-client-id) `
-                    -github-reviewer-app-installation $(BotAccount-review-bot-for-go-installation) `
-                    -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)' `
+                    -github-app-client-id $(GitHubApp-bot-for-go-client-id) `
+                    -github-app-installation $(GitHubApp-bot-for-go-microsoft-installation-id) `
+                    -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)' `
+                    -github-reviewer-app-client-id $(GitHubApp-review-bot-for-go-client-id) `
+                    -github-reviewer-app-installation $(GitHubApp-review-bot-for-go-microsoft-installation-id) `
+                    -github-reviewer-app-private-key '$(GitHubApp-review-bot-for-go-private-key-pem)' `
                     -azdo-dnceng-pat $(WifAzdoToken)
                 displayName: Sync

@@ -21,3 +21,14 @@ variables:
   # Don't include our own CI in telemetry data.
   - name: MS_GOTOOLCHAIN_TELEMETRY_ENABLED
     value: '0'
+
+  # GitHub App client and installation IDs are public identifiers. Keep private
+  # keys in the Microsoft-GoLang-bot Key Vault-backed variable group.
+  - name: GitHubApp-bot-for-go-client-id
+    value: 'Iv23ctc1C0P0qEaXMUVk'
+  - name: GitHubApp-bot-for-go-microsoft-installation-id
+    value: '61276299'
+  - name: GitHubApp-review-bot-for-go-client-id
+    value: 'Iv23ctBE80iGVpdRpGUN'
+  - name: GitHubApp-review-bot-for-go-microsoft-installation-id
+    value: '64364948'

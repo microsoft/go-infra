@@ -141,9 +141,9 @@ extends:
                             -versions '${{ join(',', parameters.releaseVersions) }}' \
                             -branch 'refs/heads/$(TargetGoImagesBranch)' \
                             -repo 'https://github.com/$(TargetGoImagesGitHubRepo)' \
-                            -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
-                            -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-                            -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+                            -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
+                            -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \
+                            -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)' \
                             -set-azdo-variable poll1MicrosoftGoImagesCommitHash
                         displayName: ⌚ Wait for go-images dependency flow
 
@@ -192,24 +192,24 @@ extends:
                         -author '${{ parameters.notify }}' \
                         -versions '${{ join(',', parameters.releaseVersions) }}' \
                         -security='${{ parameters.isSecurityRelease }}' \
-                        -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
-                        -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-                        -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
-                        -github-reviewer-app-client-id '$(BotAccount-review-bot-for-go-client-id)' \
-                        -github-reviewer-app-installation '$(BotAccount-review-bot-for-go-installation)' \
-                        -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)' 
+                        -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
+                        -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \
+                        -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)' \
+                        -github-reviewer-app-client-id '$(GitHubApp-review-bot-for-go-client-id)' \
+                        -github-reviewer-app-installation '$(GitHubApp-review-bot-for-go-microsoft-installation-id)' \
+                        -github-reviewer-app-private-key '$(GitHubApp-review-bot-for-go-private-key-pem)'
                     displayName: 📰 Publish announcement details
 
                 - ${{ if eq(parameters.runUpdateDL, true) }}:
                   - script: |
                       releasego update-dl \
                         -versions '${{ join(',', parameters.releaseVersions) }}' \
-                        -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
-                        -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-                        -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
-                        -github-reviewer-app-client-id '$(BotAccount-review-bot-for-go-client-id)' \
-                        -github-reviewer-app-installation '$(BotAccount-review-bot-for-go-installation)' \
-                        -github-reviewer-app-private-key '$(BotAccount-review-bot-for-go-private-key)'
+                        -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
+                        -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \
+                        -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)' \
+                        -github-reviewer-app-client-id '$(GitHubApp-review-bot-for-go-client-id)' \
+                        -github-reviewer-app-installation '$(GitHubApp-review-bot-for-go-microsoft-installation-id)' \
+                        -github-reviewer-app-private-key '$(GitHubApp-review-bot-for-go-private-key-pem)'
                     displayName: 📦 Update go dl packages
 
                 - ${{ if eq(parameters.runGoImageVersionCheck, true) }}:

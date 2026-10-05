@@ -132,9 +132,9 @@ extends:
                 - ${{ if eq(parameters.runCreatePullRequest, true) }}:
                   - script: |
                       releasego update-azure-linux \
-                        -github-app-client-id '$(BotAccount-bot-for-go-client-id)' \
-                        -github-app-installation '$(BotAccount-bot-for-go-installation)' \
-                        -github-app-private-key '$(BotAccount-bot-for-go-private-key)' \
+                        -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
+                        -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \
+                        -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)' \
                         -build-asset-json $(buildAssetJsonFile) \
                         -upstream ${{ parameters.upstream }} \
                         -owner ${{ parameters.owner }} \
