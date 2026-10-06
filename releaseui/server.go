@@ -128,7 +128,7 @@ func (s *Server) Handler() http.Handler {
 		})
 		mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID))
 		mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID))
-		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request) {
+		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request, _ processRequest) {
 			s.handleStartProcessRun(processID, response, request)
 		}))
 		mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, s.handleState))
@@ -143,63 +143,44 @@ func (s *Server) Handler() http.Handler {
 	return s.withSecurityHeaders(s.authenticate(mux))
 }
 
-type processResponseWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (w *processResponseWriter) WriteHeader(status int) {
-	if w.status != 0 {
-		return
-	}
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *processResponseWriter) Write(data []byte) (int, error) {
-	if w.status == 0 {
-		w.WriteHeader(http.StatusOK)
-	}
-	return w.ResponseWriter.Write(data)
+type processRequest struct {
+	runner   *coordinator.StepRunner
+	prepared bool
 }
 
 func (s *Server) prepareProcess(processID string) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
-		writer := &processResponseWriter{ResponseWriter: response}
-		s.handlePrepareProcessRun(processID, writer, request)
-		if writer.status < http.StatusOK || writer.status >= http.StatusMultipleChoices {
-			return
-		}
-		s.mu.Lock()
-		s.activeProcessID = processID
-		s.mu.Unlock()
+		s.handlePrepareProcessRun(processID, response, request)
 	}
 }
 
 func (s *Server) getProcessPlan(processID string) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
-		s.mu.Lock()
-		active := s.activeProcessID
-		s.mu.Unlock()
-		if active != "" && active != processID {
-			response.WriteHeader(http.StatusNoContent)
-			return
-		}
 		s.handleGetProcessRun(processID, response)
 	}
 }
 
-func (s *Server) requireActiveProcess(processID string, handler http.HandlerFunc) http.HandlerFunc {
+func (s *Server) requireActiveProcess(
+	processID string,
+	handler func(http.ResponseWriter, *http.Request, processRequest),
+) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
-		s.mu.Lock()
-		active := s.activeProcessID
-		s.mu.Unlock()
-		if active != "" && active != processID {
-			writeError(response, http.StatusConflict, "prepare this release process first")
+		bound, err := s.captureProcessRequest(processID)
+		if err != nil {
+			writeError(response, http.StatusConflict, err.Error())
 			return
 		}
-		handler(response, request)
+		handler(response, request, bound)
 	}
+}
+
+func (s *Server) captureProcessRequest(processID string) (processRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeProcessID != "" && s.activeProcessID != processID {
+		return processRequest{}, errors.New("prepare this release process first")
+	}
+	return processRequest{runner: s.runner, prepared: len(s.steps) != 0}, nil
 }
 
 func (s *Server) handlePage(response http.ResponseWriter, request *http.Request) {
@@ -383,23 +364,16 @@ func describeSteps(steps []*coordinator.Step) []planStep {
 	return descriptions
 }
 
-func (s *Server) handleState(response http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	runner := s.runner
-	s.mu.Unlock()
-	writeJSON(response, http.StatusOK, runner.Snapshot())
+func (s *Server) handleState(response http.ResponseWriter, _ *http.Request, bound processRequest) {
+	writeJSON(response, http.StatusOK, bound.runner.Snapshot())
 }
 
-func (s *Server) handleEvents(response http.ResponseWriter, request *http.Request) {
-	s.mu.Lock()
-	if len(s.steps) == 0 {
-		s.mu.Unlock()
+func (s *Server) handleEvents(response http.ResponseWriter, request *http.Request, bound processRequest) {
+	if !bound.prepared {
 		writeError(response, http.StatusConflict, "prepare a release before subscribing")
 		return
 	}
-	runner := s.runner
-	s.mu.Unlock()
-	streamRunnerEvents(response, request, runner)
+	streamRunnerEvents(response, request, bound.runner)
 }
 
 func streamRunnerEvents(response http.ResponseWriter, request *http.Request, runner *coordinator.StepRunner) {
