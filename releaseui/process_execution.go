@@ -119,6 +119,7 @@ func (s *Server) captureProcessRunResponse(processID string) (processRunResponse
 	defer s.mu.Unlock()
 	if s.activeProcessID != "" && s.activeProcessID != processID ||
 		s.processRun == nil || s.processRunState == nil || s.processRunState.ProcessID != processID {
+
 		return processRunResponse{}, false
 	}
 	return s.processRunResponseLocked(), true
@@ -387,6 +388,7 @@ func (s *Server) validateProcessRunUpdateLocked(update *processRunUpdate) error 
 	if s.processRunState == nil || s.processRunRecord == nil ||
 		!secureEqual(s.processRunState.Digest, update.state.Digest) ||
 		s.processRunRecord.ID != update.expectedRecord.ID || s.processRunRecord.Revision != update.expectedRecord.Revision {
+
 		return fmt.Errorf("%w: release run changed during persistence", errReleaseRunConflict)
 	}
 	return nil
