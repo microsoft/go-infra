@@ -4,12 +4,10 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"strconv"
 
-	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -19,6 +17,9 @@ func init() {
 		Name:    "retain-build",
 		Summary: "Mark an AzDO build to be retained forever (set keepForever=true).",
 		Description: `
+Note: The build retention API is currently broken, so this command will not actually retain the build.
+See https://github.com/microsoft/go-lab/issues/575
+
 By default, retains the build that is currently running this command, using
 BUILD_BUILDID, SYSTEM_COLLECTIONURI, and SYSTEM_TEAMPROJECT from the environment.
 Pass -id, -org, or -proj to override.
@@ -44,27 +45,7 @@ func handleRetainBuild(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	ctx := context.Background()
-
-	c, err := build.NewClient(ctx, azdoFlags.NewConnection())
-	if err != nil {
-		return err
-	}
-
-	// Keep permanent retention idempotent. Retention leases expire, and
-	// creating a new lease on each retry would accumulate leases.
-	keepForever := true
-	updated, err := c.UpdateBuild(ctx, build.UpdateBuildArgs{
-		Build:   &build.Build{KeepForever: &keepForever},
-		BuildId: id,
-		Project: azdoFlags.Proj,
-	})
-	if err != nil {
-		return err
-	}
-
-	url, _ := azdo.GetBuildWebURL(updated)
-	log.Printf("Enabled permanent retention for build %v %v", *id, url)
+	log.Println("Build retention API broken; skipping to unblock release process. See https://github.com/microsoft/go-lab/issues/575")
 	return nil
 }
 
