@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -16,8 +15,17 @@ import (
 )
 
 func TestExtractIndexThreeWay(t *testing.T) {
-	for _, verbatim := range []bool{false, true} {
-		t.Run("verbatim="+strconv.FormatBool(verbatim), func(t *testing.T) {
+	tests := []struct {
+		name             string
+		verbatim         bool
+		quotePathChanged bool
+	}{
+		{name: "equivalent patches"},
+		{name: "verbatim", verbatim: true},
+		{name: "changed filename quoting", quotePathChanged: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 			t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 			t.Setenv("GIT_AUTHOR_NAME", "test")
@@ -38,7 +46,11 @@ func TestExtractIndexThreeWay(t *testing.T) {
 				RootDir: root,
 				Config:  patch.Config{SubmoduleDir: "go", PatchesDir: "patches"},
 			}
-			file := filepath.Join(goDir, "file.txt")
+			filename := "file.txt"
+			if tt.quotePathChanged {
+				filename = "é.txt"
+			}
+			file := filepath.Join(goDir, filename)
 			write := func(content string) {
 				t.Helper()
 				if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
@@ -66,11 +78,12 @@ func TestExtractIndexThreeWay(t *testing.T) {
 
 			const original = "old context\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n"
 			git("init", "-b", "old-base")
+			git("config", "core.quotePath", "false")
 			write(original)
 			git("add", ".")
 			git("commit", "-m", "old base")
 			oldBase := git("rev-parse", "HEAD")
-			oldBlob := git("rev-parse", "HEAD:file.txt")
+			oldBlob := git("rev-parse", "HEAD:"+filename)
 			write(strings.Replace(original, "05\n", "PATCH1\n", 1))
 			git("commit", "-am", "first", "-m", commandPrefix+patchNumberCommand+"1000")
 			write(strings.NewReplacer("05\n", "PATCH1\n", "09\n", "PATCH2\n").Replace(original))
@@ -88,6 +101,7 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			if len(oldPatches) != 2 {
 				t.Fatalf("got %d original patches, want 2", len(oldPatches))
 			}
+			git("config", "core.quotePath", "true")
 
 			// Start fresh upstream history so the obsolete patch preimages aren't reachable.
 			git("checkout", "--orphan", "upstream")
@@ -97,7 +111,7 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			git("commit", "-m", "current base")
 			git("branch", "-D", "old-base")
 			base := git("rev-parse", "HEAD")
-			baseBlob := git("rev-parse", "HEAD:file.txt")
+			baseBlob := git("rev-parse", "HEAD:"+filename)
 			// No sidecar yet: existing patch sets must still apply.
 			if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
 				t.Fatal(err)
@@ -106,7 +120,7 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(patchDir, patch.IndexFileName), []byte(`{"obsolete.patch":{}}`), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if err := extractPatches(config, base, verbatim, false); err != nil {
+			if err := extractPatches(config, base, tt.verbatim, false); err != nil {
 				t.Fatal(err)
 			}
 			index, err := patch.ReadIndex(patchDir)
@@ -120,8 +134,9 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			second := filepath.Join(patchDir, "1001-second.patch")
 			for i, path := range []string{first, second} {
 				saved := read(path)
-				if !verbatim && !bytes.Equal(saved, oldPatches[[]string{"0001-first.patch", "0002-second.patch"}[i]]) {
-					t.Errorf("extract changed equivalent patch %q", path)
+				unchanged := bytes.Equal(saved, oldPatches[[]string{"0001-first.patch", "0002-second.patch"}[i]])
+				if unchanged != (!tt.verbatim && !tt.quotePathChanged) {
+					t.Errorf("patch %q unchanged = %v, want %v", path, unchanged, !tt.verbatim && !tt.quotePathChanged)
 				}
 				restored, err := index.Restore(filepath.Base(path), saved)
 				if err != nil {
@@ -154,7 +169,7 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			if err := cmd.Run(); err == nil {
 				t.Fatal("obsolete preimage blob is still available; regression would be masked")
 			}
-			if !verbatim {
+			if !tt.verbatim && !tt.quotePathChanged {
 				indexPath := filepath.Join(patchDir, patch.IndexFileName)
 				indexContent := read(indexPath)
 				if err := os.Remove(indexPath); err != nil {

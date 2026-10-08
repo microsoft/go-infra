@@ -55,6 +55,16 @@ func TestIndexRestore(t *testing.T) {
 			}
 		})
 	}
+	t.Run("unmatched diff header", func(t *testing.T) {
+		index := make(Index)
+		mismatched := strings.Replace(current, "diff --git a/file b/file", `diff --git "a/file" "b/file"`, 1)
+		if index.Record("change.patch", []byte(saved), &Patch{Content: "---\n" + mismatched}) {
+			t.Fatal("Record accepted unmatched diff headers")
+		}
+		if len(index) != 0 {
+			t.Fatal("Record stored index lines for unmatched diff headers")
+		}
+	})
 	t.Run("invalid index line", func(t *testing.T) {
 		entry := index["change.patch"]
 		entry.IndexLines["diff --git a/file b/file"] = first + "\n+injected"

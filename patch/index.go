@@ -34,16 +34,28 @@ func patchChecksum(content []byte) string {
 }
 
 // Record associates the saved patch with the index lines from the newly formatted patch.
-func (index Index) Record(name string, saved []byte, current *Patch) {
+// It returns false if the saved patch's diff headers cannot be matched to current's index lines.
+func (index Index) Record(name string, saved []byte, current *Patch) bool {
 	lines := make(map[string]string)
 	rewriteIndexLines(current.Content, func(diff, line string) string {
 		lines[diff] = line
 		return line
 	})
+	matched := true
+	rewriteIndexLines(string(saved), func(diff, line string) string {
+		if _, ok := lines[diff]; !ok {
+			matched = false
+		}
+		return line
+	})
+	if !matched {
+		return false
+	}
 	index[name] = indexEntry{
 		PatchSHA256: patchChecksum(saved),
 		IndexLines:  lines,
 	}
+	return true
 }
 
 // WriteFile writes the index to dir in a deterministic, readable format.
