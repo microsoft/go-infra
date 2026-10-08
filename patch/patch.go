@@ -6,6 +6,7 @@ package patch
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,7 +60,40 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 	// too late to cause noisy warnings because of them.
 	cmd.Args = append(cmd.Args, "--whitespace=nowarn")
 
-	err := WalkGoPatches(config, func(file string) error {
+	index, err := ReadIndex(filepath.Join(config.RootDir, config.PatchesDir))
+	if err != nil {
+		return err
+	}
+	var tempDir string
+	if len(index) != 0 {
+		tempDir, err = os.MkdirTemp("", "indexed-patches-*")
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := os.RemoveAll(tempDir); err != nil {
+				log.Printf("Unable to clean up indexed patches %q: %v", tempDir, err)
+			}
+		}()
+	}
+
+	err = WalkGoPatches(config, func(file string) error {
+		if len(index) != 0 {
+			content, err := os.ReadFile(file)
+			if err != nil {
+				return err
+			}
+			restored, err := index.Restore(filepath.Base(file), content)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(content, restored) {
+				file = filepath.Join(tempDir, filepath.Base(file))
+				if err := os.WriteFile(file, restored, 0o644); err != nil {
+					return err
+				}
+			}
+		}
 		cmd.Args = append(cmd.Args, file)
 		return nil
 	})

@@ -129,7 +129,7 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 		return fmt.Errorf("unable to create temp dir for patch renames: %v", err)
 	}
 
-	formatOutput, err := patch.FormatPatch(goDir, "-o", tmpRawDir, since)
+	formatOutput, err := patch.FormatPatch(goDir, "--full-index", "-o", tmpRawDir, since)
 	fmt.Print(formatOutput)
 	if err != nil {
 		return err
@@ -151,6 +151,7 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 
 	// Start numbering patches at 1 (0001).
 	n := 1
+	index := make(patch.Index)
 	if err := patch.WalkPatches(tmpRawDir, func(path string) error {
 		p, err := patch.ReadFile(path)
 		if err != nil {
@@ -230,9 +231,27 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 			}
 		}
 
+		saved, err := os.ReadFile(filepath.Join(tmpRenameDir, newName))
+		if err != nil {
+			return err
+		}
+		if !index.Record(newName, saved, p) {
+			// Different filename quoting can prevent matching diff headers in equivalent patches.
+			// Keep the freshly formatted patch rather than leave any index lines stale.
+			saved = []byte(p.String())
+			if err := os.WriteFile(filepath.Join(tmpRenameDir, newName), saved, 0o644); err != nil {
+				return err
+			}
+			index.Record(newName, saved, p)
+		}
+
 		n++
 		return nil
 	}); err != nil {
+		return err
+	}
+
+	if err := index.WriteFile(tmpRenameDir); err != nil {
 		return err
 	}
 
@@ -254,6 +273,10 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 		}
 		return nil
 	}); err != nil {
+		return err
+	}
+
+	if err := copyFile(filepath.Join(patchDir, patch.IndexFileName), filepath.Join(tmpRenameDir, patch.IndexFileName)); err != nil {
 		return err
 	}
 
