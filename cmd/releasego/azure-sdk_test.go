@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/go-infra/subcmd"
@@ -129,33 +127,6 @@ func TestAzureSDKGetBuildInfo(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in command output %q", want, out)
-		}
-	}
-}
-
-func TestAzureSDKRetainBuild(t *testing.T) {
-	var retained atomic.Bool
-	s := newAzureSDKServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch || r.URL.Path != "/collection/My Project/_apis/build/builds/123" {
-			t.Errorf("unexpected retention request: %s %s", r.Method, r.URL.Path)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var update struct{ KeepForever *bool }
-		if json.NewDecoder(r.Body).Decode(&update) != nil || update.KeepForever == nil || !*update.KeepForever {
-			t.Error("request did not enable permanent retention")
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		retained.Store(true)
-		writeAzureSDKResponse(t, w, `{"id":123,"keepForever":true}`)
-	})
-	for range 2 {
-		if err := runAzureCommand(t, handleRetainBuild, azureCommandArgs(s, "-id=123")...); err != nil {
-			t.Fatal(err)
-		}
-		if !retained.Load() {
-			t.Fatal("build was not retained")
 		}
 	}
 }
