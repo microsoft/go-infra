@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/go-infra/subcmd"
@@ -128,6 +130,53 @@ func TestAzureSDKGetBuildInfo(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in command output %q", want, out)
 		}
+	}
+}
+
+func TestAzureSDKRetainBuild(t *testing.T) {
+	var leasesCreated atomic.Int32
+	s := newAzureSDKServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/collection/My Project/_apis/build/builds/123":
+			writeAzureSDKResponse(t, w, `{"id":123,"definition":{"id":456}}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/collection/My Project/_apis/build/retention/leases":
+			var leases []struct {
+				DaysValid       *int
+				DefinitionID    *int    `json:"definitionId"`
+				OwnerID         *string `json:"ownerId"`
+				ProtectPipeline *bool
+				RunID           *int `json:"runId"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&leases); err != nil {
+				t.Errorf("decoding retention lease: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if len(leases) != 1 ||
+				leases[0].DaysValid == nil || *leases[0].DaysValid <= 36500 ||
+				leases[0].DefinitionID == nil || *leases[0].DefinitionID != 456 ||
+				leases[0].OwnerID == nil || *leases[0].OwnerID != "releasego retain-build" ||
+				leases[0].ProtectPipeline == nil || *leases[0].ProtectPipeline ||
+				leases[0].RunID == nil || *leases[0].RunID != 123 {
+
+				t.Errorf("unexpected retention lease: %+v", leases)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			leasesCreated.Add(1)
+			writeAzureSDKResponse(t, w, `{"count":1,"value":[{"leaseId":789,"definitionId":456,"runId":123}]}`)
+		default:
+			t.Errorf("unexpected retention request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	for range 2 {
+		if err := runAzureCommand(t, handleRetainBuild, azureCommandArgs(s, "-id=123")...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := leasesCreated.Load(); got != 2 {
+		t.Fatalf("created %d retention leases, want 2", got)
 	}
 }
 
