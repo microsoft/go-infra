@@ -4,11 +4,205 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/go-infra/patch"
 )
+
+func TestExtractIndexThreeWay(t *testing.T) {
+	for _, verbatim := range []bool{false, true} {
+		t.Run("verbatim="+strconv.FormatBool(verbatim), func(t *testing.T) {
+			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+			t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+			t.Setenv("GIT_AUTHOR_NAME", "test")
+			t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+			t.Setenv("GIT_COMMITTER_NAME", "test")
+			t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+			t.Setenv("GIT_GO_PATCH_SUBMODULE_REFERENCES", "")
+
+			root := t.TempDir()
+			goDir := filepath.Join(root, "go")
+			patchDir := filepath.Join(root, "patches")
+			for _, dir := range []string{goDir, patchDir} {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := &patch.FoundConfig{
+				RootDir: root,
+				Config:  patch.Config{SubmoduleDir: "go", PatchesDir: "patches"},
+			}
+			file := filepath.Join(goDir, "file.txt")
+			write := func(content string) {
+				t.Helper()
+				if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			read := func(path string) []byte {
+				t.Helper()
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return content
+			}
+			git := func(args ...string) string {
+				t.Helper()
+				cmd := exec.Command("git", args...)
+				cmd.Dir = goDir
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("git %v failed: %v\n%s", args, err, out)
+				}
+				return strings.TrimSpace(string(out))
+			}
+
+			const original = "old context\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n"
+			git("init", "-b", "old-base")
+			write(original)
+			git("add", ".")
+			git("commit", "-m", "old base")
+			oldBase := git("rev-parse", "HEAD")
+			oldBlob := git("rev-parse", "HEAD:file.txt")
+			write(strings.Replace(original, "05\n", "PATCH1\n", 1))
+			git("commit", "-am", "first", "-m", commandPrefix+patchNumberCommand+"1000")
+			write(strings.NewReplacer("05\n", "PATCH1\n", "09\n", "PATCH2\n").Replace(original))
+			git("commit", "-am", "second")
+			if _, err := patch.FormatPatch(goDir, "-o", patchDir, oldBase); err != nil {
+				t.Fatal(err)
+			}
+			oldPatches := make(map[string][]byte)
+			if err := patch.WalkPatches(patchDir, func(path string) error {
+				oldPatches[filepath.Base(path)] = read(path)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if len(oldPatches) != 2 {
+				t.Fatalf("got %d original patches, want 2", len(oldPatches))
+			}
+
+			// Start fresh upstream history so the obsolete patch preimages aren't reachable.
+			git("checkout", "--orphan", "upstream")
+			currentBase := strings.Replace(original, "old context", "new context", 1)
+			write(currentBase)
+			git("add", ".")
+			git("commit", "-m", "current base")
+			git("branch", "-D", "old-base")
+			base := git("rev-parse", "HEAD")
+			baseBlob := git("rev-parse", "HEAD:file.txt")
+			// No sidecar yet: existing patch sets must still apply.
+			if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
+				t.Fatal(err)
+			}
+			// Regeneration must remove obsolete entries, including renamed patches.
+			if err := os.WriteFile(filepath.Join(patchDir, patch.IndexFileName), []byte(`{"obsolete.patch":{}}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := extractPatches(config, base, verbatim, false); err != nil {
+				t.Fatal(err)
+			}
+			index, err := patch.ReadIndex(patchDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(index) != 2 {
+				t.Fatalf("got %d index entries, want 2", len(index))
+			}
+			first := filepath.Join(patchDir, "1000-first.patch")
+			second := filepath.Join(patchDir, "1001-second.patch")
+			for i, path := range []string{first, second} {
+				saved := read(path)
+				if !verbatim && !bytes.Equal(saved, oldPatches[[]string{"0001-first.patch", "0002-second.patch"}[i]]) {
+					t.Errorf("extract changed equivalent patch %q", path)
+				}
+				restored, err := index.Restore(filepath.Base(path), saved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i == 0 && !strings.Contains(string(restored), "index "+baseBlob+"..") {
+					t.Errorf("index does not restore the current base blob:\n%s", restored)
+				}
+			}
+
+			git("reset", "--hard", base)
+			if err := patch.Apply(config, patch.ApplyModeIndex); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.NewReplacer("05\n", "PATCH1\n", "09\n", "PATCH2\n").Replace(currentBase)
+			if got := string(read(file)); got != want {
+				t.Errorf("index apply content = %q, want %q", got, want)
+			}
+			if got := git("rev-parse", "HEAD"); got != base {
+				t.Errorf("index apply moved HEAD to %q", got)
+			}
+
+			git("reset", "--hard", base)
+			write(strings.Replace(currentBase, "05\n", "UPSTREAM\n", 1))
+			git("commit", "-am", "conflicting upstream update")
+			git("reflog", "expire", "--expire=now", "--all")
+			git("gc", "--prune=now")
+			cmd := exec.Command("git", "cat-file", "-e", oldBlob)
+			cmd.Dir = goDir
+			if err := cmd.Run(); err == nil {
+				t.Fatal("obsolete preimage blob is still available; regression would be masked")
+			}
+			if !verbatim {
+				indexPath := filepath.Join(patchDir, patch.IndexFileName)
+				indexContent := read(indexPath)
+				if err := os.Remove(indexPath); err != nil {
+					t.Fatal(err)
+				}
+				if err := patch.Apply(config, patch.ApplyModeCommits); err == nil {
+					t.Fatal("unmodified patch unexpectedly applied")
+				}
+				cmd = exec.Command("git", "am", "--retry", "-3")
+				cmd.Dir = goDir
+				out, err := cmd.CombinedOutput()
+				if err == nil || !strings.Contains(string(out), "could not build fake ancestor") {
+					t.Fatalf("missing index did not reproduce fake ancestor failure: %v\n%s", err, out)
+				}
+				git("am", "--abort")
+				if err := os.WriteFile(indexPath, indexContent, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			firstBefore, secondBefore := read(first), read(second)
+			if err := patch.Apply(config, patch.ApplyModeCommits); err == nil {
+				t.Fatal("apply unexpectedly succeeded on conflicting upstream content")
+			}
+			cmd = exec.Command("git", "am", "--retry", "-3")
+			cmd.Dir = goDir
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "CONFLICT") {
+				t.Fatalf("git am -3 did not produce an ordinary conflict: %v\n%s", err, out)
+			}
+			if strings.Contains(string(out), "could not build fake ancestor") {
+				t.Fatalf("git am -3 could not build its ancestor:\n%s", out)
+			}
+			if !strings.Contains(string(read(file)), "<<<<<<<") {
+				t.Fatal("git am -3 did not leave conflict markers")
+			}
+			write(strings.Replace(currentBase, "05\n", "PATCH1\n", 1))
+			git("add", ".")
+			// The temporary patch copies have been deleted, but am must retain the whole queue.
+			git("am", "--continue")
+			if got := string(read(file)); got != want {
+				t.Errorf("resolved patch series = %q, want %q", got, want)
+			}
+			if !bytes.Equal(read(first), firstBefore) || !bytes.Equal(read(second), secondBefore) {
+				t.Error("apply modified tracked patch files")
+			}
+		})
+	}
+}
 
 func TestSubmoduleHasPatchCommits(t *testing.T) {
 	git, err := exec.LookPath("git")
