@@ -4,7 +4,7 @@
       "owner": "golangci-lint",
       "pattern": [
         {
-          "regexp": "^(.+\\.go):(\\d+):(\\d+): (.+)$",
+          "regexp": "^(.+\\.go):(\\d+):(?:(\\d+):)? (.+)$",
           "file": 1,
           "line": 2,
           "column": 3,
