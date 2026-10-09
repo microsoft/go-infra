@@ -12,7 +12,24 @@ jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v2.14.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache golangci-lint
+        id: cache-golangci-lint
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ runner.arch }}-${{ env.GOLANGCI_LINT_VERSION }}
+
+      - name: Install golangci-lint
+        if: steps.cache-golangci-lint.outputs.cache-hit != 'true'
+        run: curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "${RUNNER_TEMP}/golangci-lint" "${GOLANGCI_LINT_VERSION}"
+
+      - name: Register golangci-lint problem matcher
+        run: echo "::add-matcher::.github/golangci-lint-matcher.json"
+
       - name: Run golangci-lint
-        run: docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v2.10 golangci-lint run -v
+        run: ${RUNNER_TEMP}/golangci-lint/golangci-lint run -v
