@@ -4,7 +4,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -225,10 +224,27 @@ func TestGitHubReleaseLifecycle(t *testing.T) {
 }
 
 func TestGitHubUpdateDLRequests(t *testing.T) {
-	var tree, commit, ref, pull atomic.Bool
+	var updated, pull atomic.Bool
 	var mutations atomic.Int32
-	assetJSON := `{"goVersion":"1.26.1-1"}`
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(assetJSON)))
+	assetJSON := `{"version":"1.26.1-1"}`
+	oldUpdateDLRepo := updateDLRepo
+	t.Cleanup(func() { updateDLRepo = oldUpdateDLRepo })
+	updateDLRepo = func(update dlRepoUpdate) error {
+		if update.RepoURL != "https://github.com/o/dl.git" || update.PushURL == update.RepoURL {
+			t.Errorf("unexpected clone or push URL: clone=%q push=%q", update.RepoURL, update.PushURL)
+		}
+		if update.DryRun || update.KeepClone {
+			t.Errorf("unexpected run modes: dryRun=%v keepClone=%v", update.DryRun, update.KeepClone)
+		}
+		if !strings.HasPrefix(update.Branch, "dev/dl/msgo-1.26.1-1/") || update.Title == "" {
+			t.Errorf("unexpected branch or title: branch=%q title=%q", update.Branch, update.Title)
+		}
+		if len(update.Releases) != 1 || update.Releases[0].Version != "1.26.1-1" || string(update.Releases[0].AssetsJSON) != assetJSON {
+			t.Errorf("unexpected releases: %+v", update.Releases)
+		}
+		updated.Store(true)
+		return nil
+	}
 	newReleaseGitHubServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/releases/releases/tags/v1.26.1-1":
@@ -237,40 +253,7 @@ func TestGitHubUpdateDLRequests(t *testing.T) {
 			if _, err := io.WriteString(w, assetJSON); err != nil {
 				t.Error(err)
 			}
-		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/lab/contents/dl/msgo1.26.1-1/main.go":
-			releaseGitHubJSON(t, w, 404, `{"message":"Not Found"}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/lab/git/ref/heads/main":
-			releaseGitHubJSON(t, w, 200, `{"object":{"sha":"base-sha"}}`)
-		case r.Method == http.MethodGet && r.URL.Path == "/repos/o/lab/git/commits/base-sha":
-			releaseGitHubJSON(t, w, 200, `{"sha":"base-sha","tree":{"sha":"base-tree"}}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/lab/git/trees":
-			var body struct {
-				BaseTree string `json:"base_tree"`
-				Tree     []struct{ Path, Content, Mode string }
-			}
-			if json.NewDecoder(r.Body).Decode(&body) != nil || body.BaseTree != "base-tree" || len(body.Tree) != 1 || body.Tree[0].Path != "dl/msgo1.26.1-1/main.go" || body.Tree[0].Mode != "100644" || !strings.Contains(body.Tree[0].Content, hash) {
-				t.Errorf("wrong generated tree: %+v", body)
-			}
-			tree.Store(true)
-			releaseGitHubJSON(t, w, 201, `{"sha":"new-tree"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/lab/git/commits":
-			var body struct {
-				Message, Tree string
-				Parents       []string
-			}
-			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Tree != "new-tree" || body.Message == "" || !reflect.DeepEqual(body.Parents, []string{"base-sha"}) {
-				t.Errorf("wrong commit payload: %+v", body)
-			}
-			commit.Store(true)
-			releaseGitHubJSON(t, w, 201, `{"sha":"new-commit"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/lab/git/refs":
-			var body struct{ Ref, SHA string }
-			if json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasPrefix(body.Ref, "refs/heads/dev/dl/msgo-1.26.1-1/") || body.SHA != "new-commit" {
-				t.Errorf("wrong ref payload: %+v", body)
-			}
-			ref.Store(true)
-			releaseGitHubJSON(t, w, 201, `{"ref":"created"}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/lab/pulls":
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/dl/pulls":
 			var body struct{ Head, Base, Title, Body string }
 			if json.NewDecoder(r.Body).Decode(&body) != nil || body.Base != "main" || !strings.HasPrefix(body.Head, "dev/dl/msgo-1.26.1-1/") || body.Title == "" || body.Body == "" {
 				t.Errorf("wrong PR payload: %+v", body)
@@ -285,10 +268,10 @@ func TestGitHubUpdateDLRequests(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	})
-	if err := runGitHubCommand(t, updateDL, "-repo=o/lab", "-go-repo=o/releases", "-versions=1.26.1-1", "-github-reviewer-pat=reviewer-token"); err != nil {
+	if err := runGitHubCommand(t, updateDL, "-repo=o/dl", "-go-repo=o/releases", "-versions=1.26.1-1", "-github-reviewer-pat=reviewer-token"); err != nil {
 		t.Fatal(err)
 	}
-	if !tree.Load() || !commit.Load() || !ref.Load() || !pull.Load() || mutations.Load() != 2 {
-		t.Fatal("update-dl did not complete its existing release workflow")
+	if !updated.Load() || !pull.Load() || mutations.Load() != 2 {
+		t.Fatal("update-dl did not complete its release workflow")
 	}
 }

@@ -4,24 +4,23 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/google/go-github/v92/github"
+	"github.com/microsoft/go-infra/executil"
+	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -31,32 +30,42 @@ import (
 
 var downloadHTTPClient = http.Client{Timeout: 30 * time.Second}
 
+// updateDLRepo is replaceable so request-level tests don't need to run Git or Go.
+var updateDLRepo = updateDLRepository
+
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "update-dl",
-		Summary: "Add dl packages to the go-lab repository for new Go releases.",
+		Summary: "Add packages to the go-dl repository for new Go releases.",
 		Description: `
-The update-dl command generates dl/msgo<version>/main.go files for each specified
-Go release version and creates a pull request on the go-lab repository. It fetches
-the assets.json SHA256 hash from the GitHub release.
+The update-dl command downloads assets.json for each specified Go release,
+adds the manifests to the go-dl database, regenerates the packages, and creates
+a pull request on the go-dl repository.
 `,
 		Handle: updateDL,
 	})
 }
 
-// dlVersionData holds the data needed to generate a dl package file.
-type dlVersionData struct {
-	Version string
-	SHA256  string
+type dlRelease struct {
+	Version    string
+	AssetsJSON []byte
 }
 
-//go:embed templates/dl.template.go.tmpl
-var dlTemplate string
+type dlRepoUpdate struct {
+	RepoURL   string
+	PushURL   string
+	Branch    string
+	Title     string
+	Releases  []dlRelease
+	DryRun    bool
+	KeepClone bool
+}
 
 func updateDL(p subcmd.ParseFunc) error {
 	releaseVersions := flag.String("versions", "", "Comma-separated list of version numbers for the Go release (e.g. 1.25.8-1,1.26.1-1).")
-	dryRun := flag.Bool("n", false, "Enable dry run: do not push changes to GitHub.")
-	dlRepo := flag.String("repo", "microsoft/go-lab", "The GitHub repository for the dl packages, in '{owner}/{repo}' form.")
+	dryRun := flag.Bool("n", false, "Enable dry run: clone, generate, and commit changes locally, but do not push or create a pull request.")
+	keepTemp := flag.Bool("w", false, "Keep the temporary go-dl clone after the command exits.")
+	dlRepo := flag.String("repo", "microsoft/go-dl", "The GitHub repository for the dl packages, in '{owner}/{repo}' form.")
 	goRepo := flag.String("go-repo", "microsoft/go", "The GitHub repository for Go releases, in '{owner}/{repo}' form.")
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
@@ -69,7 +78,7 @@ func updateDL(p subcmd.ParseFunc) error {
 		return fmt.Errorf("no versions specified; use -versions flag")
 	}
 
-	labOwner, labName, err := githubutil.ParseRepoFlag(dlRepo)
+	dlOwner, dlName, err := githubutil.ParseRepoFlag(dlRepo)
 	if err != nil {
 		return fmt.Errorf("invalid -repo: %w", err)
 	}
@@ -79,15 +88,22 @@ func updateDL(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-
 	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
-		return err
+		if !*dryRun || !errors.Is(err, githubutil.ErrNoAuthProvided) {
+			return err
+		}
+
+		// Dry runs only read public release data and clone the public go-dl repository.
+		client, err = github.NewClient()
+		if err != nil {
+			return fmt.Errorf("create unauthenticated GitHub client: %w", err)
+		}
 	}
 
-	// Parse and validate versions, fetching the SHA256 for each from the release's assets.json.
+	// Parse and validate versions, downloading the published manifest for each release.
 	rawVersions := strings.Split(*releaseVersions, ",")
-	dlVersions := make([]dlVersionData, 0, len(rawVersions))
+	releases := make([]dlRelease, 0, len(rawVersions))
 	for _, v := range rawVersions {
 		v = strings.TrimSpace(v)
 		if v == "" {
@@ -99,137 +115,68 @@ func updateDL(p subcmd.ParseFunc) error {
 		}
 
 		version := gv.Full()
-		log.Printf("Fetching assets.json SHA256 for version %s...\n", version)
-		assetsJSONSHA256, err := fetchAssetsJSONSHA256(ctx, client, goOwner, goName, "v"+version)
+		log.Printf("Fetching assets.json for version %s...\n", version)
+		assetsJSON, err := fetchAssetsJSON(ctx, client, goOwner, goName, "v"+version)
 		if err != nil {
-			return fmt.Errorf("error fetching assets.json SHA256 for version %s: %w", version, err)
+			return fmt.Errorf("error fetching assets.json for version %s: %w", version, err)
 		}
-		log.Printf("assets.json SHA256 for %s: %s\n", version, assetsJSONSHA256)
-		dlVersions = append(dlVersions, dlVersionData{
-			Version: version,
-			SHA256:  assetsJSONSHA256,
+		releases = append(releases, dlRelease{
+			Version:    version,
+			AssetsJSON: assetsJSON,
 		})
 	}
-	if len(dlVersions) == 0 {
+	if len(releases) == 0 {
 		return fmt.Errorf("no valid versions found in -versions flag")
 	}
-	// Sort descending so PR title lists versions in a consistent order.
-	sort.Slice(dlVersions, func(i, j int) bool {
-		return infrasort.GoVersionLess(goversion.New(dlVersions[i].Version), goversion.New(dlVersions[j].Version))
+
+	// Keep titles and branch names stable regardless of the input order.
+	sort.Slice(releases, func(i, j int) bool {
+		return infrasort.GoVersionLess(goversion.New(releases[i].Version), goversion.New(releases[j].Version))
 	})
 
-	// Generate file contents from the template.
-	tmpl, err := template.New("dl").Parse(dlTemplate)
-	if err != nil {
-		return fmt.Errorf("error parsing dl template: %w", err)
+	// Generate the commit and pull request title and a unique update branch.
+	versionStrings := make([]string, 0, len(releases))
+	for _, release := range releases {
+		versionStrings = append(versionStrings, release.Version)
 	}
+	title := "Update dl for Microsoft build of Go " + strings.Join(versionStrings, ", ")
+	branchName := "dev/dl/msgo-" + strings.Join(versionStrings, "-") + "/" + fmt.Sprintf("%d", time.Now().Unix())
 
-	type fileEntry struct {
-		path    string
-		version string
-		content []byte
-	}
-	files := make([]fileEntry, 0, len(dlVersions))
-
-	for _, dv := range dlVersions {
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, dv); err != nil {
-			return fmt.Errorf("error executing dl template for version %s: %w", dv.Version, err)
-		}
-		filePath := dlFilePath(dv.Version)
-		files = append(files, fileEntry{path: filePath, version: dv.Version, content: buf.Bytes()})
-	}
-
-	if *dryRun {
-		for _, f := range files {
-			fmt.Printf("Would create %s\n", f.path)
-			fmt.Println("=====")
-			if _, err := os.Stdout.Write(f.content); err != nil {
-				return err
-			}
-			fmt.Println("=====")
-		}
-		return nil
-	}
-
-	// Check that none of the files already exist.
-	refFS := githubutil.NewRefFS(ctx, client, labOwner, labName, "main")
-	filePaths := make([]string, len(files))
-	for i, f := range files {
-		filePaths[i] = f.path
-	}
-	if err := checkDLFilesNotExist(refFS, filePaths); err != nil {
-		return err
-	}
-
-	// Generate the PR title.
-	versionStrings := make([]string, 0, len(dlVersions))
-	for _, dv := range dlVersions {
-		versionStrings = append(versionStrings, dv.Version)
-	}
-	title := generateDLPRTitle(versionStrings)
-
-	prBody := "**Automated Pull Request:** Adds dl packages for new Microsoft build of Go releases.\n" +
-		"This PR was generated automatically using the [`update-dl.go`](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/update-dl.go) script."
-
-	// Use the tree API to create a single commit with all files, avoiding noisy history
-	// and simplifying retries. If anything fails, retry from the beginning with a fresh base.
-	slug := "msgo-" + strings.Join(versionStrings, "-")
-	branchName := "dev/dl/" + slug + "/" + fmt.Sprintf("%d", time.Now().Unix())
-
-	var pr *github.PullRequest
-	if err := githubutil.Retry(func() error {
-		// Get the base branch ref and commit to pin the tree base.
-		baseRef, _, err := client.Git.GetRef(ctx, labOwner, labName, "heads/main")
+	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", dlOwner, dlName)
+	var pushURL string
+	if !*dryRun {
+		// Keep credentials out of the configured remote. The authenticated URL is used only by git push.
+		auther, err := gitHubAuthFlags.NewAuther()
 		if err != nil {
-			return fmt.Errorf("error getting main ref: %w", err)
+			return fmt.Errorf("failed to get GitHub auther: %w", err)
 		}
-		baseCommitSHA := baseRef.Object.GetSHA()
-		baseCommit, _, err := client.Git.GetCommit(ctx, labOwner, labName, baseCommitSHA)
-		if err != nil {
-			return fmt.Errorf("error getting commit %s: %w", baseCommitSHA, err)
-		}
+		pushURL = auther.InsertAuth(repoURL)
+	}
 
-		// Build tree entries for all files.
-		treeEntries := make([]*github.TreeEntry, 0, len(files))
-		for _, f := range files {
-			treeEntries = append(treeEntries, &github.TreeEntry{
-				Path:    new(f.path),
-				Content: new(string(f.content)),
-				Mode:    new(githubutil.TreeModeFile),
-			})
-		}
-
-		createTree, _, err := client.Git.CreateTree(ctx, labOwner, labName, baseCommit.Tree.GetSHA(), treeEntries)
-		if err != nil {
-			return fmt.Errorf("error creating tree: %w", err)
-		}
-
-		createCommit, _, err := client.Git.CreateCommit(ctx, labOwner, labName, github.Commit{
-			Message: new(title),
-			Parents: []*github.Commit{baseCommit},
-			Tree:    createTree,
-		}, &github.CreateCommitOptions{})
-		if err != nil {
-			return fmt.Errorf("error creating commit: %w", err)
-		}
-
-		newRef := github.CreateRef{
-			Ref: "refs/heads/" + branchName,
-			SHA: createCommit.GetSHA(),
-		}
-		if _, _, err = client.Git.CreateRef(ctx, labOwner, labName, newRef); err != nil {
-			return fmt.Errorf("error creating ref %s: %w", branchName, err)
-		}
-		// Ref is created; can't retry from here (name is taken).
-		return nil
+	// Clone go-dl, add the manifests, regenerate its packages, and commit the result.
+	// A non-dry run also pushes the update branch.
+	if err := updateDLRepo(dlRepoUpdate{
+		RepoURL:   repoURL,
+		PushURL:   pushURL,
+		Branch:    branchName,
+		Title:     title,
+		Releases:  releases,
+		DryRun:    *dryRun,
+		KeepClone: *keepTemp,
 	}); err != nil {
 		return err
 	}
+	if *dryRun {
+		return nil
+	}
 
-	// Create the pull request.
+	// Create the pull request for the branch pushed above.
+	prBody := "**Automated Pull Request:** Adds packages for new Microsoft builds of Go.\n" +
+		"This PR was generated automatically using the [`update-dl.go`](https://github.com/microsoft/go-infra/blob/main/cmd/releasego/update-dl.go) script."
+
+	var pr *github.PullRequest
 	if err := githubutil.Retry(func() error {
-		pr, _, err = client.PullRequests.Create(ctx, labOwner, labName, github.CreatePullRequest{
+		pr, _, err = client.PullRequests.Create(ctx, dlOwner, dlName, github.CreatePullRequest{
 			Title: new(title),
 			Head:  branchName,
 			Base:  "main",
@@ -265,20 +212,16 @@ func updateDL(p subcmd.ParseFunc) error {
 	return nil
 }
 
-// fetchAssetsJSONSHA256 downloads the assets.json from a GitHub release and returns its content SHA256.
-// The dl tool in go-lab uses this hash to verify the integrity of assets.json before extracting
-// platform-specific download URLs and hashes from it.
-func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, repo, tag string) (string, error) {
+func fetchAssetsJSON(ctx context.Context, client *github.Client, owner, repo, tag string) ([]byte, error) {
 	var release *github.RepositoryRelease
 	if err := githubutil.Retry(func() error {
 		var err error
 		release, _, err = client.Repositories.GetReleaseByTag(ctx, owner, repo, tag)
 		return err
 	}); err != nil {
-		return "", fmt.Errorf("error getting release for tag %s: %w", tag, err)
+		return nil, fmt.Errorf("error getting release for tag %s: %w", tag, err)
 	}
 
-	// Find assets.json in the release assets.
 	var assetsAsset *github.ReleaseAsset
 	for i := range release.Assets {
 		if release.Assets[i].GetName() == "assets.json" {
@@ -287,50 +230,96 @@ func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, re
 		}
 	}
 	if assetsAsset == nil {
-		return "", fmt.Errorf("assets.json not found in release %s", tag)
+		return nil, fmt.Errorf("assets.json not found in release %s", tag)
 	}
 
-	// Download the assets.json file.
 	var rc io.ReadCloser
 	if err := githubutil.Retry(func() error {
 		var err error
 		rc, _, err = client.Repositories.DownloadReleaseAsset(ctx, owner, repo, assetsAsset.GetID(), &downloadHTTPClient)
 		return err
 	}); err != nil {
-		return "", fmt.Errorf("error downloading assets.json from release %s: %w", tag, err)
+		return nil, fmt.Errorf("error downloading assets.json from release %s: %w", tag, err)
 	}
 	defer rc.Close()
 
 	data, err := io.ReadAll(rc)
 	if err != nil {
-		return "", fmt.Errorf("error reading assets.json: %w", err)
+		return nil, fmt.Errorf("error reading assets.json: %w", err)
+	}
+	return data, nil
+}
+
+func updateDLRepository(update dlRepoUpdate) error {
+	repoDir, err := os.MkdirTemp("", "update-go-dl-*")
+	if err != nil {
+		return fmt.Errorf("create temporary directory: %w", err)
+	}
+	if !update.KeepClone {
+		defer gitcmd.AttemptDelete(repoDir)
+	}
+	log.Printf("Temporary go-dl clone: %s\n", repoDir)
+
+	// Generation rewrites several directory trees, so use the repository's generator in a clone
+	// rather than trying to reproduce its output with the GitHub tree API.
+	if err := executil.Run(exec.Command("git", "clone", "--branch", "main", "--single-branch", update.RepoURL, repoDir)); err != nil {
+		return fmt.Errorf("clone %s: %w", update.RepoURL, err)
+	}
+	if err := gitcmd.Run(repoDir, "checkout", "-b", update.Branch); err != nil {
+		return fmt.Errorf("create branch %s: %w", update.Branch, err)
+	}
+	if err := writeDLManifests(repoDir, update.Releases); err != nil {
+		return err
 	}
 
-	hash := sha256.Sum256(data)
-	return fmt.Sprintf("%x", hash[:]), nil
-}
-
-// dlFilePath returns the path for a dl package's main.go file within the go-lab repo.
-func dlFilePath(version string) string {
-	return fmt.Sprintf("dl/msgo%s/main.go", version)
-}
-
-// checkDLFilesNotExist checks that none of the given file paths already exist in the filesystem.
-// fsys can be a githubutil.NewRefFS (remote GitHub) or os.DirFS (local).
-func checkDLFilesNotExist(fsys githubutil.SimplifiedFS, paths []string) error {
-	for _, path := range paths {
-		_, err := fsys.ReadFile(path)
-		if err == nil {
-			return fmt.Errorf("file %s already exists", path)
+	generateDir := filepath.Join(repoDir, "internal", "gen")
+	if err := executil.Run(executil.Dir(generateDir, "go", "generate")); err != nil {
+		return fmt.Errorf("generate go-dl packages: %w", err)
+	}
+	if err := gitcmd.Run(repoDir, "add", "--all"); err != nil {
+		return fmt.Errorf("stage go-dl changes: %w", err)
+	}
+	if err := gitcmd.Run(repoDir, "diff", "--cached", "--quiet"); err == nil {
+		return errors.New("go-dl generation produced no changes")
+	} else if _, ok := err.(*exec.ExitError); !ok {
+		return fmt.Errorf("check generated go-dl changes: %w", err)
+	}
+	if err := gitcmd.Run(repoDir, "commit", "-m", update.Title); err != nil {
+		return fmt.Errorf("commit go-dl changes: %w", err)
+	}
+	if update.DryRun {
+		fmt.Println("Dry run created this local commit:")
+		if err := gitcmd.Run(repoDir, "show", "--stat", "--oneline", "HEAD"); err != nil {
+			return fmt.Errorf("show generated go-dl commit: %w", err)
 		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("error checking if file %s exists: %w", path, err)
+		return nil
+	}
+	if err := gitcmd.Run(repoDir, "push", update.PushURL, "HEAD:refs/heads/"+update.Branch); err != nil {
+		return fmt.Errorf("push go-dl changes: %w", err)
+	}
+	return nil
+}
+
+func writeDLManifests(repoDir string, releases []dlRelease) error {
+	for _, release := range releases {
+		path := filepath.Join(repoDir, dlManifestPath(release.Version))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("create manifest directory for %s: %w", release.Version, err)
+		}
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("manifest for %s already exists", release.Version)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("check manifest for %s: %w", release.Version, err)
+		}
+		// Keep the published bytes unchanged. The database is the record of the release manifest.
+		if err := os.WriteFile(path, release.AssetsJSON, 0o644); err != nil {
+			return fmt.Errorf("write manifest for %s: %w", release.Version, err)
 		}
 	}
 	return nil
 }
 
-// generateDLPRTitle generates a human-readable PR title for the dl update.
-func generateDLPRTitle(versions []string) string {
-	return "Update dl for Go " + strings.Join(versions, ", ")
+func dlManifestPath(version string) string {
+	series := goversion.New(version).MajorMinor()
+	return filepath.Join("internal", "gen", "db", "go"+series, "go"+version+".assets.json")
 }
