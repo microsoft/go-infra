@@ -226,6 +226,27 @@ If you have many patch files authored by different developers and it isn't reaso
 Be careful when staging your WIP patch files in the outer repo, because `extract` doesn't fully understand this situation and will delete the patches that haven't been fixed up yet.
 The next dev to work on resolution can then check out the WIP branch and run `git go-patch apply` to pick up where the last dev left it.
 
+### Index preservation
+
+Enable index preservation by setting `PreserveIndex` to `true` in `.git-go-patch`.
+This feature requires `MinimumToolVersion` to be at least `v1.0.2`.
+
+```json
+{
+  ...
+  "MinimumToolVersion": "v1.0.2",
+  "PreserveIndex": true
+}
+```
+
+By default, `git go-patch extract` ignores changes that would only update the `index` lines of the `.patch` files.
+This avoids noise in pull requests, but it can prevent `git am -3` from finding the blobs it needs for a three-way merge.
+Index preservation stores the current `index` lines in a separate `index.json` file.
+Commit this file alongside the patches.
+
+The generated patch files remain standard Git patches and can still be applied directly without `git-go-patch`.
+The `index.json` file is only needed when `git-go-patch` restores index lines for conflict resolution with `git am -3`.
+
 ## Init submodule and apply patches with a fresh clone
 
 `git go-patch apply` understands how to set up the patched submodule, so there's no need to run `git submodule [...]` commands after a fresh clone or checkout:
