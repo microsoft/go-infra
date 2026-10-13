@@ -34,6 +34,11 @@ type Config struct {
 	// relative to the config file.
 	StatusFileDir string
 
+	// PreserveIndex enables generating index.json during extract and restoring its current blob
+	// hashes during apply. Requires MinimumToolVersion >= v1.0.2 so older tools cannot silently
+	// skip index preservation. Disabled by default.
+	PreserveIndex bool `json:",omitempty"`
+
 	// ExtractAsAuthor makes "git-go-patch extract" set this author in the resulting patch file.
 	//
 	// This can be used to avoid patch file attribution confusion: when a patch goes through the
