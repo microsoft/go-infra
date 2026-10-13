@@ -218,15 +218,6 @@ func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
 	r.publishLocked()
 }
 
-func stepProgressEqual(current *StepProgress, next StepProgress) bool {
-	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
-		current.Completed != next.Completed || current.Total != next.Total {
-
-		return false
-	}
-	return true
-}
-
 func (r *StepRunner) publishLocked() {
 	r.sequence++
 	snapshot := r.snapshotLocked()
@@ -238,6 +229,15 @@ func (r *StepRunner) publishLocked() {
 			delete(r.subscribers, id)
 		}
 	}
+}
+
+func stepProgressEqual(current *StepProgress, next StepProgress) bool {
+	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
+		current.Completed != next.Completed || current.Total != next.Total {
+
+		return false
+	}
+	return true
 }
 
 type stepState struct {
@@ -303,6 +303,18 @@ func (s *stepState) waitForDependencies(ctx context.Context, states map[*Step]*s
 	return eg.Wait()
 }
 
+func (s *stepState) done(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.complete:
+		if s.err != nil {
+			return &errDependencyFailed{stepName: s.step.Name, err: s.err}
+		}
+		return nil
+	}
+}
+
 type errDependencyFailed struct {
 	stepName string
 	err      error
@@ -314,16 +326,4 @@ func (e *errDependencyFailed) Error() string {
 
 func (e *errDependencyFailed) Unwrap() error {
 	return e.err
-}
-
-func (s *stepState) done(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.complete:
-		if s.err != nil {
-			return &errDependencyFailed{stepName: s.step.Name, err: s.err}
-		}
-		return nil
-	}
 }

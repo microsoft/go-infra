@@ -12,7 +12,7 @@ import (
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
-	"github.com/microsoft/go-infra/releaseui/internal/runstore"
+	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
 const testDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

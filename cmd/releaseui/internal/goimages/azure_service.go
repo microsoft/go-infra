@@ -55,7 +55,9 @@ func (s *AzureService) Preflight(ctx context.Context) (string, error) {
 
 		return "", fmt.Errorf("pipeline 1023 does not match the read-only allowlist: %#v", definition)
 	}
-	return "Authenticated and verified direct go-images pipeline 1023. Planning is read-only; confirmed execution can queue only this target.", nil
+	details := "Authenticated and verified direct go-images pipeline 1023. Normal, rollback, and dev/test releases are available."
+	fmt.Println(details)
+	return details, nil
 }
 
 // ResolveCurrentSource resolves and validates the exact current microsoft/main source.

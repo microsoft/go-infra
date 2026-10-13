@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releaseui
+package server
 
 import (
 	"context"
@@ -18,6 +18,8 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/webview"
+	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
 type testUI struct {
@@ -75,11 +77,11 @@ func TestDashboardQueriesReleaseRecords(t *testing.T) {
 	canceled := testProcessRun(t)
 	canceled.Started = true
 	canceled.Complete = true
-	canceled.Result = resultCanceled
+	canceled.Result = string(runstore.StatusCanceled)
 	succeeded := testProcessRun(t)
 	succeeded.Started = true
 	succeeded.Complete = true
-	succeeded.Result = resultSucceeded
+	succeeded.Result = string(runstore.StatusSucceeded)
 
 	store := newMemoryProcessRunStore()
 	seedReleaseRecord(store, testReleaseRunRecord(3, canceled, true, time.Date(2026, 9, 9, 14, 0, 0, 0, time.UTC)))
@@ -91,16 +93,16 @@ func TestDashboardQueriesReleaseRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	var dashboard dashboardResponse
+	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
 	if response.StatusCode != http.StatusOK || dashboard.TrackingError != "" ||
 		len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 0 || len(dashboard.Recent) != 2 {
 
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
-	if dashboard.Ongoing[0].RecordID != 2 || dashboard.Ongoing[0].Status != resultRunning ||
-		dashboard.Recent[0].RecordID != 3 || dashboard.Recent[0].Status != resultCanceled ||
-		dashboard.Recent[1].RecordID != 1 || dashboard.Recent[1].Status != resultSucceeded {
+	if dashboard.Ongoing[0].RecordID != 2 || dashboard.Ongoing[0].Status != string(runstore.StatusRunning) ||
+		dashboard.Recent[0].RecordID != 3 || dashboard.Recent[0].Status != string(runstore.StatusCanceled) ||
+		dashboard.Recent[1].RecordID != 1 || dashboard.Recent[1].Status != string(runstore.StatusSucceeded) {
 
 		t.Fatalf("dashboard groups = %#v, %#v, %#v", dashboard.Ongoing, dashboard.NeedsAttention, dashboard.Recent)
 	}
@@ -110,7 +112,7 @@ func TestSelectReleaseRecordRestoresRun(t *testing.T) {
 	run := testProcessRun(t)
 	run.Started = true
 	run.Complete = true
-	run.Result = resultSucceeded
+	run.Result = string(runstore.StatusSucceeded)
 	store := newMemoryProcessRunStore()
 	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
 	seedReleaseRecord(store, testReleaseRunRecord(43, run, true, time.Now().UTC()))
@@ -127,7 +129,7 @@ func TestSelectReleaseRecordRestoresRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	var plan processRunResponse
+	var plan webview.ProcessRunResponse[*contract.Plan]
 	decodeResponse(t, response, &plan)
 	if response.StatusCode != http.StatusOK || plan.Execution.Record == nil || plan.Execution.Record.ID != 42 {
 		t.Fatalf("status = %d, plan = %#v", response.StatusCode, plan)
@@ -160,7 +162,7 @@ func TestRestoringReleaseDoesNotBlockReads(t *testing.T) {
 	}
 	store := newMemoryProcessRunStore()
 	run := testProcessRun(t)
-	run.Started, run.Complete, run.Result = true, true, resultSucceeded
+	run.Started, run.Complete, run.Result = true, true, string(runstore.StatusSucceeded)
 	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
 	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
 	request := authenticatedRequest(t, ui.server, http.MethodPost, "/api/releases/42/select", `{}`)
@@ -201,7 +203,7 @@ func TestRestoringReleaseDoesNotReplaceConcurrentPreparation(t *testing.T) {
 	}
 	store := newMemoryProcessRunStore()
 	run := testProcessRun(t)
-	run.Started, run.Complete, run.Result = true, true, resultSucceeded
+	run.Started, run.Complete, run.Result = true, true, string(runstore.StatusSucceeded)
 	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
 	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
 	selected := httptest.NewRecorder()
@@ -245,7 +247,7 @@ func TestRestoringReleaseDoesNotReplaceConcurrentPreparation(t *testing.T) {
 	}
 	latest := httptest.NewRecorder()
 	ui.server.Handler().ServeHTTP(latest, authenticatedRequest(t, ui.server, http.MethodGet, "/api/processes/example/plan", ""))
-	var plan processRunResponse
+	var plan webview.ProcessRunResponse[*contract.Plan]
 	if err := json.Unmarshal(latest.Body.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
@@ -266,18 +268,18 @@ func TestExportImportReleaseRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	var exported releaseRecordExport
+	var exported webview.ReleaseRecordExport[*runstore.State]
 	decodeResponse(t, response, &exported)
 	if response.StatusCode != http.StatusOK || exported.ID != 42 || exported.Revision != 1 {
 		t.Fatalf("status = %d, export = %#v", response.StatusCode, exported)
 	}
 	exported.Run.Complete = true
-	exported.Run.Result = resultUncertain
+	exported.Run.Result = string(runstore.StatusUncertain)
 	response = postJSONValue(t, ui, "/api/releases/42/import", exported)
 	defer response.Body.Close()
-	var updated releaseRecordExport
+	var updated webview.ReleaseRecordExport[*runstore.State]
 	decodeResponse(t, response, &updated)
-	if response.StatusCode != http.StatusOK || updated.Revision != 2 || updated.Run.Result != resultUncertain {
+	if response.StatusCode != http.StatusOK || updated.Revision != 2 || updated.Run.Result != string(runstore.StatusUncertain) {
 		t.Fatalf("status = %d, update = %#v", response.StatusCode, updated)
 	}
 	response = postJSONValue(t, ui, "/api/releases/42/import", exported)
@@ -289,7 +291,7 @@ func TestExportImportReleaseRecord(t *testing.T) {
 
 func TestExportRejectsMalformedStoreRecord(t *testing.T) {
 	store := newMemoryProcessRunStore()
-	store.records[42] = &releaseRunRecord{ID: 42, Revision: 1}
+	store.records[42] = &runstore.Record{ID: 42, Revision: 1}
 	ui := newTestUI(t, WithReleaseRunStore(store))
 	response, err := ui.client.Get(ui.http.URL + "/api/releases/42/export")
 	if err != nil {
@@ -309,15 +311,15 @@ func TestImportRejectsChangedIntentAndInvalidState(t *testing.T) {
 	ui := newTestUI(t, WithReleaseRunStore(store))
 	for _, test := range []struct {
 		name   string
-		change func(*releaseRecordExport)
+		change func(*webview.ReleaseRecordExport[*runstore.State])
 	}{
-		{name: "intent", change: func(exported *releaseRecordExport) {
+		{name: "intent", change: func(exported *webview.ReleaseRecordExport[*runstore.State]) {
 			exported.Run.Digest = strings.Repeat("b", 64)
 		}},
-		{name: "input", change: func(exported *releaseRecordExport) {
+		{name: "input", change: func(exported *webview.ReleaseRecordExport[*runstore.State]) {
 			exported.Run.Snapshot.Input = json.RawMessage(`{"changed":true}`)
 		}},
-		{name: "status", change: func(exported *releaseRecordExport) {
+		{name: "status", change: func(exported *webview.ReleaseRecordExport[*runstore.State]) {
 			exported.Run.Complete = true
 		}},
 	} {
@@ -326,7 +328,7 @@ func TestImportRejectsChangedIntentAndInvalidState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			exported := exportReleaseRunRecord(record)
+			exported := testExportReleaseRunRecord(record)
 			test.change(&exported)
 			response := postJSONValue(t, ui, "/api/releases/42/import", exported)
 			closeResponse(t, response)
@@ -351,12 +353,18 @@ func TestImportRejectsChangedReviewedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exported := exportReleaseRunRecord(record)
+	exported := testExportReleaseRunRecord(record)
 	exported.Run.Snapshot.State = json.RawMessage(`{"value":"changed"}`)
 	response := postJSONValue(t, ui, "/api/releases/42/import", exported)
 	closeResponse(t, response)
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func testExportReleaseRunRecord(record *runstore.Record) webview.ReleaseRecordExport[*runstore.State] {
+	return webview.ReleaseRecordExport[*runstore.State]{
+		ID: record.ID, Revision: record.Revision, URL: record.URL, Run: record.Run.Clone(),
 	}
 }
 
@@ -402,14 +410,14 @@ func closeResponse(t *testing.T, response *http.Response) {
 	}
 }
 
-func testReleaseRunRecord(id int, run *releaseRunState, closed bool, updatedAt time.Time) *releaseRunRecord {
-	return &releaseRunRecord{
+func testReleaseRunRecord(id int, run *runstore.State, closed bool, updatedAt time.Time) *runstore.Record {
+	return &runstore.Record{
 		ID: id, Revision: 1, URL: fmt.Sprintf("https://example.invalid/releases/%d", id),
 		Closed: closed, UpdatedAt: updatedAt, Run: run.Clone(),
 	}
 }
 
-func seedReleaseRecord(store *memoryProcessRunStore, record *releaseRunRecord) {
+func seedReleaseRecord(store *memoryProcessRunStore, record *runstore.Record) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.records[record.ID] = cloneReleaseRunRecord(record)

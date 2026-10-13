@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,7 +15,7 @@ import (
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"
-	releaseui "github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -61,16 +59,11 @@ func handleServe(parse subcmd.ParseFunc) error {
 	options := []releaseui.Option{
 		releaseui.WithProcesses(goImagesProcess, goInfraProcess),
 	}
+	if !*noOpen {
+		options = append(options, releaseui.WithBrowser())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return releaseui.ListenAndServe(ctx, *listenAddress, func(launchURL string) {
-		fmt.Printf("Release UI listening at %s\n", launchURL)
-		fmt.Println("Go-images pipeline 1023 execution is available for normal, rollback, and dev/ test releases.")
-		if !*noOpen {
-			if err := releaseui.OpenBrowser(launchURL); err != nil {
-				log.Printf("Unable to open browser automatically: %v", err)
-			}
-		}
-	}, options...)
+	return releaseui.ListenAndServe(ctx, *listenAddress, options...)
 }

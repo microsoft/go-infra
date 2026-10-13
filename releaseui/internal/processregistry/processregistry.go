@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releaseui
+// Package processregistry validates and indexes configured release processes.
+package processregistry
 
 import (
 	"errors"
@@ -20,29 +21,33 @@ var (
 	inputIDPattern   = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
 )
 
-type registeredProcess struct {
-	process    contract.Process
-	definition contract.ProcessDefinition
-	inputs     []webview.Input
-	group      *registeredProcessGroup
+// Process is one validated process registration.
+type Process struct {
+	Implementation contract.Process
+	Definition     contract.ProcessDefinition
+	Inputs         []webview.Input
+	Group          *Group
 }
 
-type registeredProcessGroup struct {
-	identity  contract.Identity
-	processes []*registeredProcess
+// Group is one validated process group.
+type Group struct {
+	Identity  contract.Identity
+	Processes []*Process
 }
 
-type processRegistry struct {
-	groups  []*registeredProcessGroup
-	ordered []*registeredProcess
-	byID    map[string]*registeredProcess
+// Registry indexes validated release processes and groups.
+type Registry struct {
+	groups  []*Group
+	ordered []*Process
+	byID    map[string]*Process
 }
 
-func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, error) {
+// New validates and indexes groups.
+func New(groups ...contract.ProcessGroup) (*Registry, error) {
 	if len(groups) == 0 {
 		return nil, errors.New("release process registry is empty")
 	}
-	registry := &processRegistry{byID: make(map[string]*registeredProcess)}
+	registry := &Registry{byID: make(map[string]*Process)}
 	for _, group := range groups {
 		if isNil(group) {
 			return nil, errors.New("release process group is nil")
@@ -55,16 +60,16 @@ func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, erro
 		if identity == nil {
 			return nil, errors.New("release process group returned a nil identity")
 		}
-		registeredGroup := &registeredProcessGroup{identity: *identity}
+		registeredGroup := &Group{Identity: *identity}
 		for _, process := range processes {
 			entry, err := registry.register(process)
 			if err != nil {
 				return nil, err
 			}
-			entry.group = registeredGroup
-			registeredGroup.processes = append(registeredGroup.processes, entry)
+			entry.Group = registeredGroup
+			registeredGroup.Processes = append(registeredGroup.Processes, entry)
 		}
-		if err := validateIdentity("release process group", registeredGroup.identity); err != nil {
+		if err := validateIdentity("release process group", registeredGroup.Identity); err != nil {
 			return nil, err
 		}
 		registry.groups = append(registry.groups, registeredGroup)
@@ -72,7 +77,7 @@ func newProcessRegistry(groups ...contract.ProcessGroup) (*processRegistry, erro
 	return registry, nil
 }
 
-func (r *processRegistry) register(process contract.Process) (*registeredProcess, error) {
+func (r *Registry) register(process contract.Process) (*Process, error) {
 	if isNil(process) {
 		return nil, errors.New("release process implementation is nil")
 	}
@@ -111,10 +116,38 @@ func (r *processRegistry) register(process contract.Process) (*registeredProcess
 		}
 		seen[input.ID] = struct{}{}
 	}
-	entry := &registeredProcess{process: process, definition: definition, inputs: definitions}
+	entry := &Process{Implementation: process, Definition: definition, Inputs: definitions}
 	r.byID[definition.ID] = entry
 	r.ordered = append(r.ordered, entry)
 	return entry, nil
+}
+
+// Page returns the embedded page name for a process route.
+func (r *Registry) Page(path string) (string, bool) {
+	id := strings.TrimPrefix(path, "/")
+	_, ok := r.byID[id]
+	return "process.html", ok && path == Path(id)
+}
+
+// Lookup returns a process by ID.
+func (r *Registry) Lookup(id string) (*Process, bool) {
+	process, ok := r.byID[id]
+	return process, ok
+}
+
+// Groups returns the registered groups in display order.
+func (r *Registry) Groups() []*Group {
+	return append([]*Group(nil), r.groups...)
+}
+
+// Ordered returns all registered processes in display order.
+func (r *Registry) Ordered() []*Process {
+	return append([]*Process(nil), r.ordered...)
+}
+
+// Path returns the browser path for a process.
+func Path(id string) string {
+	return "/" + id
 }
 
 func validateIdentity(subject string, identity contract.Identity) error {
@@ -133,32 +166,4 @@ func isNil(value any) bool {
 	}
 	reflected := reflect.ValueOf(value)
 	return reflected.Kind() == reflect.Pointer && reflected.IsNil()
-}
-
-func processPath(id string) string {
-	return "/" + id
-}
-
-func (r *processRegistry) page(path string) (string, bool) {
-	id := strings.TrimPrefix(path, "/")
-	_, ok := r.byID[id]
-	return "process.html", ok && path == processPath(id)
-}
-
-func (r *processRegistry) process(id string) (*registeredProcess, bool) {
-	process, ok := r.byID[id]
-	return process, ok
-}
-
-func (r *processRegistry) summaries() []processSummary {
-	summaries := make([]processSummary, 0, len(r.groups))
-	for _, group := range r.groups {
-		defaultProcess := group.processes[0]
-		summaries = append(summaries, processSummary{
-			ID:   defaultProcess.definition.ID,
-			Name: group.identity.Name, Mark: group.identity.Mark,
-			Description: group.identity.Description, Href: processPath(defaultProcess.definition.ID),
-		})
-	}
-	return summaries
 }

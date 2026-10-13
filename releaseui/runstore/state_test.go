@@ -30,6 +30,19 @@ func TestStateLifecycle(t *testing.T) {
 	}
 }
 
+func TestStateRejectsCheckpointBeforeStart(t *testing.T) {
+	state, err := NewState("example", &contract.StateSnapshot{
+		Input: json.RawMessage(`{}`), State: json.RawMessage(`{}`),
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Checkpointed = true
+	if err := state.Validate(); err == nil {
+		t.Fatal("unstarted checkpointed run passed validation")
+	}
+}
+
 func TestRecordRejectsClosedIncompleteRun(t *testing.T) {
 	state, err := NewState("example", &contract.StateSnapshot{
 		Input: json.RawMessage(`{}`), State: json.RawMessage(`{}`),

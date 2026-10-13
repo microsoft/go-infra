@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package runstore defines the private durable-state contract shared by releaseui and its store.
+// Package runstore defines release execution state and its durable storage contract.
 package runstore
 
 import (

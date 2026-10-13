@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releaseui
+// Package browser opens URLs in the operating system's default browser.
+package browser
 
 import (
 	"fmt"
@@ -10,10 +11,10 @@ import (
 	"runtime"
 )
 
-// OpenBrowser asks the operating system to open target in the user's default browser.
-func OpenBrowser(target string) error {
+// Open asks the operating system to open target in the default browser.
+func Open(target string) error {
 	isWSL := os.Getenv("WSL_INTEROP") != "" || os.Getenv("WSL_DISTRO_NAME") != ""
-	command, args, err := browserCommand(runtime.GOOS, isWSL, target)
+	command, args, err := command(runtime.GOOS, isWSL, target)
 	if err != nil {
 		return err
 	}
@@ -23,7 +24,7 @@ func OpenBrowser(target string) error {
 	return nil
 }
 
-func browserCommand(goos string, isWSL bool, target string) (string, []string, error) {
+func command(goos string, isWSL bool, target string) (string, []string, error) {
 	switch goos {
 	case "darwin":
 		return "open", []string{target}, nil

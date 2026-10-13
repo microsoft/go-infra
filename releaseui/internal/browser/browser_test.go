@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-package releaseui
+package browser
 
 import "testing"
 
-func TestBrowserCommand(t *testing.T) {
+func TestCommand(t *testing.T) {
 	for _, test := range []struct {
 		goos    string
 		isWSL   bool
@@ -17,12 +17,12 @@ func TestBrowserCommand(t *testing.T) {
 		{goos: "windows", command: "rundll32"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
-			command, args, err := browserCommand(test.goos, test.isWSL, "http://127.0.0.1:1234")
+			actual, args, err := command(test.goos, test.isWSL, "http://127.0.0.1:1234")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if command != test.command {
-				t.Fatalf("command = %q, want %q", command, test.command)
+			if actual != test.command {
+				t.Fatalf("command = %q, want %q", actual, test.command)
 			}
 			if len(args) == 0 || args[len(args)-1] != "http://127.0.0.1:1234" {
 				t.Fatalf("browser args do not contain target URL: %q", args)
@@ -30,7 +30,7 @@ func TestBrowserCommand(t *testing.T) {
 		})
 	}
 
-	if _, _, err := browserCommand("plan9", false, "http://127.0.0.1:1234"); err == nil {
+	if _, _, err := command("plan9", false, "http://127.0.0.1:1234"); err == nil {
 		t.Fatal("expected unsupported OS error")
 	}
 }
