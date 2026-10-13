@@ -147,6 +147,77 @@ func TestInstallPath(t *testing.T) {
 	}
 }
 
+func TestDownloadFileRetriesStreamFailure(t *testing.T) {
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			t.Parallel()
+
+			outPath := filepath.Join(t.TempDir(), "download")
+			outPathPS := strings.ReplaceAll(outPath, "'", "''")
+			out := runTestFile(t, interpreter, makeTestFile(t, `
+			Load-Assembly -Assembly System.Net.Http
+			$script:downloadAttempts = 0
+			function GetHTTPResponse([Uri] $Uri, [bool]$HeaderOnly, [bool]$DisableRedirect, [int]$MaxAttempts = 3) {
+				$script:downloadAttempts++
+				$response = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK)
+				if ($script:downloadAttempts -eq 1) {
+					$stream = [System.IO.MemoryStream]::new([byte[]]@(65, 66, 67))
+					$response.Content = [System.Net.Http.StreamContent]::new($stream)
+					$stream.Dispose()
+				}
+				else {
+					$response.Content = [System.Net.Http.StringContent]::new("downloaded")
+				}
+				return $response
+			}
+			DownloadFile -Source "https://example.invalid/file" -OutPath '`+outPathPS+`'
+			Write-Output "attempts=$script:downloadAttempts"
+			exit
+			`))
+
+			if !strings.Contains(out, "attempts=2") {
+				t.Fatalf("expected the download to be attempted twice, got:\n%s", out)
+			}
+			downloaded, err := os.ReadFile(outPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(downloaded) != "downloaded" {
+				t.Errorf("expected successful retry content %q, got %q", "downloaded", downloaded)
+			}
+		})
+	}
+}
+
+func TestDownloadFileDoesNotRetryNotFound(t *testing.T) {
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			t.Parallel()
+
+			out := runTestFile(t, interpreter, makeTestFile(t, `
+			$script:downloadAttempts = 0
+			function GetHTTPResponse([Uri] $Uri, [bool]$HeaderOnly, [bool]$DisableRedirect, [int]$MaxAttempts = 3) {
+				$script:downloadAttempts++
+				$exception = [System.Exception]::new("Not found")
+				$exception.Data["NonRetryable"] = $true
+				throw $exception
+			}
+			try {
+				DownloadFile -Source "https://example.invalid/missing" -OutPath "missing-download"
+			}
+			catch {
+			}
+			Write-Output "attempts=$script:downloadAttempts"
+			exit
+			`))
+
+			if !strings.Contains(out, "attempts=1") {
+				t.Fatalf("expected the not-found download to be attempted once, got:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestInstall(t *testing.T) {
 	if !*download {
 		t.Skip("skipping test that downloads Microsoft build of Go from the internet; use -download to run it")
