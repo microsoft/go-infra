@@ -613,6 +613,7 @@ function DownloadFile($Source, [string]$OutPath) {
         $Response = $null
         $Stream = $null
         $File = $null
+        $CopySucceeded = $false
         $DownloadSucceeded = $false
 
         try {
@@ -620,12 +621,15 @@ function DownloadFile($Source, [string]$OutPath) {
             $Stream = $Response.Content.ReadAsStreamAsync().Result
             $File = [System.IO.File]::Create($OutPath)
             $Stream.CopyTo($File)
-            $DownloadSucceeded = $true
+            $CopySucceeded = $true
         }
         finally {
             try {
                 if ($null -ne $File) {
                     $File.Dispose()
+                    if ($CopySucceeded) {
+                        $DownloadSucceeded = $true
+                    }
                 }
             }
             finally {
@@ -648,7 +652,6 @@ function DownloadFile($Source, [string]$OutPath) {
                 }
             }
         }
-        $DownloadSucceeded = $true
     }
 
     Invoke-With-Retry $downloadScript
