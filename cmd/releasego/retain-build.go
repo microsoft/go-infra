@@ -4,10 +4,13 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 	"strconv"
 
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -15,11 +18,8 @@ import (
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "retain-build",
-		Summary: "Mark an AzDO build to be retained forever (set keepForever=true).",
+		Summary: "Retain an AzDO build forever.",
 		Description: `
-Note: The build retention API is currently broken, so this command will not actually retain the build.
-See https://github.com/microsoft/go-lab/issues/575
-
 By default, retains the build that is currently running this command, using
 BUILD_BUILDID, SYSTEM_COLLECTIONURI, and SYSTEM_TEAMPROJECT from the environment.
 Pass -id, -org, or -proj to override.
@@ -45,7 +45,40 @@ func handleRetainBuild(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	log.Println("Build retention API broken; skipping to unblock release process. See https://github.com/microsoft/go-lab/issues/575")
+	ctx := context.Background()
+
+	c, err := build.NewClient(ctx, azdoFlags.NewConnection())
+	if err != nil {
+		return err
+	}
+
+	b, err := c.GetBuild(ctx, build.GetBuildArgs{
+		BuildId: id,
+		Project: azdoFlags.Proj,
+	})
+	if err != nil {
+		return err
+	}
+	if b.Definition == nil || b.Definition.Id == nil {
+		return fmt.Errorf("build %d has no pipeline definition ID", *id)
+	}
+
+	leases := []build.NewRetentionLease{{
+		DaysValid:       new(36501),
+		DefinitionId:    b.Definition.Id,
+		OwnerId:         new("releasego retain-build"),
+		ProtectPipeline: new(false),
+		RunId:           id,
+	}}
+	if _, err := c.AddRetentionLeases(ctx, build.AddRetentionLeasesArgs{
+		NewLeases: &leases,
+		Project:   azdoFlags.Proj,
+	}); err != nil {
+		return err
+	}
+
+	url, _ := azdo.GetBuildWebURL(b)
+	log.Printf("Enabled permanent retention for build %v %v", *id, url)
 	return nil
 }
 
