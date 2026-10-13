@@ -215,6 +215,10 @@ service, updates it with an Azure DevOps revision check, and resumes monitoring 
 after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and
 refuses a replacement.
 
+State and progress views remain responsive while state is saved or a release is restored.
+If a new plan is prepared during a restore, the restore returns a conflict rather than replacing
+that plan.
+
 ## Security boundaries
 
 * The server binds only to a loopback address.

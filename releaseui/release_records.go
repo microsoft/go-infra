@@ -13,7 +13,6 @@ import (
 	"strconv"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
-	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 const (
@@ -97,43 +96,47 @@ func (s *Server) handleSelectRelease(response http.ResponseWriter, request *http
 	}
 	s.selectionMu.Lock()
 	defer s.selectionMu.Unlock()
-	s.mu.Lock()
-	if href, selected := s.selectedReleaseHrefLocked(id); selected {
-		s.mu.Unlock()
+	href, selected, err := s.releaseSelection(id)
+	if err != nil {
+		writeError(response, http.StatusConflict, err.Error())
+		return
+	}
+	if selected {
 		writeJSON(response, http.StatusOK, map[string]string{"href": href})
 		return
 	}
-	if s.hasSelectedOrPreparedReleaseLocked() {
-		s.mu.Unlock()
-		writeError(response, http.StatusConflict, "restart without a selected or prepared release before selecting a different record")
-		return
-	}
-	s.mu.Unlock()
 	record, err := s.processRunStore.Get(request.Context(), id)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, fmt.Sprintf("load release record: %v", err))
 		return
 	}
-	s.mu.Lock()
-	if href, selected := s.selectedReleaseHrefLocked(id); selected {
-		s.mu.Unlock()
-		writeJSON(response, http.StatusOK, map[string]string{"href": href})
-		return
-	}
-	if s.hasSelectedOrPreparedReleaseLocked() {
-		s.mu.Unlock()
+	href, selected, err = s.releaseSelection(id)
+	if err != nil {
 		writeError(response, http.StatusConflict, "a release was prepared while the record was loading")
 		return
 	}
-	href, err := s.restoreReleaseRunRecord(record)
+	if selected {
+		writeJSON(response, http.StatusOK, map[string]string{"href": href})
+		return
+	}
+	href, err = s.restoreReleaseRunRecord(record)
 	if err != nil {
-		s.clearSelectedReleaseLocked()
-		s.mu.Unlock()
 		writeError(response, http.StatusConflict, fmt.Sprintf("restore release record: %v", err))
 		return
 	}
-	s.mu.Unlock()
 	writeJSON(response, http.StatusOK, map[string]string{"href": href})
+}
+
+func (s *Server) releaseSelection(id int) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if href, selected := s.selectedReleaseHrefLocked(id); selected {
+		return href, true, nil
+	}
+	if s.hasSelectedOrPreparedReleaseLocked() {
+		return "", false, errors.New("restart without a selected or prepared release before selecting a different record")
+	}
+	return "", false, nil
 }
 
 func (s *Server) restoreReleaseRunRecord(record *releaseRunRecord) (string, error) {
@@ -155,16 +158,6 @@ func (s *Server) selectedReleaseHrefLocked(id int) (string, bool) {
 
 func (s *Server) hasSelectedOrPreparedReleaseLocked() bool {
 	return s.processRunning || len(s.steps) != 0 || s.processRun != nil
-}
-
-func (s *Server) clearSelectedReleaseLocked() {
-	s.activeProcessID = ""
-	s.steps = nil
-	s.runner = &coordinator.StepRunner{}
-	s.processRun = nil
-	s.processRunState = nil
-	s.processPlan = nil
-	s.processRunRecord = nil
 }
 
 func (s *Server) handleExportRelease(response http.ResponseWriter, request *http.Request) {

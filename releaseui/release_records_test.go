@@ -12,10 +12,12 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 type testUI struct {
@@ -140,6 +142,115 @@ func TestSelectReleaseRecordRestoresRun(t *testing.T) {
 	closeResponse(t, response)
 	if response.StatusCode != http.StatusConflict {
 		t.Fatalf("different record status = %d, want %d", response.StatusCode, http.StatusConflict)
+	}
+}
+
+func TestRestoringReleaseDoesNotBlockReads(t *testing.T) {
+	process := exampleProcess()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	process.build = func(
+		ctx context.Context,
+		run *fakeReleaseRun,
+		checkpoint contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		close(entered)
+		<-release
+		return exampleProcessSteps(func(context.Context) error { return nil }), nil
+	}
+	store := newMemoryProcessRunStore()
+	run := testProcessRun(t)
+	run.Started, run.Complete, run.Result = true, true, resultSucceeded
+	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+	request := authenticatedRequest(t, ui.server, http.MethodPost, "/api/releases/42/select", `{}`)
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ui.server.Handler().ServeHTTP(response, request)
+	}()
+	var reader <-chan struct{}
+	t.Cleanup(func() {
+		close(release)
+		<-done
+		if reader != nil {
+			<-reader
+		}
+	})
+	waitForSignal(t, entered)
+	reader = assertProcessReadResponsive(t, ui.server, "/api/processes/example/state")
+}
+
+func TestRestoringReleaseDoesNotReplaceConcurrentPreparation(t *testing.T) {
+	process := exampleProcess()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	process.build = func(
+		ctx context.Context,
+		run *fakeReleaseRun,
+		checkpoint contract.CheckpointFunc,
+	) ([]*coordinator.Step, error) {
+		if checkpoint != nil {
+			close(entered)
+			<-release
+		}
+		return exampleProcessSteps(func(context.Context) error { return nil }), nil
+	}
+	store := newMemoryProcessRunStore()
+	run := testProcessRun(t)
+	run.Started, run.Complete, run.Result = true, true, resultSucceeded
+	seedReleaseRecord(store, testReleaseRunRecord(42, run, true, time.Now().UTC()))
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+	selected := httptest.NewRecorder()
+	selectionRequest := authenticatedRequest(t, ui.server, http.MethodPost, "/api/releases/42/select", `{}`)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ui.server.Handler().ServeHTTP(selected, selectionRequest)
+	}()
+	prepared := httptest.NewRecorder()
+	preparationDone := make(chan struct{})
+	preparationStarted := false
+	t.Cleanup(func() {
+		unblock()
+		<-done
+		if preparationStarted {
+			<-preparationDone
+		}
+	})
+	waitForSignal(t, entered)
+	request := authenticatedRequest(t, ui.server, http.MethodPost, "/api/processes/example/plan", `{}`)
+	preparationStarted = true
+	go func() {
+		defer close(preparationDone)
+		ui.server.Handler().ServeHTTP(prepared, request)
+	}()
+	select {
+	case <-preparationDone:
+		if prepared.Code != http.StatusOK {
+			t.Fatalf("preparation: status = %d, body = %s", prepared.Code, prepared.Body.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("preparation waited for restore reconstruction")
+		unblock()
+		<-preparationDone
+	}
+	unblock()
+	<-done
+	if selected.Code != http.StatusConflict {
+		t.Errorf("restore replaced the concurrent plan: status = %d, body = %s", selected.Code, selected.Body.String())
+	}
+	latest := httptest.NewRecorder()
+	ui.server.Handler().ServeHTTP(latest, authenticatedRequest(t, ui.server, http.MethodGet, "/api/processes/example/plan", ""))
+	var plan processRunResponse
+	if err := json.Unmarshal(latest.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if latest.Code != http.StatusOK || plan.Execution.Record != nil || plan.Execution.Run.Complete {
+		t.Fatalf("prepared plan was lost: status = %d, plan = %#v", latest.Code, plan)
 	}
 }
 
