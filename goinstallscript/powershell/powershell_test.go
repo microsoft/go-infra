@@ -189,6 +189,35 @@ func TestDownloadFileRetriesStreamFailure(t *testing.T) {
 	}
 }
 
+func TestDownloadFileDoesNotRetryNotFound(t *testing.T) {
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			t.Parallel()
+
+			out := runTestFile(t, interpreter, makeTestFile(t, `
+			$script:downloadAttempts = 0
+			function GetHTTPResponse([Uri] $Uri, [bool]$HeaderOnly, [bool]$DisableRedirect, [int]$MaxAttempts = 3) {
+				$script:downloadAttempts++
+				$exception = [System.Exception]::new("Not found")
+				$exception.Data["NonRetryable"] = $true
+				throw $exception
+			}
+			try {
+				DownloadFile -Source "https://example.invalid/missing" -OutPath "missing-download"
+			}
+			catch {
+			}
+			Write-Output "attempts=$script:downloadAttempts"
+			exit
+			`))
+
+			if !strings.Contains(out, "attempts=1") {
+				t.Fatalf("expected the not-found download to be attempted once, got:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestInstall(t *testing.T) {
 	if !*download {
 		t.Skip("skipping test that downloads Microsoft build of Go from the internet; use -download to run it")

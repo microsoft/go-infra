@@ -189,7 +189,7 @@ function Invoke-With-Retry([ScriptBlock]$ScriptBlock, [System.Threading.Cancella
         }
         catch {
             $Attempts++
-            if (($Attempts -lt $MaxAttempts) -and -not $cancellationToken.IsCancellationRequested) {
+            if (($Attempts -lt $MaxAttempts) -and -not $cancellationToken.IsCancellationRequested -and -not $PSItem.Exception.Data["NonRetryable"]) {
                 Start-Sleep $SecondsBetweenAttempts
             }
             else {
@@ -395,6 +395,7 @@ function GetHTTPResponse([Uri] $Uri, [bool]$HeaderOnly, [bool]$DisableRedirect, 
                     $DownloadException.Data["ErrorMessage"] = "Unable to download $Uri. Returned HTTP status code: " + $DownloadException.Data["StatusCode"]
 
                     if (404 -eq [int] $Response.StatusCode) {
+                        $DownloadException.Data["NonRetryable"] = $true
                         $cts.Cancel()
                     }
                 }
@@ -622,19 +623,32 @@ function DownloadFile($Source, [string]$OutPath) {
             $DownloadSucceeded = $true
         }
         finally {
-            if ($null -ne $File) {
-                $File.Dispose()
+            try {
+                if ($null -ne $File) {
+                    $File.Dispose()
+                }
             }
-            if ($null -ne $Stream) {
-                $Stream.Dispose()
-            }
-            if ($null -ne $Response) {
-                $Response.Dispose()
-            }
-            if (-not $DownloadSucceeded -and $null -ne $File) {
-                Remove-Item -LiteralPath $OutPath -Force -ErrorAction SilentlyContinue
+            finally {
+                try {
+                    if ($null -ne $Stream) {
+                        $Stream.Dispose()
+                    }
+                }
+                finally {
+                    try {
+                        if ($null -ne $Response) {
+                            $Response.Dispose()
+                        }
+                    }
+                    finally {
+                        if (-not $DownloadSucceeded -and $null -ne $File) {
+                            Remove-Item -LiteralPath $OutPath -Force -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
             }
         }
+        $DownloadSucceeded = $true
     }
 
     Invoke-With-Retry $downloadScript
