@@ -22,8 +22,8 @@ const IndexFileName = "index.json"
 type Index map[string]indexEntry
 
 type indexEntry struct {
-	PatchSHA256 string            `json:"patchSHA256"`
-	IndexLines  map[string]string `json:"indexLines"`
+	PatchSHA256 string         `json:"patchSHA256"`
+	IndexLines  map[int]string `json:"indexLines"`
 }
 
 var indexLinePattern = regexp.MustCompile(`^index ([0-9a-f]{40}|[0-9a-f]{64})\.\.([0-9a-f]{40}|[0-9a-f]{64})( [0-7]{6})?$`)
@@ -37,14 +37,18 @@ func patchChecksum(content []byte) string {
 // It returns false if the saved patch's diff headers cannot be matched to current's index lines.
 func (index Index) Record(name string, saved []byte, current *Patch) bool {
 	lines := make(map[string]string)
-	rewriteIndexLines(current.Content, func(diff, line string) string {
+	rewriteIndexLines(current.Content, func(_ int, diff, line string) string {
 		lines[diff] = line
 		return line
 	})
 	matched := true
-	rewriteIndexLines(string(saved), func(diff, line string) string {
-		if _, ok := lines[diff]; !ok {
+	indexLines := make(map[int]string)
+	rewriteIndexLines(string(saved), func(lineNumber int, diff, line string) string {
+		currentLine, ok := lines[diff]
+		if !ok {
 			matched = false
+		} else {
+			indexLines[lineNumber] = currentLine
 		}
 		return line
 	})
@@ -53,7 +57,7 @@ func (index Index) Record(name string, saved []byte, current *Patch) bool {
 	}
 	index[name] = indexEntry{
 		PatchSHA256: patchChecksum(saved),
-		IndexLines:  lines,
+		IndexLines:  indexLines,
 	}
 	return true
 }
@@ -90,20 +94,23 @@ func (index Index) Restore(name string, content []byte) ([]byte, error) {
 	if !ok || entry.PatchSHA256 != patchChecksum(content) {
 		return content, nil
 	}
-	for _, line := range entry.IndexLines {
+	for lineNumber, line := range entry.IndexLines {
+		if lineNumber < 1 {
+			return nil, fmt.Errorf("invalid index line number for patch %q: %d", name, lineNumber)
+		}
 		if !indexLinePattern.MatchString(line) {
 			return nil, fmt.Errorf("invalid index line for patch %q: %q", name, line)
 		}
 	}
-	return []byte(rewriteIndexLines(string(content), func(diff, line string) string {
-		if replacement, ok := entry.IndexLines[diff]; ok {
+	return []byte(rewriteIndexLines(string(content), func(lineNumber int, _, line string) string {
+		if replacement, ok := entry.IndexLines[lineNumber]; ok {
 			return replacement
 		}
 		return line
 	})), nil
 }
 
-func rewriteIndexLines(content string, replace func(diff, line string) string) string {
+func rewriteIndexLines(content string, replace func(lineNumber int, diff, line string) string) string {
 	lines := strings.SplitAfter(content, "\n")
 	var diff string
 	inContent := false
@@ -114,7 +121,7 @@ func rewriteIndexLines(content string, replace func(diff, line string) string) s
 		} else if inContent && strings.HasPrefix(line, "diff --git ") {
 			diff = line
 		} else if diff != "" && strings.HasPrefix(line, "index ") {
-			lines[i] = replace(diff, line) + strings.TrimPrefix(text, line)
+			lines[i] = replace(i+1, diff, line) + strings.TrimPrefix(text, line)
 		}
 	}
 	return strings.Join(lines, "")

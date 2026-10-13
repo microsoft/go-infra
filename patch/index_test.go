@@ -67,11 +67,43 @@ func TestIndexRestore(t *testing.T) {
 	})
 	t.Run("invalid index line", func(t *testing.T) {
 		entry := index["change.patch"]
-		entry.IndexLines["diff --git a/file b/file"] = first + "\n+injected"
+		for lineNumber := range entry.IndexLines {
+			entry.IndexLines[lineNumber] = first + "\n+injected"
+		}
 		if _, err := index.Restore("change.patch", []byte(saved)); err == nil {
 			t.Fatal("Restore accepted an injected patch line")
 		}
 	})
+}
+
+func TestIndexNonUTF8FilenameRoundTrip(t *testing.T) {
+	filename := string([]byte{0xff})
+	diff := "diff --git a/" + filename + " b/" + filename
+	oldIndex := "index abc..def 100644"
+	newIndex := "index " + strings.Repeat("a", 40) + ".." + strings.Repeat("b", 40) + " 100644"
+	saved := []byte("Subject: change\n\n---\n" + diff + "\n" + oldIndex + "\n")
+	current := &Patch{Content: "---\n" + diff + "\n" + newIndex + "\n"}
+
+	index := make(Index)
+	if !index.Record("change.patch", saved, current) {
+		t.Fatal("Record did not match the non-UTF-8 diff header")
+	}
+	dir := t.TempDir()
+	if err := index.WriteFile(dir); err != nil {
+		t.Fatal(err)
+	}
+	index, err := ReadIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := index.Restore("change.patch", saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("Subject: change\n\n---\n" + diff + "\n" + newIndex + "\n")
+	if string(got) != string(want) {
+		t.Errorf("restored patch = %q, want %q", got, want)
+	}
 }
 
 func TestIndexFile(t *testing.T) {
