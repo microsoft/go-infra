@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/go-infra/executil"
+	"golang.org/x/mod/semver"
 )
 
 type ApplyMode int
@@ -60,9 +61,13 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 	// too late to cause noisy warnings because of them.
 	cmd.Args = append(cmd.Args, "--whitespace=nowarn")
 
-	index, err := ReadIndex(filepath.Join(config.RootDir, config.PatchesDir))
-	if err != nil {
-		return err
+	var index Index
+	var err error
+	if config.PreserveIndex {
+		index, err = ReadIndex(filepath.Join(config.RootDir, config.PatchesDir))
+		if err != nil {
+			return err
+		}
 	}
 	var tempDir string
 	if len(index) != 0 {
@@ -298,6 +303,9 @@ func findConfigInDir(dir string) (*FoundConfig, error) {
 	}
 	if err := json.Unmarshal(data, &config.Config); err != nil {
 		return nil, err
+	}
+	if config.PreserveIndex && semver.Compare(config.MinimumToolVersion, "v1.0.2") < 0 {
+		return nil, fmt.Errorf("PreserveIndex requires MinimumToolVersion >= v1.0.2 in %q", filepath.Join(dir, ConfigFileName))
 	}
 	return &config, nil
 }

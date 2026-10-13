@@ -140,11 +140,23 @@ You can also run each step yourself:
    * Other `git rebase` features like [`git commit --fixup={commit}`](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt---fixupamendrewordltcommitgt) also work as expected.
 1. Use `git go-patch extract` to rewrite the patch files based on the changes in the submodule.
 
-`extract` also generates `index.json` in the patches directory.
+To enable index preservation for all contributors, set both of these properties in the repository's committed `.git-go-patch` configuration:
+
+```json
+{
+  "MinimumToolVersion": "v1.0.2",
+  "PreserveIndex": true
+}
+```
+
+Keep the existing paths and other properties, and retain a higher `MinimumToolVersion` if already set.
+`PreserveIndex` requires `MinimumToolVersion` to be at least `v1.0.2`, so older installations refuse to run rather than silently skip the feature.
+With index preservation enabled, `extract` also generates `index.json` in the patches directory.
 Commit this file alongside the patches: it records current blob hashes while allowing unchanged patch files to retain their older, less noisy formatting.
 `apply` restores these hashes in temporary copies so a later `git am -3` can build its ancestor using the current upstream history, including in a fresh clone.
 The tracked patch files are not modified by `apply` and can still be applied directly with Git.
 Patch sets without `index.json` continue to work as before; entries for manually edited patches are ignored until the next extraction.
+Index preservation is off by default: when `PreserveIndex` is absent or false, `extract` does not generate or update `index.json`, and `apply` ignores it even if it exists.
 
 ### Recovering from a bad rebase
 

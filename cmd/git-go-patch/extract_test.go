@@ -19,10 +19,14 @@ func TestExtractIndexThreeWay(t *testing.T) {
 		name             string
 		verbatim         bool
 		quotePathChanged bool
+		disabled         bool
 	}{
 		{name: "equivalent patches"},
 		{name: "verbatim", verbatim: true},
 		{name: "changed filename quoting", quotePathChanged: true},
+		{name: "disabled", disabled: true},
+		{name: "disabled verbatim", disabled: true, verbatim: true},
+		{name: "disabled changed filename quoting", disabled: true, quotePathChanged: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,7 +48,12 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			}
 			config := &patch.FoundConfig{
 				RootDir: root,
-				Config:  patch.Config{SubmoduleDir: "go", PatchesDir: "patches"},
+				Config: patch.Config{
+					SubmoduleDir:       "go",
+					PatchesDir:         "patches",
+					PreserveIndex:      !tt.disabled,
+					MinimumToolVersion: "v1.0.2",
+				},
 			}
 			filename := "file.txt"
 			if tt.quotePathChanged {
@@ -115,6 +124,49 @@ func TestExtractIndexThreeWay(t *testing.T) {
 			// No sidecar yet: existing patch sets must still apply.
 			if err := patch.Apply(config, patch.ApplyModeCommits); err != nil {
 				t.Fatal(err)
+			}
+			if tt.disabled {
+				if err := extractPatches(config, base, tt.verbatim, false); err != nil {
+					t.Fatal(err)
+				}
+				indexPath := filepath.Join(patchDir, patch.IndexFileName)
+				if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+					t.Fatalf("disabled extract created an index: %v", err)
+				}
+				if !tt.verbatim {
+					if got := read(filepath.Join(patchDir, "1000-first.patch")); !bytes.Equal(got, oldPatches["0001-first.patch"]) {
+						t.Error("disabled extraction changed an equivalent patch")
+					}
+				} else {
+					formatted, err := patch.FormatPatch(goDir, "--stdout", base+"..HEAD~1")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := read(filepath.Join(patchDir, "1000-first.patch")); string(got) != formatted {
+						t.Error("disabled verbatim extraction changed the original patch formatting")
+					}
+				}
+				const unusedIndex = "invalid JSON: ignored while disabled\n"
+				if err := os.WriteFile(indexPath, []byte(unusedIndex), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := extractPatches(config, base, tt.verbatim, false); err != nil {
+					t.Fatal(err)
+				}
+				if got := string(read(indexPath)); got != unusedIndex {
+					t.Errorf("disabled extract changed existing index to %q", got)
+				}
+				want := strings.NewReplacer("05\n", "PATCH1\n", "09\n", "PATCH2\n").Replace(currentBase)
+				for _, mode := range []patch.ApplyMode{patch.ApplyModeIndex, patch.ApplyModeCommits} {
+					git("reset", "--hard", base)
+					if err := patch.Apply(config, mode); err != nil {
+						t.Fatalf("disabled apply mode %v read the invalid index: %v", mode, err)
+					}
+					if got := string(read(file)); got != want {
+						t.Errorf("disabled apply mode %v content = %q, want %q", mode, got, want)
+					}
+				}
+				return
 			}
 			// Regeneration must remove obsolete entries, including renamed patches.
 			if err := os.WriteFile(filepath.Join(patchDir, patch.IndexFileName), []byte(`{"obsolete.patch":{}}`), 0o644); err != nil {
