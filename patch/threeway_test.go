@@ -186,6 +186,75 @@ func TestTryThreeWayRebase(t *testing.T) {
 			t.Errorf("regenerated patch author = %q, want %q", p.FromAuthor, author)
 		}
 	})
+
+	t.Run("preserved index enables three-way apply", func(t *testing.T) {
+		repoDir, newBase, patchPath, _ := setupThreeWayRebaseRepo(t, original, patched, diverged)
+		indexPath, originalIndex := enableThreeWayTestIndexPreservation(t, repoDir, patchPath)
+
+		updatedFiles, err := TryThreeWayRebase(repoDir, "go", newBase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUpdatedFiles := []string{
+			filepath.Join("patches", filepath.Base(patchPath)),
+			filepath.Join("patches", IndexFileName),
+		}
+		if !slices.Equal(updatedFiles, wantUpdatedFiles) {
+			t.Errorf("updatedFiles = %v, want %v", updatedFiles, wantUpdatedFiles)
+		}
+
+		updatedPatch, err := os.ReadFile(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updatedIndexContent, err := os.ReadFile(indexPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Equal(updatedIndexContent, originalIndex) {
+			t.Error("index.json was not updated")
+		}
+		updatedIndex, err := ReadIndex(filepath.Dir(indexPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry := updatedIndex[filepath.Base(patchPath)]
+		if entry.PatchSHA256 != patchChecksum(updatedPatch) {
+			t.Errorf("index patch checksum = %q, want %q", entry.PatchSHA256, patchChecksum(updatedPatch))
+		}
+		for _, line := range entry.IndexLines {
+			if !indexLinePattern.MatchString(line) {
+				t.Errorf("recorded index line is not full length: %q", line)
+			}
+		}
+		verifyPatchApplies(t, repoDir, newBase, patchPath, merged)
+	})
+
+	t.Run("preserved index rebases dependent patches", func(t *testing.T) {
+		longOriginal := "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
+		longPatched := strings.Replace(longOriginal, "10\n", "PATCH1\n", 1)
+		longDiverged := strings.Replace(longOriginal, "06\n07\n", "UPSTREAM6\nUPSTREAM7\n", 1)
+		repoDir, newBase, firstPatchPath, firstPatch := setupThreeWayRebaseRepo(t, longOriginal, longPatched, longDiverged)
+		secondPatchContent := strings.Replace(longPatched, "03\n", "PATCH2\n", 1)
+		secondPatchPath, secondPatch := addPatchAfterFirst(t, repoDir, newBase, firstPatchPath, "file.txt", secondPatchContent)
+		enableThreeWayTestIndexPreservation(t, repoDir, firstPatchPath, secondPatchPath)
+
+		updatedFiles, err := TryThreeWayRebase(repoDir, "go", newBase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUpdatedFiles := []string{
+			filepath.Join("patches", filepath.Base(firstPatchPath)),
+			filepath.Join("patches", filepath.Base(secondPatchPath)),
+			filepath.Join("patches", IndexFileName),
+		}
+		if !slices.Equal(updatedFiles, wantUpdatedFiles) {
+			t.Errorf("updatedFiles = %v, want %v", updatedFiles, wantUpdatedFiles)
+		}
+		ensureThreeWayTestFileChanged(t, firstPatchPath, firstPatch, true)
+		ensureThreeWayTestFileChanged(t, secondPatchPath, secondPatch, true)
+		verifyPatchSeriesApplies(t, repoDir, newBase, firstPatchPath, secondPatchPath)
+	})
 }
 
 func TestFormatPatch(t *testing.T) {
@@ -279,18 +348,18 @@ func TestTryThreeWayRebaseNoMatchingConfig(t *testing.T) {
 	}
 }
 
-func TestWritePatchReplacements(t *testing.T) {
+func TestWriteFileReplacements(t *testing.T) {
 	t.Run("preparation failure leaves originals unchanged", func(t *testing.T) {
 		rootDir := t.TempDir()
 		patchPath := filepath.Join(rootDir, "first.patch")
 		writeThreeWayTestFile(t, patchPath, "original")
 
-		_, err := writePatchReplacements(rootDir, []patchReplacement{
+		_, err := writeFileReplacements(rootDir, []fileReplacement{
 			{path: patchPath, content: []byte("replacement")},
 			{path: filepath.Join(rootDir, "missing.patch"), content: []byte("replacement")},
 		})
 		if err == nil {
-			t.Fatal("writePatchReplacements succeeded, want error")
+			t.Fatal("writeFileReplacements succeeded, want error")
 		}
 		content, err := os.ReadFile(patchPath)
 		if err != nil {
@@ -314,7 +383,7 @@ func TestWritePatchReplacements(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		updatedFiles, err := writePatchReplacements(rootDir, []patchReplacement{
+		updatedFiles, err := writeFileReplacements(rootDir, []fileReplacement{
 			{path: patchPath, content: []byte("replacement")},
 		})
 		if err != nil {
@@ -339,6 +408,27 @@ func TestWritePatchReplacements(t *testing.T) {
 		}
 		assertNoPatchReplacementTemps(t, rootDir)
 	})
+
+	t.Run("creates allowed file", func(t *testing.T) {
+		rootDir := t.TempDir()
+		path := filepath.Join(rootDir, "new.json")
+		updatedFiles, err := writeFileReplacements(rootDir, []fileReplacement{
+			{path: path, content: []byte("{}\n"), allowCreate: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"new.json"}; !slices.Equal(updatedFiles, want) {
+			t.Errorf("updated files = %v, want %v", updatedFiles, want)
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != "{}\n" {
+			t.Errorf("created file content = %q, want %q", content, "{}\n")
+		}
+	})
 }
 
 func assertNoPatchReplacementTemps(t *testing.T, dir string) {
@@ -356,6 +446,61 @@ func TestReadRejectsOversizedLine(t *testing.T) {
 	if _, err := Read(strings.NewReader(strings.Repeat("x", bufio.MaxScanTokenSize+1))); err == nil {
 		t.Fatal("Read succeeded with an oversized line, want scanner error")
 	}
+}
+
+func enableThreeWayTestIndexPreservation(t *testing.T, repoDir string, patchPaths ...string) (string, []byte) {
+	t.Helper()
+	if len(patchPaths) == 0 {
+		t.Fatal("no patches provided")
+	}
+
+	index := make(Index)
+	for _, patchPath := range patchPaths {
+		originalPatch, err := os.ReadFile(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := Read(bytes.NewReader(originalPatch))
+		if err != nil {
+			t.Fatal(err)
+		}
+		current.Content = rewriteIndexLines(current.Content, func(_ int, _ string, line string) string {
+			fields := strings.Fields(line)
+			hashes := strings.Split(fields[1], "..")
+			oldHash := threeWayTestGitOutput(t, repoDir, "rev-parse", hashes[0])
+			newHash := threeWayTestGitOutput(t, repoDir, "rev-parse", hashes[1])
+			mode := ""
+			if len(fields) == 3 {
+				mode = " " + fields[2]
+			}
+			return "index " + oldHash + ".." + newHash + mode
+		})
+
+		stalePatch := []byte(rewriteIndexLines(string(originalPatch), func(_ int, _ string, line string) string {
+			fields := strings.Fields(line)
+			mode := ""
+			if len(fields) == 3 {
+				mode = " " + fields[2]
+			}
+			return "index " + strings.Repeat("1", 40) + ".." + strings.Repeat("2", 40) + mode
+		}))
+		writeThreeWayTestFile(t, patchPath, string(stalePatch))
+		if !index.Record(filepath.Base(patchPath), stalePatch, current) {
+			t.Fatalf("failed to record current index lines for stale patch %q", patchPath)
+		}
+	}
+
+	patchDir := filepath.Dir(patchPaths[0])
+	if err := index.WriteFile(patchDir); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(patchDir, IndexFileName)
+	indexContent, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeThreeWayTestFile(t, filepath.Join(repoDir, ConfigFileName), `{"MinimumToolVersion":"v1.0.2","SubmoduleDir":"go","PatchesDir":"patches","PreserveIndex":true}`)
+	return indexPath, indexContent
 }
 
 func setupThreeWayRebaseRepo(t *testing.T, original, patched, newBaseContent string) (repoDir, newBase, patchPath string, originalPatch []byte) {

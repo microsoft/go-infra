@@ -6,7 +6,6 @@ package patch
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,21 +82,9 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 	}
 
 	err = WalkGoPatches(config, func(file string) error {
-		if len(index) != 0 {
-			content, err := os.ReadFile(file)
-			if err != nil {
-				return err
-			}
-			restored, err := index.Restore(filepath.Base(file), content)
-			if err != nil {
-				return err
-			}
-			if !bytes.Equal(content, restored) {
-				file = filepath.Join(tempDir, filepath.Base(file))
-				if err := os.WriteFile(file, restored, 0o644); err != nil {
-					return err
-				}
-			}
+		file, err = index.restoreFile(file, tempDir)
+		if err != nil {
+			return err
 		}
 		cmd.Args = append(cmd.Args, file)
 		return nil

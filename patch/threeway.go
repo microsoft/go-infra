@@ -23,9 +23,11 @@ import (
 // commits are kept separately.
 //
 // If a clean apply fails, TryThreeWayRebase retries with "git am --3way". When that succeeds, it
-// regenerates only that patch, leaving clean patches untouched to avoid noisy diffs. If a three-way
-// merge conflicts, patch files are left unchanged. The returned paths are relative to rootDir.
-// If rootDir has no matching patch configuration, the function does nothing.
+// regenerates only that patch, leaving clean patches untouched to avoid noisy diffs. If index
+// preservation is enabled, it restores index lines before applying and updates index.json for
+// regenerated patches. If a three-way merge conflicts, patch files are left unchanged. The
+// returned paths are relative to rootDir. If rootDir has no matching patch configuration, the
+// function does nothing.
 func TryThreeWayRebase(rootDir, submoduleDir, baseCommit string) ([]string, error) {
 	rootDir, err := filepath.Abs(rootDir)
 	if err != nil {
@@ -41,12 +43,13 @@ func TryThreeWayRebase(rootDir, submoduleDir, baseCommit string) ([]string, erro
 	return tryThreeWayRebase(config, rootDir, baseCommit)
 }
 
-type patchReplacement struct {
-	path    string
-	content []byte
+type fileReplacement struct {
+	path        string
+	content     []byte
+	allowCreate bool
 }
 
-func writePatchReplacements(rootDir string, replacements []patchReplacement) ([]string, error) {
+func writeFileReplacements(rootDir string, replacements []fileReplacement) ([]string, error) {
 	type preparedReplacement struct {
 		path         string
 		tempPath     string
@@ -62,30 +65,35 @@ func writePatchReplacements(rootDir string, replacements []patchReplacement) ([]
 	for _, replacement := range replacements {
 		relativePath, err := filepath.Rel(rootDir, replacement.path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to determine regenerated patch path: %w", err)
+			return nil, fmt.Errorf("failed to determine generated file path: %w", err)
 		}
+		// Preserve permissions when replacing a file. A generated file may be absent only when the
+		// caller explicitly allows creating it, in which case it gets standard file permissions.
 		info, err := os.Stat(replacement.path)
-		if err != nil {
-			return nil, fmt.Errorf("failed to inspect patch %q: %w", replacement.path, err)
+		mode := os.FileMode(0o644)
+		if err == nil {
+			mode = info.Mode().Perm()
+		} else if !os.IsNotExist(err) || !replacement.allowCreate {
+			return nil, fmt.Errorf("failed to inspect generated file %q: %w", replacement.path, err)
 		}
 		temp, err := os.CreateTemp(filepath.Dir(replacement.path), "."+filepath.Base(replacement.path)+"-*")
 		if err != nil {
-			return nil, fmt.Errorf("failed to create temporary patch for %q: %w", replacement.path, err)
+			return nil, fmt.Errorf("failed to create temporary file for %q: %w", replacement.path, err)
 		}
 		tempPath := temp.Name()
 		if _, err := temp.Write(replacement.content); err != nil {
 			_ = temp.Close()
 			_ = os.Remove(tempPath)
-			return nil, fmt.Errorf("failed to write temporary patch for %q: %w", replacement.path, err)
+			return nil, fmt.Errorf("failed to write temporary file for %q: %w", replacement.path, err)
 		}
-		if err := temp.Chmod(info.Mode().Perm()); err != nil {
+		if err := temp.Chmod(mode); err != nil {
 			_ = temp.Close()
 			_ = os.Remove(tempPath)
-			return nil, fmt.Errorf("failed to preserve permissions for patch %q: %w", replacement.path, err)
+			return nil, fmt.Errorf("failed to preserve permissions for generated file %q: %w", replacement.path, err)
 		}
 		if err := temp.Close(); err != nil {
 			_ = os.Remove(tempPath)
-			return nil, fmt.Errorf("failed to close temporary patch for %q: %w", replacement.path, err)
+			return nil, fmt.Errorf("failed to close temporary file for %q: %w", replacement.path, err)
 		}
 		prepared = append(prepared, preparedReplacement{
 			path:         replacement.path,
@@ -97,7 +105,7 @@ func writePatchReplacements(rootDir string, replacements []patchReplacement) ([]
 	updatedFiles := make([]string, 0, len(prepared))
 	for _, replacement := range prepared {
 		if err := os.Rename(replacement.tempPath, replacement.path); err != nil {
-			return nil, fmt.Errorf("failed to replace regenerated patch %q: %w", replacement.path, err)
+			return nil, fmt.Errorf("failed to replace generated file %q: %w", replacement.path, err)
 		}
 		updatedFiles = append(updatedFiles, replacement.relativePath)
 	}
@@ -116,6 +124,30 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		return nil, nil
 	}
 
+	var index Index
+	var indexedPatchDir string
+	if config.PreserveIndex {
+		var err error
+		index, err = ReadIndex(filepath.Join(config.RootDir, config.PatchesDir))
+		if err != nil {
+			return nil, err
+		}
+		if index == nil {
+			index = make(Index)
+		}
+		if len(index) != 0 {
+			indexedPatchDir, err = os.MkdirTemp("", "indexed-patches-*")
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				if err := os.RemoveAll(indexedPatchDir); err != nil {
+					log.Printf("Unable to clean up indexed patches %q: %v", indexedPatchDir, err)
+				}
+			}()
+		}
+	}
+
 	workDir, err := gitcmd.NewTempCloneRepo(sourceRepo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary repo for patch rebase: %w", err)
@@ -126,10 +158,14 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		return nil, fmt.Errorf("failed to check out patch base commit %q: %w", baseCommit, err)
 	}
 
-	var replacements []patchReplacement
+	var replacements []fileReplacement
 
 	for _, patchPath := range patchPaths {
-		if err := gitcmd.Am(workDir, "--quiet", patchPath); err == nil {
+		applyPatchPath, err := index.restoreFile(patchPath, indexedPatchDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to restore index lines for patch %q: %w", patchPath, err)
+		}
+		if err := gitcmd.Am(workDir, "--quiet", applyPatchPath); err == nil {
 			continue
 		} else {
 			log.Printf("Patch %q did not apply cleanly; retrying with a three-way merge: %v\n", filepath.Base(patchPath), err)
@@ -139,14 +175,18 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 			return nil, fmt.Errorf("failed to abort clean patch apply before three-way retry: %w", err)
 		}
 
-		if err := gitcmd.Run(workDir, "am", "--3way", "--whitespace=nowarn", "--quiet", patchPath); err != nil {
+		if err := gitcmd.Run(workDir, "am", "--3way", "--whitespace=nowarn", "--quiet", applyPatchPath); err != nil {
 			log.Printf("Three-way patch merge did not resolve %q; leaving patch files unchanged: %v\n", filepath.Base(patchPath), err)
 			// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
 			_ = gitcmd.Run(workDir, "am", "--abort")
 			return nil, nil
 		}
 
-		formatted, err := FormatPatch(workDir, "--stdout", "-1", "HEAD")
+		formatArgs := []string{"--stdout", "-1", "HEAD"}
+		if config.PreserveIndex {
+			formatArgs = append([]string{"--full-index"}, formatArgs...)
+		}
+		formatted, err := FormatPatch(workDir, formatArgs...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to regenerate patch %q: %w", filepath.Base(patchPath), err)
 		}
@@ -157,11 +197,27 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		if config.ExtractAsAuthor != "" {
 			p.FromAuthor = config.ExtractAsAuthor
 		}
-		replacements = append(replacements, patchReplacement{
+		replacement := fileReplacement{
 			path:    patchPath,
 			content: []byte(p.String()),
+		}
+		replacements = append(replacements, replacement)
+		if config.PreserveIndex && !index.Record(filepath.Base(patchPath), replacement.content, p) {
+			return nil, fmt.Errorf("failed to record index lines for regenerated patch %q", patchPath)
+		}
+	}
+
+	if config.PreserveIndex && len(replacements) > 0 {
+		content, err := index.marshal()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate patch index: %w", err)
+		}
+		replacements = append(replacements, fileReplacement{
+			path:        filepath.Join(config.RootDir, config.PatchesDir, IndexFileName),
+			content:     content,
+			allowCreate: true,
 		})
 	}
 
-	return writePatchReplacements(config.RootDir, replacements)
+	return writeFileReplacements(config.RootDir, replacements)
 }

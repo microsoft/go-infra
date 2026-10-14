@@ -4,6 +4,7 @@
 package patch
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -64,11 +65,19 @@ func (index Index) Record(name string, saved []byte, current *Patch) bool {
 
 // WriteFile writes the index to dir in a deterministic, readable format.
 func (index Index) WriteFile(dir string) error {
-	data, err := json.MarshalIndent(index, "", "  ")
+	data, err := index.marshal()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, IndexFileName), append(data, '\n'), 0o644)
+	return os.WriteFile(filepath.Join(dir, IndexFileName), data, 0o644)
+}
+
+func (index Index) marshal() ([]byte, error) {
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 // ReadIndex reads the optional generated index from dir. Older patch sets need no index.
@@ -108,6 +117,31 @@ func (index Index) Restore(name string, content []byte) ([]byte, error) {
 		}
 		return line
 	})), nil
+}
+
+// restoreFile returns a path to a patch with its preserved index lines restored. If no matching
+// index entry applies, it returns path unchanged. Otherwise, it writes the restored patch under
+// tempDir so callers can pass it to Git without modifying the committed patch file.
+func (index Index) restoreFile(path, tempDir string) (string, error) {
+	if len(index) == 0 {
+		return path, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	restored, err := index.Restore(filepath.Base(path), content)
+	if err != nil {
+		return "", err
+	}
+	if bytes.Equal(content, restored) {
+		return path, nil
+	}
+	restoredPath := filepath.Join(tempDir, filepath.Base(path))
+	if err := os.WriteFile(restoredPath, restored, 0o644); err != nil {
+		return "", err
+	}
+	return restoredPath, nil
 }
 
 func rewriteIndexLines(content string, replace func(lineNumber int, diff, line string) string) string {
