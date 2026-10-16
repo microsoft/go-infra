@@ -138,6 +138,9 @@ and exposes both supported paths:
   discovers the new run, checkpoints its ID and URL, and polls it to a terminal conclusion. GitHub's workflow dispatch endpoint does not return a run ID, so the UI supplies a random token as the run title and matches that exact title. If a monitoring interval times out, polling continues from the checkpointed run ID. The dashboard reports the final result.
 
 Both paths require an authenticated `gh` CLI, a reviewed plan, and a separate confirmation click.
+Manual patch releases also require the correlation input and matching run name in the workflow on
+`main`. If that workflow update has not landed, the UI explains the prerequisite and blocks manual
+dispatch without blocking release-on-merge.
 The server hardcodes `microsoft/go-infra`, `main`,
 `release-on-merge`, and the workflow filename; browser input cannot replace any of those targets.
 

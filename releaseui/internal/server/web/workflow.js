@@ -42,14 +42,16 @@
   const inputRecords = new Map();
   let processDefinition = null;
   let workflow = null;
-  let endpointBase = "";
+  let selectedSession = null;
+  let sessionReady = false;
+  let submitting = "";
   let plan = null;
   let preflight = null;
   let eventSource = null;
   let executionActive = false;
   let runConfirmationPending = false;
   let lastRefreshSignature = "";
-  let refreshInFlight = false;
+  let refreshInFlight = null;
   let toastTimer = null;
 
   initialize().catch((error) => showError(error.message));
@@ -58,7 +60,6 @@
     processDefinition = await globalThis.releaseProcessReady;
     workflow = processDefinition.workflow;
 
-    endpointBase = `/api/processes/${encodeURIComponent(processDefinition.id)}`;
     workflowSection.hidden = false;
     workflowHeading.textContent = workflow.heading;
     planButton.querySelector("span:first-child").textContent = workflow.submitLabel || "Prepare release";
@@ -71,9 +72,8 @@
       return option;
     }));
     processVariant.value = processDefinition.id;
-    renderVariant();
     form.addEventListener("submit", prepareRelease);
-    processVariant.addEventListener("change", renderVariant);
+    processVariant.addEventListener("change", selectVariant);
     executionButton.addEventListener("click", handleExecutionAction);
     executionCancel.addEventListener("click", cancelRunConfirmation);
     if ("ResizeObserver" in globalThis) {
@@ -82,8 +82,7 @@
       globalThis.addEventListener("resize", renderGraphEdges);
     }
 
-    await loadPreflight();
-    await loadExistingPlan();
+    await selectVariant();
   }
 
   function selectedVariant() {
@@ -92,7 +91,6 @@
 
   function renderVariant() {
     const variant = selectedVariant();
-    endpointBase = `/api/processes/${encodeURIComponent(variant.id)}`;
     workflowHeading.textContent = variant.preamble || workflow.heading || "Configure release";
     planButton.querySelector("span:first-child").textContent =
       variant.submitLabel || workflow.submitLabel || "Prepare release";
@@ -102,6 +100,66 @@
     variantNoticeCopy.textContent = variant.notice || "";
     inputRecords.clear();
     processInputs.replaceChildren(...(variant.inputs || []).map(createInput));
+  }
+
+  async function selectVariant() {
+    if (selectedSession) selectedSession.controller.abort();
+    if (eventSource) eventSource.close();
+    eventSource = null;
+    const session = {
+      processID: selectedVariant().id,
+      endpoint: `/api/processes/${encodeURIComponent(selectedVariant().id)}`,
+      controller: new AbortController(),
+    };
+    selectedSession = session;
+    sessionReady = false;
+    submitting = "";
+    plan = null;
+    preflight = null;
+    executionActive = false;
+    runConfirmationPending = false;
+    lastRefreshSignature = "";
+    refreshInFlight = null;
+    renderVariant();
+    history.replaceState(null, "", `/${encodeURIComponent(session.processID)}`);
+    planContent.hidden = true;
+    emptyState.hidden = false;
+    planSubtitle.textContent = "Configure the release to prepare a validated plan.";
+    planFacts.replaceChildren();
+    stepList.replaceChildren();
+    stepEdges.replaceChildren();
+    executionControls.hidden = true;
+    executionUnavailable.hidden = true;
+    processSafety.hidden = false;
+    safetyTitle.textContent = "Checking readiness";
+    safetyCopy.textContent = "Loading this release process.";
+    preflightList.replaceChildren();
+    updateActionButtons();
+
+    try {
+      const options = { signal: session.controller.signal };
+      const [report, currentPlan] = await Promise.all([
+        requestJSON(`${session.endpoint}/preflight`, options),
+        requestJSON(`${session.endpoint}/plan`, options),
+      ]);
+      if (selectedSession !== session) return;
+      preflight = report;
+      renderPreflight();
+      if (currentPlan) {
+        renderPlan(currentPlan);
+        await refreshState(session);
+        if (selectedSession !== session) return;
+        connectEvents(session);
+      }
+      sessionReady = true;
+    } catch (error) {
+      if (selectedSession !== session) return;
+      safetyTitle.textContent = "Release state unavailable";
+      safetyCopy.textContent = error.message;
+      showError(`Unable to load this release: ${error.message}`);
+    } finally {
+      if (selectedSession === session) updateActionButtons();
+    }
   }
 
   function createInput(input) {
@@ -162,42 +220,58 @@
 
   async function prepareRelease(event) {
     event.preventDefault();
-    setBusy(planButton, true, "Resolving and validating…");
+    if (planButton.disabled) return;
+    const session = selectedSession;
+    submitting = "prepare";
+    updateActionButtons();
     try {
-      plan = await requestJSON(`${endpointBase}/plan`, {
+      const prepared = await requestJSON(`${session.endpoint}/plan`, {
         method: "POST",
         body: JSON.stringify(serializeInputs()),
       });
-      renderPlan(plan);
-      connectEvents();
+      if (selectedSession !== session) return;
+      renderPlan(prepared);
+      await refreshState(session);
+      if (selectedSession === session) connectEvents(session);
     } catch (error) {
-      showError(error.message);
+      if (selectedSession === session) showError(error.message);
     } finally {
-      setBusy(
-        planButton,
-        false,
-        selectedVariant().submitLabel || workflow.submitLabel || "Prepare release",
-      );
-      if (!preflight?.planningEnabled) planButton.disabled = true;
+      if (selectedSession === session) {
+        submitting = "";
+        updateActionButtons();
+      }
     }
   }
 
   async function startRelease() {
-    setBusy(executionButton, true, "Starting release…");
+    const session = selectedSession;
+    const digest = plan.execution.planDigest;
+    submitting = "start";
+    updateActionButtons();
     try {
-      await requestJSON(`${endpointBase}/start`, {
+      await requestJSON(`${session.endpoint}/start`, {
         method: "POST",
-        body: JSON.stringify({ planDigest: plan.execution.planDigest, confirmed: true }),
+        body: JSON.stringify({ planDigest: digest, confirmed: true }),
       });
-      connectEvents();
-      await refreshPlan();
+      if (selectedSession !== session) return;
+      runConfirmationPending = false;
+      connectEvents(session);
+      await refreshPlan(session);
+      await refreshState(session);
     } catch (error) {
-      showError(error.message);
-      updateExecutionButton();
+      if (selectedSession === session) showError(error.message);
+    } finally {
+      if (selectedSession === session) {
+        submitting = "";
+        updateActionButtons();
+      }
     }
   }
 
   function renderPlan(nextPlan) {
+    if (nextPlan.variantId !== selectedSession.processID) {
+      throw new Error("The returned plan does not belong to the selected release process.");
+    }
     plan = nextPlan;
     restoreInputs(nextPlan.variantId, nextPlan.input);
     emptyState.hidden = true;
@@ -263,6 +337,7 @@
   }
 
   function handleExecutionAction() {
+    if (executionButton.disabled) return;
     if (!runConfirmationPending) {
       runConfirmationPending = true;
       updateExecutionButton();
@@ -495,13 +570,21 @@
   }
 
   function updateActionButtons() {
+    planButton.disabled = !sessionReady || !preflight?.planningEnabled || executionActive || Boolean(submitting);
+    planButton.title = executionActive
+      ? "This release is running. Follow its progress below."
+      : preflight && !preflight.planningEnabled ? preflightFailureSummary() : "";
+    planButton.querySelector("span:first-child").textContent = submitting === "prepare"
+      ? "Resolving and validating…"
+      : selectedVariant().submitLabel || workflow.submitLabel || "Prepare release";
+    processVariant.disabled = Boolean(submitting);
     updateExecutionButton();
   }
 
   function updateExecutionButton() {
     const execution = plan?.execution;
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const enabled = preflightReady;
+    const enabled = sessionReady && preflightReady && Boolean(plan) && !submitting;
     const complete = Boolean(execution?.run?.complete);
     runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;
@@ -509,16 +592,20 @@
     executionButton.disabled = !enabled || complete || executionActive;
     executionButton.textContent = complete
       ? "Release completed"
-      : executionActive
+      : submitting === "start"
+        ? "Starting release…"
+        : executionActive
         ? "Monitoring release…"
         : runConfirmationPending ? "Confirm run" : executionControls.dataset.buttonLabel || "Run release";
   }
 
-  function connectEvents() {
-    if (!plan) return;
+  function connectEvents(session) {
+    if (selectedSession !== session || !plan) return;
     if (eventSource) eventSource.close();
-    eventSource = new EventSource(`${endpointBase}/events`);
-    eventSource.addEventListener("state", (event) => {
+    const source = new EventSource(`${session.endpoint}/events`);
+    eventSource = source;
+    source.addEventListener("state", (event) => {
+      if (selectedSession !== session || eventSource !== source) return;
       const snapshot = JSON.parse(event.data);
       executionActive = snapshot.active;
       if (snapshot.steps?.length) {
@@ -530,64 +617,57 @@
       const signature = (snapshot.steps || []).map((step) => `${step.name}:${step.status}`).join("|");
       if (signature !== lastRefreshSignature || !snapshot.active) {
         lastRefreshSignature = signature;
-        refreshPlan().catch((error) => showError(error.message));
+        refreshPlan(session).catch((error) => {
+          if (selectedSession === session) showError(error.message);
+        });
       }
     });
   }
 
-  async function refreshPlan() {
-    if (refreshInFlight) return;
-    refreshInFlight = true;
+  async function refreshPlan(session) {
+    if (selectedSession !== session || refreshInFlight === session) return;
+    refreshInFlight = session;
     try {
-      const response = await fetch(`${endpointBase}/plan`);
-      if (response.status === 204) return;
-      const latest = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(latest.error || `${response.status} ${response.statusText}`);
+      const latest = await requestJSON(`${session.endpoint}/plan`, { signal: session.controller.signal });
+      if (selectedSession !== session || !latest) return;
       if (!plan || latest.variantId !== plan.variantId) return;
       plan = latest;
       renderLinks(latest.execution);
       renderExecution(latest.execution, latest.plan || {});
       updateActionButtons();
     } finally {
-      refreshInFlight = false;
+      if (refreshInFlight === session) refreshInFlight = null;
     }
   }
 
-  async function loadExistingPlan() {
-    try {
-      const response = await fetch(`${endpointBase}/plan`);
-      if (response.status === 204) return;
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
-      renderPlan(data);
-      connectEvents();
-    } catch (error) {
-      showError(`Unable to restore release plan: ${error.message}`);
+  async function refreshState(session) {
+    const snapshot = await requestJSON(`${session.endpoint}/state`, { signal: session.controller.signal });
+    if (selectedSession !== session) return;
+    executionActive = snapshot.active;
+    if (snapshot.steps?.length) {
+      updateSteps(snapshot);
+      updateProgress(snapshot);
     }
+    updateActionButtons();
   }
 
-  async function loadPreflight() {
+  function renderPreflight() {
     processSafety.hidden = false;
-    try {
-      preflight = await requestJSON(`${endpointBase}/preflight`);
-      planButton.disabled = !preflight.planningEnabled;
-      planButton.title = preflight.planningEnabled ? "" : "Planning is unavailable until the readiness checks pass";
-      preflightList.replaceChildren(...(preflight.checks || []).map((check) => {
-        const item = document.createElement("li");
-        item.dataset.status = check.status;
-        item.title = check.details;
-        item.textContent = check.name;
-        return item;
-      }));
-      if (preflight.externalExecutionEnabled) {
-        safetyTitle.textContent = "External execution enabled";
-        safetyCopy.textContent = "Preparing a plan does not start it. Every run requires explicit confirmation.";
-      } else {
-        safetyTitle.textContent = "Planning readiness";
-        safetyCopy.textContent = "Review the local checks before preparing or running this release.";
-      }
-    } catch (error) {
-      showError(`Unable to check local readiness: ${error.message}`);
+    preflightList.replaceChildren(...(preflight.checks || []).map((check) => {
+      const item = document.createElement("li");
+      item.dataset.status = check.status;
+      item.title = check.details;
+      item.textContent = check.status !== "passed" && check.details
+        ? `${check.name}: ${check.details}`
+        : check.name;
+      return item;
+    }));
+    if (preflight.externalExecutionEnabled) {
+      safetyTitle.textContent = "External execution enabled";
+      safetyCopy.textContent = "Preparing a plan does not start it. Every run requires explicit confirmation.";
+    } else {
+      safetyTitle.textContent = "Planning is blocked";
+      safetyCopy.textContent = preflightFailureSummary();
     }
   }
 
@@ -596,16 +676,10 @@
       ...options,
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
-    const data = await response.json().catch(() => ({}));
+    if (response.status === 204) return null;
+    const data = await response.json();
     if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
     return data;
-  }
-
-  function setBusy(button, busy, label) {
-    button.disabled = busy;
-    const text = button.querySelector("span:first-child");
-    if (text) text.textContent = label;
-    else button.textContent = label;
   }
 
   function showError(message) {

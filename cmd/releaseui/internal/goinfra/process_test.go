@@ -20,18 +20,19 @@ const testGoInfraHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 type fakeGoInfraGitHub struct {
 	mu sync.Mutex
 
-	preflightCalls  int
-	getPRCalls      int
-	labelCalls      int
-	dispatches      []bool
-	pollCalls       int
-	workflowRun     GoInfraWorkflowRun
-	workflowUpdates []GoInfraWorkflowRun
-	pullRequest     GoInfraPullRequest
-	preflightErr    error
-	labelErr        error
-	dispatchErr     error
-	pollErr         error
+	preflightCalls             int
+	getPRCalls                 int
+	labelCalls                 int
+	dispatches                 []bool
+	pollCalls                  int
+	workflowRun                GoInfraWorkflowRun
+	workflowUpdates            []GoInfraWorkflowRun
+	pullRequest                GoInfraPullRequest
+	preflightErr               error
+	releaseOnMergePreflightErr error
+	labelErr                   error
+	dispatchErr                error
+	pollErr                    error
 }
 
 type fakeGoInfraGitHubStats struct {
@@ -51,6 +52,13 @@ func (f *fakeGoInfraGitHub) Preflight(context.Context) (string, error) {
 	defer f.mu.Unlock()
 	f.preflightCalls++
 	return "verified fake GitHub integration", f.preflightErr
+}
+
+func (f *fakeGoInfraGitHub) PreflightReleaseOnMerge(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.preflightCalls++
+	return "verified fake release-on-merge integration", f.releaseOnMergePreflightErr
 }
 
 func (f *fakeGoInfraGitHub) GetPullRequest(_ context.Context, number int) (GoInfraPullRequest, error) {
@@ -154,6 +162,25 @@ func TestProcessGroupDefinesConcreteReleaseProcesses(t *testing.T) {
 	for index := range want {
 		if got[index] != want[index] {
 			t.Fatalf("process IDs = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestManualWorkflowReadinessDoesNotBlockReleaseOnMerge(t *testing.T) {
+	workflowErr := errors.New("manual workflow correlation is unavailable")
+	service := &fakeGoInfraGitHub{preflightErr: workflowErr}
+	processes := NewProcess(service).Processes()
+	for index, process := range processes {
+		warning, blocking := process.Preflight(context.Background())
+		if warning != nil {
+			t.Fatalf("process %s returned warning %v", process.Definition().ID, warning)
+		}
+		if index == 0 {
+			if blocking != nil {
+				t.Fatalf("release-on-merge was blocked by manual workflow readiness: %v", blocking)
+			}
+		} else if !errors.Is(blocking, workflowErr) {
+			t.Fatalf("process %s did not enforce manual workflow readiness: %v", process.Definition().ID, blocking)
 		}
 	}
 }

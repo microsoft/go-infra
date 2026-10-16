@@ -129,6 +129,14 @@ func (p goInfraProcessBase) Preflight(ctx context.Context) (warning error, block
 	return nil, err
 }
 
+func (p *releaseOnMergeProcess) Preflight(ctx context.Context) (warning error, blocking error) {
+	if err := validateGoInfraConfiguration(p.github); err != nil {
+		return nil, err
+	}
+	_, err := p.github.PreflightReleaseOnMerge(ctx)
+	return nil, err
+}
+
 func (p *releaseOnMergeProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(releaseOnMergeInput)
 	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseinput.FieldOptions{
