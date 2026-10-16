@@ -170,10 +170,31 @@ workflow run. The base64url-encoded canonical JSON remains in a collapsed manage
 Azure DevOps HTML normalization cannot alter release state. Add operator notes as work-item comments
 rather than editing Description.
 
-The dashboard queries active tagged work items and the ten most recently closed items. Starting and
-running work appears under **Ongoing releases**. Active failed, canceled, and uncertain work appears
+The dashboard queries active tagged work items and the ten most recently closed items.
+If an individual work item fails validation or its stored record cannot be decoded, it appears as a
+read-only card. Open work items appear under **Needs attention**; closed items appear under
+**Recent history**. The card links to its tracking record, shows its saved release status when
+readable separately from its work-item state, and gives safe next steps.
+Saved release titles and update times identify these entries even when the full run cannot be
+loaded. Tracking item numbers remain in the secondary link rather than serving as release names.
+The underlying error is available under **Technical details**. These cards cannot open, resume, or
+edit the unreadable release state; other readable releases remain available. No migration or
+record rewrite happens automatically. Closing a work item does not cancel its external run or
+update the stored execution result.
+The current prototype can show older test records as **Cannot open in this session**.
+This is an unreleased prototype. Compatibility with data from earlier prototype builds is not
+guaranteed, and older test records may remain read-only. Supported current-format records can
+still be reopened in another UI session.
+For supported records with a known external run that this UI is no longer monitoring, the dashboard
+automatically checks that run using read-only requests. It shows the verified external status
+separately from the saved checkpoint and keeps the external-run link available, even for closed
+items. Failed lookups are shown as unverified, not running or successful. These checks never
+resume execution, queue a pipeline, dispatch a workflow, or rewrite the work item.
+
+Starting and running work appears under **Ongoing releases**. Open failed, canceled, and uncertain work appears
 under **Needs attention**. Successful work and manually closed terminal outcomes appear under
-**Recently completed** without rewriting the execution result. Clicking a card or **Open** selects
+**Recent history** without rewriting the execution result. Closed unfinished records remain read-only.
+Clicking an available card or **Open** selects
 one work item for this server. Its Azure DevOps browser link appears on the dashboard and selected
 release page. **View JSON** exports its snapshot for manual repair and imports edited JSON only when
 the exported Azure DevOps revision is still current. Import validates the process payload and cannot
@@ -192,6 +213,9 @@ The current go-images graph is a linear mirror, queue, and monitor sequence.
 During the pipeline wait step, the existing SSE stream reports whether the Azure build is queued,
 running, or complete. Build status is checked every five seconds, and the UI links to Azure DevOps
 for stage, job, and task details.
+Once an external run is known, **Open release run** links to the Azure pipeline or GitHub workflow.
+The tracking-record link remains separate. Subsequent checkpoints also include the external-run
+link in the work-item description.
 
 Azure Pipeline definition metadata and Azure Repos reads use the official Azure DevOps Go SDK.
 The generated SDK's `build.Build` model omits run-level `templateParameters`.
@@ -201,6 +225,10 @@ The generated `Build.Parameters` field can carry the legacy correlation variable
 ## Durability and duplicate prevention
 
 The focused graph checkpoints queue intent **before** issuing the Azure POST, then checkpoints the returned build ID and successful completion.
+Confirmed external cancellation is saved as canceled. Stopping the local monitor is different:
+it leaves a checkpoint that can be resumed rather than pretending the external run was canceled.
+The UI reports completion only after the final record save, and shows persistence failures instead
+of reporting success.
 Correlation variables bind an Azure run to the release session ID, release mode, execution digest, source build, source commit, and version metadata.
 If the process restarts in the queue-response crash window, it reconciles recent runs before attempting another POST.
 

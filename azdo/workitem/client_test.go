@@ -167,7 +167,7 @@ func TestGetAcceptsClosedAttentionStatus(t *testing.T) {
 	}
 }
 
-func TestGetRejectsIncompatibleWorkflowState(t *testing.T) {
+func TestGetPreservesIndependentWorkItemAndReleaseStates(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		status Status
@@ -183,8 +183,12 @@ func TestGetRejectsIncompatibleWorkflowState(t *testing.T) {
 				return item, nil
 			}}
 			client := newTestClient(t, sdk, "test-token")
-			if _, err := client.Get(context.Background(), 42); err == nil || !strings.Contains(err.Error(), "incompatible") {
-				t.Fatalf("error = %v, want incompatible state error", err)
+			got, err := client.Get(context.Background(), 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != test.state || got.Snapshot.Status != test.status {
+				t.Fatalf("work item = %#v, want independent saved states", got)
 			}
 		})
 	}
@@ -392,6 +396,116 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 	}
 	if got := []int{items[0].ID, items[1].ID}; !slices.Equal(got, []int{2, 1}) {
 		t.Fatalf("work item order = %v, want [2 1]", got)
+	}
+}
+
+func TestQueryKeepsValidItemsWhenWorkItemIsInvalid(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*workitemtracking.WorkItem)
+		want   string
+	}{
+		{
+			name: "test tag mismatch",
+			change: func(item *workitemtracking.WorkItem) {
+				(*item.Fields)["System.Tags"] = SelectorTag + "; " + TestTag
+			},
+			want: "test tag does not match release snapshot",
+		},
+		{
+			name: "invalid snapshot",
+			change: func(item *workitemtracking.WorkItem) {
+				(*item.Fields)[descriptionField] = "<p>not a release snapshot</p>"
+			},
+			want: "release snapshot",
+		},
+		{
+			name: "missing revision",
+			change: func(item *workitemtracking.WorkItem) {
+				item.Rev = nil
+			},
+			want: "invalid work item",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			references := []workitemtracking.WorkItemReference{{Id: pointer(3)}, {Id: pointer(2)}, {Id: pointer(1)}}
+			invalid := sdkWorkItem(t, 2, 1, testSnapshot(StatusRunning))
+			test.change(invalid)
+			responses := []workitemtracking.WorkItem{
+				*sdkWorkItem(t, 1, 1, testSnapshot(StatusSucceeded)),
+				*invalid,
+				*sdkWorkItem(t, 3, 1, testSnapshot(StatusSucceeded)),
+			}
+			sdk := &fakeClient{
+				query: func(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error) {
+					return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
+				},
+				gets: func(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
+					return &responses, nil
+				},
+				get: func(context.Context, workitemtracking.GetWorkItemArgs) (*workitemtracking.WorkItem, error) {
+					return invalid, nil
+				},
+			}
+			client := newTestClient(t, sdk, "test-token")
+			items, err := client.Query(context.Background(), true, 20)
+			if err == nil || !strings.Contains(err.Error(), test.want) || !strings.Contains(err.Error(), "work item 2") {
+				t.Fatalf("error = %v, want item 2 validation error containing %q", err, test.want)
+			}
+			var problem *ReadError
+			if !errors.As(err, &problem) || problem.ID != 2 || problem.URL != "https://example.invalid/workitems/2" {
+				t.Fatalf("read error = %#v, want item identity and browser URL", problem)
+			}
+			if problem.Title != "Go images release" || problem.ChangedAt.IsZero() {
+				t.Fatalf("read error lost descriptive metadata: %#v", problem)
+			}
+			if test.name == "test tag mismatch" && (problem.State != "Active" || problem.Status != StatusRunning) {
+				t.Fatalf("saved state metadata = %#v", problem)
+			}
+			if len(items) != 2 || items[0].ID != 3 || items[1].ID != 1 {
+				t.Fatalf("valid items = %#v, want items [3 1]", items)
+			}
+			if items[0].Title != "Go images release" {
+				t.Fatalf("valid item lost its title: %#v", items[0])
+			}
+			if _, err := client.Get(context.Background(), 2); err == nil {
+				t.Fatal("get accepted the invalid work item")
+			}
+		})
+	}
+}
+
+func TestQueryRejectsInvalidBatchResponses(t *testing.T) {
+	first := sdkWorkItem(t, 1, 1, testSnapshot(StatusRunning))
+	second := sdkWorkItem(t, 2, 1, testSnapshot(StatusRunning))
+	(*second.Fields)["System.State"] = "Closed"
+	for _, test := range []struct {
+		name      string
+		responses []workitemtracking.WorkItem
+		want      string
+	}{
+		{name: "missing item", responses: []workitemtracking.WorkItem{*first}, want: "1 of 2"},
+		{name: "duplicate item", responses: []workitemtracking.WorkItem{*first, *first}, want: "duplicate work item 1"},
+		{name: "duplicate invalid item", responses: []workitemtracking.WorkItem{*first, *second, *second}, want: "duplicate work item 2"},
+		{name: "unrequested item", responses: []workitemtracking.WorkItem{*first, *sdkWorkItem(t, 3, 1, testSnapshot(StatusRunning))}, want: "unrequested work item 3"},
+		{name: "invalid ID", responses: []workitemtracking.WorkItem{*first, {}}, want: "invalid work item"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			references := []workitemtracking.WorkItemReference{{Id: pointer(2)}, {Id: pointer(1)}}
+			sdk := &fakeClient{
+				query: func(context.Context, workitemtracking.QueryByWiqlArgs) (*workitemtracking.WorkItemQueryResult, error) {
+					return &workitemtracking.WorkItemQueryResult{WorkItems: &references}, nil
+				},
+				gets: func(context.Context, workitemtracking.GetWorkItemsBatchArgs) (*[]workitemtracking.WorkItem, error) {
+					return &test.responses, nil
+				},
+			}
+			client := newTestClient(t, sdk, "test-token")
+			items, err := client.Query(context.Background(), false, 20)
+			if err == nil || !strings.Contains(err.Error(), test.want) || items != nil {
+				t.Fatalf("items = %#v, error = %v, want no items and error containing %q", items, err, test.want)
+			}
+		})
 	}
 }
 

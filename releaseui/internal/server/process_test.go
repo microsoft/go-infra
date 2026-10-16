@@ -129,6 +129,34 @@ func TestProcessPlanUsesBrowserJSONShape(t *testing.T) {
 	}
 }
 
+func TestCurrentPlanIncludesProcessOwnedRunLink(t *testing.T) {
+	const runURL = "https://example.test/runs/888"
+	process := exampleProcess()
+	process.view.RunURL = runURL
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(newMemoryProcessRunStore()))
+	prepared := postJSON(t, ui, "/api/processes/example/plan", `{}`)
+	defer prepared.Body.Close()
+	if prepared.StatusCode != http.StatusOK {
+		t.Fatalf("prepare status = %d", prepared.StatusCode)
+	}
+	response, err := ui.client.Get(ui.http.URL + "/api/processes/example/plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var current struct {
+		Execution map[string]json.RawMessage `json:"execution"`
+	}
+	decodeResponse(t, response, &current)
+	var got string
+	if err := json.Unmarshal(current.Execution["runUrl"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || got != runURL {
+		t.Fatalf("current status = %d, run URL = %q", response.StatusCode, got)
+	}
+}
+
 func startExample(t *testing.T, server *Server, digest string) *httptest.ResponseRecorder {
 	t.Helper()
 	response := httptest.NewRecorder()

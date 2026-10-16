@@ -51,6 +51,7 @@ type ProcessService interface {
 	ResolveCurrentSource(context.Context) (Source, error)
 	ValidateRollback(context.Context, int) (RollbackSource, error)
 	NewRunService(RunRequest) (RunService, error)
+	InspectRun(context.Context, RunRequest, string) (*contract.RunInspection, error)
 }
 
 // RunRequest binds one real run to a confirmed durable plan.
@@ -321,12 +322,24 @@ func (r *goImagesRun) TakeView() *contract.RunView {
 	if r.state.Workflow.BuildID != "" {
 		view.Summary = "Azure DevOps pipeline is running"
 		view.Detail = "Build " + r.state.Workflow.BuildID
+		view.RunURL = pipelineRunURL(r.state.Workflow.BuildID)
 	}
 	if r.state.Workflow.Complete {
 		view.Summary = "Azure DevOps pipeline completed"
 		view.Detail = "Build " + r.state.Workflow.BuildID + " finished with result " + r.state.Workflow.Result
 	}
 	return view
+}
+
+func (r *goImagesRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
+	r.mu.RLock()
+	buildID := r.state.Workflow.BuildID
+	request := goImagesRunRequest(r.state)
+	r.mu.RUnlock()
+	if buildID == "" {
+		return nil, nil
+	}
+	return r.service.InspectRun(ctx, request, buildID)
 }
 
 func (r *goImagesRun) Plan() *contract.Plan {
@@ -351,9 +364,7 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 	r.mu.RLock()
 	input := r.state.Document.Input
 	state := r.state.Workflow
-	source := r.state.Source
-	sessionID := r.state.Document.ID
-	executionDigest := r.state.Document.ExecutionDigest
+	request := goImagesRunRequest(r.state)
 	r.mu.RUnlock()
 
 	var service RunService = disabledGoImagesService{}
@@ -375,11 +386,7 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 			}
 		}
 		var err error
-		service, err = r.service.NewRunService(RunRequest{
-			Mode: input.Mode, SessionID: sessionID, ExecutionDigest: executionDigest,
-			Versions: append([]string(nil), input.Versions...), SourceBuildID: input.SourceBuildID,
-			SourceVersion: source.Commit, PreviousQueueAttempt: state.QueueAttempted,
-		})
+		service, err = r.service.NewRunService(request)
 		if err != nil {
 			return nil, fmt.Errorf("create go-images execution service: %w", err)
 		}
@@ -393,6 +400,20 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 	}
 	steps, _, err := NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
 	return steps, err
+}
+
+func goImagesRunRequest(state goImagesSnapshotState) RunRequest {
+	input := state.Document.Input
+	return RunRequest{
+		Mode: input.Mode, SessionID: state.Document.ID, ExecutionDigest: state.Document.ExecutionDigest,
+		Versions: append([]string(nil), input.Versions...), SourceBuildID: input.SourceBuildID,
+		SourceVersion: state.Source.Commit, PreviousQueueAttempt: state.Workflow.QueueAttempted,
+	}
+}
+
+func pipelineRunURL(buildID string) string {
+	return fmt.Sprintf("https://dev.azure.com/%s/%s/_build/results?buildId=%s",
+		goImagesPipelineOrg, goImagesPipelineProject, buildID)
 }
 
 func encodeGoImagesSnapshot(input PlanInput, state goImagesSnapshotState) (*contract.StateSnapshot, error) {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
@@ -123,6 +124,15 @@ func (f *fakeGoInfraGitHub) PollWorkflowRun(
 	return updates[len(updates)-1], pollErr
 }
 
+func (f *fakeGoInfraGitHub) GetWorkflowRun(_ context.Context, id int64) (GoInfraWorkflowRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workflowRun.ID != id {
+		return GoInfraWorkflowRun{}, errors.New("unexpected workflow run")
+	}
+	return f.workflowRun, f.pollErr
+}
+
 func (f *fakeGoInfraGitHub) stats() fakeGoInfraGitHubStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -219,6 +229,48 @@ func TestReleaseOnMergeProcess(t *testing.T) {
 	}
 }
 
+func TestDryRunInspectionDoesNotDispatchOrMutateSavedState(t *testing.T) {
+	github := &fakeGoInfraGitHub{workflowRun: testGoInfraWorkflowRun("completed", "cancelled")}
+	process := NewProcess(github.integration()).Processes()[1]
+	snapshot, err := process.Prepare(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, state, err := decodeGoInfraSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := testGoInfraWorkflowRun("queued", "")
+	state.WorkflowRun = &saved
+	snapshot, err = encodeGoInfraSnapshot(input, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := process.Load(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := run.TakeSnapshot()
+	inspector, ok := run.(contract.RunInspector)
+	if !ok {
+		t.Fatal("dry run has no read-only inspector")
+	}
+	inspection, err := inspector.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Status != "canceled" || inspection.RunURL != saved.URL {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+	after := run.TakeSnapshot()
+	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
+		t.Fatal("workflow inspection changed the saved snapshot")
+	}
+	if stats := github.stats(); stats.labelCalls != 0 || len(stats.dispatches) != 0 || stats.pollCalls != 0 {
+		t.Fatalf("workflow inspection executed actions: %#v", stats)
+	}
+}
+
 func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 	github := &fakeGoInfraGitHub{
 		workflowUpdates: []GoInfraWorkflowRun{
@@ -252,7 +304,9 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		t.Fatalf("checkpoint count = %d, want 3", checkpoints)
 	}
 	view := run.TakeView()
-	if !view.Test || view.Summary != "GitHub workflow completed" {
+	if !view.Test || view.Summary != "GitHub workflow completed" ||
+		view.RunURL != "https://github.com/microsoft/go-infra/actions/runs/123" {
+
 		t.Fatalf("view = %#v", view)
 	}
 }

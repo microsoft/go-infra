@@ -156,6 +156,11 @@ func (s *Service) DispatchPatchRelease(ctx context.Context, dryRun bool) (Workfl
 	return run, nil
 }
 
+// GetWorkflowRun reads one existing run on the fixed release target.
+func (s *Service) GetWorkflowRun(ctx context.Context, id int64) (WorkflowRun, error) {
+	return s.client.GetWorkflowRun(ctx, workflowTarget(), id)
+}
+
 // PollWorkflowRun waits until the allowlisted run completes and reports each observed state.
 func (s *Service) PollWorkflowRun(ctx context.Context, id int64, report func(WorkflowRun) error) (WorkflowRun, error) {
 	run, err := s.client.PollWorkflowRun(ctx, workflowTarget(), id, report)

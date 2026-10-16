@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -105,6 +107,231 @@ func TestDashboardQueriesReleaseRecords(t *testing.T) {
 		dashboard.Recent[1].RecordID != 1 || dashboard.Recent[1].Status != string(runstore.StatusSucceeded) {
 
 		t.Fatalf("dashboard groups = %#v, %#v, %#v", dashboard.Ongoing, dashboard.NeedsAttention, dashboard.Recent)
+	}
+}
+
+func TestDashboardRetainsReleasesWhenQueryReturnsPartialResults(t *testing.T) {
+	running := testProcessRun(t)
+	running.Started = true
+	completed := testProcessRun(t)
+	completed.Started, completed.Complete, completed.Result = true, true, string(runstore.StatusSucceeded)
+	store := newMemoryProcessRunStore()
+	seedReleaseRecord(store, testReleaseRunRecord(42, running, false, time.Now().UTC()))
+	seedReleaseRecord(store, testReleaseRunRecord(43, completed, true, time.Now().UTC()))
+	store.queryErr = errors.New("release record 41: unsupported stored payload")
+	ui := newTestUI(t, WithReleaseRunStore(store))
+	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var dashboard webview.DashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 1 || len(dashboard.Recent) != 1 {
+		t.Fatalf("status = %d, dashboard = %#v", response.StatusCode, dashboard)
+	}
+	if dashboard.Ongoing[0].RecordID != 42 || dashboard.Recent[0].RecordID != 43 ||
+		!strings.Contains(dashboard.TrackingError, "release record 41") {
+
+		t.Fatalf("partial dashboard = %#v", dashboard)
+	}
+}
+
+func TestDashboardGroupsReadOnlyRecordsByWorkItemState(t *testing.T) {
+	running := testProcessRun(t)
+	running.Started = true
+	unknownProcess := running.Clone()
+	unknownProcess.ProcessID = "no-longer-configured"
+	store := newMemoryProcessRunStore()
+	seedReleaseRecord(store, testReleaseRunRecord(42, running, false, time.Now().UTC()))
+	unknownRecord := testReleaseRunRecord(45, unknownProcess, false, time.Now().UTC())
+	unknownRecord.Title = "Older infrastructure dry run"
+	seedReleaseRecord(store, unknownRecord)
+	updatedAt := time.Date(2026, 9, 16, 23, 6, 48, 0, time.UTC)
+	store.queryErr = fmt.Errorf("query failed for some records: %w", errors.Join(
+		&runstore.RecordError{
+			ID: 41, URL: "https://example.invalid/workitems/41", RecordState: "Active", SavedStatus: "canceled",
+			Title: "Go images test release: 1.26.8-1, 1.27.1-2", UpdatedAt: updatedAt,
+			Message: "Saved-data format 8 is not supported.", Guidance: "Leave the saved JSON unchanged.",
+			Err: errors.New(`decode process run: json: unknown field "schemaVersion"`),
+		},
+		&runstore.RecordError{
+			ID: 44, URL: "https://example.invalid/workitems/44", RecordState: "Closed", SavedStatus: "running",
+			Closed: true,
+			Title:  "Earlier Go images test release", UpdatedAt: updatedAt,
+			Message: "Work-item state and saved release status disagree.", Guidance: "Check the external run first.",
+			Err: errors.New(`state "Closed" is incompatible with release status "running"`),
+		},
+		errors.New("tracking service unavailable"),
+	))
+	ui := newTestUI(t, WithReleaseRunStore(store))
+	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var dashboard webview.DashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 1 ||
+		len(dashboard.NeedsAttention) != 2 || len(dashboard.Recent) != 1 {
+
+		t.Fatalf("status = %d, dashboard = %#v", response.StatusCode, dashboard)
+	}
+	for _, release := range append(dashboard.NeedsAttention, dashboard.Recent...) {
+		if release.Issue == nil || release.RecordURL == "" || release.Href != "" ||
+			release.Issue.Message == "" || release.Issue.Guidance == "" || release.Issue.Detail == "" {
+
+			t.Errorf("unreadable card = %#v", release)
+			continue
+		}
+		switch release.RecordID {
+		case 41:
+			if release.Status != "canceled" || release.Issue.RecordState != "Active" {
+				t.Errorf("unsupported-format card = %#v", release)
+			}
+			if release.Name != "Go images test release: 1.26.8-1, 1.27.1-2" || !release.UpdatedAt.Equal(updatedAt) {
+				t.Errorf("unsupported-format card lost its readable identity: %#v", release)
+			}
+		case 44:
+			if release.Status != "running" || release.Issue.RecordState != "Closed" {
+				t.Errorf("state-conflict card = %#v", release)
+			}
+			if release.Name != "Earlier Go images test release" {
+				t.Errorf("read-only history card title = %q", release.Name)
+			}
+		case 45:
+			if release.Status != "running" {
+				t.Errorf("unconfigured-process card = %#v", release)
+			}
+			if release.Name != "Older infrastructure dry run" {
+				t.Errorf("unconfigured process lost its saved title: %#v", release)
+			}
+		default:
+			t.Errorf("unexpected card = %#v", release)
+		}
+	}
+	if !strings.Contains(dashboard.TrackingError, "tracking service unavailable") ||
+		strings.Contains(dashboard.TrackingError, "schemaVersion") || strings.Contains(dashboard.TrackingError, "incompatible") {
+
+		t.Fatalf("unclassified tracking error = %q", dashboard.TrackingError)
+	}
+}
+
+func TestDashboardWithoutDescriptiveMetadataDoesNotUseTheIDAsItsName(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	store.queryErr = &runstore.RecordError{
+		ID: 41, URL: "https://example.invalid/workitems/41",
+		Message: "Saved release metadata is unavailable.", Guidance: "Open the tracking item.",
+		Err: errors.New("unreadable record"),
+	}
+	ui := newTestUI(t, WithReleaseRunStore(store))
+	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var dashboard webview.DashboardResponse
+	decodeResponse(t, response, &dashboard)
+	if len(dashboard.NeedsAttention) != 1 || dashboard.NeedsAttention[0].Name != "Saved release" {
+		t.Fatalf("missing-metadata card = %#v", dashboard.NeedsAttention)
+	}
+	data, err := json.Marshal(dashboard.NeedsAttention[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"updatedAt"`) {
+		t.Fatalf("missing update time became a fabricated date: %s", data)
+	}
+}
+
+func TestDashboardInspectsStaleHistoryWithoutExecutionOrWrites(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		status        string
+		closed        bool
+		inspectionErr error
+		wantStatus    string
+	}{
+		{name: "closed canceled", status: "canceled", closed: true, wantStatus: "canceled"},
+		{name: "closed still running", status: "running", closed: true, wantStatus: "running"},
+		{name: "open running", status: "running", wantStatus: "running"},
+		{name: "unavailable", closed: true, inspectionErr: errors.New("Azure status lookup unavailable"), wantStatus: "uncertain"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const runURL = "https://example.invalid/runs/888"
+			var inspections, builds atomic.Int32
+			process := &fakeProcess{
+				definition: testProcessDefinition("example"),
+				view:       &contract.RunView{Test: true, RunURL: runURL},
+				inspect: func(ctx context.Context, _ *contract.StateSnapshot) (*contract.RunInspection, error) {
+					inspections.Add(1)
+					if _, ok := ctx.Deadline(); !ok {
+						t.Error("read-only inspection has no deadline")
+					}
+					return &contract.RunInspection{RunURL: runURL, Status: test.status}, test.inspectionErr
+				},
+				build: func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error) {
+					builds.Add(1)
+					return nil, errors.New("dashboard must never build executable steps")
+				},
+			}
+			running := testProcessRun(t)
+			running.Started, running.Checkpointed = true, true
+			store := newMemoryProcessRunStore()
+			seedReleaseRecord(store, testReleaseRunRecord(42, running, test.closed, time.Now().UTC()))
+			ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+			response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			var dashboard webview.DashboardResponse
+			decodeResponse(t, response, &dashboard)
+			var release webview.ReleaseSummary
+			if test.closed {
+				if len(dashboard.Recent) != 1 || len(dashboard.NeedsAttention) != 0 || len(dashboard.Ongoing) != 0 {
+					t.Fatalf("closed dashboard = %#v", dashboard)
+				}
+				release = dashboard.Recent[0]
+				if release.Issue == nil || release.Href != "" || !release.Closed {
+					t.Fatalf("closed read-only card = %#v", release)
+				}
+			} else {
+				if len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 0 {
+					t.Fatalf("open dashboard = %#v", dashboard)
+				}
+				release = dashboard.Ongoing[0]
+				if release.Issue != nil || release.Href == "" {
+					t.Fatalf("open running card lost its existing selection action: %#v", release)
+				}
+			}
+			if release.Status != test.wantStatus || release.SavedStatus != "running" || release.RunURL != runURL {
+				t.Fatalf("status and link = %#v", release)
+			}
+			if test.inspectionErr == nil && release.ExternalStatus != test.status {
+				t.Fatalf("verified status = %#v", release)
+			}
+			if test.inspectionErr != nil && (release.ExternalStatus != "" || !strings.Contains(release.Issue.Detail, test.inspectionErr.Error())) {
+				t.Fatalf("inspection failure was hidden: %#v", release)
+			}
+			if inspections.Load() != 1 || builds.Load() != 0 {
+				t.Fatalf("inspections = %d, executable graphs = %d", inspections.Load(), builds.Load())
+			}
+			stored, err := store.Get(context.Background(), 42)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Revision != 1 || stored.Run.Complete || stored.Run.Result != "" || stored.Closed != test.closed {
+				t.Fatalf("read-only lookup changed the record: %#v", stored)
+			}
+			if test.closed {
+				selected := postJSON(t, ui, "/api/releases/42/select", `{}`)
+				defer selected.Body.Close()
+				if selected.StatusCode != http.StatusConflict || builds.Load() != 0 {
+					t.Fatalf("closed unfinished record resumed: status=%d, builds=%d", selected.StatusCode, builds.Load())
+				}
+			}
+		})
 	}
 }
 

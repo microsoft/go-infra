@@ -63,6 +63,57 @@ func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) 
 	return 888, nil
 }
 
+func TestInspectPipelineReadsOnlyItsValidatedTestRun(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*azdopipeline.Build)
+	}{
+		{name: "canceled test run"},
+		{name: "different build", change: func(build *azdopipeline.Build) { build.ID = 889 }},
+		{name: "different definition", change: func(build *azdopipeline.Build) { build.DefinitionID = 1 }},
+		{name: "different intent", change: func(build *azdopipeline.Build) { build.Parameters[executionDigestVariable] = "wrong-intent" }},
+		{name: "different mode", change: func(build *azdopipeline.Build) { build.Parameters[modeVariable] = "normal" }},
+		{name: "publication target", change: func(build *azdopipeline.Build) { build.TemplateParameters["publishRepoPrefix"] = "public/" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parameters, err := PipelineParameters(ModeTest, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			template := make(map[string]any, len(parameters))
+			for name, value := range parameters {
+				template[name] = value
+			}
+			build := &azdopipeline.Build{
+				ID: 888, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
+				Status: "completed", Result: "canceled",
+				Parameters: map[string]string{
+					correlationVariable: "session", executionDigestVariable: testDigest,
+					modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
+				},
+				TemplateParameters: template,
+			}
+			if test.change != nil {
+				test.change(build)
+			}
+			reader, queue := &fakeReader{builds: []*azdopipeline.Build{build}}, &fakeQueueClient{}
+			service := newTestService(t, reader, queue, PipelineRunConfig{Mode: ModeTest})
+			inspection, err := service.InspectPipeline(context.Background(), "888")
+			if test.change == nil {
+				if err != nil || inspection.Status != "canceled" || inspection.RunURL != pipelineRunURL("888") {
+					t.Fatalf("inspection = %#v, error = %v", inspection, err)
+				}
+			} else if err == nil {
+				t.Fatalf("unrelated build was accepted: %#v", inspection)
+			}
+			if queue.calls != 0 || reader.gets != 1 || reader.lists != 0 || reader.failureGets != 0 {
+				t.Fatalf("inspection caused extra actions: queue=%d, get=%d, list=%d, failures=%d",
+					queue.calls, reader.gets, reader.lists, reader.failureGets)
+			}
+		})
+	}
+}
+
 func TestTriggerQueuesEachAllowlistedMode(t *testing.T) {
 	for _, test := range []struct {
 		mode          Mode

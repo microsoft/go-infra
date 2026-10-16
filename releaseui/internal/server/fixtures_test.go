@@ -27,6 +27,7 @@ type fakeProcess struct {
 	plan       *contract.Plan
 	planForRun func(*contract.StateSnapshot) *contract.Plan
 	view       *contract.RunView
+	inspect    func(context.Context, *contract.StateSnapshot) (*contract.RunInspection, error)
 }
 
 type fakeReleaseRun struct {
@@ -78,6 +79,13 @@ func (r *fakeReleaseRun) TakeView() *contract.RunView {
 	}
 	view := *r.process.view
 	return &view
+}
+
+func (r *fakeReleaseRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
+	if r.process.inspect == nil {
+		return nil, errors.New("fake read-only inspection is not configured")
+	}
+	return r.process.inspect(ctx, r.TakeSnapshot())
 }
 
 func (r *fakeReleaseRun) Plan() *contract.Plan {
@@ -201,9 +209,6 @@ func (s *memoryProcessRunStore) Query(
 ) ([]*runstore.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.queryErr != nil {
-		return nil, s.queryErr
-	}
 	records := make([]*runstore.Record, 0, len(s.records))
 	for _, record := range s.records {
 		if record.Closed == closed {
@@ -216,7 +221,7 @@ func (s *memoryProcessRunStore) Query(
 	if len(records) > limit {
 		records = records[:limit]
 	}
-	return records, nil
+	return records, s.queryErr
 }
 
 func (s *memoryProcessRunStore) Update(

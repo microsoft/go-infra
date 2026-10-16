@@ -26,6 +26,9 @@ const (
 )
 
 var (
+	// ErrCanceled reports a confirmed cancellation, not an interrupted local monitor.
+	ErrCanceled = errors.New("external operation was canceled")
+
 	errStepPanic     = errors.New("panic while executing step")
 	errAlreadyActive = errors.New("step runner is already active")
 )
@@ -91,6 +94,12 @@ type StepRunner struct {
 // running steps. A panic is recovered, wrapped with errStepPanic, and treated as an error. The
 // steps must be the validated graph returned by Step.TransitiveDependencies.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
+	return r.ExecuteWithFinalizer(ctx, steps, nil)
+}
+
+// ExecuteWithFinalizer finishes the run only after finalize has recorded its outcome.
+// The finalizer runs outside the runner lock, once all steps have returned.
+func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, finalize func(error) error) error {
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
@@ -121,6 +130,9 @@ func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
 		})
 	}
 	err := eg.Wait()
+	if finalize != nil {
+		err = errors.Join(err, finalize(err))
+	}
 
 	r.mu.Lock()
 	r.active = false
@@ -265,6 +277,8 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 			switch {
 			case errors.As(err, &dependencyErr):
 				status = StepStatusBlocked
+			case errors.Is(err, ErrCanceled):
+				status = StepStatusCanceled
 			case errors.Is(err, context.Canceled) && ctx.Err() != nil:
 				status = StepStatusCanceled
 			}

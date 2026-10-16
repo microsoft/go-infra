@@ -56,6 +56,37 @@ func TestStepRunner_Execute_PanicToError(t *testing.T) {
 	}
 }
 
+func TestStepRunnerFinalizesBeforeReportingCompletion(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	finalErr := errors.New("outcome could not be saved")
+	step := NewRootStep("finish", NoTimeout, func(context.Context) error { return nil })
+	var runner StepRunner
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.ExecuteWithFinalizer(context.Background(), []*Step{step}, func(error) error {
+			close(entered)
+			<-release
+			return finalErr
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("finalizer did not run")
+	}
+	if !runner.Snapshot().Active {
+		close(release)
+		t.Fatal("runner reported completion before finalization")
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, finalErr) {
+		t.Fatalf("execution error = %v", err)
+	}
+	if snapshot := runner.Snapshot(); snapshot.Active || snapshot.Error != finalErr.Error() {
+		t.Fatalf("final snapshot = %#v", snapshot)
+	}
+}
+
 func TestStepRunnerSnapshots(t *testing.T) {
 	releaseStep := make(chan struct{})
 	step := NewRootStep("Controlled step", NoTimeout, func(ctx context.Context) error {

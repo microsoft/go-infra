@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 	azdorepo "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/repo"
+	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 const (
@@ -101,6 +102,19 @@ func (s *AzureService) ValidateRollback(ctx context.Context, buildID int) (Rollb
 
 // NewRunService creates the queue-and-monitor service for one confirmed run.
 func (s *AzureService) NewRunService(request RunRequest) (RunService, error) {
+	return s.newPipelineRunService(request)
+}
+
+// InspectRun reads the known build without queueing or monitoring execution.
+func (s *AzureService) InspectRun(ctx context.Context, request RunRequest, buildID string) (*contract.RunInspection, error) {
+	service, err := s.newPipelineRunService(request)
+	if err != nil {
+		return nil, err
+	}
+	return service.InspectPipeline(ctx, buildID)
+}
+
+func (s *AzureService) newPipelineRunService(request RunRequest) (*PipelineRunService, error) {
 	return NewPipelineRunService(s.pipelines, s.queue, PipelineRunConfig{
 		Mode:                 request.Mode,
 		SessionID:            request.SessionID,

@@ -264,6 +264,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan-deep); box-
 .release-card-body p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .compact-button { min-height: 34px; padding: 0 12px; text-decoration: none; }
 .release-card-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.release-card-issue { align-items: flex-start; border-color: rgb(241 199 91 / 36%); }
+.release-card-issue .release-icon, .release-card-issue .status-badge { background: rgb(241 199 91 / 12%); color: var(--yellow); }
+.release-card-history { border-color: var(--border); }
+.release-card-history .release-icon, .release-card-history .status-badge { background: var(--surface-soft); color: var(--muted); }
+.release-card-body .release-issue-message { color: var(--text); }
+.release-card-issue p { line-height: 1.5; }
+.release-issue-details { margin-top: 10px; color: var(--muted); font-size: 12px; }
+.release-issue-details summary { width: fit-content; cursor: pointer; color: var(--cyan); }
+.release-issue-details pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tracking-error { margin: 12px 0 0; padding: 11px 13px; border: 1px solid rgb(255 123 135 / 34%); border-radius: 8px; background: rgb(255 123 135 / 8%); color: #ffd1d6; font-size: 12px; line-height: 1.5; }
 .json-dialog { width: min(880px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .json-dialog::backdrop { background: rgb(0 0 0 / 68%); }

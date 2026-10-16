@@ -67,6 +67,8 @@ type processCheckpointer struct {
 	stop      chan struct{}
 	done      chan struct{}
 	stopOnce  sync.Once
+	failureMu sync.Mutex
+	failure   error
 }
 
 // ErrorKind identifies the operation category of a process-run failure.
@@ -191,12 +193,14 @@ func (s *Manager) Current(processID string) (webview.ProcessRunResponse[*contrac
 	if !ok {
 		return webview.ProcessRunResponse[*contract.Plan]{}, false
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if session.run == nil || session.state == nil {
+	response, run, found := session.captureCurrent()
+	if !found {
 		return webview.ProcessRunResponse[*contract.Plan]{}, false
 	}
-	return session.responseLocked(), true
+	if view := run.TakeView(); view != nil {
+		response.Execution.RunURL = view.RunURL
+	}
+	return response, true
 }
 
 // Prepare validates input and builds the release plan for processID.
@@ -362,37 +366,51 @@ func (s *Manager) executeProcessRun(
 	checkpointer *processCheckpointer,
 ) {
 	defer checkpointer.cancel()
-	err := runner.Execute(ctx, steps)
+	if err := runner.ExecuteWithFinalizer(ctx, steps, func(executionErr error) error {
+		return s.finishProcessRun(session, digest, run, checkpointer, executionErr)
+	}); err != nil {
+		log.Printf("Release run finished: %v", err)
+	}
+}
+
+func (s *Manager) finishProcessRun(
+	session *processSession,
+	digest string,
+	run contract.Run,
+	checkpointer *processCheckpointer,
+	executionErr error,
+) error {
 	checkpointer.Close()
 	snapshot, snapshotErr := snapshotReleaseRun(run)
 	view := run.TakeView()
 	update, captureErr := session.captureRunUpdate(digest)
 	if captureErr != nil {
-		log.Printf("Complete release run: %v", captureErr)
-		return
+		return fmt.Errorf("complete release run: %w", captureErr)
 	}
 	state := update.state
 	if snapshotErr == nil {
 		state.Snapshot = snapshot
 	}
 	state.Complete, state.Result = processRunOutcome(
-		err, snapshotErr, checkpointer.failed.Load(), checkpointer.persisted.Load(),
+		executionErr, snapshotErr, checkpointer.failed.Load(), checkpointer.persisted.Load(),
 	)
 	if view != nil && !view.UpdatedAt.IsZero() {
 		state.UpdatedAt = view.UpdatedAt
 	}
 	record, saveErr := s.store.Update(context.Background(), update.expectedRecord, state, view, update.plan)
 	if saveErr != nil {
-		log.Printf("Persist release outcome: %v", saveErr)
+		saveErr = fmt.Errorf("persist release outcome: %w", saveErr)
 	}
-	if publishErr := session.publishOutcome(update, record, saveErr); publishErr != nil {
-		log.Printf("Publish release outcome: %v", publishErr)
+	publishErr := session.publishOutcome(update, record, saveErr)
+	if publishErr != nil {
+		publishErr = fmt.Errorf("publish release outcome: %w", publishErr)
 	}
+	return errors.Join(checkpointer.failureError(), snapshotErr, saveErr, publishErr)
 }
 
 func (s *Manager) restoreProcessRunRecord(record *runstore.Record) error {
-	if record == nil || record.Run == nil {
-		return errors.New("release run record is empty")
+	if err := validateRecordForExecution(record); err != nil {
+		return err
 	}
 	state := record.Run.Clone()
 	registered, ok := s.processes.Lookup(state.ProcessID)
@@ -453,6 +471,15 @@ func (s *processSession) selectedReleaseHrefLocked(id int) (string, bool) {
 	return "", false
 }
 
+func (s *processSession) captureCurrent() (webview.ProcessRunResponse[*contract.Plan], contract.Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.run == nil || s.state == nil {
+		return webview.ProcessRunResponse[*contract.Plan]{}, nil, false
+	}
+	return s.responseLocked(), s.run, true
+}
+
 func (s *processSession) responseLocked() webview.ProcessRunResponse[*contract.Plan] {
 	if s.run == nil || s.state == nil {
 		return webview.ProcessRunResponse[*contract.Plan]{}
@@ -464,13 +491,16 @@ func (s *processSession) responseLocked() webview.ProcessRunResponse[*contract.P
 		if state.Result != resultSucceeded {
 			status = resultFailed
 		}
+		if state.Result == resultCanceled {
+			status = resultCanceled
+		}
 		for index := range steps {
 			steps[index].Status = status
 		}
 	}
 	execution := webview.ExecutionResponse{
 		PlanDigest: state.Digest,
-		Run:        webview.PipelineRun{Complete: state.Complete},
+		Run:        webview.PipelineRun{Complete: state.Complete, Result: state.Result},
 	}
 	if s.record != nil {
 		execution.Record = &webview.ReleaseRecordReference{ID: s.record.ID, URL: s.record.URL}
@@ -563,6 +593,12 @@ func (s *processSession) captureRunUpdate(digest string) (*processRunUpdate, err
 	return &processRunUpdate{
 		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan,
 	}, nil
+}
+
+func (s *processSession) isRunningRecord(id int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.running && s.record != nil && s.record.ID == id
 }
 
 func (s *processSession) publishCheckpoint(update *processRunUpdate, record *runstore.Record) error {
@@ -705,8 +741,17 @@ func (c *processCheckpointer) persist() bool {
 
 func (c *processCheckpointer) fail(err error) {
 	log.Printf("Release checkpoint failed: %v", err)
+	c.failureMu.Lock()
+	c.failure = err
+	c.failureMu.Unlock()
 	c.failed.Store(true)
 	c.cancel()
+}
+
+func (c *processCheckpointer) failureError() error {
+	c.failureMu.Lock()
+	defer c.failureMu.Unlock()
+	return c.failure
 }
 
 func newError(kind ErrorKind, err error) error {
@@ -751,6 +796,16 @@ func loadReleaseRun(process contract.Process, snapshot *contract.StateSnapshot) 
 	return run, nil
 }
 
+func validateRecordForExecution(record *runstore.Record) error {
+	if err := runstore.ValidateRecord(record); err != nil {
+		return err
+	}
+	if record.Closed && !record.Run.Complete {
+		return errors.New("closed release run record cannot be resumed")
+	}
+	return nil
+}
+
 func validateProcessRunUpdateLocked(session *processSession, update *processRunUpdate) error {
 	if session.state == nil || session.record == nil ||
 		!localserver.Equal(session.state.Digest, update.state.Digest) ||
@@ -765,6 +820,8 @@ func processRunOutcome(executionErr, snapshotErr error, checkpointFailed, checkp
 	switch {
 	case checkpointFailed || snapshotErr != nil:
 		return true, resultUncertain
+	case errors.Is(executionErr, coordinator.ErrCanceled):
+		return true, resultCanceled
 	case executionErr == nil:
 		return true, resultSucceeded
 	case (errors.Is(executionErr, context.Canceled) || errors.Is(executionErr, context.DeadlineExceeded)) && checkpointPersisted:

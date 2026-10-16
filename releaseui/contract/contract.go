@@ -115,6 +115,20 @@ type Run interface {
 	Build(context.Context, CheckpointFunc) ([]*coordinator.Step, error)
 }
 
+// RunInspector optionally reads the current external run status without executing steps,
+// changing the Run snapshot, or mutating an external service.
+type RunInspector interface {
+	Inspect(context.Context) (*RunInspection, error)
+}
+
+// RunInspection is a read-only observation, separate from a release's persisted checkpoint.
+type RunInspection struct {
+	RunURL string
+
+	// Status is waiting, running, succeeded, failed, or canceled.
+	Status string
+}
+
 // CheckpointFunc must be called by a Run's steps after changing state. This allows releaseui to
 // persist the state and, when useful, refresh the view.
 //
@@ -197,6 +211,9 @@ type RunView struct {
 
 	// Detail adds process-specific status information.
 	Detail string
+
+	// RunURL links to the external pipeline or workflow run. Empty until a run is known.
+	RunURL string
 
 	// UpdatedAt is the time of the last update that is considered relevant by the [Run]. Some steps
 	// may make progress or poll a resource without committing state updates, and this field

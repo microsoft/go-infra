@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/webview"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -41,6 +43,18 @@ func (r *testRun) Plan() *contract.Plan {
 
 func (r *testRun) Build(context.Context, contract.CheckpointFunc) ([]*coordinator.Step, error) {
 	return nil, errors.New("test run does not build an execution graph")
+}
+
+type blockingViewRun struct {
+	contract.Run
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (r *blockingViewRun) TakeView() *contract.RunView {
+	close(r.entered)
+	<-r.release
+	return r.Run.TakeView()
 }
 
 type testStore struct {
@@ -115,6 +129,140 @@ func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
 	}
 }
 
+func TestCurrentIncludesExternalRunURL(t *testing.T) {
+	manager, session, _, _, cancel := checkpointTestRun(t)
+	defer cancel()
+	session.run = &testRun{
+		snapshot: session.state.Snapshot,
+		plan:     session.plan,
+		view:     &contract.RunView{RunURL: "https://example.test/runs/888"},
+	}
+	current, found := manager.Current("example")
+	if !found || current.Execution.RunURL != "https://example.test/runs/888" ||
+		current.Execution.Record == nil || current.Execution.Record.ID != 1 {
+
+		t.Fatalf("current release = %#v, found = %v", current, found)
+	}
+}
+
+func TestCurrentDoesNotHoldSessionLockDuringTakeView(t *testing.T) {
+	manager, session, run, _, cancel := checkpointTestRun(t)
+	defer cancel()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	session.run = &blockingViewRun{Run: run, entered: entered, release: release}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.Current("example")
+	}()
+	readDone := make(chan struct{})
+	readStarted := false
+	t.Cleanup(func() {
+		close(release)
+		<-done
+		if readStarted {
+			<-readDone
+		}
+	})
+	waitForTestSignal(t, entered)
+	readStarted = true
+	go func() {
+		defer close(readDone)
+		manager.Active("example")
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(5 * time.Second):
+		t.Error("runner access was blocked by TakeView")
+	}
+}
+
+func TestValidateRecordForExecution(t *testing.T) {
+	state, err := runstore.NewState("example", &contract.StateSnapshot{
+		Input: json.RawMessage(`{}`), State: json.RawMessage(`{}`),
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Started = true
+	for _, test := range []struct {
+		name      string
+		closed    bool
+		complete  bool
+		result    string
+		malformed string
+		wantError bool
+	}{
+		{name: "open unfinished"},
+		{name: "closed unfinished", closed: true, wantError: true},
+		{name: "open succeeded", complete: true, result: resultSucceeded},
+		{name: "closed succeeded", closed: true, complete: true, result: resultSucceeded},
+		{name: "closed canceled", closed: true, complete: true, result: resultCanceled},
+		{name: "missing identity", malformed: "id", wantError: true},
+		{name: "missing state", malformed: "state", wantError: true},
+		{name: "missing timestamp", malformed: "timestamp", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			record := &runstore.Record{
+				ID: 1, Revision: 1, Closed: test.closed, UpdatedAt: time.Now().UTC(), Run: state.Clone(),
+			}
+			record.Run.Complete, record.Run.Result = test.complete, test.result
+			switch test.malformed {
+			case "id":
+				record.ID = 0
+			case "state":
+				record.Run = nil
+			case "timestamp":
+				record.UpdatedAt = time.Time{}
+			}
+			if err := validateRecordForExecution(record); (err != nil) != test.wantError {
+				t.Fatalf("execution validation = %v, want error = %v", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestTrackingErrorGroupingUsesNeutralClosedFlag(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		closed      bool
+		recordState string
+	}{
+		{name: "archived provider state", closed: true, recordState: "Archived"},
+		{name: "resolved provider state", closed: true, recordState: "Resolved"},
+		{name: "no provider state", closed: true},
+		{name: "open provider state", recordState: "Investigating"},
+		{name: "display text is not authoritative", recordState: "Closed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var dashboard webview.DashboardResponse
+			problem := &runstore.RecordError{
+				ID: 42, Closed: test.closed, RecordState: test.recordState,
+				Message: "Unreadable saved release.", Guidance: "Open the tracking item.",
+				Err: errors.New("unreadable metadata"),
+			}
+			addTrackingError(&dashboard, problem)
+			addTrackingError(&dashboard, problem)
+			var summary webview.ReleaseSummary
+			if test.closed {
+				if len(dashboard.Recent) != 1 || len(dashboard.NeedsAttention) != 0 {
+					t.Fatalf("closed grouping = %#v", dashboard)
+				}
+				summary = dashboard.Recent[0]
+			} else {
+				if len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 0 {
+					t.Fatalf("open grouping = %#v", dashboard)
+				}
+				summary = dashboard.NeedsAttention[0]
+			}
+			if summary.Closed != test.closed || summary.Issue.RecordState != test.recordState {
+				t.Fatalf("provider-neutral metadata = %#v", summary)
+			}
+		})
+	}
+}
+
 func TestProcessRunOutcome(t *testing.T) {
 	checkpointErr := errors.New("checkpoint failed")
 	for _, test := range []struct {
@@ -128,6 +276,8 @@ func TestProcessRunOutcome(t *testing.T) {
 	}{
 		{name: "success", complete: true, result: resultSucceeded},
 		{name: "failure", executionErr: errors.New("step failed"), complete: true, result: resultFailed},
+		{name: "external canceled", executionErr: errors.Join(errors.New("pipeline canceled"), coordinator.ErrCanceled), complete: true, result: resultCanceled},
+		{name: "external canceled but checkpoint failed", executionErr: coordinator.ErrCanceled, checkpointFailed: true, complete: true, result: resultUncertain},
 		{name: "canceled before checkpoint", executionErr: context.Canceled, complete: true, result: resultUncertain},
 		{name: "deadline before checkpoint", executionErr: context.DeadlineExceeded, complete: true, result: resultUncertain},
 		{name: "canceled after checkpoint", executionErr: context.Canceled, checkpointPersisted: true},
@@ -196,6 +346,9 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 				)
 			}()
 			waitForTestSignal(t, store.updateStarted)
+			if phase == "completion" && !session.runner.Snapshot().Active {
+				t.Fatal("runner reported completion before its outcome was saved")
+			}
 			readDone := make(chan struct{})
 			go func() {
 				manager.Current("example")
@@ -206,6 +359,30 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 			waitForTestSignal(t, done)
 			checkpointer.Close()
 		})
+	}
+}
+
+func TestFinalPersistenceFailureIsVisible(t *testing.T) {
+	manager, session, run, store, cancel := checkpointTestRun(t)
+	defer cancel()
+	store.updateErr = errors.New("revision changed during final persistence")
+	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
+	steps := []*coordinator.Step{
+		coordinator.NewRootStep("finish", time.Minute, func(context.Context) error { return nil }),
+	}
+	manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
+	snapshot := session.runner.Snapshot()
+	if snapshot.Active || !strings.Contains(snapshot.Error, store.updateErr.Error()) {
+		t.Fatalf("completion snapshot = %#v", snapshot)
+	}
+	current, found := manager.Current("example")
+	if !found || current.Execution.Run.Result != resultUncertain {
+		t.Fatalf("browser outcome = %#v, found = %v", current.Execution.Run, found)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state.Result != resultUncertain || session.running {
+		t.Fatalf("session result = %q, running = %v", session.state.Result, session.running)
 	}
 }
 

@@ -9,6 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/internal/processregistry"
@@ -17,8 +20,9 @@ import (
 )
 
 const (
-	dashboardActiveLimit = 50
-	dashboardRecentLimit = 10
+	dashboardActiveLimit       = 50
+	dashboardRecentLimit       = 10
+	dashboardInspectionTimeout = 5 * time.Second
 )
 
 // History provides access to durable release records managed by a Manager.
@@ -34,21 +38,48 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 		Recent:         make([]webview.ReleaseSummary, 0),
 		Processes:      h.processSummaries(),
 	}
-	active, err := h.manager.store.Query(ctx, false, dashboardActiveLimit)
-	if err != nil {
-		result.TrackingError = err.Error()
-		return result
+	active, activeErr := h.manager.store.Query(ctx, false, dashboardActiveLimit)
+	recent, recentErr := h.manager.store.Query(ctx, true, dashboardRecentLimit)
+	addTrackingError(&result, errors.Join(activeErr, recentErr))
+	records := append(active, recent...)
+	summaries := make([]webview.ReleaseSummary, len(records))
+	summaryErrors := make([]error, len(records))
+	inspectionContext, cancel := context.WithTimeout(ctx, dashboardInspectionTimeout)
+	defer cancel()
+	var workers sync.WaitGroup
+	limit := make(chan struct{}, 4)
+	for index, record := range records {
+		limit <- struct{}{}
+		workers.Go(func() {
+			defer func() { <-limit }()
+			summaries[index], summaryErrors[index] = h.releaseSummary(inspectionContext, record)
+		})
 	}
-	recent, err := h.manager.store.Query(ctx, true, dashboardRecentLimit)
-	if err != nil {
-		result.TrackingError = err.Error()
-	}
-	for _, record := range append(active, recent...) {
-		summary, err := h.releaseSummary(record)
+	workers.Wait()
+	for index, record := range records {
+		summary, err := summaries[index], summaryErrors[index]
 		if err != nil {
-			if result.TrackingError == "" {
-				result.TrackingError = err.Error()
+			if record != nil && record.ID > 0 {
+				problem := &runstore.RecordError{
+					ID: record.ID, URL: record.URL, Err: err,
+					Title: record.Title, UpdatedAt: record.UpdatedAt,
+					Closed:   record.Closed,
+					Message:  "This record's release process or saved state could not be loaded.",
+					Guidance: "Open the tracking record and ask the RelUI maintainers to inspect it before trying to restore the release.",
+				}
+				if record.Run != nil {
+					if problem.Title == "" {
+						if registered, ok := h.manager.processes.Lookup(record.Run.ProcessID); ok {
+							problem.Title = registered.Group.Identity.Name + " · " + registered.Definition.Name
+						}
+					}
+					if status, statusErr := record.Run.Status(); statusErr == nil {
+						problem.SavedStatus = string(status)
+					}
+				}
+				err = problem
 			}
+			addTrackingError(&result, err)
 			continue
 		}
 		if record.Closed {
@@ -129,7 +160,7 @@ func (h *History) Import(
 		return webview.ReleaseRecordExport[*runstore.State]{},
 			errorf(ErrorStore, "load release record: %v", err)
 	}
-	if err := runstore.ValidateRecord(current); err != nil {
+	if err := validateRecordForExecution(current); err != nil {
 		return webview.ReleaseRecordExport[*runstore.State]{},
 			errorf(ErrorStore, "load release record: %v", err)
 	}
@@ -176,7 +207,7 @@ func (h *History) Import(
 }
 
 func (h *History) restore(record *runstore.Record) (string, error) {
-	if err := runstore.ValidateRecord(record); err != nil {
+	if err := validateRecordForExecution(record); err != nil {
 		return "", err
 	}
 	if err := h.manager.restoreProcessRunRecord(record); err != nil {
@@ -213,7 +244,7 @@ func (h *History) validateImport(current, candidate *runstore.State) (contract.R
 	return run, nil
 }
 
-func (h *History) releaseSummary(record *runstore.Record) (webview.ReleaseSummary, error) {
+func (h *History) releaseSummary(ctx context.Context, record *runstore.Record) (webview.ReleaseSummary, error) {
 	if err := runstore.ValidateRecord(record); err != nil {
 		return webview.ReleaseSummary{}, err
 	}
@@ -230,11 +261,51 @@ func (h *History) releaseSummary(record *runstore.Record) (webview.ReleaseSummar
 	if err != nil {
 		return webview.ReleaseSummary{}, err
 	}
-	summary := h.runSummary(record.Run, run.TakeView())
+	view := run.TakeView()
+	summary := h.runSummary(record.Run, view)
 	summary.Status = string(status)
+	summary.SavedStatus = string(status)
 	summary.UpdatedAt = record.UpdatedAt
 	summary.RecordID = record.ID
 	summary.RecordURL = record.URL
+	summary.Closed = record.Closed
+	session, _ := h.manager.processSession(record.Run.ProcessID)
+	if record.Run.Started && !record.Run.Complete && !session.isRunningRecord(record.ID) &&
+		(record.Closed || summary.RunURL != "") {
+
+		summary.Name = registered.Group.Identity.Name + " · " + registered.Definition.Name
+		summary.Href = ""
+		summary.Status = resultUncertain
+		summary.Issue = &webview.ReleaseIssue{
+			Message:  "This UI is not monitoring the saved run.",
+			Guidance: "The saved status is not a live status. No run was started or resumed by loading this page.",
+		}
+		if view != nil && view.RunURL != "" {
+			if inspector, ok := run.(contract.RunInspector); ok {
+				inspection, inspectErr := inspector.Inspect(ctx)
+				if inspectErr == nil {
+					inspectErr = validateInspection(inspection, view.RunURL)
+				}
+				if inspectErr != nil {
+					summary.Issue.Message = "The external run's current status could not be verified."
+					summary.Issue.Guidance = "Open the release run to check it, or reload to retry. The saved record was not changed."
+					summary.Issue.Detail = inspectErr.Error()
+				} else {
+					summary.Status = inspection.Status
+					summary.ExternalStatus = inspection.Status
+					summary.RunURL = inspection.RunURL
+					summary.Issue.Message = "External run status was checked without resuming the release."
+					summary.Issue.Guidance = "The saved record was not changed. Open the release run for its full details."
+					if inspection.Status != "waiting" && inspection.Status != "running" {
+						summary.Issue.Message = "The external run has finished; the saved release checkpoint has not been updated."
+					} else if !record.Closed {
+						summary.Issue = nil
+						summary.Href = processregistry.Path(record.Run.ProcessID)
+					}
+				}
+			}
+		}
+	}
 	return summary, nil
 }
 
@@ -253,8 +324,10 @@ func (h *History) runSummary(run *runstore.State, view *contract.RunView) webvie
 	}
 	updatedAt := run.UpdatedAt
 	mode := ""
+	runURL := ""
 	if view != nil {
 		mode = view.Detail
+		runURL = view.RunURL
 		if !view.UpdatedAt.IsZero() {
 			updatedAt = view.UpdatedAt
 		}
@@ -262,6 +335,7 @@ func (h *History) runSummary(run *runstore.State, view *contract.RunView) webvie
 	return webview.ReleaseSummary{
 		Mark: identity.Mark, Name: identity.Name,
 		Mode: mode, Status: status, UpdatedAt: updatedAt, Href: processregistry.Path(run.ProcessID),
+		RunURL: runURL,
 	}
 }
 
@@ -276,6 +350,66 @@ func (h *History) processSummaries() []webview.ProcessSummary {
 		})
 	}
 	return summaries
+}
+
+func validateInspection(inspection *contract.RunInspection, runURL string) error {
+	if inspection == nil || inspection.RunURL != runURL {
+		return errors.New("external status lookup did not match the saved run link")
+	}
+	switch inspection.Status {
+	case "waiting", "running", "succeeded", "failed", "canceled":
+		return nil
+	default:
+		return fmt.Errorf("external status lookup returned unsupported status %q", inspection.Status)
+	}
+}
+
+func addTrackingError(result *webview.DashboardResponse, err error) {
+	if err == nil {
+		return
+	}
+	var problem *runstore.RecordError
+	if !errors.As(err, &problem) {
+		if result.TrackingError != "" {
+			result.TrackingError += "\n"
+		}
+		result.TrackingError += err.Error()
+		return
+	}
+	switch err := err.(type) {
+	case *runstore.RecordError:
+		for _, releases := range [][]webview.ReleaseSummary{result.NeedsAttention, result.Recent} {
+			for _, release := range releases {
+				if release.Issue != nil && release.RecordID == err.ID {
+					return
+				}
+			}
+		}
+		name := strings.TrimSpace(err.Title)
+		if name == "" {
+			name = "Saved release"
+		}
+		summary := webview.ReleaseSummary{
+			Mark: "!", Name: name, UpdatedAt: err.UpdatedAt,
+			Status: err.SavedStatus, SavedStatus: err.SavedStatus, RecordID: err.ID, RecordURL: err.URL,
+			Closed: err.Closed,
+			Issue: &webview.ReleaseIssue{
+				RecordState: err.RecordState, Message: err.Message, Guidance: err.Guidance,
+				Detail: err.Error(),
+			},
+		}
+		if summary.Closed {
+			result.Recent = append(result.Recent, summary)
+		} else {
+			result.NeedsAttention = append(result.NeedsAttention, summary)
+		}
+	case interface{ Unwrap() []error }:
+		for _, child := range err.Unwrap() {
+			addTrackingError(result, child)
+		}
+	case interface{ Unwrap() error }:
+		addTrackingError(result, err.Unwrap())
+	}
 }
 
 func releaseSelection(session *processSession, id int) (string, bool, error) {

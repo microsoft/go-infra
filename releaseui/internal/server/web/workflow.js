@@ -28,6 +28,7 @@
   const stepEdges = document.querySelector("#step-edges");
   const stepList = document.querySelector("#step-list");
   const executionLinks = document.querySelector("#execution-links");
+  const runLink = document.querySelector("#run-link");
   const recordLink = document.querySelector("#record-link");
   const executionControls = document.querySelector("#execution-controls");
   const executionUnavailable = document.querySelector("#execution-unavailable");
@@ -540,6 +541,7 @@
     progressBar.style.width = `${steps.length ? Math.round((complete / steps.length) * 100) : 0}%`;
     progressLabel.textContent = snapshot.active
       ? "Release workflow in progress"
+      : snapshot.error ? "Workflow stopped; review the error"
       : complete === steps.length && steps.length
         ? succeeded === steps.length ? "Workflow completed successfully" : "Workflow stopped"
         : "Ready";
@@ -557,6 +559,12 @@
   }
 
   function renderLinks(execution) {
+    runLink.hidden = !execution?.runUrl;
+    if (execution?.runUrl) {
+      runLink.href = execution.runUrl;
+    } else {
+      runLink.removeAttribute("href");
+    }
     const record = execution?.record;
     recordLink.hidden = !record?.url;
     if (record?.url) {
@@ -566,7 +574,7 @@
       recordLink.removeAttribute("href");
     }
 
-    executionLinks.hidden = recordLink.hidden;
+    executionLinks.hidden = runLink.hidden && recordLink.hidden;
   }
 
   function updateActionButtons() {
@@ -590,8 +598,14 @@
     executionCancel.hidden = runConfirmation.hidden;
     executionTitle.textContent = runConfirmationPending ? "Confirm release" : executionControls.dataset.title || "Run release";
     executionButton.disabled = !enabled || complete || executionActive;
+    const completionLabel = {
+      succeeded: "Release completed",
+      failed: "Release failed",
+      canceled: "Release canceled",
+      uncertain: "Outcome needs attention",
+    }[execution?.run?.result] || "Outcome needs attention";
     executionButton.textContent = complete
-      ? "Release completed"
+      ? completionLabel
       : submitting === "start"
         ? "Starting release…"
         : executionActive
@@ -648,6 +662,7 @@
       updateSteps(snapshot);
       updateProgress(snapshot);
     }
+    if (!snapshot.active && snapshot.error) showError(snapshot.error);
     updateActionButtons();
   }
 

@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	azureBaseURL    = "https://dev.azure.com/devdiv"
-	azureProject    = "DEVDIV"
-	azureItemType   = "Issue"
-	azureTokenCache = 5 * time.Minute
+	azureBaseURL       = "https://dev.azure.com/devdiv"
+	azureProject       = "DEVDIV"
+	azureItemType      = "Issue"
+	azureTokenCache    = 5 * time.Minute
+	releaseTitlePrefix = "[releaseagent]"
 )
 
 type workItemClient interface {
@@ -79,9 +80,9 @@ func (s *store) Create(
 	if err != nil {
 		return nil, err
 	}
-	title := "[releaseagent] " + run.ProcessID
+	title := releaseTitlePrefix + " " + run.ProcessID
 	if plan != nil && strings.TrimSpace(plan.Subtitle) != "" {
-		title = "[releaseagent] " + plan.Subtitle
+		title = releaseTitlePrefix + " " + plan.Subtitle
 	}
 	item, err := s.client.Create(ctx, title, s.assignedTo, snapshot)
 	if err != nil {
@@ -129,19 +130,73 @@ func (s *store) Update(
 }
 
 func (s *store) Query(ctx context.Context, closed bool, limit int) ([]*runstore.Record, error) {
-	items, err := s.client.Query(ctx, closed, limit)
-	if err != nil {
-		return nil, err
-	}
+	items, queryErr := s.client.Query(ctx, closed, limit)
 	records := make([]*runstore.Record, 0, len(items))
+	recordErrors := []error{releaseQueryError(queryErr)}
 	for _, item := range items {
 		record, err := releaseRunRecord(item)
 		if err != nil {
-			return nil, err
+			if item != nil {
+				problem := &runstore.RecordError{
+					ID: item.ID, URL: item.URL, RecordState: item.State, Err: err,
+					Title: releaseRecordTitle(item.Title), UpdatedAt: item.ChangedAt,
+					Closed:   item.State == "Closed",
+					Message:  "Saved release data could not be read.",
+					Guidance: "Open the tracking record and ask the RelUI maintainers to inspect it. Do not remove fields from the saved JSON to bypass validation.",
+				}
+				if item.Snapshot != nil {
+					problem.SavedStatus = string(item.Snapshot.Status)
+					var format struct {
+						SchemaVersion *int `json:"schemaVersion"`
+					}
+					if err := json.Unmarshal(item.Snapshot.Payload, &format); err == nil && format.SchemaVersion != nil {
+						problem.Message = "Cannot open in this session."
+						problem.Guidance = "You can still inspect its saved summary and open the tracking item."
+						problem.Err = fmt.Errorf("unsupported saved-data format %d: %w", *format.SchemaVersion, problem.Err)
+					}
+				}
+				err = problem
+			}
+			recordErrors = append(recordErrors, err)
+			continue
 		}
 		records = append(records, record)
 	}
-	return records, nil
+	return records, errors.Join(recordErrors...)
+}
+
+func releaseQueryError(err error) error {
+	switch err := err.(type) {
+	case nil:
+		return nil
+	case *azdoworkitem.ReadError:
+		problem := &runstore.RecordError{
+			ID: err.ID, URL: err.URL, RecordState: err.State, SavedStatus: string(err.Status), Err: err,
+			Title: releaseRecordTitle(err.Title), UpdatedAt: err.ChangedAt,
+			Closed:   err.State == "Closed",
+			Message:  "Work-item validation failed.",
+			Guidance: "Open the tracking record and ask the RelUI maintainers to inspect its managed release data. This record cannot be resumed here.",
+		}
+		return problem
+	case interface{ Unwrap() []error }:
+		children := err.Unwrap()
+		mapped := make([]error, 0, len(children))
+		for _, child := range children {
+			mapped = append(mapped, releaseQueryError(child))
+		}
+		return errors.Join(mapped...)
+	case interface{ Unwrap() error }:
+		mapped := releaseQueryError(err.Unwrap())
+		var problem *runstore.RecordError
+		if errors.As(mapped, &problem) {
+			return mapped
+		}
+	}
+	return err
+}
+
+func releaseRecordTitle(title string) string {
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(title), releaseTitlePrefix))
 }
 
 func releaseRunSnapshot(
@@ -175,6 +230,9 @@ func releaseRunDescription(
 ) *azdoworkitem.DescriptionSummary {
 	fields := make([]azdoworkitem.DescriptionField, 0)
 	if view != nil {
+		if view.RunURL != "" {
+			fields = append(fields, azdoworkitem.DescriptionField{Label: "External run", Value: "Open release run", URL: view.RunURL})
+		}
 		if strings.TrimSpace(view.Summary) != "" {
 			fields = append(fields, azdoworkitem.DescriptionField{Label: "Status", Value: view.Summary})
 		}
@@ -216,6 +274,7 @@ func releaseRunRecord(item *azdoworkitem.WorkItem) (*runstore.Record, error) {
 	run.UpdatedAt = item.ChangedAt
 	return &runstore.Record{
 		ID: item.ID, Revision: item.Revision, URL: item.URL,
+		Title:  releaseRecordTitle(item.Title),
 		Closed: item.State == "Closed", UpdatedAt: item.ChangedAt, Run: run.Clone(),
 	}, nil
 }

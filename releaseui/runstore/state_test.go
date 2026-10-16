@@ -43,7 +43,7 @@ func TestStateRejectsCheckpointBeforeStart(t *testing.T) {
 	}
 }
 
-func TestRecordRejectsClosedIncompleteRun(t *testing.T) {
+func TestRecordReadsClosedIncompleteRun(t *testing.T) {
 	state, err := NewState("example", &contract.StateSnapshot{
 		Input: json.RawMessage(`{}`), State: json.RawMessage(`{}`),
 	}, time.Now().UTC())
@@ -52,7 +52,7 @@ func TestRecordRejectsClosedIncompleteRun(t *testing.T) {
 	}
 	state.Started = true
 	record := &Record{ID: 1, Revision: 1, Closed: true, UpdatedAt: time.Now().UTC(), Run: state}
-	if err := ValidateRecord(record); err == nil {
-		t.Fatal("closed incomplete release record passed validation")
+	if err := ValidateRecord(record); err != nil {
+		t.Fatalf("read-only closed record validation: %v", err)
 	}
 }

@@ -43,6 +43,9 @@ type PlanStep struct {
 type PipelineRun struct {
 	// Complete reports whether the release has reached a terminal state.
 	Complete bool `json:"complete"`
+
+	// Result distinguishes success, failure, cancellation, and an uncertain saved outcome.
+	Result string `json:"result,omitempty"`
 }
 
 // ReleaseRecordReference identifies the durable record for a release.
@@ -61,6 +64,9 @@ type ExecutionResponse struct {
 
 	// Run summarizes the release execution state.
 	Run PipelineRun `json:"run"`
+
+	// RunURL links to the external run owned by the release process.
+	RunURL string `json:"runUrl,omitempty"`
 
 	// Record identifies the durable release record after the release is confirmed.
 	Record *ReleaseRecordReference `json:"record,omitempty"`
@@ -98,8 +104,20 @@ type ReleaseSummary struct {
 	// Status describes the release's current or final state.
 	Status string `json:"status"`
 
+	// SavedStatus is the last persisted status, separate from an external observation.
+	SavedStatus string `json:"savedStatus,omitempty"`
+
+	// ExternalStatus is the status verified by a read-only lookup of the known external run.
+	ExternalStatus string `json:"externalStatus,omitempty"`
+
+	// RunURL links to the process-owned pipeline or workflow.
+	RunURL string `json:"runUrl,omitempty"`
+
+	// Closed reports that the tracking record is history rather than an open action item.
+	Closed bool `json:"closed,omitempty"`
+
 	// UpdatedAt is the last known change to the release.
-	UpdatedAt time.Time `json:"updatedAt"`
+	UpdatedAt time.Time `json:"updatedAt,omitzero"`
 
 	// Href links to the release process page.
 	Href string `json:"href"`
@@ -109,6 +127,24 @@ type ReleaseSummary struct {
 
 	// RecordURL links to the record in its backing service.
 	RecordURL string `json:"recordUrl,omitempty"`
+
+	// Issue makes a record read-only without hiding its metadata or external run link.
+	Issue *ReleaseIssue `json:"issue,omitempty"`
+}
+
+// ReleaseIssue explains why a record cannot be opened for execution.
+type ReleaseIssue struct {
+	// RecordState is the state reported by the backing service, not the external run.
+	RecordState string `json:"recordState,omitempty"`
+
+	// Message explains the problem without requiring knowledge of the storage format.
+	Message string `json:"message"`
+
+	// Guidance describes safe next steps for the operator.
+	Guidance string `json:"guidance"`
+
+	// Detail preserves the underlying error for troubleshooting.
+	Detail string `json:"detail"`
 }
 
 // ProcessSummary describes one release process card on the dashboard.
