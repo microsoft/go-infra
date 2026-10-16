@@ -129,6 +129,14 @@ func (p goInfraProcessBase) Preflight(ctx context.Context) (warning error, block
 	return nil, err
 }
 
+func (p *releaseOnMergeProcess) Preflight(ctx context.Context) (warning error, blocking error) {
+	if err := validateGoInfraConfiguration(p.github); err != nil {
+		return nil, err
+	}
+	_, err := p.github.PreflightReleaseOnMerge(ctx)
+	return nil, err
+}
+
 func (p *releaseOnMergeProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(releaseOnMergeInput)
 	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseinput.FieldOptions{
@@ -257,6 +265,7 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 		return view
 	}
 	run := r.state.WorkflowRun
+	view.RunURL = run.URL
 	view.Summary = "GitHub workflow is queued"
 	view.Detail = fmt.Sprintf("Waiting for run %d to start", run.ID)
 	switch run.Status {
@@ -268,6 +277,43 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 		view.Detail = fmt.Sprintf("Run %d completed with conclusion %s", run.ID, run.Conclusion)
 	}
 	return view
+}
+
+func (r *goInfraRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
+	r.mu.RLock()
+	if r.state.WorkflowRun == nil {
+		r.mu.RUnlock()
+		return nil, nil
+	}
+	saved := *r.state.WorkflowRun
+	r.mu.RUnlock()
+	run, err := r.github.GetWorkflowRun(ctx, saved.ID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateGoInfraWorkflowRun(&run); err != nil {
+		return nil, err
+	}
+	if run.ID != saved.ID || run.HeadSHA != saved.HeadSHA || run.URL != saved.URL {
+		return nil, errors.New("inspected GitHub workflow does not match the saved run")
+	}
+	status := "waiting"
+	switch run.Status {
+	case "in_progress":
+		status = "running"
+	case "completed":
+		switch run.Conclusion {
+		case "success":
+			status = "succeeded"
+		case "cancelled":
+			status = "canceled"
+		case "failure", "timed_out", "action_required", "startup_failure", "stale", "neutral", "skipped":
+			status = "failed"
+		default:
+			return nil, fmt.Errorf("workflow run has unsupported conclusion %q", run.Conclusion)
+		}
+	}
+	return &contract.RunInspection{RunURL: run.URL, Status: status}, nil
 }
 
 func (r *goInfraRun) Plan() *contract.Plan {
@@ -325,9 +371,12 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 				}
 				state.WorkflowRun = &run
 			}
-			_, err := r.github.PollWorkflowRun(ctx, state.WorkflowRun.ID, func(run GoInfraWorkflowRun) error {
+			completed, err := r.github.PollWorkflowRun(ctx, state.WorkflowRun.ID, func(run GoInfraWorkflowRun) error {
 				return r.checkpoint(ctx, run, checkpoint)
 			})
+			if err != nil && completed.Status == "completed" && completed.Conclusion == "cancelled" {
+				return errors.Join(coordinator.ErrCanceled, err)
+			}
 			return err
 		default:
 			return fmt.Errorf("unsupported go-infra action %q", input.Action)

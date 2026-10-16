@@ -56,24 +56,10 @@ func workflowTarget() githubclient.Workflow {
 	}
 }
 
-// Preflight verifies local authentication and the fixed repository and workflow targets.
+// Preflight verifies readiness for manual patch releases on the fixed workflow target.
 func (s *Service) Preflight(ctx context.Context) (string, error) {
-	if err := s.client.AuthStatus(ctx); err != nil {
+	if err := s.verifyTargets(ctx); err != nil {
 		return "", err
-	}
-	repository, err := s.client.GetRepository(ctx, repositoryTarget())
-	if err != nil {
-		return "", fmt.Errorf("verify go-infra repository: %w", err)
-	}
-	if repository.FullName != Owner+"/"+Repository || repository.DefaultBranch != DefaultRef {
-		return "", fmt.Errorf("go-infra repository does not match the release allowlist: %#v", repository)
-	}
-	workflow, err := s.client.GetWorkflow(ctx, workflowTarget())
-	if err != nil {
-		return "", fmt.Errorf("verify go-infra release workflow: %w", err)
-	}
-	if workflow.Path != WorkflowPath || workflow.State != "active" {
-		return "", fmt.Errorf("go-infra release workflow does not match the allowlist: %#v", workflow)
 	}
 	workflowYAML, err := s.client.GetFile(ctx, repositoryTarget(), WorkflowPath, DefaultRef)
 	if err != nil {
@@ -83,6 +69,36 @@ func (s *Service) Preflight(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return "Authenticated to GitHub and verified microsoft/go-infra main and its active patch-release workflow.", nil
+}
+
+// PreflightReleaseOnMerge verifies the targets needed to apply the release-on-merge label.
+// It does not require the correlation inputs used only by manual workflow dispatch.
+func (s *Service) PreflightReleaseOnMerge(ctx context.Context) (string, error) {
+	if err := s.verifyTargets(ctx); err != nil {
+		return "", err
+	}
+	return "Authenticated to GitHub and verified the go-infra release-on-merge target.", nil
+}
+
+func (s *Service) verifyTargets(ctx context.Context) error {
+	if err := s.client.AuthStatus(ctx); err != nil {
+		return err
+	}
+	repository, err := s.client.GetRepository(ctx, repositoryTarget())
+	if err != nil {
+		return fmt.Errorf("verify go-infra repository: %w", err)
+	}
+	if repository.FullName != Owner+"/"+Repository || repository.DefaultBranch != DefaultRef {
+		return fmt.Errorf("go-infra repository does not match the release allowlist: %#v", repository)
+	}
+	workflow, err := s.client.GetWorkflow(ctx, workflowTarget())
+	if err != nil {
+		return fmt.Errorf("verify go-infra release workflow: %w", err)
+	}
+	if workflow.Path != WorkflowPath || workflow.State != "active" {
+		return fmt.Errorf("go-infra release workflow does not match the allowlist: %#v", workflow)
+	}
+	return nil
 }
 
 // GetPullRequest validates an open, non-fork pull request targeting main.
@@ -140,6 +156,11 @@ func (s *Service) DispatchPatchRelease(ctx context.Context, dryRun bool) (Workfl
 	return run, nil
 }
 
+// GetWorkflowRun reads one existing run on the fixed release target.
+func (s *Service) GetWorkflowRun(ctx context.Context, id int64) (WorkflowRun, error) {
+	return s.client.GetWorkflowRun(ctx, workflowTarget(), id)
+}
+
 // PollWorkflowRun waits until the allowlisted run completes and reports each observed state.
 func (s *Service) PollWorkflowRun(ctx context.Context, id int64, report func(WorkflowRun) error) (WorkflowRun, error) {
 	run, err := s.client.PollWorkflowRun(ctx, workflowTarget(), id, report)
@@ -168,7 +189,13 @@ func validateWorkflowContract(data []byte) error {
 	inputs := workflow.On.WorkflowDispatch.Inputs
 	dryRun, dryRunOK := inputs["dry-run"]
 	correlation, correlationOK := inputs[CorrelationInput]
-	if workflow.RunName != workflowRunName || len(inputs) != 2 || !dryRunOK || !correlationOK ||
+	if !correlationOK || workflow.RunName != workflowRunName {
+		return fmt.Errorf(
+			"manual patch releases are unavailable: %s on %s must include %s and the matching run-name; merge the workflow update first",
+			WorkflowFile, DefaultRef, CorrelationInput,
+		)
+	}
+	if len(inputs) != 2 || !dryRunOK ||
 		dryRun.Required == nil || !*dryRun.Required || dryRun.Type != "boolean" || dryRun.Default != false ||
 		correlation.Required == nil || *correlation.Required || correlation.Type != "string" || correlation.Default != "" {
 

@@ -83,6 +83,10 @@ func (e *PipelineResultError) Unwrap() error {
 	return e.Err
 }
 
+func (e *PipelineResultError) Is(target error) bool {
+	return target == coordinator.ErrCanceled && e.Result == "canceled"
+}
+
 // CheckpointFunc reports that State changed. The state pointer is valid only during the call.
 type CheckpointFunc func(*State)
 

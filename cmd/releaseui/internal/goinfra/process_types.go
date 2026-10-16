@@ -36,9 +36,11 @@ type GoInfraWorkflowRun = githubclient.WorkflowRun
 // GitHubService is the GitHub behavior required by the Go-infra release process.
 type GitHubService interface {
 	Preflight(context.Context) (string, error)
+	PreflightReleaseOnMerge(context.Context) (string, error)
 	GetPullRequest(context.Context, int) (GoInfraPullRequest, error)
 	AddReleaseOnMergeLabel(context.Context, int, string) (GoInfraPullRequest, error)
 	DispatchPatchRelease(context.Context, bool) (GoInfraWorkflowRun, error)
+	GetWorkflowRun(context.Context, int64) (GoInfraWorkflowRun, error)
 	PollWorkflowRun(context.Context, int64, func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error)
 }
 

@@ -38,6 +38,17 @@ type Config struct {
 	WorkItemType string
 }
 
+// ReadError preserves work-item metadata when its release data cannot be loaded.
+type ReadError struct {
+	ID        int
+	URL       string
+	Title     string
+	State     string
+	Status    Status
+	ChangedAt time.Time
+	Err       error
+}
+
 type Client struct {
 	baseURL      string
 	project      string
@@ -51,6 +62,7 @@ type WorkItem struct {
 	ID        int
 	Revision  int
 	URL       string
+	Title     string
 	State     string
 	ChangedAt time.Time
 	Snapshot  *Snapshot
@@ -219,6 +231,8 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	return workItem, nil
 }
 
+// Query lists active or closed release work items, newest first.
+// Invalid individual items are omitted and reported alongside valid results.
 func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem, error) {
 	if limit <= 0 || limit > maxQueryResults {
 		return nil, fmt.Errorf("release work item query limit must be between 1 and %d", maxQueryResults)
@@ -277,26 +291,43 @@ func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem
 		return nil, errors.New("azure DevOps returned no work item query results")
 	}
 	items := make([]*WorkItem, len(ids))
+	seen := make(map[int]bool, len(ids))
+	var itemErrors []error
 	for index := range *responses {
-		item, err := c.parseWorkItem(&(*responses)[index])
-		if err != nil {
-			return nil, err
+		response := &(*responses)[index]
+		if response.Id == nil || *response.Id <= 0 {
+			return nil, errors.New("azure DevOps returned an invalid work item")
 		}
-		position, ok := positions[item.ID]
+		id := *response.Id
+		position, ok := positions[id]
 		if !ok {
-			return nil, fmt.Errorf("azure DevOps returned unrequested work item %d", item.ID)
+			return nil, fmt.Errorf("azure DevOps returned unrequested work item %d", id)
 		}
-		if items[position] != nil {
-			return nil, fmt.Errorf("azure DevOps returned duplicate work item %d", item.ID)
+		if seen[id] {
+			return nil, fmt.Errorf("azure DevOps returned duplicate work item %d", id)
+		}
+		seen[id] = true
+		item, err := c.parseWorkItem(response)
+		if err != nil {
+			var readErr *ReadError
+			if !errors.As(err, &readErr) {
+				readErr = workItemReadError(response, nil, err)
+			}
+			itemErrors = append(itemErrors, readErr)
+			continue
 		}
 		items[position] = item
 	}
+	if len(seen) != len(ids) {
+		return nil, fmt.Errorf("azure DevOps returned %d of %d requested work items", len(*responses), len(ids))
+	}
+	validItems := make([]*WorkItem, 0, len(items))
 	for _, item := range items {
-		if item == nil {
-			return nil, fmt.Errorf("azure DevOps returned %d of %d requested work items", len(*responses), len(ids))
+		if item != nil {
+			validItems = append(validItems, item)
 		}
 	}
-	return items, nil
+	return validItems, errors.Join(itemErrors...)
 }
 
 func (c *Client) createClient(ctx context.Context) (workItemClient, string, error) {
@@ -335,6 +366,10 @@ func (c *Client) parseWrittenWorkItem(response *workitemtracking.WorkItem, want 
 	workItem, err := c.parseWorkItem(response)
 	if err != nil {
 		return nil, err
+	}
+	if !workItemStateMatches(workItem.State, workItem.Snapshot.Status) {
+		return nil, fmt.Errorf("written work item %d state %q is incompatible with release status %q",
+			workItem.ID, workItem.State, workItem.Snapshot.Status)
 	}
 	got, err := MarshalSnapshot(workItem.Snapshot)
 	if err != nil {
@@ -380,18 +415,17 @@ func (c *Client) parseWorkItem(response *workitemtracking.WorkItem) (*WorkItem, 
 	}
 	testTagged := hasTag(tags, TestTag) || hasTag(tags, legacyTestTag)
 	if testTagged != snapshot.Test {
-		return nil, fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id)
-	}
-	if !workItemStateMatches(state, snapshot.Status) {
-		return nil, fmt.Errorf("work item %d state %q is incompatible with release status %q", *response.Id, state, snapshot.Status)
+		return nil, workItemReadError(response, snapshot,
+			fmt.Errorf("work item %d test tag does not match release snapshot", *response.Id))
 	}
 	itemURL := workItemURL(response)
 	if itemURL == "" {
-		return nil, fmt.Errorf("work item %d has no browser URL", *response.Id)
+		return nil, workItemReadError(response, snapshot,
+			fmt.Errorf("work item %d has no browser URL", *response.Id))
 	}
 	return &WorkItem{
 		ID: *response.Id, Revision: *response.Rev, URL: itemURL,
-		State: state, ChangedAt: changedAt, Snapshot: snapshot,
+		Title: title, State: state, ChangedAt: changedAt, Snapshot: snapshot,
 	}, nil
 }
 
@@ -399,6 +433,32 @@ func (c *Client) fields() []string {
 	return []string{
 		"System.WorkItemType", "System.Title", "System.State", "System.AreaPath", "System.Tags", "System.ChangedDate", descriptionField,
 	}
+}
+
+func (e *ReadError) Error() string {
+	return fmt.Sprintf("release work item %d: %v", e.ID, e.Err)
+}
+
+func (e *ReadError) Unwrap() error { return e.Err }
+
+func workItemReadError(response *workitemtracking.WorkItem, snapshot *Snapshot, err error) *ReadError {
+	result := &ReadError{ID: *response.Id, URL: workItemURL(response), Err: err}
+	if response.Fields != nil {
+		result.Title, _ = (*response.Fields)["System.Title"].(string)
+		result.State, _ = (*response.Fields)["System.State"].(string)
+		if changed, ok := (*response.Fields)["System.ChangedDate"].(string); ok {
+			changedAt, parseErr := time.Parse(time.RFC3339Nano, changed)
+			if parseErr != nil {
+				result.Err = errors.Join(err, fmt.Errorf("read work item %d changed date: %w", result.ID, parseErr))
+			} else {
+				result.ChangedAt = changedAt
+			}
+		}
+	}
+	if snapshot != nil {
+		result.Status = snapshot.Status
+	}
+	return result
 }
 
 func patch(operation webapi.Operation, path string, value any) webapi.JsonPatchOperation {

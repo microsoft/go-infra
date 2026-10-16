@@ -110,6 +110,44 @@ func TestPreflightRejectsWorkflowInputDrift(t *testing.T) {
 	}
 }
 
+func TestReleaseOnMergePreflightDoesNotRequireDispatchCorrelation(t *testing.T) {
+	runner := &fakeRunner{responses: [][]byte{
+		nil,
+		[]byte(`{"full_name":"microsoft/go-infra","default_branch":"main"}`),
+		[]byte(`{"path":".github/workflows/create-go-infra-patch-release.yml","state":"active"}`),
+	}}
+	service, err := newTestGitHubService(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PreflightReleaseOnMerge(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("release-on-merge performed %d commands, want only target readiness reads", len(runner.calls))
+	}
+}
+
+func TestManualPreflightExplainsMissingWorkflowUpdate(t *testing.T) {
+	workflow := "on:\n  workflow_dispatch:\n    inputs:\n      dry-run:\n        required: true\n        type: boolean\n        default: false\n"
+	runner := &fakeRunner{responses: [][]byte{
+		nil,
+		[]byte(`{"full_name":"microsoft/go-infra","default_branch":"main"}`),
+		[]byte(`{"path":".github/workflows/create-go-infra-patch-release.yml","state":"active"}`),
+		[]byte(`{"encoding":"base64","content":"` + base64.StdEncoding.EncodeToString([]byte(workflow)) + `"}`),
+	}}
+	service, err := newTestGitHubService(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Preflight(context.Background())
+	if err == nil || !strings.Contains(err.Error(), CorrelationInput) ||
+		!strings.Contains(err.Error(), "merge the workflow update first") {
+
+		t.Fatalf("missing workflow prerequisite error = %v", err)
+	}
+}
+
 func TestRepositoryWorkflowContract(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", ".github", "workflows", WorkflowFile))
 	if err != nil {

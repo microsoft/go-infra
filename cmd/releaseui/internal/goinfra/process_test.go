@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
@@ -20,18 +21,19 @@ const testGoInfraHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 type fakeGoInfraGitHub struct {
 	mu sync.Mutex
 
-	preflightCalls  int
-	getPRCalls      int
-	labelCalls      int
-	dispatches      []bool
-	pollCalls       int
-	workflowRun     GoInfraWorkflowRun
-	workflowUpdates []GoInfraWorkflowRun
-	pullRequest     GoInfraPullRequest
-	preflightErr    error
-	labelErr        error
-	dispatchErr     error
-	pollErr         error
+	preflightCalls             int
+	getPRCalls                 int
+	labelCalls                 int
+	dispatches                 []bool
+	pollCalls                  int
+	workflowRun                GoInfraWorkflowRun
+	workflowUpdates            []GoInfraWorkflowRun
+	pullRequest                GoInfraPullRequest
+	preflightErr               error
+	releaseOnMergePreflightErr error
+	labelErr                   error
+	dispatchErr                error
+	pollErr                    error
 }
 
 type fakeGoInfraGitHubStats struct {
@@ -51,6 +53,13 @@ func (f *fakeGoInfraGitHub) Preflight(context.Context) (string, error) {
 	defer f.mu.Unlock()
 	f.preflightCalls++
 	return "verified fake GitHub integration", f.preflightErr
+}
+
+func (f *fakeGoInfraGitHub) PreflightReleaseOnMerge(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.preflightCalls++
+	return "verified fake release-on-merge integration", f.releaseOnMergePreflightErr
 }
 
 func (f *fakeGoInfraGitHub) GetPullRequest(_ context.Context, number int) (GoInfraPullRequest, error) {
@@ -115,6 +124,15 @@ func (f *fakeGoInfraGitHub) PollWorkflowRun(
 	return updates[len(updates)-1], pollErr
 }
 
+func (f *fakeGoInfraGitHub) GetWorkflowRun(_ context.Context, id int64) (GoInfraWorkflowRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.workflowRun.ID != id {
+		return GoInfraWorkflowRun{}, errors.New("unexpected workflow run")
+	}
+	return f.workflowRun, f.pollErr
+}
+
 func (f *fakeGoInfraGitHub) stats() fakeGoInfraGitHubStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -158,6 +176,25 @@ func TestProcessGroupDefinesConcreteReleaseProcesses(t *testing.T) {
 	}
 }
 
+func TestManualWorkflowReadinessDoesNotBlockReleaseOnMerge(t *testing.T) {
+	workflowErr := errors.New("manual workflow correlation is unavailable")
+	service := &fakeGoInfraGitHub{preflightErr: workflowErr}
+	processes := NewProcess(service).Processes()
+	for index, process := range processes {
+		warning, blocking := process.Preflight(context.Background())
+		if warning != nil {
+			t.Fatalf("process %s returned warning %v", process.Definition().ID, warning)
+		}
+		if index == 0 {
+			if blocking != nil {
+				t.Fatalf("release-on-merge was blocked by manual workflow readiness: %v", blocking)
+			}
+		} else if !errors.Is(blocking, workflowErr) {
+			t.Fatalf("process %s did not enforce manual workflow readiness: %v", process.Definition().ID, blocking)
+		}
+	}
+}
+
 func TestReleaseOnMergeProcess(t *testing.T) {
 	github := &fakeGoInfraGitHub{pullRequest: testGoInfraPullRequest()}
 	process := NewProcess(github.integration()).Processes()[0]
@@ -189,6 +226,48 @@ func TestReleaseOnMergeProcess(t *testing.T) {
 	}
 	if stats := github.stats(); stats.getPRCalls != 1 || stats.labelCalls != 1 {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestDryRunInspectionDoesNotDispatchOrMutateSavedState(t *testing.T) {
+	github := &fakeGoInfraGitHub{workflowRun: testGoInfraWorkflowRun("completed", "cancelled")}
+	process := NewProcess(github.integration()).Processes()[1]
+	snapshot, err := process.Prepare(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, state, err := decodeGoInfraSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := testGoInfraWorkflowRun("queued", "")
+	state.WorkflowRun = &saved
+	snapshot, err = encodeGoInfraSnapshot(input, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := process.Load(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := run.TakeSnapshot()
+	inspector, ok := run.(contract.RunInspector)
+	if !ok {
+		t.Fatal("dry run has no read-only inspector")
+	}
+	inspection, err := inspector.Inspect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Status != "canceled" || inspection.RunURL != saved.URL {
+		t.Fatalf("inspection = %#v", inspection)
+	}
+	after := run.TakeSnapshot()
+	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
+		t.Fatal("workflow inspection changed the saved snapshot")
+	}
+	if stats := github.stats(); stats.labelCalls != 0 || len(stats.dispatches) != 0 || stats.pollCalls != 0 {
+		t.Fatalf("workflow inspection executed actions: %#v", stats)
 	}
 }
 
@@ -225,7 +304,9 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		t.Fatalf("checkpoint count = %d, want 3", checkpoints)
 	}
 	view := run.TakeView()
-	if !view.Test || view.Summary != "GitHub workflow completed" {
+	if !view.Test || view.Summary != "GitHub workflow completed" ||
+		view.RunURL != "https://github.com/microsoft/go-infra/actions/runs/123" {
+
 		t.Fatalf("view = %#v", view)
 	}
 }
