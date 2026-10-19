@@ -163,7 +163,7 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 		}
 
 		if config.ExtractAsAuthor != "" {
-			p.FromAuthor = config.ExtractAsAuthor
+			p.SetAuthor(config.ExtractAsAuthor)
 		}
 
 		subjectReader := strings.NewReader(p.Subject)

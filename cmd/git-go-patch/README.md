@@ -226,6 +226,22 @@ If you have many patch files authored by different developers and it isn't reaso
 Be careful when staging your WIP patch files in the outer repo, because `extract` doesn't fully understand this situation and will delete the patches that haven't been fixed up yet.
 The next dev to work on resolution can then check out the WIP branch and run `git go-patch apply` to pick up where the last dev left it.
 
+### Patch author attribution
+
+Set `ExtractAsAuthor` in `.git-go-patch` to assign a consistent author to extracted patches:
+
+```json
+{
+  "ExtractAsAuthor": "USERNAME <ID+USERNAME@users.noreply.github.com>"
+}
+```
+
+When this setting is non-empty, `git go-patch extract` replaces the patch's `From:` author and removes all `Co-authored-by:` lines from its commit message, regardless of the co-author.
+Automatic three-way patch regeneration uses the same behavior.
+Other commit-message trailers and patch contents are preserved.
+If the setting is omitted or empty, author and co-author attribution are preserved.
+Use the patch file's Git history to find its contributors rather than the attribution inside the patch.
+
 ### Index preservation
 
 Enable index preservation by setting `PreserveIndex` to `true` in `.git-go-patch`.
