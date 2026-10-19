@@ -13,11 +13,12 @@ It runs on the same schedule as the `microsoft/main` submodule updates, even whe
 The sync replaces `README.md`, `SUPPORT.md`, `SECURITY.md`, and all files recursively under `eng/doc/`, including adding new files and removing files deleted on main.
 Each copied Markdown document starts with an HTML comment linking to its maintained version on `microsoft/main`, naming the destination branch, and warning `DO NOT EDIT`.
 Other files, such as JSON metadata and images, are copied unchanged to preserve their formats.
-Make documentation changes on `microsoft/main`; edits to copied documents on support branches are overwritten on the next sync.
 
 Documentation-only PRs use `dev/auto-sync-docs/<target branch>` so they do not interfere with submodule/release sync PRs.
-They do not merge main into support branches or change code, patches, version files, or submodule pointers.
-The entry requires `Upstream`, `Target`, and `MainBranch`; `BranchMap`, `AutoSyncBranches`, and `SubmoduleTarget` must be omitted.
+
+In a documentation sync entry, `Upstream` identifies the source repository, `Target` identifies the destination repository, and `MainBranch` names the source branch.
+All three fields are required.
+The entry cannot also specify `BranchMap`, `AutoSyncBranches`, or `SubmoduleTarget`, which configure branch merges and submodule updates instead.
 
 ## Patch updates
 

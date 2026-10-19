@@ -259,9 +259,14 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
-	if entry.SyncDocs && (entry.MainBranch == "" || entry.SubmoduleTarget != "" ||
-		len(entry.BranchMap) != 0 || len(entry.AutoSyncBranches) != 0) {
-		return nil, errors.New("SyncDocs requires MainBranch and cannot be combined with SubmoduleTarget, BranchMap, or AutoSyncBranches")
+	if entry.SyncDocs {
+		if entry.MainBranch == "" ||
+			entry.SubmoduleTarget != "" ||
+			len(entry.BranchMap) != 0 ||
+			len(entry.AutoSyncBranches) != 0 {
+
+			return nil, errors.New("SyncDocs requires MainBranch and cannot be combined with SubmoduleTarget, BranchMap, or AutoSyncBranches")
+		}
 	}
 
 	urlAuther, err := f.ParseAuth()
