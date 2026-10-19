@@ -68,6 +68,8 @@ func Test_MakeBranchPRs_Docs(t *testing.T) {
 		"eng/doc/new-name.md":        "Renamed on main",
 		"eng/doc/file-to-dir/new.md": "Now a directory\n",
 		"eng/doc/dir-to-file":        "Now a file\n",
+		"eng/doc/links.json":         "{\"main\":\"microsoft/main\"}\n",
+		"eng/doc/image.png":          "\x89PNG\r\n\x1a\n\x00\xff",
 	}
 	for name, content := range docs {
 		write(name, content)
@@ -108,9 +110,12 @@ func Test_MakeBranchPRs_Docs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := fmt.Sprintf(
-				"<!-- This document is maintained in https://github.com/microsoft/go/blob/microsoft/main/%s and automatically copied to %s, DO NOT EDIT. -->\n\n%s",
-				strings.NewReplacer(" ", "%20", "\n", "%0A").Replace(name), branch, content)
+			want := content
+			if strings.HasSuffix(name, ".md") {
+				want = fmt.Sprintf(
+					"<!-- This document is maintained in https://github.com/microsoft/go/blob/microsoft/main/%s and automatically copied to %s, DO NOT EDIT. -->\n\n%s",
+					strings.NewReplacer(" ", "%20", "\n", "%0A").Replace(name), branch, content)
+			}
 			if got != want {
 				t.Errorf("%s:%s = %q, want %q", branch, name, got, want)
 			}

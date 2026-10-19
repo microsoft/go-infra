@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"path"
 	"strings"
 
 	"github.com/microsoft/go-infra/gitcmd"
@@ -43,17 +44,20 @@ func syncDocs(dir, upstream string, branch *gitpr.SyncPRRefSet) error {
 		if err != nil {
 			return err
 		}
-		sourceURL := &url.URL{
-			Scheme: "https",
-			Host:   "github.com",
-			Path:   "/" + remote.GetOwnerSlashRepo() + "/blob/" + branch.UpstreamName + "/" + name,
+		// Assets such as JSON and images must remain byte-for-byte copies.
+		if strings.EqualFold(path.Ext(name), ".md") {
+			sourceURL := &url.URL{
+				Scheme: "https",
+				Host:   "github.com",
+				Path:   "/" + remote.GetOwnerSlashRepo() + "/blob/" + branch.UpstreamName + "/" + name,
+			}
+			content = fmt.Sprintf(
+				"<!-- This document is maintained in %s and automatically copied to %s, DO NOT EDIT. -->\n\n",
+				sourceURL, branch.Name) + content
 		}
-		header := fmt.Sprintf(
-			"<!-- This document is maintained in %s and automatically copied to %s, DO NOT EDIT. -->\n\n",
-			sourceURL, branch.Name)
 		hash := exec.Command("git", "hash-object", "-w", "--stdin")
 		hash.Dir = dir
-		hash.Stdin = strings.NewReader(header + content)
+		hash.Stdin = strings.NewReader(content)
 		blob, err := combinedOutput(hash)
 		if err != nil {
 			return err
