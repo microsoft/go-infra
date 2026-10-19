@@ -5,6 +5,19 @@ Sync is used to keep Microsoft's repos up to date with upstream repos, and to up
 
 This sometimes involves automatically resolving merge conflicts, so the infra is implemented here rather than relying on existing infra that assumes clean merges.
 
+## Documentation updates
+
+The `SyncDocs` entry in [/eng/sync-config.json](/eng/sync-config.json) copies documentation from `microsoft/go`'s `microsoft/main` branch to the current and previous stable support branches defined by [msmajorversions](/msmajorversions).
+It runs on the same schedule as the `microsoft/main` submodule updates, even when the submodule is already up to date.
+
+The sync replaces `README.md`, `SUPPORT.md`, `SECURITY.md`, and all files recursively under `eng/doc/`, including adding new files and removing files deleted on main.
+Each copied document starts with an HTML comment linking to its maintained version on `microsoft/main`, naming the destination branch, and warning `DO NOT EDIT`.
+Make documentation changes on `microsoft/main`; edits to copied documents on support branches are overwritten on the next sync.
+
+Documentation-only PRs use `dev/auto-sync-docs/<target branch>` so they do not interfere with submodule/release sync PRs.
+They do not merge main into support branches or change code, patches, version files, or submodule pointers.
+The entry requires `Upstream`, `Target`, and `MainBranch`; `BranchMap`, `AutoSyncBranches`, and `SubmoduleTarget` must be omitted.
+
 ## Patch updates
 
 When a sync entry updates a submodule managed by a `.git-go-patch` file at the target repository root, sync checks each patch against the new upstream commit.

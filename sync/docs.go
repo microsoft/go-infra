@@ -5,6 +5,7 @@ package sync
 
 import (
 	"fmt"
+	"net/url"
 	"os/exec"
 	"strings"
 
@@ -42,9 +43,14 @@ func syncDocs(dir, upstream string, branch *gitpr.SyncPRRefSet) error {
 		if err != nil {
 			return err
 		}
+		sourceURL := &url.URL{
+			Scheme: "https",
+			Host:   "github.com",
+			Path:   "/" + remote.GetOwnerSlashRepo() + "/blob/" + branch.UpstreamName + "/" + name,
+		}
 		header := fmt.Sprintf(
-			"<!-- This document is maintained in https://github.com/%s/blob/%s/%s and automatically copied to %s, DO NOT EDIT. -->\n\n",
-			remote.GetOwnerSlashRepo(), branch.UpstreamName, name, branch.Name)
+			"<!-- This document is maintained in %s and automatically copied to %s, DO NOT EDIT. -->\n\n",
+			sourceURL, branch.Name)
 		hash := exec.Command("git", "hash-object", "-w", "--stdin")
 		hash.Dir = dir
 		hash.Stdin = strings.NewReader(header + content)
