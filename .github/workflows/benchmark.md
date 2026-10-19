@@ -14,6 +14,10 @@ Three jobs run in sequence:
    For each entry: checks out HEAD and BASE, runs `go test -bench=. -count=10 -benchmem` against each, and uploads the per-entry results as a `benchstat-<label>` artifact.
 3. **`conclude`** — downloads all per-entry artifacts, builds a single markdown report with [`cmd/benchcheck`](../cmd/benchcheck), posts (or updates) the PR comment, and fails the job if any entry reported a regression or test failure.
 
+The `bench` job checks out HEAD, BASE, and go-infra before setting up Go.
+Its module and build cache key includes the available `head/go.sum`, `base/go.sum`, and `_go-infra/go.sum` files.
+The go-infra dependency file allows caching even when the benchmarked project has no `go.sum`.
+
 ## Caller skeleton
 
 ```yaml

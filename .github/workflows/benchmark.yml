@@ -98,11 +98,6 @@ jobs:
         shell: bash
         run: ${{ matrix.container-setup }}
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: ${{ matrix.go-version }}
-          go-download-base-url: ${{ matrix.go-download-base-url || 'https://aka.ms/golang/release/latest' }}
-
       - name: Checkout HEAD
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -123,6 +118,15 @@ jobs:
           repository: microsoft/go-infra
           ref: ${{ job.workflow_sha }}
           path: _go-infra
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go-version }}
+          go-download-base-url: ${{ matrix.go-download-base-url || 'https://aka.ms/golang/release/latest' }}
+          cache-dependency-path: |
+            head/go.sum
+            base/go.sum
+            _go-infra/go.sum
 
       - name: Set FIPS mode (Windows)
         if: matrix.fips-mode != '' && runner.os == 'Windows'
