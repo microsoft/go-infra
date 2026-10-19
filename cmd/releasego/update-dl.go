@@ -34,10 +34,10 @@ var downloadHTTPClient = http.Client{Timeout: 30 * time.Second}
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "update-dl",
-		Summary: "Add dl packages to the go-lab repository for new Go releases.",
+		Summary: "Add dl packages to the go-dl repository for new Go releases.",
 		Description: `
 The update-dl command generates dl/msgo<version>/main.go files for each specified
-Go release version and creates a pull request on the go-lab repository. It fetches
+Go release version and creates a pull request on the go-dl repository. It fetches
 the assets.json SHA256 hash from the GitHub release.
 `,
 		Handle: updateDL,
@@ -56,7 +56,7 @@ var dlTemplate string
 func updateDL(p subcmd.ParseFunc) error {
 	releaseVersions := flag.String("versions", "", "Comma-separated list of version numbers for the Go release (e.g. 1.25.8-1,1.26.1-1).")
 	dryRun := flag.Bool("n", false, "Enable dry run: do not push changes to GitHub.")
-	dlRepo := flag.String("repo", "microsoft/go-lab", "The GitHub repository for the dl packages, in '{owner}/{repo}' form.")
+	dlRepo := flag.String("repo", "microsoft/go-dl", "The GitHub repository for the dl packages, in '{owner}/{repo}' form.")
 	goRepo := flag.String("go-repo", "microsoft/go", "The GitHub repository for Go releases, in '{owner}/{repo}' form.")
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
 	gitHubReviewerAuthFlags := githubutil.BindGitHubAuthFlags("reviewer")
@@ -266,7 +266,7 @@ func updateDL(p subcmd.ParseFunc) error {
 }
 
 // fetchAssetsJSONSHA256 downloads the assets.json from a GitHub release and returns its content SHA256.
-// The dl tool in go-lab uses this hash to verify the integrity of assets.json before extracting
+// The dl tool in go-dl uses this hash to verify the integrity of assets.json before extracting
 // platform-specific download URLs and hashes from it.
 func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, repo, tag string) (string, error) {
 	var release *github.RepositoryRelease
@@ -310,7 +310,7 @@ func fetchAssetsJSONSHA256(ctx context.Context, client *github.Client, owner, re
 	return fmt.Sprintf("%x", hash[:]), nil
 }
 
-// dlFilePath returns the path for a dl package's main.go file within the go-lab repo.
+// dlFilePath returns the path for a dl package's main.go file within the go-dl repo.
 func dlFilePath(version string) string {
 	return fmt.Sprintf("dl/msgo%s/main.go", version)
 }
