@@ -64,6 +64,12 @@ type ConfigEntry struct {
 	// branch, it is forked from the tip of this branch.
 	MainBranch string
 
+	// SyncDocs copies README.md, SUPPORT.md, SECURITY.md, and eng/doc/** from MainBranch
+	// in Upstream to the active support branches in Target, as defined by msmajorversions.
+	// This is a documentation-only sync, using separate PR branches from submodule updates.
+	// BranchMap and AutoSyncBranches must be empty when this is enabled.
+	SyncDocs bool
+
 	// SourceBranchLatestCommit is a map of source branch names in Upstream (keys) and a full commit
 	// hash to treat as the latest commit for that source branch, no matter what the upstream
 	// repository says at the time of merge. This map can be used to avoid a race between the sync

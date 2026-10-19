@@ -18,6 +18,12 @@
     "SubmoduleTarget": "go"
   },
   {
+    "Upstream": "https://github.com/microsoft/go",
+    "Target": "https://github.com/microsoft/go",
+    "MainBranch": "microsoft/main",
+    "SyncDocs": true
+  },
+  {
     "Upstream": "https://github.com/docker-library/golang",
     "Target": "https://github.com/microsoft/go-images",
     "BranchMap": {
