@@ -173,17 +173,26 @@ func TestTryThreeWayRebase(t *testing.T) {
 	t.Run("configured patch author is used", func(t *testing.T) {
 		const author = "Patch Bot <patch-bot@example.com>"
 		repoDir, newBase, patchPath, _ := setupThreeWayRebaseRepo(t, original, patched, diverged)
+		p, err := ReadFile(patchPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Subject += "Co-authored-by: Person <person@example.com>\n\n"
+		writeThreeWayTestFile(t, patchPath, p.String())
 		writeThreeWayTestFile(t, filepath.Join(repoDir, ConfigFileName), `{"SubmoduleDir":"go","PatchesDir":"patches","ExtractAsAuthor":"`+author+`"}`)
 
 		if _, err := TryThreeWayRebase(repoDir, "go", newBase); err != nil {
 			t.Fatal(err)
 		}
-		p, err := ReadFile(patchPath)
+		p, err = ReadFile(patchPath)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if p.FromAuthor != author {
 			t.Errorf("regenerated patch author = %q, want %q", p.FromAuthor, author)
+		}
+		if strings.Contains(p.Subject, "Co-authored-by:") {
+			t.Errorf("regenerated patch retained co-author: %q", p.Subject)
 		}
 	})
 

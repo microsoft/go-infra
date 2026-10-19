@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,85 @@ import (
 
 	"github.com/microsoft/go-infra/patch"
 )
+
+func TestExtractAuthorAttribution(t *testing.T) {
+	for _, verbatim := range []bool{false, true} {
+		for _, author := range []string{"", "Patch Bot <patch-bot@example.com>"} {
+			t.Run(fmt.Sprintf("verbatim=%v/author=%q", verbatim, author), func(t *testing.T) {
+				t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+				t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+				t.Setenv("GIT_AUTHOR_NAME", "test")
+				t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+				t.Setenv("GIT_COMMITTER_NAME", "test")
+				t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+
+				root := t.TempDir()
+				goDir := filepath.Join(root, "go")
+				patchDir := filepath.Join(root, "patches")
+				for _, dir := range []string{goDir, patchDir} {
+					if err := os.Mkdir(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				git := func(args ...string) string {
+					t.Helper()
+					cmd := exec.Command("git", args...)
+					cmd.Dir = goDir
+					out, err := cmd.CombinedOutput()
+					if err != nil {
+						t.Fatalf("git %v failed: %v\n%s", args, err, out)
+					}
+					return strings.TrimSpace(string(out))
+				}
+				git("init", "-b", "main")
+				git("commit", "--allow-empty", "-m", "base")
+				base := git("rev-parse", "HEAD")
+				const content = "Co-authored-by: This is file content, not attribution.\n"
+				if err := os.WriteFile(filepath.Join(goDir, "file.txt"), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				git("add", ".")
+				git("commit", "-m", "change", "-m", "Body.\n\nCo-authored-by: Copilot <copilot@example.com>\nco-authored-by: Person <person@example.com>\nSigned-off-by: Reviewer <reviewer@example.com>")
+				// Existing patches exercise the non-verbatim matcher's preservation path.
+				if _, err := patch.FormatPatch(goDir, "-o", patchDir, base); err != nil {
+					t.Fatal(err)
+				}
+				config := &patch.FoundConfig{
+					RootDir: root,
+					Config: patch.Config{
+						SubmoduleDir:    "go",
+						PatchesDir:      "patches",
+						ExtractAsAuthor: author,
+					},
+				}
+				for range 2 {
+					if err := extractPatches(config, base, verbatim, false); err != nil {
+						t.Fatal(err)
+					}
+					p, err := patch.ReadFile(filepath.Join(patchDir, "0001-change.patch"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantAuthor := author
+					wantSubject := "[PATCH] change\n\nBody.\n\nSigned-off-by: Reviewer <reviewer@example.com>\n"
+					if author == "" {
+						wantAuthor = "test <test@example.com>"
+						wantSubject = "[PATCH] change\n\nBody.\n\nCo-authored-by: Copilot <copilot@example.com>\nco-authored-by: Person <person@example.com>\nSigned-off-by: Reviewer <reviewer@example.com>\n"
+					}
+					if p.FromAuthor != wantAuthor {
+						t.Errorf("FromAuthor = %q, want %q", p.FromAuthor, wantAuthor)
+					}
+					if p.Subject != wantSubject {
+						t.Errorf("Subject = %q, want %q", p.Subject, wantSubject)
+					}
+					if !strings.Contains(p.Content, "+"+content) {
+						t.Errorf("patch diff lost file content: %q", p.Content)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestExtractIndexThreeWay(t *testing.T) {
 	tests := []struct {

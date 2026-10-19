@@ -138,6 +138,27 @@ type Header struct {
 	Subject       string
 }
 
+// SetAuthor overrides the author and removes co-author attribution from the commit message.
+func (h *Header) SetAuthor(author string) {
+	h.FromAuthor = author
+	var subject strings.Builder
+	removed := false
+	for line := range strings.SplitAfterSeq(h.Subject, "\n") {
+		key, _, found := strings.Cut(line, ":")
+		if found && strings.EqualFold(strings.TrimSpace(key), "Co-authored-by") {
+			removed = true
+			continue
+		}
+		subject.WriteString(line)
+	}
+	if removed {
+		h.Subject = strings.TrimRight(subject.String(), "\n") + "\n"
+		if !strings.Contains(h.Subject, "\n\n") {
+			h.Subject += "\n"
+		}
+	}
+}
+
 // Patch is a parsed Git patch file.
 type Patch struct {
 	Header

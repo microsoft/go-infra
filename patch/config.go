@@ -39,7 +39,9 @@ type Config struct {
 	// skip index preservation. Disabled by default.
 	PreserveIndex bool `json:",omitempty"`
 
-	// ExtractAsAuthor makes "git-go-patch extract" set this author in the resulting patch file.
+	// ExtractAsAuthor makes "git-go-patch extract" set this author in the resulting patch file
+	// and remove all Co-authored-by lines from its commit message. Automatic three-way patch
+	// regeneration uses the same behavior. If empty, author and co-author attribution are preserved.
 	//
 	// This can be used to avoid patch file attribution confusion: when a patch goes through the
 	// "apply" "rebase" "extract" process, the patch file's "author" field stays the same, but

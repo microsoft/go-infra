@@ -195,7 +195,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 			return nil, fmt.Errorf("failed to parse regenerated patch %q: %w", filepath.Base(patchPath), err)
 		}
 		if config.ExtractAsAuthor != "" {
-			p.FromAuthor = config.ExtractAsAuthor
+			p.SetAuthor(config.ExtractAsAuthor)
 		}
 		replacement := fileReplacement{
 			path:    patchPath,
