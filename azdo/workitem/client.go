@@ -146,7 +146,7 @@ func (c *Client) Create(ctx context.Context, title, assignedTo string, snapshot 
 		patch(webapi.OperationValues.Add, "/fields/System.AreaPath", AreaPath),
 		patch(webapi.OperationValues.Add, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/System.AssignedTo", assignedTo),
-		patch(webapi.OperationValues.Add, "/fields/System.State", workItemState(snapshot.Status)),
+		patch(webapi.OperationValues.Add, "/fields/System.State", "Active"),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
 	sdk, token, err := c.newClient(ctx)
@@ -189,6 +189,7 @@ func (c *Client) Get(ctx context.Context, id int) (*WorkItem, error) {
 	return workItem, nil
 }
 
+// Update saves the release snapshot without changing the tracking item's workflow state.
 func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapshot) (*WorkItem, error) {
 	if current == nil || current.ID <= 0 || current.Revision <= 0 {
 		return nil, errors.New("current release work item is invalid")
@@ -203,7 +204,6 @@ func (c *Client) Update(ctx context.Context, current *WorkItem, snapshot *Snapsh
 	}
 	document := []webapi.JsonPatchOperation{
 		patch(webapi.OperationValues.Test, "/rev", current.Revision),
-		patch(webapi.OperationValues.Add, "/fields/System.State", workItemStateForUpdate(current.State, snapshot.Status)),
 		patch(webapi.OperationValues.Replace, "/fields/System.Tags", workItemTags(snapshot)),
 		patch(webapi.OperationValues.Add, "/fields/"+descriptionField, description),
 	}
@@ -367,10 +367,6 @@ func (c *Client) parseWrittenWorkItem(response *workitemtracking.WorkItem, want 
 	if err != nil {
 		return nil, err
 	}
-	if !workItemStateMatches(workItem.State, workItem.Snapshot.Status) {
-		return nil, fmt.Errorf("written work item %d state %q is incompatible with release status %q",
-			workItem.ID, workItem.State, workItem.Snapshot.Status)
-	}
 	got, err := MarshalSnapshot(workItem.Snapshot)
 	if err != nil {
 		return nil, err
@@ -498,31 +494,6 @@ func workItemTags(snapshot *Snapshot) string {
 	}
 	tags = append(tags, snapshot.ProcessID)
 	return strings.Join(tags, "; ")
-}
-
-func workItemState(status Status) string {
-	if status == StatusSucceeded {
-		return "Closed"
-	}
-	return "Active"
-}
-
-func workItemStateForUpdate(current string, status Status) string {
-	if current == "Closed" && isAttentionStatus(status) {
-		return "Closed"
-	}
-	return workItemState(status)
-}
-
-func workItemStateMatches(state string, status Status) bool {
-	if state == workItemState(status) {
-		return true
-	}
-	return state == "Closed" && isAttentionStatus(status)
-}
-
-func isAttentionStatus(status Status) bool {
-	return status == StatusFailed || status == StatusCanceled || status == StatusUncertain
 }
 
 func isRevisionConflict(err error) bool {

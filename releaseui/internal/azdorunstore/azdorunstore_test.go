@@ -20,22 +20,24 @@ import (
 const testDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 type fakeWorkItemClient struct {
-	created   *azdoworkitem.Snapshot
-	updated   *azdoworkitem.Snapshot
-	updateErr error
-	queried   []*azdoworkitem.WorkItem
-	queryErr  error
+	created      *azdoworkitem.Snapshot
+	createdTitle string
+	updated      *azdoworkitem.Snapshot
+	updateErr    error
+	queried      []*azdoworkitem.WorkItem
+	queryErr     error
 }
 
 func (f *fakeWorkItemClient) Create(
 	_ context.Context,
-	_, assignedTo string,
+	title, assignedTo string,
 	snapshot *azdoworkitem.Snapshot,
 ) (*azdoworkitem.WorkItem, error) {
 	if assignedTo != "Release Operator" {
 		return nil, errors.New("unexpected release work item assignee")
 	}
 	f.created = snapshot
+	f.createdTitle = title
 	return testWorkItem(42, 1, "Active", snapshot), nil
 }
 
@@ -45,14 +47,14 @@ func (f *fakeWorkItemClient) Get(context.Context, int) (*azdoworkitem.WorkItem, 
 
 func (f *fakeWorkItemClient) Update(
 	_ context.Context,
-	_ *azdoworkitem.WorkItem,
+	current *azdoworkitem.WorkItem,
 	snapshot *azdoworkitem.Snapshot,
 ) (*azdoworkitem.WorkItem, error) {
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
 	f.updated = snapshot
-	return testWorkItem(42, 2, "Closed", snapshot), nil
+	return testWorkItem(42, 2, current.State, snapshot), nil
 }
 
 func (f *fakeWorkItemClient) Query(context.Context, bool, int) ([]*azdoworkitem.WorkItem, error) {
@@ -71,7 +73,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	run := testReleaseRun()
 	view := &contract.RunView{Test: true, Summary: "Ready", RunURL: "https://example.invalid/runs/888"}
 	plan := &contract.Plan{Subtitle: "Run example", Facts: []contract.PlanFact{{Label: "Value", Value: "fixed"}}}
-	record, err := store.Create(context.Background(), run, view, plan)
+	record, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, view, plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +97,57 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Revision != 2 || updated.Run.Result != string(runstore.StatusSucceeded) || !updated.Closed ||
+	if updated.Revision != 2 || updated.Run.Result != string(runstore.StatusSucceeded) || updated.Closed ||
 		client.updated.Status != azdoworkitem.StatusSucceeded {
 
 		t.Fatalf("updated record = %#v, snapshot = %#v", updated, client.updated)
+	}
+}
+
+func TestStoreCreateUsesProcessName(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		plan *contract.Plan
+	}{
+		{
+			name: "with review subtitle",
+			plan: &contract.Plan{Subtitle: "Review example with 3 steps"},
+		},
+		{name: "no plan"},
+		{name: "empty plan", plan: &contract.Plan{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeWorkItemClient{}
+			store, err := newStore(client, "Release Operator")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Create(
+				context.Background(), "Examples \u00b7 Example release", testReleaseRun(), nil, test.plan,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if want := "[releaseagent] Examples \u00b7 Example release"; client.createdTitle != want {
+				t.Fatalf("work item title = %q, want %q", client.createdTitle, want)
+			}
+		})
+	}
+}
+
+func TestStoreRejectsEmptyProcessName(t *testing.T) {
+	for _, name := range []string{"", " \t"} {
+		client := &fakeWorkItemClient{}
+		store, err := newStore(client, "Release Operator")
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := &contract.Plan{Subtitle: "Review example with 3 steps"}
+		if _, err := store.Create(context.Background(), name, testReleaseRun(), nil, plan); err == nil {
+			t.Fatal("empty process name was accepted")
+		}
+		if client.created != nil {
+			t.Fatal("a tracking item was created without a process name")
+		}
 	}
 }
 
@@ -109,7 +158,7 @@ func TestStoreRejectsUnstartedRun(t *testing.T) {
 	}
 	run := testReleaseRun()
 	run.Started = false
-	if _, err := store.Create(context.Background(), run, nil, nil); err == nil {
+	if _, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, nil, nil); err == nil {
 		t.Fatal("unstarted release run was persisted")
 	}
 }

@@ -81,6 +81,9 @@ func (p *exampleProcess) InputForm(inputs *releaseinput.Set) any {
 `Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
 `Process.Load` validates a snapshot and constructs a `Run`.
 `Run.TakeSnapshot` returns an independent durable state copy, `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
+The shared host names new tracking items from the registered process-group and process names.
+Process implementations do not supply tracking titles. Pipeline identifiers and step counts
+remain in plan facts and review-page subtitles. Updates do not rename existing tracking items.
 Only execution of the returned steps may mutate external state.
 Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
 The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
@@ -158,6 +161,9 @@ test mode and go-infra dry-run mode. Every item receives its process ID as a tag
 items also receive `test`; all release UI queries combine these tags with `releaseagent`. Azure
 DevOps treats tags as case-insensitive and may display the project-canonical casing, such as `Test`.
 Unconfirmed plans remain in memory and create no work item.
+Tracking items start in **Active**. Saving a release outcome does not close or reopen the item.
+Close tracking items manually in Azure DevOps, completing any project-required resolution fields.
+Successful runs still appear under **Recent history** while their tracking items remain open.
 Starting the server does not perform an external action.
 Opening the go-infra page performs read-only preflight checks; a mutation still requires preparing
 the exact request and confirming it.
