@@ -72,18 +72,19 @@ func newStore(client workItemClient, assignedTo string) (*store, error) {
 
 func (s *store) Create(
 	ctx context.Context,
+	name string,
 	run *runstore.State,
 	view *contract.RunView,
 	plan *contract.Plan,
 ) (*runstore.Record, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("release run name is empty")
+	}
 	snapshot, err := releaseRunSnapshot(run, view, plan)
 	if err != nil {
 		return nil, err
 	}
-	title := releaseTitlePrefix + " " + run.ProcessID
-	if plan != nil && strings.TrimSpace(plan.Subtitle) != "" {
-		title = releaseTitlePrefix + " " + plan.Subtitle
-	}
+	title := releaseTitlePrefix + " " + name
 	item, err := s.client.Create(ctx, title, s.assignedTo, snapshot)
 	if err != nil {
 		return nil, err

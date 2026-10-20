@@ -286,7 +286,7 @@ func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
 
 	state := testProcessRun(t)
 	state.Started = true
-	record, err := store.Create(context.Background(), state, process.view, process.plan)
+	record, err := store.Create(context.Background(), "Examples \u00b7 example", state, process.view, process.plan)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,4 +528,16 @@ func TestConfiguredProcessesCanRunConcurrently(t *testing.T) {
 
 	releaseRuns()
 	store.waitForCompleted(t, 2)
+	records, err := store.Query(context.Background(), false, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("record count = %d, want 2", len(records))
+	}
+	for _, record := range records {
+		if want := "Examples \u00b7 " + record.Run.ProcessID; record.Title != want {
+			t.Fatalf("record title = %q, want %q", record.Title, want)
+		}
+	}
 }

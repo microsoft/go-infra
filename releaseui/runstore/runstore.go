@@ -20,9 +20,10 @@ var ErrConflict = errors.New("release run revision changed")
 // Implementations must use revision checks in Update and return [ErrConflict] when the record
 // changed after the caller read it. Implementations must not retain or mutate arguments.
 type Store interface {
-	// Create stores run before releaseui starts external execution. view and plan contain derived
-	// display data for the same run and may be nil.
-	Create(ctx context.Context, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
+	// Create stores run before releaseui starts external execution. name is the non-empty
+	// host-generated name combining the registered group and process names. view and plan contain
+	// derived display data for the same run and may be nil.
+	Create(ctx context.Context, name string, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
 
 	// Get returns the record identified by id.
 	Get(ctx context.Context, id int) (*Record, error)
