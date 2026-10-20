@@ -15,6 +15,7 @@ import (
 	"time"
 
 	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -236,6 +237,29 @@ func (s *PipelineRunService) validateCorrelatedBuild(build *azdopipeline.Build) 
 func templateParameterString(value any) (string, bool) {
 	valueString, ok := value.(string)
 	return valueString, ok
+}
+
+// InspectPipeline validates and reads a known run without polling or changing execution state.
+func (s *PipelineRunService) InspectPipeline(ctx context.Context, buildID string) (*contract.RunInspection, error) {
+	id, err := strconv.Atoi(buildID)
+	if err != nil || id <= 0 {
+		return nil, fmt.Errorf("invalid go-images release build ID %q", buildID)
+	}
+	build, err := s.reader.Get(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("inspect go-images release build %d: %w", id, err)
+	}
+	if build == nil || build.ID != id {
+		return nil, fmt.Errorf("azure returned a different go-images build for %d", id)
+	}
+	if err := s.validateCorrelatedBuild(build); err != nil {
+		return nil, err
+	}
+	status, err := build.State()
+	if err != nil {
+		return nil, fmt.Errorf("interpret go-images release build %d: %w", id, err)
+	}
+	return &contract.RunInspection{RunURL: pipelineRunURL(buildID), Status: string(status)}, nil
 }
 
 // PollPipeline waits for the correlated release run using read-only GET requests.

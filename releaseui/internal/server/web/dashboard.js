@@ -1,0 +1,290 @@
+"use strict";
+
+const ongoingReleases = document.querySelector("#ongoing-releases");
+const attentionSection = document.querySelector("#attention-section");
+const attentionReleases = document.querySelector("#attention-releases");
+const recentSection = document.querySelector("#recent-section");
+const recentReleases = document.querySelector("#recent-releases");
+const processGrid = document.querySelector("#process-grid");
+const trackingError = document.querySelector("#tracking-error");
+const jsonDialog = document.querySelector("#json-dialog");
+const jsonDialogTitle = document.querySelector("#json-dialog-title");
+const jsonEditor = document.querySelector("#json-editor");
+const jsonError = document.querySelector("#json-error");
+const jsonClose = document.querySelector("#json-close");
+const jsonCopy = document.querySelector("#json-copy");
+const jsonSave = document.querySelector("#json-save");
+
+let editingRecord = 0;
+
+loadDashboard();
+jsonClose.addEventListener("click", () => jsonDialog.close());
+jsonCopy.addEventListener("click", copyJSON);
+jsonSave.addEventListener("click", saveJSON);
+
+async function loadDashboard() {
+  const dashboardState = await requestJSON("/api/dashboard");
+  renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
+  attentionSection.hidden = dashboardState.needsAttention.length === 0;
+  renderReleases(attentionReleases, dashboardState.needsAttention, "");
+  processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
+  recentSection.hidden = dashboardState.recent.length === 0;
+  renderReleases(recentReleases, dashboardState.recent, "");
+  trackingError.hidden = !dashboardState.trackingError;
+  trackingError.textContent = dashboardState.trackingError || "";
+}
+
+function renderReleases(container, releases, emptyText) {
+  if (!releases.length) {
+    const empty = document.createElement("article");
+    empty.className = "release-empty";
+    empty.textContent = emptyText;
+    container.replaceChildren(empty);
+    return;
+  }
+  container.replaceChildren(...releases.map(createReleaseCard));
+}
+
+function createReleaseCard(release) {
+  const card = document.createElement("article");
+  card.className = "release-card";
+
+  const icon = document.createElement("span");
+  icon.className = "release-icon";
+  icon.textContent = release.mark;
+
+  const body = document.createElement("div");
+  body.className = "release-card-body";
+  const top = document.createElement("div");
+  top.className = "release-card-title";
+  const title = document.createElement("strong");
+  title.textContent = release.issue ? release.name : `${release.name} · ${formatMode(release.mode)}`;
+  const status = document.createElement("span");
+  status.className = "status-badge";
+  status.dataset.status = release.issue && !release.externalStatus ? "unavailable" : release.status;
+  status.textContent = release.externalStatus
+    ? statusText(release.externalStatus)
+    : release.issue
+      ? release.closed ? "Read-only" : "Needs attention"
+      : statusText(release.status);
+  top.append(title, status);
+  body.append(top);
+
+  const details = document.createElement("p");
+  if (release.issue) {
+    card.classList.add("release-card-issue");
+    if (release.closed) card.classList.add("release-card-history");
+    details.textContent = `Saved release status: ${release.savedStatus || release.status || "Not readable"}`;
+    if (release.externalStatus) details.textContent = `External run: ${statusText(release.externalStatus)} · ${details.textContent}`;
+    if (release.issue.recordState) {
+      details.textContent += ` · Work-item state: ${release.issue.recordState}`;
+    } else if (release.closed) {
+      details.textContent += " · Tracking item: closed";
+    }
+
+    const message = document.createElement("p");
+    message.className = "release-issue-message";
+    message.textContent = release.issue.message;
+    const guidance = document.createElement("p");
+    guidance.textContent = release.issue.guidance;
+    body.append(message);
+    if (release.mode) {
+      const context = document.createElement("p");
+      context.textContent = release.mode;
+      body.append(context);
+    }
+    if (release.updatedAt) {
+      const updated = document.createElement("p");
+      updated.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}`;
+      body.append(updated);
+    }
+    body.append(details, guidance);
+    if (release.issue.detail) {
+      const technical = document.createElement("details");
+      technical.className = "release-issue-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Technical details";
+      const detail = document.createElement("pre");
+      detail.textContent = release.issue.detail;
+      technical.append(summary, detail);
+      body.append(technical);
+    }
+  } else {
+    details.textContent = release.externalStatus
+      ? `External run: ${statusText(release.externalStatus)} · Updated ${new Date(release.updatedAt).toLocaleString()}`
+      : `Updated ${new Date(release.updatedAt).toLocaleString()}`;
+    if (release.savedStatus === "running" && !release.externalStatus) details.textContent += " · Status from saved checkpoint";
+    body.append(details);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "release-card-actions";
+  if (release.runUrl) {
+    const runLink = document.createElement("a");
+    runLink.className = "button button-secondary compact-button";
+    runLink.href = release.runUrl;
+    runLink.target = "_blank";
+    runLink.rel = "noreferrer";
+    runLink.textContent = "Open release run";
+    actions.append(runLink);
+  }
+  if (release.recordId && release.recordUrl) {
+    const recordLink = document.createElement("a");
+    recordLink.className = "button button-secondary compact-button";
+    recordLink.href = release.recordUrl;
+    recordLink.target = "_blank";
+    recordLink.rel = "noreferrer";
+    recordLink.textContent = `Tracking item #${release.recordId}`;
+    actions.append(recordLink);
+  }
+  if (!release.issue && release.recordId) {
+    const edit = document.createElement("button");
+    edit.className = "button button-secondary compact-button";
+    edit.type = "button";
+    edit.textContent = "View JSON";
+    edit.addEventListener("click", () => openJSON(release));
+
+    const open = document.createElement("button");
+    open.className = "button button-secondary compact-button";
+    open.type = "button";
+    open.textContent = "Open";
+    const openRelease = () => {
+      if (!open.disabled) selectRelease(release, open, "Open");
+    };
+    open.addEventListener("click", openRelease);
+    card.classList.add("release-card-selectable");
+    card.tabIndex = 0;
+    card.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element) || !event.target.closest("a, button")) openRelease();
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openRelease();
+    });
+    actions.append(edit, open);
+  } else if (!release.issue) {
+    const link = document.createElement("a");
+    link.className = "button button-secondary compact-button";
+    link.href = release.href;
+    link.textContent = "Track release";
+    actions.append(link);
+  }
+  card.append(icon, body, actions);
+  return card;
+}
+
+async function selectRelease(release, button, label) {
+  setButtonBusy(button, true, "Opening…");
+  try {
+    const selected = await requestJSON(`/api/releases/${release.recordId}/select`, {
+      method: "POST",
+      body: "{}",
+    });
+    location.assign(selected.href);
+  } catch (error) {
+    showTrackingError(error.message);
+    setButtonBusy(button, false, label);
+  }
+}
+
+async function openJSON(release) {
+  try {
+    const exported = await requestJSON(`/api/releases/${release.recordId}/export`);
+    editingRecord = release.recordId;
+    jsonDialogTitle.textContent = `Release ${release.recordId} state`;
+    jsonEditor.value = JSON.stringify(exported, null, 2);
+    jsonError.hidden = true;
+    jsonDialog.showModal();
+  } catch (error) {
+    showTrackingError(error.message);
+  }
+}
+
+async function copyJSON() {
+  try {
+    await navigator.clipboard.writeText(jsonEditor.value);
+    setButtonBusy(jsonCopy, true, "Copied");
+    setTimeout(() => setButtonBusy(jsonCopy, false, "Copy JSON"), 900);
+  } catch (error) {
+    showJSONError(error.message);
+  }
+}
+
+async function saveJSON() {
+  let value;
+  try {
+    value = JSON.parse(jsonEditor.value);
+  } catch (error) {
+    showJSONError(`Invalid JSON: ${error.message}`);
+    return;
+  }
+  if (!confirm(`Replace the stored state for release ${editingRecord}?`)) return;
+
+  setButtonBusy(jsonSave, true, "Saving…");
+  try {
+    const updated = await requestJSON(`/api/releases/${editingRecord}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(value),
+    });
+    jsonEditor.value = JSON.stringify(updated, null, 2);
+    jsonDialog.close();
+    await loadDashboard();
+  } catch (error) {
+    showJSONError(error.message);
+  } finally {
+    setButtonBusy(jsonSave, false, "Save repaired state");
+  }
+}
+
+function setButtonBusy(button, busy, text) {
+  button.disabled = busy;
+  button.textContent = text;
+}
+
+function showTrackingError(message) {
+  trackingError.textContent = message;
+  trackingError.hidden = false;
+}
+
+function showJSONError(message) {
+  jsonError.textContent = message;
+  jsonError.hidden = false;
+}
+
+function createProcessCard(process) {
+  const card = document.createElement("a");
+  card.className = "process-card";
+  card.href = process.href;
+
+  const mark = document.createElement("span");
+  mark.className = "process-mark";
+  mark.textContent = process.mark;
+
+  const title = document.createElement("h3");
+  title.textContent = process.name;
+  const description = document.createElement("p");
+  description.textContent = process.description;
+  const action = document.createElement("span");
+  action.className = "process-action";
+  action.textContent = "Open release process →";
+
+  card.append(mark, title, description, action);
+  return card;
+}
+
+function formatMode(mode) {
+  return mode ? `${mode[0].toUpperCase()}${mode.slice(1)}` : "Release";
+}
+
+function statusText(status) {
+  return status === "running" ? "in progress" : status;
+}
+
+async function requestJSON(path, options = {}) {
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
+  return data;
+}

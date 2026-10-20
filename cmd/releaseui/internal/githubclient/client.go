@@ -390,6 +390,27 @@ func newCorrelationID() (string, error) {
 	return "release-ui-" + hex.EncodeToString(data), nil
 }
 
+// GetWorkflowRun reads and validates one existing run without dispatching or polling.
+func (c *Client) GetWorkflowRun(ctx context.Context, workflow Workflow, id int64) (WorkflowRun, error) {
+	if err := workflow.validate(); err != nil {
+		return WorkflowRun{}, err
+	}
+	if id <= 0 {
+		return WorkflowRun{}, fmt.Errorf("invalid workflow run ID %d", id)
+	}
+	var run WorkflowRun
+	if err := c.getJSON(ctx, fmt.Sprintf("%s/actions/runs/%d", workflow.Repository.endpoint(), id), &run); err != nil {
+		return WorkflowRun{}, fmt.Errorf("get workflow run %d: %w", id, err)
+	}
+	if run.ID != id {
+		return WorkflowRun{}, fmt.Errorf("GitHub returned workflow run %d, expected %d", run.ID, id)
+	}
+	if err := c.ValidateWorkflowRun(workflow, run); err != nil {
+		return WorkflowRun{}, err
+	}
+	return run, nil
+}
+
 // PollWorkflowRun waits until the workflow run completes and reports each observed state.
 func (c *Client) PollWorkflowRun(
 	ctx context.Context,
@@ -397,21 +418,9 @@ func (c *Client) PollWorkflowRun(
 	id int64,
 	report func(WorkflowRun) error,
 ) (WorkflowRun, error) {
-	if err := workflow.validate(); err != nil {
-		return WorkflowRun{}, err
-	}
-	if id <= 0 {
-		return WorkflowRun{}, fmt.Errorf("invalid workflow run ID %d", id)
-	}
 	for {
-		var run WorkflowRun
-		if err := c.getJSON(ctx, fmt.Sprintf("%s/actions/runs/%d", workflow.Repository.endpoint(), id), &run); err != nil {
-			return WorkflowRun{}, fmt.Errorf("get workflow run %d: %w", id, err)
-		}
-		if run.ID != id {
-			return WorkflowRun{}, fmt.Errorf("GitHub returned workflow run %d, expected %d", run.ID, id)
-		}
-		if err := c.ValidateWorkflowRun(workflow, run); err != nil {
+		run, err := c.GetWorkflowRun(ctx, workflow, id)
+		if err != nil {
 			return WorkflowRun{}, err
 		}
 		if report != nil {

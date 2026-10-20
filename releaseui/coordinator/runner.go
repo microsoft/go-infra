@@ -26,6 +26,9 @@ const (
 )
 
 var (
+	// ErrCanceled reports a confirmed cancellation, not an interrupted local monitor.
+	ErrCanceled = errors.New("external operation was canceled")
+
 	errStepPanic     = errors.New("panic while executing step")
 	errAlreadyActive = errors.New("step runner is already active")
 )
@@ -91,6 +94,12 @@ type StepRunner struct {
 // running steps. A panic is recovered, wrapped with errStepPanic, and treated as an error. The
 // steps must be the validated graph returned by Step.TransitiveDependencies.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
+	return r.ExecuteWithFinalizer(ctx, steps, nil)
+}
+
+// ExecuteWithFinalizer finishes the run only after finalize has recorded its outcome.
+// The finalizer runs outside the runner lock, once all steps have returned.
+func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, finalize func(error) error) error {
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
@@ -121,6 +130,9 @@ func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
 		})
 	}
 	err := eg.Wait()
+	if finalize != nil {
+		err = errors.Join(err, finalize(err))
+	}
 
 	r.mu.Lock()
 	r.active = false
@@ -218,15 +230,6 @@ func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
 	r.publishLocked()
 }
 
-func stepProgressEqual(current *StepProgress, next StepProgress) bool {
-	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
-		current.Completed != next.Completed || current.Total != next.Total {
-
-		return false
-	}
-	return true
-}
-
 func (r *StepRunner) publishLocked() {
 	r.sequence++
 	snapshot := r.snapshotLocked()
@@ -238,6 +241,15 @@ func (r *StepRunner) publishLocked() {
 			delete(r.subscribers, id)
 		}
 	}
+}
+
+func stepProgressEqual(current *StepProgress, next StepProgress) bool {
+	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
+		current.Completed != next.Completed || current.Total != next.Total {
+
+		return false
+	}
+	return true
 }
 
 type stepState struct {
@@ -265,6 +277,8 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 			switch {
 			case errors.As(err, &dependencyErr):
 				status = StepStatusBlocked
+			case errors.Is(err, ErrCanceled):
+				status = StepStatusCanceled
 			case errors.Is(err, context.Canceled) && ctx.Err() != nil:
 				status = StepStatusCanceled
 			}
@@ -303,6 +317,18 @@ func (s *stepState) waitForDependencies(ctx context.Context, states map[*Step]*s
 	return eg.Wait()
 }
 
+func (s *stepState) done(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.complete:
+		if s.err != nil {
+			return &errDependencyFailed{stepName: s.step.Name, err: s.err}
+		}
+		return nil
+	}
+}
+
 type errDependencyFailed struct {
 	stepName string
 	err      error
@@ -314,16 +340,4 @@ func (e *errDependencyFailed) Error() string {
 
 func (e *errDependencyFailed) Unwrap() error {
 	return e.err
-}
-
-func (s *stepState) done(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.complete:
-		if s.err != nil {
-			return &errDependencyFailed{stepName: s.step.Name, err: s.err}
-		}
-		return nil
-	}
 }
