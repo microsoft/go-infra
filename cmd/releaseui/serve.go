@@ -12,10 +12,12 @@ import (
 	"time"
 
 	azdotoken "github.com/microsoft/go-infra/azdo/token"
+	"github.com/microsoft/go-infra/cmd/releaseui/internal/demo"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/githubclient"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goimages"
 	"github.com/microsoft/go-infra/cmd/releaseui/internal/goinfra"
 	"github.com/microsoft/go-infra/releaseui"
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/subcmd"
 )
 
@@ -31,6 +33,7 @@ func init() {
 func handleServe(parse subcmd.ParseFunc) error {
 	listenAddress := flag.String("listen", "127.0.0.1:0", "Loopback address for the local HTTP server")
 	noOpen := flag.Bool("no-open", false, "Do not automatically open the UI in the default browser")
+	includeDemo := flag.Bool("demo", false, "Include simulated release processes that create real Azure DevOps test work items")
 	if err := parse(); err != nil {
 		return err
 	}
@@ -56,8 +59,12 @@ func handleServe(parse subcmd.ParseFunc) error {
 		return err
 	}
 	goImagesProcess := goimages.NewProcess(goImagesService)
+	processes := []contract.ProcessGroup{goImagesProcess, goInfraProcess}
+	if *includeDemo {
+		processes = append(processes, demo.NewProcess())
+	}
 	options := []releaseui.Option{
-		releaseui.WithProcesses(goImagesProcess, goInfraProcess),
+		releaseui.WithProcesses(processes...),
 	}
 	if !*noOpen {
 		options = append(options, releaseui.WithBrowser())
