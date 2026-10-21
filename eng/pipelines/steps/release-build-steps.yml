@@ -78,7 +78,7 @@ steps:
           -proj 'internal' \
           -azdopat '$(System.AccessToken)'
       displayName: ⌚ Wait for internal mirror
-      timeoutInMinutes: 16 # See https://github.com/microsoft/go-lab/issues/124
+      timeoutInMinutes: 30 # See https://github.com/microsoft/go-lab/issues/124
 
     # Wait until a build is automatically started for the merged commit. We
     # don't trigger the build ourselves because manual builds that do signing
