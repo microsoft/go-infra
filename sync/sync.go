@@ -236,7 +236,7 @@ type changedBranch struct {
 	PRRequest  *gitpr.GitHubRequest
 	ExistingPR *gitpr.ExistingPR
 
-	// RemoteCommit is the checked PR branch tip, or empty if no PR exists.
+	// RemoteCommit is the checked PR branch tip, or empty if the branch doesn't exist.
 	RemoteCommit string
 
 	SkipReason string
@@ -247,6 +247,21 @@ type changedBranch struct {
 
 func (b *changedBranch) pushLease() string {
 	return "--force-with-lease=refs/heads/" + b.Refs.PRBranch() + ":" + b.RemoteCommit
+}
+
+func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
+	ref := "refs/heads/" + b.Refs.PRBranch()
+	cmd := exec.Command("git", "ls-remote", "--heads", remote, ref)
+	cmd.Dir = dir
+	output, err := combinedOutput(cmd)
+	if err != nil {
+		return err
+	}
+	b.RemoteCommit = ""
+	if strings.TrimSpace(output) != "" {
+		b.RemoteCommit, err = gitcmd.FetchRefCommit(dir, remote, ref)
+	}
+	return err
 }
 
 // SyncResult is the result of a sync call.
@@ -752,28 +767,23 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		if err != nil {
 			return nil, err
 		}
-		if c.ExistingPR != nil {
-			// If the PR already exists, we need to check if anyone else has pushed changes to the
-			// branch to make sure we don't overwrite them.
-			remoteCommit, err := gitcmd.FetchRefCommit(
-				dir,
-				urlAuther.InsertAuth(entry.PRBranchStorageRepo()),
-				"refs/heads/"+c.Refs.PRBranch())
-			if err != nil {
-				return nil, err
-			}
-			c.RemoteCommit = remoteCommit
+		// A branch may exist even without an open PR, such as after PR submission fails.
+		if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
+			return nil, err
+		}
+		if c.RemoteCommit != "" {
+			// Check if anyone else has pushed changes to the branch so we don't overwrite them.
 			myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.Result.Commit)
 			if err != nil {
 				return nil, err
 			}
-			remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", remoteCommit)
+			remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.RemoteCommit)
 			if err != nil {
 				return nil, err
 			}
 
 			if myAuthorEmail != remoteAuthorEmail {
-				c.SkipReason = "PR already exists, but my author name (" +
+				c.SkipReason = "PR branch already exists, but my author name (" +
 					myAuthorEmail +
 					") is different from the author of the remote commit (" +
 					remoteAuthorEmail +

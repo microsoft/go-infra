@@ -59,11 +59,13 @@ func Test_changedBranch_pushLease(t *testing.T) {
 				if err := runGit(local, "push", remote, b.Refs.PRBranchRefspec()); err != nil {
 					t.Fatal(err)
 				}
-				var err error
-				b.RemoteCommit, err = gitcmd.FetchRefCommit(local, remote, ref)
-				if err != nil {
-					t.Fatal(err)
-				}
+			}
+			// Inspect branches independently of whether an open PR exists.
+			if err := b.fetchRemoteCommit(local, remote); err != nil {
+				t.Fatal(err)
+			}
+			if (b.RemoteCommit != "") != tt.exists {
+				t.Fatalf("checked remote commit = %q, want branch existence = %v", b.RemoteCommit, tt.exists)
 			}
 			// Like sync, build a replacement that isn't based on the previous PR tip.
 			if err := runGit(local, "reset", "--hard", "main"); err != nil {
