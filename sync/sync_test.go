@@ -11,8 +11,112 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goldentest"
 )
+
+func Test_changedBranch_pushLease(t *testing.T) {
+	tests := []struct {
+		name          string
+		exists        bool
+		change        string
+		wantRejection bool
+	}{
+		{name: "update existing branch", exists: true},
+		{name: "create new branch"},
+		{name: "concurrent commit", exists: true, change: "commit", wantRejection: true},
+		{name: "concurrent branch creation", change: "commit", wantRejection: true},
+		{name: "concurrent branch deletion", exists: true, change: "delete", wantRejection: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			local, remote := filepath.Join(dir, "local"), filepath.Join(dir, "remote")
+			if err := setupMockRepo(local, "main"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(remote, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := runGit(remote, "init", "--bare"); err != nil {
+				t.Fatal(err)
+			}
+			b := &changedBranch{
+				Refs: &gitpr.SyncPRRefSet{
+					PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+				},
+			}
+			ref := "refs/heads/" + b.Refs.PRBranch()
+			if err := runGit(local, "checkout", "-b", b.Refs.PRBranch()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.exists {
+				if err := addMockFile(local, "previous-sync", "previous"); err != nil {
+					t.Fatal(err)
+				}
+				if err := runGit(local, "push", remote, b.Refs.PRBranchRefspec()); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				b.RemoteCommit, err = gitcmd.FetchRefCommit(local, remote, ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Like sync, build a replacement that isn't based on the previous PR tip.
+			if err := runGit(local, "reset", "--hard", "main"); err != nil {
+				t.Fatal(err)
+			}
+			if err := addMockFile(local, "new-sync", "replacement"); err != nil {
+				t.Fatal(err)
+			}
+			switch tt.change {
+			case "commit":
+				if err := runGit(local, "checkout", "main"); err != nil {
+					t.Fatal(err)
+				}
+				if err := addMockFile(local, "manual-change", "preserve me"); err != nil {
+					t.Fatal(err)
+				}
+				if err := runGit(local, "push", "--force", remote, "HEAD:"+ref); err != nil {
+					t.Fatal(err)
+				}
+			case "delete":
+				if err := runGit(local, "push", remote, ":"+ref); err != nil {
+					t.Fatal(err)
+				}
+			}
+			remoteTip := func() string {
+				t.Helper()
+				out, err := exec.Command("git", "ls-remote", remote, ref).Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(out)
+			}
+			before := remoteTip()
+			err := runGit(local, "push", b.pushLease(), remote, b.Refs.PRBranchRefspec())
+			if (err != nil) != tt.wantRejection {
+				t.Fatalf("push error = %v, want rejection = %v", err, tt.wantRejection)
+			}
+			if tt.wantRejection {
+				if after := remoteTip(); after != before {
+					t.Fatalf("rejected push changed remote tip: before %q, after %q", before, after)
+				}
+			} else {
+				want, err := gitcmd.ShowQuietPretty(local, "%H", b.Refs.PRBranch())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := strings.Fields(remoteTip()); len(got) != 2 || got[0] != want {
+					t.Fatalf("remote tip = %v, want %s", got, want)
+				}
+			}
+		})
+	}
+}
 
 func Test_createCommitMessageSnippet(t *testing.T) {
 	maxUpstreamCommitMessageInSnippet = 20

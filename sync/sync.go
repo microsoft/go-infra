@@ -236,10 +236,17 @@ type changedBranch struct {
 	PRRequest  *gitpr.GitHubRequest
 	ExistingPR *gitpr.ExistingPR
 
+	// RemoteCommit is the checked PR branch tip, or empty if no PR exists.
+	RemoteCommit string
+
 	SkipReason string
 
 	// Result contains this branch's [SyncResult] once a PR is submitted/updated.
 	Result *SyncResult
+}
+
+func (b *changedBranch) pushLease() string {
+	return "--force-with-lease=refs/heads/" + b.Refs.PRBranch() + ":" + b.RemoteCommit
 }
 
 // SyncResult is the result of a sync call.
@@ -755,6 +762,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			if err != nil {
 				return nil, err
 			}
+			c.RemoteCommit = remoteCommit
 			myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.Result.Commit)
 			if err != nil {
 				return nil, err
@@ -780,11 +788,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		return results, nil
 	}
 
-	newGitPushCommand := func(remote string, force bool, refspecs []string) *exec.Cmd {
+	newGitPushCommand := func(remote string, leases, refspecs []string) *exec.Cmd {
 		c := newGitCmd("push")
-		if force {
-			c.Args = append(c.Args, "--force")
-		}
+		c.Args = append(c.Args, leases...)
 		c.Args = append(c.Args, urlAuther.InsertAuth(remote))
 		c.Args = append(c.Args, refspecs...)
 		if *f.DryRun {
@@ -798,16 +804,19 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	//
 	// Even if we did base our branch on "to", we'd hit undesired behaviors if the branch still has
 	// changes from an old PR. There are ways to handle this, but no clear benefit. Force push is
-	// simple and makes the PR flow simple.
+	// simple and makes the PR flow simple. Each lease requires the remote branch to still be at
+	// the commit we checked above (or not exist for a new PR), so concurrent changes aren't lost.
 	mergePushRefspecs := make([]string, 0, len(changedBranches))
+	mergePushLeases := make([]string, 0, len(changedBranches))
 	for _, b := range changedBranches {
 		if b.SkipReason != "" {
 			continue
 		}
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
+		mergePushLeases = append(mergePushLeases, b.pushLease())
 	}
 	if len(mergePushRefspecs) > 0 {
-		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), true, mergePushRefspecs)); err != nil {
+		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), mergePushLeases, mergePushRefspecs)); err != nil {
 			return nil, err
 		}
 	}
