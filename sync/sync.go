@@ -253,7 +253,7 @@ func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
 	ref := "refs/heads/" + b.Refs.PRBranch()
 	cmd := exec.Command("git", "ls-remote", "--heads", remote, ref)
 	cmd.Dir = dir
-	output, err := combinedOutput(cmd)
+	output, err := executil.Output(cmd)
 	if err != nil {
 		return err
 	}
@@ -262,6 +262,33 @@ func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
 		b.RemoteCommit, err = gitcmd.FetchRefCommit(dir, remote, ref)
 	}
 	return err
+}
+
+func (b *changedBranch) checkRemoteAuthor(dir string) error {
+	if b.RemoteCommit == "" {
+		return nil
+	}
+	// Check if anyone else has pushed changes to the branch so we don't overwrite them.
+	myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", b.Result.Commit)
+	if err != nil {
+		return err
+	}
+	remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", b.RemoteCommit)
+	if err != nil {
+		return err
+	}
+	if myAuthorEmail != remoteAuthorEmail {
+		if b.ExistingPR == nil {
+			return fmt.Errorf("retained PR branch %q has a commit by %q, not %q; reconcile or rename the branch before retrying sync",
+				b.Refs.PRBranch(), remoteAuthorEmail, myAuthorEmail)
+		}
+		b.SkipReason = "PR branch already exists, but my author name (" +
+			myAuthorEmail +
+			") is different from the author of the remote commit (" +
+			remoteAuthorEmail +
+			"). Skipping PR submission."
+	}
+	return nil
 }
 
 // SyncResult is the result of a sync call.
@@ -771,24 +798,8 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
 			return nil, err
 		}
-		if c.RemoteCommit != "" {
-			// Check if anyone else has pushed changes to the branch so we don't overwrite them.
-			myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.Result.Commit)
-			if err != nil {
-				return nil, err
-			}
-			remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.RemoteCommit)
-			if err != nil {
-				return nil, err
-			}
-
-			if myAuthorEmail != remoteAuthorEmail {
-				c.SkipReason = "PR branch already exists, but my author name (" +
-					myAuthorEmail +
-					") is different from the author of the remote commit (" +
-					remoteAuthorEmail +
-					"). Skipping PR submission."
-			}
+		if err := c.checkRemoteAuthor(dir); err != nil {
+			return nil, err
 		}
 	}
 

@@ -120,6 +120,91 @@ func Test_changedBranch_pushLease(t *testing.T) {
 	}
 }
 
+func Test_changedBranch_fetchRemoteCommitMissingWithTrace(t *testing.T) {
+	dir := t.TempDir()
+	if err := setupMockRepo(dir, "main"); err != nil {
+		t.Fatal(err)
+	}
+	b := &changedBranch{
+		Refs: &gitpr.SyncPRRefSet{
+			PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+		},
+		RemoteCommit: "previously checked tip",
+	}
+	t.Setenv("GIT_TRACE", "1")
+	if err := b.fetchRemoteCommit(dir, dir); err != nil {
+		t.Fatal(err)
+	}
+	if b.RemoteCommit != "" {
+		t.Fatalf("missing branch has remote commit %q", b.RemoteCommit)
+	}
+}
+
+func Test_changedBranch_checkRemoteAuthor(t *testing.T) {
+	tests := []struct {
+		name      string
+		exists    bool
+		openPR    bool
+		manual    bool
+		wantError bool
+		wantSkip  bool
+	}{
+		{name: "new branch"},
+		{name: "retained bot branch", exists: true},
+		{name: "open bot PR", exists: true, openPR: true},
+		{name: "retained manual branch", exists: true, manual: true, wantError: true},
+		{name: "open manual PR", exists: true, openPR: true, manual: true, wantSkip: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if err := setupMockRepo(dir, "main"); err != nil {
+				t.Fatal(err)
+			}
+			commit, err := gitcmd.ShowQuietPretty(dir, "%H", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := &changedBranch{
+				Refs: &gitpr.SyncPRRefSet{
+					PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+				},
+				Result: &SyncResult{Commit: commit},
+			}
+			if tt.openPR {
+				b.ExistingPR = &gitpr.ExistingPR{}
+			}
+			if tt.manual {
+				if err := runGit(dir, "-c", "user.email=manual@example.com", "commit",
+					"--allow-empty", "--author=Manual <manual@example.com>", "-m", "Manual repair"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.exists {
+				b.RemoteCommit, err = gitcmd.ShowQuietPretty(dir, "%H", "HEAD")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = b.checkRemoteAuthor(dir)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("checkRemoteAuthor error = %v, want error = %v", err, tt.wantError)
+			}
+			if tt.wantError {
+				for _, want := range []string{b.Refs.PRBranch(), "manual@example.com", "reconcile or rename", "retrying sync"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing %q", err, want)
+					}
+				}
+			}
+			if (b.SkipReason != "") != tt.wantSkip {
+				t.Errorf("skip reason = %q, want skip = %v", b.SkipReason, tt.wantSkip)
+			}
+		})
+	}
+}
+
 func Test_createCommitMessageSnippet(t *testing.T) {
 	maxUpstreamCommitMessageInSnippet = 20
 	snippetCutoffIndicator = "[...]"
