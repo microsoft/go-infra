@@ -147,6 +147,56 @@ func TestInstallPath(t *testing.T) {
 	}
 }
 
+func TestAzurePipelinePath(t *testing.T) {
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			t.Parallel()
+
+			installDir := t.TempDir()
+			out := runTestFile(t, interpreter, makeTestFile(t, `
+			Prepend-ToolsetPathEnv -InstallRoot $InstallDir -SpecificVersion "1.21.2-1"
+			exit
+			`), "-InstallDir", installDir, "-AzurePipelinePath")
+
+			want := "go-install: ##vso[task.prependpath]" + filepath.Join(installDir, "go1.21.2-1", "bin")
+			for _, line := range strings.Split(out, "\n") {
+				if strings.TrimSuffix(line, "\r") == want {
+					return
+				}
+			}
+			t.Errorf("expected logging command %q, got:\n%s", want, out)
+		})
+	}
+}
+
+func TestGitHubActionsPath(t *testing.T) {
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			t.Parallel()
+
+			installDir := t.TempDir()
+			pathFile := filepath.Join(installDir, "github-path")
+			if err := os.WriteFile(pathFile, []byte("existing-path\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runTestFile(t, interpreter, makeTestFile(t, `
+			$env:GITHUB_PATH = Join-Path $InstallDir "github-path"
+			Prepend-ToolsetPathEnv -InstallRoot $InstallDir -SpecificVersion "1.21.2-1"
+			exit
+			`), "-InstallDir", installDir, "-GitHubActionsPath")
+
+			content, err := os.ReadFile(pathFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "existing-path\n" + filepath.Join(installDir, "go1.21.2-1", "bin") + "\n"
+			if got := strings.ReplaceAll(string(content), "\r\n", "\n"); got != want {
+				t.Errorf("expected GITHUB_PATH content %q, got %q", want, got)
+			}
+		})
+	}
+}
+
 func TestDownloadFileRetriesStreamFailure(t *testing.T) {
 	for _, interpreter := range currentOSInterpreters(t) {
 		t.Run(interpreter, func(t *testing.T) {
