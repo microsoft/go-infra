@@ -928,15 +928,15 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 			}
 
-			if name, description := syncPRLabel(entry); name != "" {
-				if err := gitpr.AddPRLabel(parsedPRTargetRemote, pr.Number, name, "C2E0C6", description, auther); err != nil {
+			if b.ExistingPR == nil {
+				fmt.Printf("---- Approving with reviewer account...\n")
+				if err = gitpr.ApprovePR(pr.NodeID, reviewAuther); err != nil {
 					return err
 				}
 			}
 
-			if b.ExistingPR == nil {
-				fmt.Printf("---- Approving with reviewer account...\n")
-				if err = gitpr.ApprovePR(pr.NodeID, reviewAuther); err != nil {
+			if name, description := syncPRLabel(entry); name != "" {
+				if err := gitpr.AddPRLabel(parsedPRTargetRemote, pr.Number, name, "C2E0C6", description, auther); err != nil {
 					return err
 				}
 			}
