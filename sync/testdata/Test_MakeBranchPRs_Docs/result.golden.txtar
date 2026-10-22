@@ -1,0 +1,50 @@
+-- MICROSOFT_REVISION --
+Branch-specific revision
+-- README.md --
+<!--
+DO NOT EDIT THIS COPY.
+Local edits will be overwritten.
+Source: https://github.com/microsoft/go/blob/microsoft/main/README.md
+-->
+
+# Main README
+-- SECURITY.md --
+<!--
+DO NOT EDIT THIS COPY.
+Local edits will be overwritten.
+Source: https://github.com/microsoft/go/blob/microsoft/main/SECURITY.md
+-->
+
+Security details
+-- SUPPORT.md --
+<!--
+DO NOT EDIT THIS COPY.
+Local edits will be overwritten.
+Source: https://github.com/microsoft/go/blob/microsoft/main/SUPPORT.md
+-->
+
+Support details
+-- VERSION --
+Branch-specific version
+-- eng/doc/guide.md --
+<!--
+DO NOT EDIT THIS COPY.
+Local edits will be overwritten.
+Source: https://github.com/microsoft/go/blob/microsoft/main/eng/doc/guide.md
+-->
+
+# Guide
+-- eng/doc/links.json --
+{"main":"microsoft/main"}
+-- eng/doc/nested/deep.md --
+<!--
+DO NOT EDIT THIS COPY.
+Local edits will be overwritten.
+Source: https://github.com/microsoft/go/blob/microsoft/main/eng/doc/nested/deep.md
+-->
+
+Nested documentation
+-- eng/docs/not-matched.md --
+Branch-specific docs
+-- src/code.go --
+package release
