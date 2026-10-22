@@ -1,0 +1,20 @@
+-- MICROSOFT_REVISION --
+Main-only revision
+-- README.md --
+# Main README
+-- SECURITY.md --
+Security details
+-- SUPPORT.md --
+Support details
+-- VERSION --
+Main-only version
+-- eng/doc/guide.md --
+# Guide
+-- eng/doc/links.json --
+{"main":"microsoft/main"}
+-- eng/doc/nested/deep.md --
+Nested documentation
+-- eng/docs/not-matched.md --
+Main-only docs
+-- src/code.go --
+package main

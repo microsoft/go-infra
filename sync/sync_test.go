@@ -16,6 +16,28 @@ import (
 	"github.com/microsoft/go-infra/goldentest"
 )
 
+func Test_syncPRLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry ConfigEntry
+		want  string
+	}{
+		{name: "docs", entry: ConfigEntry{SyncDocs: true}, want: "sync:docs"},
+		{name: "submodule", entry: ConfigEntry{SubmoduleTarget: "go"}, want: "sync:upstream"},
+		{name: "fork merge"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name, description := syncPRLabel(&tc.entry)
+			if name != tc.want {
+				t.Errorf("label = %q, want %q", name, tc.want)
+			}
+			if (description == "") != (name == "") {
+				t.Errorf("label %q has unexpected description %q", name, description)
+			}
+		})
+	}
+}
+
 func Test_changedBranch_pushLease(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -1,0 +1,12 @@
+-- MICROSOFT_REVISION --
+Branch-specific revision
+-- README.md --
+# Release README
+-- VERSION --
+Branch-specific version
+-- eng/doc/deleted.md --
+Deleted on main
+-- eng/docs/not-matched.md --
+Branch-specific docs
+-- src/code.go --
+package release
