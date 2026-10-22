@@ -38,6 +38,7 @@ func TestRunParallelProgress(t *testing.T) {
 		assertParallelProgress(t, runner.Snapshot(), checkpointUnits, checkpointUnits)
 		if state := testState(t, run); !state.Initialized || state.Finished ||
 			state.WorkACompleted != checkpointUnits || state.WorkBCompleted != checkpointUnits {
+
 			t.Fatalf("in-progress state = %#v", state)
 		}
 		if err := <-done; err != nil {
@@ -48,6 +49,7 @@ func TestRunParallelProgress(t *testing.T) {
 		}
 		if state := testState(t, run); !state.Finished ||
 			state.WorkACompleted != workUnits || state.WorkBCompleted != workUnits {
+
 			t.Fatalf("completed state = %#v", state)
 		}
 		for _, step := range runner.Snapshot().Steps {
@@ -60,6 +62,7 @@ func TestRunParallelProgress(t *testing.T) {
 		}
 		if view.Summary != "Ready" || string(before.State) == string(run.TakeSnapshot().State) ||
 			!reflect.DeepEqual(plan, run.Plan()) {
+
 			t.Fatal("execution changed an earlier view or plan, or did not update state")
 		}
 		if view := run.TakeView(); !view.Test || view.RunURL != "" || view.Summary != "Demo completed" {
@@ -167,10 +170,12 @@ func TestRunsExecuteIndependently(t *testing.T) {
 		}
 		if !reflect.DeepEqual(interrupted, first.TakeSnapshot()) ||
 			testState(t, first).Finished || !testState(t, second).Finished {
+
 			t.Fatal("finishing the second run changed the interrupted first run")
 		}
 		if reflect.DeepEqual(first.Plan(), second.Plan()) ||
 			string(first.TakeSnapshot().Input) == string(second.TakeSnapshot().Input) {
+
 			t.Fatal("demo identities were mixed")
 		}
 	})
@@ -193,6 +198,7 @@ func TestCheckpointCancellationStopsExecution(t *testing.T) {
 		}
 		if state := testState(t, run); !state.Initialized || state.Finished ||
 			state.WorkACompleted != 0 || state.WorkBCompleted != 0 || checkpoints.Load() != 1 {
+
 			t.Fatalf("state after checkpoint cancellation = %#v, checkpoints = %d", state, checkpoints.Load())
 		}
 	})
@@ -233,6 +239,7 @@ func assertParallelProgress(t *testing.T, snapshot coordinator.Snapshot, complet
 			}
 			if step.Status != coordinator.StepStatusRunning || step.Progress == nil ||
 				step.Progress.Completed != completed || step.Progress.Total != workUnits {
+
 				t.Fatalf("parallel work = %#v, want %d completed units", step, completed)
 			}
 		case "Finish demo":

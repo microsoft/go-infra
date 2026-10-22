@@ -123,6 +123,7 @@ func validateState(state state) error {
 	}
 	if state.WorkACompleted < 0 || state.WorkACompleted > workUnits ||
 		state.WorkBCompleted < 0 || state.WorkBCompleted > workUnits {
+
 		return errors.New("demo work count is out of range")
 	}
 	if !state.Initialized && (state.WorkACompleted != 0 || state.WorkBCompleted != 0 || state.Finished) {

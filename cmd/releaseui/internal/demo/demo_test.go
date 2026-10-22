@@ -52,6 +52,7 @@ func TestProcessGroup(t *testing.T) {
 		}
 		if plan == nil || plan.Subtitle != definition.Name+" simulated release" ||
 			plan.ExecutionButtonLabel != "Run demo" || len(plan.Facts) == 0 {
+
 			t.Fatalf("plan = %#v", plan)
 		}
 		if !reflect.DeepEqual(before, run.TakeSnapshot()) {
@@ -101,9 +102,9 @@ func TestSnapshotIsolation(t *testing.T) {
 	want := second.TakeSnapshot()
 	snapshot.Input[0] = '!'
 	snapshot.State[0] = '!'
-	copy := first.TakeSnapshot()
-	copy.Input[0] = '!'
-	copy.State[0] = '!'
+	snapshotCopy := first.TakeSnapshot()
+	snapshotCopy.Input[0] = '!'
+	snapshotCopy.State[0] = '!'
 	view := first.TakeView()
 	view.Summary = "changed"
 	plan := first.Plan()
