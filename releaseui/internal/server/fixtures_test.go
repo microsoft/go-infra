@@ -173,6 +173,7 @@ func newMemoryProcessRunStore() *memoryProcessRunStore {
 
 func (s *memoryProcessRunStore) Create(
 	_ context.Context,
+	name string,
 	run *runstore.State,
 	_ *contract.RunView,
 	_ *contract.Plan,
@@ -184,6 +185,7 @@ func (s *memoryProcessRunStore) Create(
 	}
 	record := &runstore.Record{
 		ID: s.nextID, Revision: 1,
+		Title:     name,
 		URL:       fmt.Sprintf("https://example.invalid/releases/%d", s.nextID),
 		UpdatedAt: run.UpdatedAt, Run: run.Clone(),
 	}
@@ -248,7 +250,7 @@ func (s *memoryProcessRunStore) Update(
 	}
 	record = &runstore.Record{
 		ID: record.ID, Revision: record.Revision + 1,
-		URL: record.URL, Closed: record.Closed,
+		URL: record.URL, Title: record.Title, Closed: record.Closed,
 		UpdatedAt: time.Now().UTC(), Run: run.Clone(),
 	}
 	s.records[record.ID] = record

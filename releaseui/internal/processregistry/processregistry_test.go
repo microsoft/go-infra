@@ -75,6 +75,9 @@ func TestRegistryIndexesProcessesAndGroups(t *testing.T) {
 	if !ok || process.Definition.Name != "two" {
 		t.Fatalf("process = %#v, ok = %v", process, ok)
 	}
+	if name := process.DisplayName(); name != "Examples \u00b7 two" {
+		t.Fatalf("display name = %q", name)
+	}
 	groups := registry.Groups()
 	if len(groups) != 1 || process.Group != groups[0] || groups[0].Processes[0].Definition.ID != "one" {
 		t.Fatalf("groups = %#v", groups)

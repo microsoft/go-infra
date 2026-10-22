@@ -70,7 +70,7 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 				if record.Run != nil {
 					if problem.Title == "" {
 						if registered, ok := h.manager.processes.Lookup(record.Run.ProcessID); ok {
-							problem.Title = registered.Group.Identity.Name + " · " + registered.Definition.Name
+							problem.Title = registered.DisplayName()
 						}
 					}
 					if status, statusErr := record.Run.Status(); statusErr == nil {
@@ -273,7 +273,7 @@ func (h *History) releaseSummary(ctx context.Context, record *runstore.Record) (
 	if record.Run.Started && !record.Run.Complete && !session.isRunningRecord(record.ID) &&
 		(record.Closed || summary.RunURL != "") {
 
-		summary.Name = registered.Group.Identity.Name + " · " + registered.Definition.Name
+		summary.Name = registered.DisplayName()
 		summary.Href = ""
 		summary.Status = resultUncertain
 		summary.Issue = &webview.ReleaseIssue{

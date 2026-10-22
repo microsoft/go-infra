@@ -104,6 +104,25 @@ func TestCreateAddsTestTag(t *testing.T) {
 	}
 }
 
+func TestCreateKeepsCompletedRunActive(t *testing.T) {
+	snapshot := testSnapshot(StatusSucceeded)
+	sdk := &fakeClient{create: func(_ context.Context, args workitemtracking.CreateWorkItemArgs) (*workitemtracking.WorkItem, error) {
+		if args.Document == nil {
+			t.Fatal("create document is nil")
+		}
+		assertPatch(t, *args.Document, 4, webapi.OperationValues.Add, "/fields/System.State", "Active")
+		return sdkWorkItem(t, 42, 1, snapshot), nil
+	}}
+	client := newTestClient(t, sdk, "test-token")
+	item, err := client.Create(context.Background(), "Completed release", "Release Operator", snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != "Active" || item.Snapshot.Status != StatusSucceeded {
+		t.Fatalf("created work item = %#v", item)
+	}
+}
+
 func TestGetRejectsMismatchedTestTag(t *testing.T) {
 	snapshot := testSnapshot(StatusStarting)
 	snapshot.Test = true
@@ -259,45 +278,58 @@ func TestUpdateTestsRevisionFirst(t *testing.T) {
 	snapshot := testSnapshot(StatusSucceeded)
 	snapshot.Test = true
 	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 4 ||
+		if args.Id == nil || *args.Id != 42 || args.Document == nil || len(*args.Document) != 3 ||
 			args.Expand == nil || *args.Expand != workitemtracking.WorkItemExpandValues.Links {
 
 			t.Fatalf("update args = %#v", args)
 		}
 		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
-		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
-		assertPatch(t, *args.Document, 2, webapi.OperationValues.Replace, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
+		assertPatch(t, *args.Document, 1, webapi.OperationValues.Replace, "/fields/System.Tags", SelectorTag+"; "+TestTag+"; go-images")
+		assertPatch(t, *args.Document, 2, webapi.OperationValues.Add, "/fields/System.Description", mustRenderDescription(t, snapshot))
 		return sdkWorkItem(t, 42, 8, snapshot), nil
 	}}
 	client := newTestClient(t, sdk, "test-token")
-	item, err := client.Update(context.Background(), &WorkItem{ID: 42, Revision: 7}, snapshot)
+	item, err := client.Update(context.Background(), &WorkItem{ID: 42, Revision: 7, State: "Active"}, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if item.Revision != 8 || item.Snapshot.Status != StatusSucceeded {
+	if item.Revision != 8 || item.State != "Active" || item.Snapshot.Status != StatusSucceeded {
 		t.Fatalf("updated work item = %#v", item)
 	}
 }
 
-func TestUpdatePreservesClosedAttentionStatus(t *testing.T) {
-	snapshot := testSnapshot(StatusCanceled)
-	sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
-		if args.Document == nil {
-			t.Fatal("update document is nil")
+func TestUpdatePreservesWorkItemState(t *testing.T) {
+	for _, state := range []string{"Active", "Closed"} {
+		for _, status := range []Status{
+			StatusStarting, StatusRunning, StatusSucceeded, StatusFailed, StatusCanceled, StatusUncertain,
+		} {
+			t.Run(state+"/"+string(status), func(t *testing.T) {
+				snapshot := testSnapshot(status)
+				sdk := &fakeClient{update: func(_ context.Context, args workitemtracking.UpdateWorkItemArgs) (*workitemtracking.WorkItem, error) {
+					if args.Document == nil {
+						t.Fatal("update document is nil")
+					}
+					for _, operation := range *args.Document {
+						if operation.Path != nil && *operation.Path == "/fields/System.State" {
+							t.Fatal("saving a release snapshot must not change the tracking item state")
+						}
+					}
+					item := sdkWorkItem(t, 42, 8, snapshot)
+					(*item.Fields)["System.State"] = state
+					return item, nil
+				}}
+				client := newTestClient(t, sdk, "test-token")
+				item, err := client.Update(context.Background(), &WorkItem{
+					ID: 42, Revision: 7, State: state,
+				}, snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if item.State != state || item.Snapshot.Status != status {
+					t.Fatalf("updated work item = %#v", item)
+				}
+			})
 		}
-		assertPatch(t, *args.Document, 0, webapi.OperationValues.Test, "/rev", 7)
-		assertPatch(t, *args.Document, 1, webapi.OperationValues.Add, "/fields/System.State", "Closed")
-		item := sdkWorkItem(t, 42, 8, snapshot)
-		(*item.Fields)["System.State"] = "Closed"
-		return item, nil
-	}}
-	client := newTestClient(t, sdk, "test-token")
-	item, err := client.Update(context.Background(), &WorkItem{ID: 42, Revision: 7, State: "Closed"}, snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if item.State != "Closed" || item.Snapshot.Status != StatusCanceled {
-		t.Fatalf("updated work item = %#v", item)
 	}
 }
 
@@ -565,7 +597,7 @@ func sdkWorkItem(t *testing.T, id, revision int, snapshot *Snapshot) *workitemtr
 	fields := map[string]any{
 		"System.WorkItemType": "Issue",
 		"System.Title":        "Go images release",
-		"System.State":        workItemState(snapshot.Status),
+		"System.State":        "Active",
 		"System.AreaPath":     AreaPath,
 		"System.Tags":         "other; " + workItemTags(snapshot),
 		"System.ChangedDate":  "2026-09-09T12:00:00Z",

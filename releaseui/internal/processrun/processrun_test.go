@@ -70,6 +70,7 @@ type testStore struct {
 
 func (s *testStore) Create(
 	context.Context,
+	string,
 	*runstore.State,
 	*contract.RunView,
 	*contract.Plan,
