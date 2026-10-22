@@ -133,6 +133,7 @@ func TestAddPRLabel(t *testing.T) {
 					}
 					if got.Name != "sync:docs" || got.Color == nil || *got.Color != "C2E0C6" ||
 						got.Description == nil || *got.Description != "Documentation sync" {
+
 						t.Errorf("unexpected label definition: %+v", got)
 					}
 					writePRResponse(t, w, tc.createStatus, `{"name":"sync:docs"}`)
