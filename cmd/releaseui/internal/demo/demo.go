@@ -17,13 +17,10 @@ import (
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
-type input struct {
-	ProcessID string `json:"processId"`
-}
-
 type processGroup struct{}
 
-// NewProcess creates two independent demo processes for concurrency testing.
+// NewProcess creates a demo process group for live testing. It includes two
+// independent processes that can run at the same time to test concurrency.
 func NewProcess() contract.ProcessGroup {
 	return &processGroup{}
 }
@@ -76,7 +73,7 @@ func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.S
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return encodeSnapshot(input{ProcessID: p.id}, state{
+	return encodeSnapshot(state{
 		SchemaVersion: stateSchema, UpdatedAt: time.Now().UTC(),
 	})
 }
@@ -85,12 +82,12 @@ func (p *process) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
 	if snapshot == nil {
 		return nil, errors.New("demo snapshot is nil")
 	}
-	input, err := decodeStrictJSON[input](snapshot.Input)
+	input, err := decodeStrictJSON[*struct{}](snapshot.Input)
 	if err != nil {
 		return nil, fmt.Errorf("decode demo input: %w", err)
 	}
-	if input.ProcessID != p.id {
-		return nil, errors.New("demo snapshot belongs to a different process")
+	if input == nil {
+		return nil, errors.New("demo input must be an object")
 	}
 	state, err := decodeStrictJSON[state](snapshot.State)
 	if err != nil {
@@ -99,19 +96,15 @@ func (p *process) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
 	if err := validateState(state); err != nil {
 		return nil, err
 	}
-	return newRun(input, p.name, state), nil
+	return newRun(p.name, state), nil
 }
 
-func encodeSnapshot(input input, state state) (*contract.StateSnapshot, error) {
-	inputJSON, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("encode demo input: %w", err)
-	}
+func encodeSnapshot(state state) (*contract.StateSnapshot, error) {
 	stateJSON, err := json.Marshal(state)
 	if err != nil {
 		return nil, fmt.Errorf("encode demo state: %w", err)
 	}
-	return &contract.StateSnapshot{Input: inputJSON, State: stateJSON}, nil
+	return &contract.StateSnapshot{Input: json.RawMessage(`{}`), State: stateJSON}, nil
 }
 
 func validateState(state state) error {
@@ -121,16 +114,16 @@ func validateState(state state) error {
 	if state.UpdatedAt.IsZero() {
 		return errors.New("demo update time is zero")
 	}
-	if state.WorkACompleted < 0 || state.WorkACompleted > workUnits ||
-		state.WorkBCompleted < 0 || state.WorkBCompleted > workUnits {
-
-		return errors.New("demo work count is out of range")
-	}
-	if !state.Initialized && (state.WorkACompleted != 0 || state.WorkBCompleted != 0 || state.Finished) {
-		return errors.New("demo work started before initialization")
-	}
-	if state.Finished && (state.WorkACompleted != workUnits || state.WorkBCompleted != workUnits) {
-		return errors.New("demo finished before both branches completed")
+	for _, completed := range state.WorkCompleted {
+		if completed < 0 || completed > workUnits {
+			return errors.New("demo work count is out of range")
+		}
+		if !state.Initialized && (completed != 0 || state.Finished) {
+			return errors.New("demo work started before initialization")
+		}
+		if state.Finished && completed != workUnits {
+			return errors.New("demo finished before both branches completed")
+		}
 	}
 	return nil
 }

@@ -45,6 +45,9 @@ func TestProcessGroup(t *testing.T) {
 		}
 		run := prepareTestRun(t, process)
 		before := run.TakeSnapshot()
+		if string(before.Input) != `{}` {
+			t.Fatalf("demo input = %s, want an empty input object", before.Input)
+		}
 		plan := run.Plan()
 		steps, err := run.Build(context.Background(), nil)
 		if err != nil {
@@ -125,18 +128,18 @@ func TestLoadRejectsInvalidState(t *testing.T) {
 	}{
 		{"schema", func(s *state) { s.SchemaVersion++ }},
 		{"missing time", func(s *state) { s.UpdatedAt = time.Time{} }},
-		{"negative work A", func(s *state) { s.WorkACompleted = -1 }},
-		{"excess work A", func(s *state) { s.Initialized = true; s.WorkACompleted = workUnits + 1 }},
-		{"negative work B", func(s *state) { s.WorkBCompleted = -1 }},
-		{"excess work B", func(s *state) { s.Initialized = true; s.WorkBCompleted = workUnits + 1 }},
-		{"work before initialization", func(s *state) { s.WorkACompleted = 1 }},
+		{"negative work A", func(s *state) { s.WorkCompleted[0] = -1 }},
+		{"excess work A", func(s *state) { s.Initialized = true; s.WorkCompleted[0] = workUnits + 1 }},
+		{"negative work B", func(s *state) { s.WorkCompleted[1] = -1 }},
+		{"excess work B", func(s *state) { s.Initialized = true; s.WorkCompleted[1] = workUnits + 1 }},
+		{"work before initialization", func(s *state) { s.WorkCompleted[0] = 1 }},
 		{"finish before work", func(s *state) { s.Initialized = true; s.Finished = true }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			state := state{SchemaVersion: stateSchema, UpdatedAt: time.Now().UTC()}
 			test.change(&state)
-			snapshot, err := encodeSnapshot(input{ProcessID: process.Definition().ID}, state)
+			snapshot, err := encodeSnapshot(state)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,15 +156,12 @@ func TestLoadRejectsInvalidSnapshot(t *testing.T) {
 	if _, err := processes[0].Load(nil); err == nil {
 		t.Fatal("nil snapshot was accepted")
 	}
-	if _, err := processes[1].Load(valid); err == nil {
-		t.Fatal("snapshot from another process was accepted")
-	}
 	tests := []struct {
 		name  string
 		input json.RawMessage
 		state json.RawMessage
 	}{
-		{"unknown input", json.RawMessage(`{"processId":"demo-a","extra":true}`), valid.State},
+		{"unknown input", json.RawMessage(`{"extra":true}`), valid.State},
 		{"null input", json.RawMessage(`null`), valid.State},
 		{"invalid input", json.RawMessage(`{`), valid.State},
 		{"extra input value", append(slices.Clone(valid.Input), []byte(` {}`)...), valid.State},
@@ -178,6 +178,20 @@ func TestLoadRejectsInvalidSnapshot(t *testing.T) {
 				t.Fatal("invalid snapshot was accepted")
 			}
 		})
+	}
+}
+
+func TestLoadUsesConfiguredDemoName(t *testing.T) {
+	processes := NewProcess().Processes()
+	snapshot := prepareTestRun(t, processes[0]).TakeSnapshot()
+	for _, process := range processes {
+		run, err := process.Load(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Plan().Subtitle != process.Definition().Name+" simulated release" {
+			t.Fatalf("plan = %#v, want configured demo identity", run.Plan())
+		}
 	}
 }
 

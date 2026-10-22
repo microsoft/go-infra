@@ -37,7 +37,7 @@ func TestRunParallelProgress(t *testing.T) {
 		synctest.Wait()
 		assertParallelProgress(t, runner.Snapshot(), checkpointUnits, checkpointUnits)
 		if state := testState(t, run); !state.Initialized || state.Finished ||
-			state.WorkACompleted != checkpointUnits || state.WorkBCompleted != checkpointUnits {
+			state.WorkCompleted != [2]int{checkpointUnits, checkpointUnits} {
 
 			t.Fatalf("in-progress state = %#v", state)
 		}
@@ -48,7 +48,7 @@ func TestRunParallelProgress(t *testing.T) {
 			t.Fatalf("elapsed = %v, want parallel duration %v", elapsed, workUnits*workDelay)
 		}
 		if state := testState(t, run); !state.Finished ||
-			state.WorkACompleted != workUnits || state.WorkBCompleted != workUnits {
+			state.WorkCompleted != [2]int{workUnits, workUnits} {
 
 			t.Fatalf("completed state = %#v", state)
 		}
@@ -89,7 +89,7 @@ func TestRunResumesCheckpoint(t *testing.T) {
 				cancel()
 				return
 			}
-			if saved == nil && state.WorkACompleted >= checkpointUnits && state.WorkBCompleted >= checkpointUnits {
+			if saved == nil && state.WorkCompleted[0] >= checkpointUnits && state.WorkCompleted[1] >= checkpointUnits {
 				saved = snapshot
 				cancel()
 			}
@@ -115,11 +115,11 @@ func TestRunResumesCheckpoint(t *testing.T) {
 			restored.TakeView()
 		})
 		synctest.Wait()
-		assertParallelProgress(t, runner.Snapshot(), before.WorkACompleted, before.WorkBCompleted)
+		assertParallelProgress(t, runner.Snapshot(), before.WorkCompleted[0], before.WorkCompleted[1])
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		remaining := max(workUnits-before.WorkACompleted, workUnits-before.WorkBCompleted)
+		remaining := max(workUnits-before.WorkCompleted[0], workUnits-before.WorkCompleted[1])
 		if elapsed := time.Since(start); elapsed != time.Duration(remaining)*workDelay {
 			t.Fatalf("resume duration = %v, want %v", elapsed, time.Duration(remaining)*workDelay)
 		}
@@ -173,9 +173,7 @@ func TestRunsExecuteIndependently(t *testing.T) {
 
 			t.Fatal("finishing the second run changed the interrupted first run")
 		}
-		if reflect.DeepEqual(first.Plan(), second.Plan()) ||
-			string(first.TakeSnapshot().Input) == string(second.TakeSnapshot().Input) {
-
+		if reflect.DeepEqual(first.Plan(), second.Plan()) {
 			t.Fatal("demo identities were mixed")
 		}
 	})
@@ -197,11 +195,50 @@ func TestCheckpointCancellationStopsExecution(t *testing.T) {
 			t.Fatalf("execution error = %v", err)
 		}
 		if state := testState(t, run); !state.Initialized || state.Finished ||
-			state.WorkACompleted != 0 || state.WorkBCompleted != 0 || checkpoints.Load() != 1 {
+			state.WorkCompleted != [2]int{} || checkpoints.Load() != 1 {
 
 			t.Fatalf("state after checkpoint cancellation = %#v, checkpoints = %d", state, checkpoints.Load())
 		}
 	})
+}
+
+func TestUpdateReleasesStateLockBeforeCheckpoint(t *testing.T) {
+	run := prepareTestRun(t, NewProcess().Processes()[0])
+	checkpoints := 0
+	err := run.update(context.Background(), func() {
+		if !run.mu.TryLock() {
+			t.Fatal("checkpoint was called while the state lock was held")
+		}
+		run.mu.Unlock()
+		run.TakeSnapshot()
+		run.TakeView()
+		checkpoints++
+	}, func(state *state) {
+		state.Initialized = true
+	})
+	if err != nil || checkpoints != 1 || !testState(t, run).Initialized {
+		t.Fatalf("update error = %v, checkpoints = %d, state = %#v", err, checkpoints, testState(t, run))
+	}
+}
+
+func TestUpdateHonorsCancellation(t *testing.T) {
+	run := prepareTestRun(t, NewProcess().Processes()[0])
+	before := run.TakeSnapshot()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := run.update(ctx, func() { t.Fatal("canceled update checkpointed") }, func(*state) {
+		t.Fatal("canceled update changed state")
+	})
+	if !errors.Is(err, context.Canceled) || !reflect.DeepEqual(before, run.TakeSnapshot()) {
+		t.Fatalf("canceled update error = %v, state = %#v", err, testState(t, run))
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	err = run.update(ctx, func() { cancel() }, func(state *state) { state.Initialized = true })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("checkpoint cancellation error = %v", err)
+	}
 }
 
 func startTestRun(

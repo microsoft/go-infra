@@ -23,29 +23,25 @@ const (
 )
 
 type state struct {
-	SchemaVersion  int       `json:"schemaVersion"`
-	Initialized    bool      `json:"initialized"`
-	WorkACompleted int       `json:"workACompleted"`
-	WorkBCompleted int       `json:"workBCompleted"`
-	Finished       bool      `json:"finished"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	SchemaVersion int       `json:"schemaVersion"`
+	Initialized   bool      `json:"initialized"`
+	WorkCompleted [2]int    `json:"workCompleted"`
+	Finished      bool      `json:"finished"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 type run struct {
 	mu    sync.RWMutex
-	input input
 	name  string
 	state state
 }
 
-func newRun(input input, name string, state state) *run {
-	return &run{input: input, name: name, state: state}
+func newRun(name string, state state) *run {
+	return &run{name: name, state: state}
 }
 
 func (r *run) TakeSnapshot() *contract.StateSnapshot {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	snapshot, err := encodeSnapshot(r.input, r.state)
+	snapshot, err := encodeSnapshot(r.readState())
 	if err != nil {
 		panic(fmt.Sprintf("encode demo snapshot: %v", err))
 	}
@@ -53,18 +49,17 @@ func (r *run) TakeSnapshot() *contract.StateSnapshot {
 }
 
 func (r *run) TakeView() *contract.RunView {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	state := r.readState()
 	summary := "Ready"
-	if r.state.Finished {
+	if state.Finished {
 		summary = "Demo completed"
-	} else if r.state.Initialized {
+	} else if state.Initialized {
 		summary = "Simulated work in progress"
 	}
 	return &contract.RunView{
-		Test: true, Summary: summary, UpdatedAt: r.state.UpdatedAt,
+		Test: true, Summary: summary, UpdatedAt: state.UpdatedAt,
 		Detail: fmt.Sprintf("%s: work A %d/%d units, work B %d/%d units",
-			r.name, r.state.WorkACompleted, workUnits, r.state.WorkBCompleted, workUnits),
+			r.name, state.WorkCompleted[0], workUnits, state.WorkCompleted[1], workUnits),
 	}
 }
 
@@ -86,10 +81,10 @@ func (r *run) Build(_ context.Context, checkpoint contract.CheckpointFunc) ([]*c
 		return r.initialize(ctx, checkpoint)
 	})
 	workA := initialize.Then("Fake work A", stepTimeout, func(ctx context.Context) error {
-		return r.work(ctx, &r.state.WorkACompleted, checkpoint)
+		return r.work(ctx, 0, checkpoint)
 	})
 	workB := initialize.Then("Fake work B", stepTimeout, func(ctx context.Context) error {
-		return r.work(ctx, &r.state.WorkBCompleted, checkpoint)
+		return r.work(ctx, 1, checkpoint)
 	})
 	finish := workA.Then("Finish demo", stepTimeout, func(ctx context.Context) error {
 		return r.finish(ctx, checkpoint)
@@ -98,26 +93,14 @@ func (r *run) Build(_ context.Context, checkpoint contract.CheckpointFunc) ([]*c
 }
 
 func (r *run) initialize(ctx context.Context, checkpoint contract.CheckpointFunc) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	if r.readState().Initialized {
+		return ctx.Err()
 	}
-	r.mu.Lock()
-	initialized := r.state.Initialized
-	if !initialized {
-		r.state.Initialized = true
-		r.state.UpdatedAt = time.Now().UTC()
-	}
-	r.mu.Unlock()
-	if initialized {
-		return nil
-	}
-	return saveCheckpoint(ctx, checkpoint)
+	return r.update(ctx, checkpoint, func(state *state) { state.Initialized = true })
 }
 
-func (r *run) work(ctx context.Context, completed *int, checkpoint contract.CheckpointFunc) error {
-	r.mu.RLock()
-	current := *completed
-	r.mu.RUnlock()
+func (r *run) work(ctx context.Context, branch int, checkpoint contract.CheckpointFunc) error {
+	current := r.readState().WorkCompleted[branch]
 	for {
 		coordinator.ReportProgress(ctx, coordinator.StepProgress{
 			Summary: "Simulated work", Detail: fmt.Sprintf("%d of %d units complete", current, workUnits),
@@ -129,15 +112,13 @@ func (r *run) work(ctx context.Context, completed *int, checkpoint contract.Chec
 		if err := wait(ctx, workDelay); err != nil {
 			return err
 		}
-		r.mu.Lock()
 		current++
-		*completed = current
-		r.state.UpdatedAt = time.Now().UTC()
-		r.mu.Unlock()
+		var save contract.CheckpointFunc
 		if current%checkpointUnits == 0 || current == workUnits {
-			if err := saveCheckpoint(ctx, checkpoint); err != nil {
-				return err
-			}
+			save = checkpoint
+		}
+		if err := r.update(ctx, save, func(state *state) { state.WorkCompleted[branch] = current }); err != nil {
+			return err
 		}
 	}
 }
@@ -146,24 +127,32 @@ func (r *run) finish(ctx context.Context, checkpoint contract.CheckpointFunc) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	if r.state.WorkACompleted != workUnits || r.state.WorkBCompleted != workUnits {
-		r.mu.Unlock()
+	saved := r.readState()
+	if saved.WorkCompleted != [2]int{workUnits, workUnits} {
 		return errors.New("cannot finish demo before both branches complete")
 	}
-	finished := r.state.Finished
-	if !finished {
-		r.state.Finished = true
-		r.state.UpdatedAt = time.Now().UTC()
+	if saved.Finished {
+		return ctx.Err()
 	}
-	r.mu.Unlock()
-	if finished {
-		return nil
-	}
-	return saveCheckpoint(ctx, checkpoint)
+	return r.update(ctx, checkpoint, func(state *state) { state.Finished = true })
 }
 
-func saveCheckpoint(ctx context.Context, checkpoint contract.CheckpointFunc) error {
+func (r *run) readState() state {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.state
+}
+
+func (r *run) update(ctx context.Context, checkpoint contract.CheckpointFunc, change func(*state)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		change(&r.state)
+		r.state.UpdatedAt = time.Now().UTC()
+	}()
 	if checkpoint != nil {
 		checkpoint()
 	}
