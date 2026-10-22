@@ -937,7 +937,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 			if name, description := syncPRLabel(entry); name != "" {
 				if err := gitpr.AddPRLabel(parsedPRTargetRemote, pr.Number, name, "C2E0C6", description, auther); err != nil {
-					return err
+					fmt.Printf("---- %s: failed to add informational PR label: %v\n", prFlowDescription, err)
 				}
 			}
 
