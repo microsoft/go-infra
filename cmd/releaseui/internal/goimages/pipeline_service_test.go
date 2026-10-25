@@ -310,10 +310,12 @@ func TestPipelineStatusReadsOnceWithoutPolling(t *testing.T) {
 }
 
 func TestPipelineStatusReportsFailure(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
+	reader := &fakeReader{
+		builds: []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
 		failures: []azdopipeline.BuildFailure{{
 			Path: "Build > Linux arm32 > Build Images", Message: "PowerShell exited with code 1",
-		}}}
+		}},
+	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
 	observation, err := service.GetPipelineStatus(context.Background(), "888")
 	if err != nil || observation.Status != coordinator.StepStatusFailed ||
@@ -336,8 +338,10 @@ func TestPipelineStatusReportsCancellation(t *testing.T) {
 }
 
 func TestPipelineStatusFailureDetailsAreOptional(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
-		failureErr: errors.New("timeline unavailable")}
+	reader := &fakeReader{
+		builds:     []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
+		failureErr: errors.New("timeline unavailable"),
+	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
 	observation, err := service.GetPipelineStatus(context.Background(), "888")
 	if err != nil || !strings.Contains(observation.Error, `failed with result "failed"`) ||
