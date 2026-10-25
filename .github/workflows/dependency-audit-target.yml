@@ -1,0 +1,184 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Prepare a dependency audit target
+
+on:
+  workflow_call:
+    inputs:
+      target_repo:
+        required: true
+        type: string
+      mode:
+        default: audit
+        type: string
+      initial_sha:
+        default: ""
+        type: string
+      area:
+        default: ""
+        type: string
+      issue:
+        default: 0
+        type: number
+      replace_pr:
+        default: 0
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ inputs.target_repo }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      owner: ${{ steps.target.outputs.owner }}
+      repo: ${{ steps.target.outputs.repo }}
+      key: ${{ steps.target.outputs.key }}
+      branch: ${{ steps.context.outputs.branch }}
+      base: ${{ steps.context.outputs.base_sha }}
+      head: ${{ steps.context.outputs.head_sha }}
+      work_branch: ${{ steps.context.outputs.work_branch }}
+      module: ${{ steps.context.outputs.module }}
+      issue: ${{ steps.context.outputs.tracker_issue }}
+      pull: ${{ steps.context.outputs.pull_request }}
+      replaces: ${{ steps.context.outputs.replaces_pr }}
+      comment: ${{ steps.context.outputs.comment_id }}
+    env:
+      DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
+      DEPENDENCY_AUDIT_ENABLE_APPLY: ${{ vars.DEPENDENCY_AUDIT_ENABLE_APPLY }}
+      DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
+      TARGET: ${{ inputs.target_repo }}
+      MODE: ${{ inputs.mode }}
+      INITIAL: ${{ inputs.initial_sha }}
+      AREA: ${{ inputs.area }}
+      ISSUE: ${{ inputs.issue }}
+      REPLACE_PR: ${{ inputs.replace_pr }}
+    steps:
+      - name: Require the central default branch
+        if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          echo "::error::Dependency automation must run from the central default branch."
+          exit 1
+      - name: Check the requested operation
+        run: |
+          case "$MODE" in
+            audit) [[ -z "$AREA" && "$ISSUE" = 0 ]] || { echo "::error::Audit does not accept an area or tracker issue."; exit 1; } ;;
+            apply) [[ -n "$AREA" && -z "$INITIAL" ]] || { echo "::error::Apply requires an area and does not accept an initial SHA."; exit 1; } ;;
+            *) echo "::error::Unknown dependency operation"; exit 1 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build the dependency audit helper
+        run: go build -o "$RUNNER_TEMP/dependencyaudit" ./cmd/dependencyaudit
+      - name: Validate enrollment before granting target access
+        id: target
+        run: |
+          "$RUNNER_TEMP/dependencyaudit" targets -repo "$TARGET" -area "$AREA" \
+            -initial-sha "$INITIAL" -issue "$ISSUE" -replace-pr "$REPLACE_PR"
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: reader
+        with:
+          client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.repo }}
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: ${{ inputs.mode == 'apply' && 'read' || '' }}
+      - name: Read the issue checkpoint and select the immutable source
+        id: context
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          PUBLISHER: ${{ steps.reader.outputs.app-slug }}[bot]
+        run: |
+          "$RUNNER_TEMP/dependencyaudit" prepare -repo "$TARGET" -initial-sha "$INITIAL" \
+            -area "$AREA" -issue "$ISSUE" -replace-pr "$REPLACE_PR" -publisher-login "$PUBLISHER" \
+            -output "$RUNNER_TEMP/dependency-audit/context.json"
+      - name: Mint a comment-only token for an existing PR
+        if: inputs.mode == 'apply' && steps.context.outputs.pull_request != '0'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: linker
+        with:
+          client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+          private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.repo }}
+          permission-issues: write
+          permission-pull-requests: read
+      - name: Refresh the existing PR link
+        if: inputs.mode == 'apply' && steps.context.outputs.pull_request != '0'
+        id: link
+        env:
+          GH_TOKEN: ${{ steps.linker.outputs.token }}
+          PUBLISHER: ${{ steps.linker.outputs.app-slug }}[bot]
+        run: |
+          "$RUNNER_TEMP/dependencyaudit" link -repo "$TARGET" -area "$AREA" -replace-pr "$REPLACE_PR" \
+            -publisher-login "$PUBLISHER" -input "$RUNNER_TEMP/dependency-audit/context.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: inputs.mode == 'audit' || steps.context.outputs.pull_request == '0'
+        with:
+          name: dependency-context-${{ steps.target.outputs.key }}
+          path: ${{ runner.temp }}/dependency-audit/context.json
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: true
+
+  audit:
+    needs: prepare
+    if: inputs.mode == 'audit'
+    uses: ./.github/workflows/dependency-audit-agent.lock.yml
+    secrets: inherit
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      copilot-requests: write
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      owner: ${{ needs.prepare.outputs.owner }}
+      repo: ${{ needs.prepare.outputs.repo }}
+      key: ${{ needs.prepare.outputs.key }}
+      branch: ${{ needs.prepare.outputs.branch }}
+      base: ${{ needs.prepare.outputs.base }}
+      head: ${{ needs.prepare.outputs.head }}
+      control_repo: ${{ github.repository }}
+      control_sha: ${{ github.workflow_sha }}
+
+  apply:
+    needs: prepare
+    if: inputs.mode == 'apply' && needs.prepare.outputs.pull == '0'
+    uses: ./.github/workflows/dependency-audit-apply-agent.lock.yml
+    secrets: inherit
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      owner: ${{ needs.prepare.outputs.owner }}
+      repo: ${{ needs.prepare.outputs.repo }}
+      key: ${{ needs.prepare.outputs.key }}
+      branch: ${{ needs.prepare.outputs.branch }}
+      head: ${{ needs.prepare.outputs.head }}
+      work_branch: ${{ needs.prepare.outputs.work_branch }}
+      module: ${{ needs.prepare.outputs.module }}
+      issue: ${{ needs.prepare.outputs.issue }}
+      replaces: ${{ needs.prepare.outputs.replaces }}
+      comment: ${{ needs.prepare.outputs.comment }}
+      area: ${{ inputs.area }}
+      control_repo: ${{ github.repository }}
+      control_sha: ${{ github.workflow_sha }}

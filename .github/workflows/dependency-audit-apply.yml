@@ -1,0 +1,79 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Apply one dependency audit area
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Enrolled repository in owner/repo form"
+        required: true
+        type: string
+      area:
+        description: "Stable area slug from the current modernization tracker"
+        required: true
+        type: string
+      issue:
+        description: "Current tracker issue number, or 0 to find it automatically"
+        default: 0
+        type: number
+      replace_pr:
+        description: "Closed, unmerged migration PR to explicitly replace, or 0"
+        default: 0
+        type: number
+
+permissions:
+  actions: write
+  contents: read
+  copilot-requests: write
+
+jobs:
+  target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      repository: ${{ steps.target.outputs.repository }}
+    steps:
+      - name: Require the central default branch
+        if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          echo "::error::Dependency migrations must run from the central repository's default branch."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Validate enrollment and the apply gate
+        id: target
+        env:
+          DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
+          DEPENDENCY_AUDIT_ENABLE_APPLY: ${{ vars.DEPENDENCY_AUDIT_ENABLE_APPLY }}
+          TARGET_REPOSITORY: ${{ inputs.target_repo }}
+          AREA: ${{ inputs.area }}
+          TRACKER_ISSUE: ${{ inputs.issue }}
+          REPLACE_PR: ${{ inputs.replace_pr }}
+        run: go run ./cmd/dependencyaudit targets -repo "$TARGET_REPOSITORY" -area "$AREA" -issue "$TRACKER_ISSUE" -replace-pr "$REPLACE_PR"
+
+  apply:
+    needs: target
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    uses: ./.github/workflows/dependency-audit-target.yml
+    secrets: inherit
+    with:
+      mode: apply
+      target_repo: ${{ needs.target.outputs.repository }}
+      area: ${{ inputs.area }}
+      issue: ${{ inputs.issue }}
+      replace_pr: ${{ inputs.replace_pr }}
