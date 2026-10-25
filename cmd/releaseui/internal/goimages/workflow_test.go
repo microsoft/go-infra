@@ -6,6 +6,7 @@ package goimages
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ var testInput = &Input{
 type fakeService struct {
 	mirrorErr error
 	pollErr   error
+	status    coordinator.StepStatus
 	mirrors   int
 	queues    int
 	polls     int
@@ -43,12 +45,21 @@ func (service *fakeService) QueuePipeline(_ context.Context, parameters map[stri
 	return "888", nil
 }
 
-func (service *fakeService) PollPipeline(_ context.Context, buildID string) error {
+func (service *fakeService) GetPipelineStatus(_ context.Context, buildID string) (*coordinator.Observation, error) {
 	service.polls++
 	if buildID != "888" {
-		return errors.New("unexpected build ID")
+		return nil, errors.New("unexpected build ID")
 	}
-	return service.pollErr
+	if service.pollErr != nil {
+		return nil, service.pollErr
+	}
+	status := service.status
+	if status == "" {
+		status = coordinator.StepStatusSucceeded
+	}
+	return &coordinator.Observation{
+		Status: status, Progress: coordinator.StepProgress{RunURL: pipelineRunURL(buildID)},
+	}, nil
 }
 
 func TestPipelineParameters(t *testing.T) {
@@ -112,8 +123,7 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 	for _, result := range []string{"failed", "canceled"} {
 		t.Run(result, func(t *testing.T) {
-			terminalErr := errors.New("pipeline " + result)
-			service := &fakeService{pollErr: &PipelineResultError{Result: result, Err: terminalErr}}
+			service := &fakeService{status: coordinator.StepStatus(result)}
 			var checkpoint State
 			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
 				checkpoint = *state
@@ -122,8 +132,11 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 				t.Fatal(err)
 			}
 			var runner coordinator.StepRunner
-			if err := runner.Execute(context.Background(), steps); !errors.Is(err, terminalErr) {
-				t.Fatalf("error = %v, want %v", err, terminalErr)
+			err = runner.Execute(context.Background(), steps)
+			if err == nil || !strings.Contains(err.Error(), result) ||
+				errors.Is(err, coordinator.ErrCanceled) != (result == "canceled") {
+
+				t.Fatalf("terminal error = %v", err)
 			}
 			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
 				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)

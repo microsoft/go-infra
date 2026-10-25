@@ -127,7 +127,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID))
 		mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID))
 		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request, _ processRequest) {
-			s.handleStartProcessRun(processID, response, request)
+			s.handleStartProcessRun(processID, response, request, false)
+		}))
+		mux.HandleFunc("POST "+prefix+"/resume", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request, _ processRequest) {
+			s.handleStartProcessRun(processID, response, request, true)
 		}))
 		mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, s.handleState))
 		mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, s.handleEvents))
@@ -276,6 +279,7 @@ func (s *Server) handleStartProcessRun(
 	processID string,
 	response http.ResponseWriter,
 	request *http.Request,
+	resume bool,
 ) {
 	if !localserver.SameOrigin(request) {
 		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
@@ -286,7 +290,11 @@ func (s *Server) handleStartProcessRun(
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.runs.Start(request.Context(), processID, start); err != nil {
+	execute := s.runs.Start
+	if resume {
+		execute = s.runs.Resume
+	}
+	if err := execute(request.Context(), processID, start); err != nil {
 		writeProcessRunError(response, request, err)
 		return
 	}

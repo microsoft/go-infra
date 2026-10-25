@@ -191,25 +191,39 @@ The current prototype can show older test records as **Cannot open in this sessi
 This is an unreleased prototype. Compatibility with data from earlier prototype builds is not
 guaranteed, and older test records may remain read-only. Supported current-format records can
 still be reopened in another UI session.
-For supported records with a known external run that this UI is no longer monitoring, the dashboard
-automatically checks that run using read-only requests. It shows the verified external status
-separately from the saved checkpoint and keeps the external-run link available, even for closed
-items. Failed lookups are shown as unverified, not running or successful. These checks never
-resume execution, queue a pipeline, dispatch a workflow, or rewrite the work item.
+Opening a supported record reconstructs its graph without executing steps or writing a checkpoint.
+The graph starts with each step's saved status, progress, and error. For unfinished records with a
+known Azure build or GitHub workflow ID, monitor steps refresh external status every five seconds
+using the same validated reads as normal execution. Each observed step shows its own run link and
+last-check time. Viewing never queues or dispatches an operation, runs an action step, or writes a
+checkpoint. A failed lookup keeps the last known progress visible and reports the refresh error.
+Slow optional diagnostic requests do not hide a confirmed Azure build result.
+The dashboard uses these graph observations too. An external run succeeding does not mark an
+unfinished release complete or start its remaining actions.
 
-Starting and running work appears under **Ongoing releases**. Open failed, canceled, and uncertain work appears
+Use a step's **Open external run** link or **Open release run** for full pipeline or workflow details.
+If this server is already executing the selected run, its graph shows execution progress, including
+for other viewers connected before a resume. Read-only refreshes stop before execution resumes and
+when the selected graph is replaced or the server stops.
+
+Work executing in this UI appears under **Ongoing releases**. Open failed, canceled, uncertain, and
+unmonitored unfinished work appears
 under **Needs attention**. Successful work and manually closed terminal outcomes appear under
 **Recent history** without rewriting the execution result. Closed unfinished records remain read-only.
 Clicking an available card or **Open** selects
-one work item for this server. Its Azure DevOps browser link appears on the dashboard and selected
+one work item for its process session without resuming it. Its Azure DevOps browser link appears on the dashboard and selected
 release page. **View JSON** exports its snapshot for manual repair and imports edited JSON only when
-the exported Azure DevOps revision is still current. Import validates the process payload and cannot
-change its process ID or immutable intent digest. Restart without a selected release before
+the exported Azure DevOps revision is still current. Import validates the process payload and rebuilt
+graph before updating the record. Missing or incompatible graph steps are rejected. Import cannot
+change the process ID or immutable intent digest. Restart without a selected release before
 repairing that release's state. Reopening the currently selected work item is idempotent; selecting a
 different work item still requires restarting the server.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
+An open unfinished saved run instead offers **Resume release** then **Confirm resume**.
+Resuming continues the existing record and requires its reviewed revision to remain current.
+It may perform external actions; opening the graph never authorizes those actions.
 Normal and rollback runs can publish production images under `public/`.
 Test runs are fixed to `dev/`.
 Do not confirm a real execution without authorization.
@@ -238,16 +252,19 @@ of reporting success.
 Correlation variables bind an Azure run to the release session ID, release mode, execution digest, source build, source commit, and version metadata.
 If the process restarts in the queue-response crash window, it reconciles recent runs before attempting another POST.
 
-When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
-The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
+Neither startup nor opening a saved record resumes execution automatically. Only a confirmed
+resume runs its steps. Process-owned checkpoints and reconciliation still determine whether a
+step can continue without duplicating an external action.
 
 The Go-images document stores only standalone input and state. `Run.Build` reconstructs the
-coordinator graph instead of serializing it. The release UI stores the document inside the
+executable graph without running it. The shared lifecycle saves graph display snapshots alongside
+the process checkpoint; those snapshots do not authorize or skip external actions.
+The release UI stores the document inside the
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
 
-The current server runs one selected release at a time. Go-images and Go-infra state live only
-in the selected Azure DevOps work item. The server creates the work item before calling the target
+The server keeps one selected release per configured process. Durable release state lives
+in its Azure DevOps work item. The server creates the work item before calling the target
 service, updates it with an Azure DevOps revision check, and resumes monitoring a known external run
 after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and
 refuses a replacement.

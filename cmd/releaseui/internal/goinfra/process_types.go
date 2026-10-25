@@ -41,7 +41,6 @@ type GitHubService interface {
 	AddReleaseOnMergeLabel(context.Context, int, string) (GoInfraPullRequest, error)
 	DispatchPatchRelease(context.Context, bool) (GoInfraWorkflowRun, error)
 	GetWorkflowRun(context.Context, int64) (GoInfraWorkflowRun, error)
-	PollWorkflowRun(context.Context, int64, func(GoInfraWorkflowRun) error) (GoInfraWorkflowRun, error)
 }
 
 type goInfraPlanInput struct {

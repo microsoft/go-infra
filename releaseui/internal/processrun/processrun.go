@@ -47,12 +47,14 @@ type processSession struct {
 	record       *runstore.Record
 	running      bool
 	checkpointer *processCheckpointer
+	watchCancel  context.CancelFunc
 }
 
 type processRunUpdate struct {
 	state          *runstore.State
 	expectedRecord *runstore.Record
 	plan           *contract.Plan
+	runner         *coordinator.StepRunner
 }
 
 type processCheckpointer struct {
@@ -268,30 +270,47 @@ func (s *Manager) Prepare(
 		return webview.ProcessRunResponse[*contract.Plan]{},
 			errorf(ErrorInternal, "create release run state: %v", err)
 	}
+	runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
+	if err != nil {
+		return webview.ProcessRunResponse[*contract.Plan]{}, newError(ErrorInternal, err)
+	}
+	state.Execution = runner.ExecutionSnapshot()
 
 	session, _ := s.processSession(processID)
-	result, err := session.publishPreparedRun(run, state, plan, steps)
+	result, err := session.publishPreparedRun(run, state, plan, steps, runner)
 	if err != nil {
 		return webview.ProcessRunResponse[*contract.Plan]{}, newError(ErrorConflict, err)
 	}
 	return result, nil
 }
 
+// Start confirms and starts a new release.
 func (s *Manager) Start(ctx context.Context, processID string, start webview.ReleaseStartRequest) error {
+	return s.start(ctx, processID, start, false)
+}
+
+// Resume explicitly continues an open saved checkpoint after revision and confirmation checks.
+func (s *Manager) Resume(ctx context.Context, processID string, start webview.ReleaseStartRequest) error {
+	return s.start(ctx, processID, start, true)
+}
+
+func (s *Manager) start(ctx context.Context, processID string, start webview.ReleaseStartRequest, resume bool) error {
 	registered, ok := s.processes.Lookup(processID)
 	if !ok {
 		return newError(ErrorNotFound, errors.New("release process is not configured"))
 	}
 	session, _ := s.processSession(processID)
-	state, err := session.reserveStart(start)
+	update, err := session.reserveStart(start, resume)
 	if err != nil {
 		return err
 	}
+	state := update.state
 
-	_, blocking := registered.Implementation.Preflight(ctx)
-	if blocking != nil {
-		session.stopStart(state.Digest)
-		return errorf(ErrorPrecondition, "external action preflight failed before mutation: %v", blocking)
+	if !resume {
+		if _, blocking := registered.Implementation.Preflight(ctx); blocking != nil {
+			session.stopStart(state.Digest)
+			return errorf(ErrorPrecondition, "external action preflight failed before mutation: %v", blocking)
+		}
 	}
 	run, err := loadReleaseRun(registered.Implementation, state.Snapshot)
 	if err != nil {
@@ -321,16 +340,37 @@ func (s *Manager) Start(ctx context.Context, processID string, start webview.Rel
 		session.stopStart(state.Digest)
 		return newError(ErrorConflict, errors.New("execution graph no longer matches the reviewed plan"))
 	}
+	runner := update.runner
+	if err := runner.ValidateSteps(steps); err != nil {
+		checkpointer.Close()
+		cancel()
+		session.stopStart(state.Digest)
+		return newError(ErrorConflict, err)
+	}
+	if state.Checkpointed {
+		checkpointer.persisted.Store(true)
+	}
 	state.Started = true
-	state.UpdatedAt = run.TakeView().UpdatedAt
-	record, err := s.store.Create(ctx, registered.DisplayName(), state, run.TakeView(), plan)
+	view := run.TakeView()
+	if view != nil && !view.UpdatedAt.IsZero() {
+		state.UpdatedAt = view.UpdatedAt
+	}
+	var record *runstore.Record
+	if resume {
+		record, err = s.store.Update(ctx, update.expectedRecord, state, view, plan)
+	} else {
+		record, err = s.store.Create(ctx, registered.DisplayName(), state, view, plan)
+	}
 	if err != nil {
 		checkpointer.Close()
 		cancel()
 		session.stopStart(state.Digest)
-		return errorf(ErrorInternal, "create release record before mutation: %v", err)
+		if errors.Is(err, runstore.ErrConflict) {
+			return errorf(ErrorConflict, "release record changed before execution: %v", err)
+		}
+		return errorf(ErrorInternal, "save release record before execution: %v", err)
 	}
-	runner, err := session.publishStartedRun(run, state, record, plan, steps, checkpointer)
+	err = session.publishStartedRun(update, run, record, plan, steps, checkpointer)
 	if err != nil {
 		checkpointer.Close()
 		cancel()
@@ -371,6 +411,7 @@ func (s *Manager) executeProcessRun(
 	}); err != nil {
 		log.Printf("Release run finished: %v", err)
 	}
+	s.watchProcessRun(session, runner, steps)
 }
 
 func (s *Manager) finishProcessRun(
@@ -394,6 +435,11 @@ func (s *Manager) finishProcessRun(
 	state.Complete, state.Result = processRunOutcome(
 		executionErr, snapshotErr, checkpointer.failed.Load(), checkpointer.persisted.Load(),
 	)
+	state.Execution = update.runner.ExecutionSnapshot()
+	state.Execution.Active = false
+	if failure := errors.Join(executionErr, snapshotErr, checkpointer.failureError()); failure != nil {
+		state.Execution.Error = failure.Error()
+	}
 	if view != nil && !view.UpdatedAt.IsZero() {
 		state.UpdatedAt = view.UpdatedAt
 	}
@@ -408,8 +454,8 @@ func (s *Manager) finishProcessRun(
 	return errors.Join(checkpointer.failureError(), snapshotErr, saveErr, publishErr)
 }
 
-func (s *Manager) restoreProcessRunRecord(record *runstore.Record) error {
-	if err := validateRecordForExecution(record); err != nil {
+func (s *Manager) restoreProcessRunRecord(ctx context.Context, record *runstore.Record) error {
+	if err := runstore.ValidateRecord(record); err != nil {
 		return err
 	}
 	state := record.Run.Clone()
@@ -422,42 +468,57 @@ func (s *Manager) restoreProcessRunRecord(record *runstore.Record) error {
 		return fmt.Errorf("load stored process run: %w", err)
 	}
 	plan := run.Plan()
-	executionContext, cancel := context.WithCancel(s.ctx)
 	session, _ := s.processSession(state.ProcessID)
-	checkpointer := s.newProcessCheckpointer(session, state.Digest, run, cancel)
-	if state.Checkpointed {
-		checkpointer.persisted.Store(true)
-	}
-	steps, err := run.Build(executionContext, checkpointer.Checkpoint)
+	steps, runner, err := buildReadOnlyGraph(ctx, run, state)
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		return fmt.Errorf("reconstruct process graph: %w", err)
-	}
-	builtSnapshot, err := snapshotReleaseRun(run)
-	if err != nil || !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
-		checkpointer.Close()
-		cancel()
-		return errors.New("reconstructing the process graph changed its state")
-	}
-	if err := validateProcessRunGraph(steps); err != nil {
-		checkpointer.Close()
-		cancel()
-		return fmt.Errorf("restore process graph: %w", err)
-	}
-	runner, running, err := session.publishRestoredRun(run, state, record, plan, steps, checkpointer)
-	if err != nil {
-		checkpointer.Close()
-		cancel()
 		return err
 	}
-	if running {
-		go s.executeProcessRun(session, state.Digest, executionContext, runner, steps, run, checkpointer)
-	} else {
-		checkpointer.Close()
-		cancel()
+	if err := session.publishRestoredRun(run, state, record, plan, steps, runner); err != nil {
+		return err
 	}
+	s.watchProcessRun(session, runner, steps)
 	return nil
+}
+
+func (s *Manager) watchProcessRun(session *processSession, runner *coordinator.StepRunner, steps []*coordinator.Step) {
+	observable := false
+	for _, step := range steps {
+		observable = observable || step.Observe != nil
+	}
+	if !observable {
+		return
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	session.mu.Lock()
+	if session.runner != runner || session.running || session.state == nil || !session.state.Started || session.state.Complete {
+		session.mu.Unlock()
+		cancel()
+		return
+	}
+	session.stopObservingLocked()
+	session.watchCancel = cancel
+	session.mu.Unlock()
+	go func() {
+		defer cancel()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			refreshContext, finishRefresh := context.WithTimeout(ctx, 5*time.Second)
+			err := runner.Observe(refreshContext)
+			finishRefresh()
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				log.Printf("Refresh read-only release graph: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 }
 
 func (s *processSession) hasSelectedOrPreparedReleaseLocked() bool {
@@ -485,25 +546,23 @@ func (s *processSession) responseLocked() webview.ProcessRunResponse[*contract.P
 		return webview.ProcessRunResponse[*contract.Plan]{}
 	}
 	state := s.state
-	steps := describeSteps(s.steps)
-	if state.Complete {
-		status := resultSucceeded
-		if state.Result != resultSucceeded {
-			status = resultFailed
-		}
-		if state.Result == resultCanceled {
-			status = resultCanceled
-		}
-		for index := range steps {
-			steps[index].Status = status
+	graph := s.runner.Snapshot()
+	steps := make([]webview.PlanStep, len(graph.Steps))
+	for index, step := range graph.Steps {
+		steps[index] = webview.PlanStep{
+			Name: step.Name, DependsOn: step.DependsOn, Status: string(step.Status),
 		}
 	}
 	execution := webview.ExecutionResponse{
 		PlanDigest: state.Digest,
 		Run:        webview.PipelineRun{Complete: state.Complete, Result: state.Result},
+		Saved:      state.Started && !s.running,
 	}
 	if s.record != nil {
-		execution.Record = &webview.ReleaseRecordReference{ID: s.record.ID, URL: s.record.URL}
+		execution.Record = &webview.ReleaseRecordReference{
+			ID: s.record.ID, URL: s.record.URL, Revision: s.record.Revision,
+		}
+		execution.CanResume = !s.running && !state.Complete && !s.record.Closed
 	}
 	return webview.ProcessRunResponse[*contract.Plan]{
 		VariantID: state.ProcessID,
@@ -517,23 +576,25 @@ func (s *processSession) publishPreparedRun(
 	state *runstore.State,
 	plan *contract.Plan,
 	steps []*coordinator.Step,
+	runner *coordinator.StepRunner,
 ) (webview.ProcessRunResponse[*contract.Plan], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.running {
 		return webview.ProcessRunResponse[*contract.Plan]{}, errors.New("cannot replace the plan while a workflow is running")
 	}
+	s.stopObservingLocked()
 	s.run = run
 	s.state = state
 	s.plan = plan
 	s.record = nil
 	s.steps = steps
-	s.runner = &coordinator.StepRunner{}
+	s.runner = runner
 	return s.responseLocked(), nil
 }
 
 // Start confirms and starts the prepared release for processID.
-func (s *processSession) reserveStart(start webview.ReleaseStartRequest) (*runstore.State, error) {
+func (s *processSession) reserveStart(start webview.ReleaseStartRequest, resume bool) (*processRunUpdate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.run == nil || s.state == nil {
@@ -545,41 +606,57 @@ func (s *processSession) reserveStart(start webview.ReleaseStartRequest) (*runst
 	if !start.Confirmed {
 		return nil, newError(ErrorInvalid, errors.New("confirm the external action before starting it"))
 	}
-	if s.state.Started || s.running {
+	if s.running || s.state.Complete || s.state.Started != resume {
 		return nil, newError(ErrorConflict, errors.New("the reviewed external action has already started"))
 	}
-	state := s.state.Clone()
+	if resume {
+		if err := validateRecordForExecution(s.record); err != nil {
+			return nil, newError(ErrorConflict, err)
+		}
+		if start.Revision <= 0 || start.Revision != s.record.Revision {
+			return nil, newError(ErrorConflict, errors.New("release record changed; restart the UI before resuming"))
+		}
+	}
 	s.running = true
-	return state, nil
+	return &processRunUpdate{
+		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan, runner: s.runner,
+	}, nil
 }
 
 func (s *processSession) publishStartedRun(
+	update *processRunUpdate,
 	run contract.Run,
-	state *runstore.State,
 	record *runstore.Record,
 	plan *contract.Plan,
 	steps []*coordinator.Step,
 	checkpointer *processCheckpointer,
-) (*coordinator.StepRunner, error) {
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state == nil || s.state.Started || !localserver.Equal(s.state.Digest, state.Digest) {
-		return nil, errors.New("reviewed external action changed before start")
+	if s.state == nil || s.runner != update.runner || !localserver.Equal(s.state.Digest, update.state.Digest) {
+		return errors.New("reviewed external action changed before start")
+	}
+	if update.expectedRecord != nil {
+		if err := validateProcessRunUpdateLocked(s, update); err != nil {
+			return err
+		}
+	} else if s.state.Started || s.record != nil {
+		return errors.New("reviewed external action changed before start")
 	}
 	s.run = run
 	s.state = record.Run.Clone()
 	s.plan = plan
 	s.record = record
 	s.steps = steps
-	s.runner = &coordinator.StepRunner{}
 	s.checkpointer = checkpointer
-	return s.runner, nil
+	s.stopObservingLocked()
+	return nil
 }
 
 func (s *processSession) stopStart(digest string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != nil && localserver.Equal(s.state.Digest, digest) && !s.state.Started {
+	if s.state != nil && localserver.Equal(s.state.Digest, digest) && s.checkpointer == nil {
 		s.running = false
 	}
 }
@@ -591,7 +668,7 @@ func (s *processSession) captureRunUpdate(digest string) (*processRunUpdate, err
 		return nil, fmt.Errorf("%w: release run changed before persistence", runstore.ErrConflict)
 	}
 	return &processRunUpdate{
-		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan,
+		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan, runner: s.runner,
 	}, nil
 }
 
@@ -642,26 +719,29 @@ func (s *processSession) publishRestoredRun(
 	record *runstore.Record,
 	plan *contract.Plan,
 	steps []*coordinator.Step,
-	checkpointer *processCheckpointer,
-) (*coordinator.StepRunner, bool, error) {
+	runner *coordinator.StepRunner,
+) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.hasSelectedOrPreparedReleaseLocked() {
-		return nil, false, errors.New("a release was prepared while the record was restoring")
+		return errors.New("a release was prepared while the record was restoring")
 	}
-	runner := &coordinator.StepRunner{}
-	running := state.Started && !state.Complete
 	s.run = run
 	s.state = state
 	s.plan = plan
 	s.record = record
 	s.steps = steps
 	s.runner = runner
-	s.running = running
-	if running {
-		s.checkpointer = checkpointer
+	s.running = false
+	s.checkpointer = nil
+	return nil
+}
+
+func (s *processSession) stopObservingLocked() {
+	if s.watchCancel != nil {
+		s.watchCancel()
+		s.watchCancel = nil
 	}
-	return runner, running, nil
 }
 
 func (c *processCheckpointer) Checkpoint() {
@@ -720,6 +800,8 @@ func (c *processCheckpointer) persist() bool {
 	}
 	state := update.state
 	state.Snapshot = snapshot
+	state.Execution = update.runner.ExecutionSnapshot()
+	state.Execution.Active = false
 	state.Checkpointed = true
 	if view != nil && !view.UpdatedAt.IsZero() {
 		state.UpdatedAt = view.UpdatedAt
@@ -769,6 +851,35 @@ func newProcessSessions(processes *processregistry.Registry) map[string]*process
 		sessions[process.Definition.ID] = &processSession{runner: &coordinator.StepRunner{}}
 	}
 	return sessions
+}
+
+func buildReadOnlyGraph(
+	ctx context.Context,
+	run contract.Run,
+	state *runstore.State,
+) ([]*coordinator.Step, *coordinator.StepRunner, error) {
+	if len(state.Execution.Steps) == 0 {
+		return nil, nil, errors.New("release record has no saved graph")
+	}
+	steps, err := run.Build(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reconstruct process graph: %w", err)
+	}
+	builtSnapshot, err := snapshotReleaseRun(run)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
+		return nil, nil, errors.New("reconstructing the process graph changed its state")
+	}
+	if err := validateProcessRunGraph(steps); err != nil {
+		return nil, nil, fmt.Errorf("restore process graph: %w", err)
+	}
+	runner, err := coordinator.NewStepRunner(steps, state.Execution)
+	if err != nil {
+		return nil, nil, err
+	}
+	return steps, runner, nil
 }
 
 func snapshotReleaseRun(run contract.Run) (*contract.StateSnapshot, error) {
@@ -831,20 +942,6 @@ func processRunOutcome(executionErr, snapshotErr error, checkpointFailed, checkp
 	default:
 		return true, resultFailed
 	}
-}
-
-func describeSteps(steps []*coordinator.Step) []webview.PlanStep {
-	descriptions := make([]webview.PlanStep, 0, len(steps))
-	for _, step := range steps {
-		description := webview.PlanStep{
-			Name: step.Name, DependsOn: make([]string, len(step.DependsOn)), Status: "waiting",
-		}
-		for i, dependency := range step.DependsOn {
-			description.DependsOn[i] = dependency.Name
-		}
-		descriptions = append(descriptions, description)
-	}
-	return descriptions
 }
 
 func validateProcessRunGraph(steps []*coordinator.Step) error {

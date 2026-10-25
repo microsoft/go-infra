@@ -111,22 +111,11 @@ type Run interface {
 	// Build does not change the Run state or mutate an external service. Only execution of the
 	// returned steps may do so.
 	//
-	// This method is called at most once per instance of [Run].
+	// This method is called at most once per instance of [Run]. A nil checkpoint constructs a
+	// graph for viewing only and must not require execution readiness or contact external services.
+	// Steps may expose read-only observations for known external operations; those callbacks must
+	// not change the Run state or invoke checkpoint.
 	Build(context.Context, CheckpointFunc) ([]*coordinator.Step, error)
-}
-
-// RunInspector optionally reads the current external run status without executing steps,
-// changing the Run snapshot, or mutating an external service.
-type RunInspector interface {
-	Inspect(context.Context) (*RunInspection, error)
-}
-
-// RunInspection is a read-only observation, separate from a release's persisted checkpoint.
-type RunInspection struct {
-	RunURL string
-
-	// Status is waiting, running, succeeded, failed, or canceled.
-	Status string
 }
 
 // CheckpointFunc must be called by a Run's steps after changing state. This allows releaseui to

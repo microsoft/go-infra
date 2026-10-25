@@ -27,7 +27,6 @@ type fakeProcess struct {
 	plan       *contract.Plan
 	planForRun func(*contract.StateSnapshot) *contract.Plan
 	view       *contract.RunView
-	inspect    func(context.Context, *contract.StateSnapshot) (*contract.RunInspection, error)
 }
 
 type fakeReleaseRun struct {
@@ -79,13 +78,6 @@ func (r *fakeReleaseRun) TakeView() *contract.RunView {
 	}
 	view := *r.process.view
 	return &view
-}
-
-func (r *fakeReleaseRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
-	if r.process.inspect == nil {
-		return nil, errors.New("fake read-only inspection is not configured")
-	}
-	return r.process.inspect(ctx, r.TakeSnapshot())
 }
 
 func (r *fakeReleaseRun) Plan() *contract.Plan {
@@ -153,6 +145,9 @@ func testProcessRun(t *testing.T) *runstore.State {
 	if err != nil {
 		t.Fatal(err)
 	}
+	run.Execution = coordinator.Snapshot{Steps: []coordinator.StepSnapshot{
+		{Name: "Run example", Status: coordinator.StepStatusWaiting},
+	}}
 	return run
 }
 

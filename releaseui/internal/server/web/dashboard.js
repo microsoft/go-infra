@@ -61,12 +61,10 @@ function createReleaseCard(release) {
   title.textContent = release.issue ? release.name : `${release.name} · ${formatMode(release.mode)}`;
   const status = document.createElement("span");
   status.className = "status-badge";
-  status.dataset.status = release.issue && !release.externalStatus ? "unavailable" : release.status;
-  status.textContent = release.externalStatus
-    ? statusText(release.externalStatus)
-    : release.issue
-      ? release.closed ? "Read-only" : "Needs attention"
-      : statusText(release.status);
+  status.dataset.status = release.issue ? "unavailable" : release.status;
+  status.textContent = release.issue
+    ? release.closed ? "Read-only" : "Needs attention"
+    : statusText(release.status);
   top.append(title, status);
   body.append(top);
 
@@ -75,7 +73,6 @@ function createReleaseCard(release) {
     card.classList.add("release-card-issue");
     if (release.closed) card.classList.add("release-card-history");
     details.textContent = `Saved release status: ${release.savedStatus || release.status || "Not readable"}`;
-    if (release.externalStatus) details.textContent = `External run: ${statusText(release.externalStatus)} · ${details.textContent}`;
     if (release.issue.recordState) {
       details.textContent += ` · Work-item state: ${release.issue.recordState}`;
     } else if (release.closed) {
@@ -110,10 +107,12 @@ function createReleaseCard(release) {
       body.append(technical);
     }
   } else {
-    details.textContent = release.externalStatus
-      ? `External run: ${statusText(release.externalStatus)} · Updated ${new Date(release.updatedAt).toLocaleString()}`
-      : `Updated ${new Date(release.updatedAt).toLocaleString()}`;
-    if (release.savedStatus === "running" && !release.externalStatus) details.textContent += " · Status from saved checkpoint";
+    details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}`;
+    if (release.externalStatus) {
+      details.textContent += ` · External status: ${statusText(release.externalStatus)}`;
+    } else if (release.status === "saved") {
+      details.textContent += " · Not executing in this UI. Open to view progress and available external status.";
+    }
     body.append(details);
   }
 
@@ -279,6 +278,7 @@ function formatMode(mode) {
 }
 
 function statusText(status) {
+  if (status === "saved") return "Saved progress";
   return status === "running" ? "in progress" : status;
 }
 

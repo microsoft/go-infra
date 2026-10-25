@@ -119,33 +119,34 @@ func TestDispatchWorkflowIgnoresConcurrentSameActorRun(t *testing.T) {
 	}
 }
 
-func TestPollWorkflowRunWaitsForSuccess(t *testing.T) {
+func TestGetWorkflowRunReadsOneValidatedState(t *testing.T) {
 	runner := &fakeRunner{responses: [][]byte{testRun("queued", ""), testRun("in_progress", ""), testRun("completed", "success")}}
 	client, err := New("github.com", runner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.sleep = func(context.Context, time.Duration) error { return nil }
 	var statuses []string
-	completed, err := client.PollWorkflowRun(context.Background(), testWorkflow(), 123, func(run WorkflowRun) error {
+	for range 3 {
+		run, err := client.GetWorkflowRun(context.Background(), testWorkflow(), 123)
+		if err != nil {
+			t.Fatal(err)
+		}
 		statuses = append(statuses, run.Status)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	if completed.Conclusion != "success" || !reflect.DeepEqual(statuses, []string{"queued", "in_progress", "completed"}) {
-		t.Fatalf("completed = %#v, statuses = %v", completed, statuses)
+	if len(runner.calls) != 3 || !reflect.DeepEqual(statuses, []string{"queued", "in_progress", "completed"}) {
+		t.Fatalf("statuses=%v, calls=%v", statuses, runner.calls)
 	}
 }
 
-func TestPollWorkflowRunReturnsFailure(t *testing.T) {
+func TestGetWorkflowRunReturnsFailureAsData(t *testing.T) {
 	runner := &fakeRunner{responses: [][]byte{testRun("completed", "failure")}}
 	client, err := New("github.com", runner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PollWorkflowRun(context.Background(), testWorkflow(), 123, nil); err == nil {
-		t.Fatal("failed workflow run was accepted")
+	if run, err := client.GetWorkflowRun(context.Background(), testWorkflow(), 123); err != nil ||
+		run.Status != "completed" || run.Conclusion != "failure" || len(runner.calls) != 1 {
+
+		t.Fatalf("run=%#v, err=%v, calls=%v", run, err, runner.calls)
 	}
 }

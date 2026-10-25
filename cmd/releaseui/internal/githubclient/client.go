@@ -411,39 +411,6 @@ func (c *Client) GetWorkflowRun(ctx context.Context, workflow Workflow, id int64
 	return run, nil
 }
 
-// PollWorkflowRun waits until the workflow run completes and reports each observed state.
-func (c *Client) PollWorkflowRun(
-	ctx context.Context,
-	workflow Workflow,
-	id int64,
-	report func(WorkflowRun) error,
-) (WorkflowRun, error) {
-	for {
-		run, err := c.GetWorkflowRun(ctx, workflow, id)
-		if err != nil {
-			return WorkflowRun{}, err
-		}
-		if report != nil {
-			if err := report(run); err != nil {
-				return WorkflowRun{}, err
-			}
-		}
-		switch run.Status {
-		case "queued", "in_progress", "waiting", "pending", "requested":
-			if err := c.sleep(ctx, c.pollInterval); err != nil {
-				return WorkflowRun{}, err
-			}
-		case "completed":
-			if run.Conclusion == "success" {
-				return run, nil
-			}
-			return run, fmt.Errorf("workflow run %d completed with conclusion %q: %s", run.ID, run.Conclusion, run.URL)
-		default:
-			return run, fmt.Errorf("workflow run %d has unsupported status %q", run.ID, run.Status)
-		}
-	}
-}
-
 func (c *Client) listWorkflowRuns(ctx context.Context, workflow Workflow) ([]WorkflowRun, error) {
 	var response struct {
 		WorkflowRuns []WorkflowRun `json:"workflow_runs"`

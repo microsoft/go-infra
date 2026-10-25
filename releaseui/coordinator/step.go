@@ -27,6 +27,9 @@ type Step struct {
 	// It is run in its own goroutine and may block on network calls, retries, etc.
 	// It shouldn't wait for another step to complete: this should be done using DependsOn.
 	Func StepFunc
+	// Observe reads an existing operation without executing Func or changing durable state.
+	// A nil observation means there is no known operation to read yet.
+	Observe func(context.Context) (*Observation, error)
 	// DependsOn is a list of steps that must all complete before Func is run.
 	DependsOn []*Step
 }

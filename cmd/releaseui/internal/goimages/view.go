@@ -15,10 +15,9 @@ func goImagesPlan(
 	source Source,
 	rollbackSource *RollbackSource,
 	parameters map[string]string,
-	stepCount int,
 ) *contract.Plan {
 	plan := &contract.Plan{
-		Subtitle: fmt.Sprintf("%s · pipeline %d · %d steps", modeName(input.Mode), DefinitionID, stepCount),
+		Subtitle: fmt.Sprintf("%s · pipeline %d", modeName(input.Mode), DefinitionID),
 		Facts: []contract.PlanFact{{
 			Label: "Pipeline source", Value: source.Branch, Detail: source.Commit,
 		}},
