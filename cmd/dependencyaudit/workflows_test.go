@@ -119,6 +119,62 @@ func TestReusableWorkflowContracts(t *testing.T) {
 	}
 }
 
+func TestTemporaryPRAuditGate(t *testing.T) {
+	router := loadWorkflow(t, "dependency-audit-target.yml")
+	gate := workflowStepByID(t, router.Jobs["prepare"].Steps, "caller")
+	if gate.If != "github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)" {
+		t.Fatal("the normal default-branch and fork guard must remain unchanged")
+	}
+	for _, test := range []struct {
+		name, key, value string
+		allowed          bool
+	}{
+		{name: "trusted-labeled-audit", allowed: true},
+		{name: "fork-repository", key: "REPOSITORY_FORK", value: "true"},
+		{name: "different-repository", key: "CALLER_REPOSITORY", value: "other/repo"},
+		{name: "different-ref", key: "CALLER_REF", value: "refs/heads/feature"},
+		{name: "different-event", key: "EVENT_NAME", value: "workflow_dispatch"},
+		{name: "push-update", key: "EVENT_ACTION", value: "synchronize"},
+		{name: "different-label", key: "EVENT_LABEL", value: "other-label"},
+		{name: "different-pr", key: "PR_NUMBER", value: "1324"},
+		{name: "fork-pr", key: "PR_HEAD_REPOSITORY", value: "other/agent-framework-go"},
+		{name: "different-head-branch", key: "PR_HEAD_BRANCH", value: "other-branch"},
+		{name: "different-base-branch", key: "PR_BASE_BRANCH", value: "other-branch"},
+		{name: "apply", key: "MODE", value: "apply"},
+		{name: "different-target", key: "TARGET", value: "other/repo"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			env := map[string]string{
+				"CALLER_REPOSITORY":  "microsoft/agent-framework-go",
+				"CALLER_REF":         "refs/pull/1323/merge",
+				"REPOSITORY_FORK":    "false",
+				"EVENT_NAME":         "pull_request",
+				"EVENT_ACTION":       "labeled",
+				"EVENT_LABEL":        "dependency-audit-smoke",
+				"PR_NUMBER":          "1323",
+				"PR_HEAD_REPOSITORY": "microsoft/agent-framework-go",
+				"PR_HEAD_BRANCH":     "dev/mclayton/dependency-audit-consumer",
+				"PR_BASE_BRANCH":     "main",
+				"DEFAULT_BRANCH":     "main",
+				"MODE":               "audit",
+				"TARGET":             "microsoft/agent-framework-go",
+			}
+			if test.key != "" {
+				env[test.key] = test.value
+			}
+			command := exec.CommandContext(t.Context(), "bash", "-euo", "pipefail", "-c", gate.Run)
+			command.Env = os.Environ()
+			for key, value := range env {
+				command.Env = append(command.Env, key+"="+value)
+			}
+			output, err := command.CombinedOutput()
+			if (err == nil) != test.allowed {
+				t.Fatalf("PR audit gate for %s: %s, %v", test.name, output, err)
+			}
+		})
+	}
+}
+
 func TestApplyWorkflowContracts(t *testing.T) {
 	router := loadWorkflow(t, "dependency-audit-target.yml")
 	if !strings.Contains(router.Jobs["apply"].If, "needs.prepare.outputs.pull == '0'") {
