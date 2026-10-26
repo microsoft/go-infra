@@ -25,7 +25,7 @@ import (
 	"github.com/microsoft/go-infra/githubutil"
 )
 
-const marker = "<!-- dependency-audit:v1\n"
+const marker = "```dependency-audit-v1\n"
 
 var (
 	repoPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$`)
@@ -61,6 +61,7 @@ type prepared struct {
 
 type nativeRequest struct {
 	Type        string          `json:"type"`
+	Operation   string          `json:"operation,omitempty"`
 	Title       string          `json:"title,omitempty"`
 	Body        string          `json:"body,omitempty"`
 	Branch      string          `json:"branch,omitempty"`
@@ -224,14 +225,14 @@ func readCheckpoint(issue *github.Issue, publisher string) (*checkpoint, error) 
 		return nil, nil
 	}
 	body := strings.ReplaceAll(issue.GetBody(), "\r\n", "\n")
-	start := strings.Index(body, "<!-- dependency-audit:")
+	start := strings.Index(body, "```dependency-audit-")
 	if start < 0 {
 		return nil, nil
 	}
 	if !strings.HasPrefix(body[start:], marker) || strings.Count(body, marker) != 1 {
 		return nil, errors.New("unsupported or duplicate tracker checkpoint metadata")
 	}
-	encoded, _, ok := strings.Cut(strings.TrimPrefix(body[start:], marker), "\n-->")
+	encoded, _, ok := strings.Cut(strings.TrimPrefix(body[start:], marker), "\n```")
 	var state checkpoint
 	if !ok || json.Unmarshal([]byte(encoded), &state) != nil || !repoPattern.MatchString(state.Repository) ||
 		state.Branch == "" || !shaPattern.MatchString(state.BaseSHA) || !shaPattern.MatchString(state.HeadSHA) ||
@@ -373,7 +374,7 @@ func findComment(ctx context.Context, client *github.Client, c config, issue int
 			return nil, err
 		}
 		for _, comment := range comments {
-			if comment.GetUser().GetLogin() == c.Publisher && strings.HasPrefix(comment.GetBody(), areaMarker(area)) {
+			if comment.GetUser().GetLogin() == c.Publisher && strings.Contains(strings.ReplaceAll(comment.GetBody(), "\r\n", "\n"), areaMarker(area)) {
 				if found != nil {
 					return nil, errors.New("multiple managed comments exist for the selected area")
 				}
@@ -387,15 +388,15 @@ func findComment(ctx context.Context, client *github.Client, c config, issue int
 	}
 }
 
-func areaMarker(slug string) string { return "<!-- dependency-audit-area:" + slug + " -->\n" }
+func areaMarker(slug string) string { return "Dependency audit area: " + slug + "\n" }
 
 func replacementMarker(number int) string {
-	return fmt.Sprintf("<!-- dependency-audit-replaces:%d -->\n", number)
+	return fmt.Sprintf("Dependency audit replaces: %d\n", number)
 }
 
 func matchesArea(pull *github.PullRequest, c config, slug string) bool {
 	return pull.GetUser().GetLogin() == c.Publisher && pull.GetUser().GetType() == "Bot" &&
-		(strings.Contains(pull.GetBody(), areaMarker(slug)) || pull.GetTitle() == "[dependency-audit] Modernize "+slug)
+		(strings.Contains(strings.ReplaceAll(pull.GetBody(), "\r\n", "\n"), areaMarker(slug)) || pull.GetTitle() == "[dependency-audit] Modernize "+slug)
 }
 
 func findPull(ctx context.Context, client *github.Client, c config, slug string) (*github.PullRequest, error) {
@@ -631,7 +632,10 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 			return errors.New("migration must create a fresh draft on the prepared branch")
 		}
 		body := item.Body
-		if strings.TrimSpace(body) == "" || len(body) > 58000 || strings.Contains(body, "<!-- dependency-audit-") {
+		if strings.TrimSpace(body) == "" || len(body) > 58000 ||
+			strings.Contains(body, "Dependency audit area:") || strings.Contains(body, "Dependency audit replaces:") ||
+			strings.Contains(body, "```dependency-audit-") {
+
 			return errors.New("new migration draft requires a bounded explanation without reserved automation markers")
 		}
 		header := areaMarker(c.Area)
@@ -650,7 +654,7 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		items = []nativeRequest{write, comment}
 	} else {
 		body := item.Body
-		if item.Type != "create_issue" || strings.Contains(body, "<!-- dependency-audit:") {
+		if item.Type != "create_issue" || strings.Contains(body, "```dependency-audit-") {
 			return errors.New("audit must submit one report without model-generated checkpoint metadata")
 		}
 		areas, err := reportAreas(body, p.State.Areas)
@@ -662,13 +666,13 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		if err != nil {
 			return err
 		}
-		body = marker + string(encoded) + "\n-->\n\n" + body
+		body = marker + string(encoded) + "\n```\n\n" + body
 		if len(body) > 60000 {
 			return errors.New("report exceeds the 60000-byte limit")
 		}
 		items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
 		if state != nil && state.HeadSHA == p.State.HeadSHA {
-			items[0] = nativeRequest{Type: "update_issue", IssueNumber: issue.GetNumber(), Body: body}
+			items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
 			if state.Previous != 0 {
 				old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, state.Previous)
 				if err != nil {

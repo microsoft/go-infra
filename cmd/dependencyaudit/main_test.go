@@ -37,7 +37,7 @@ func tracker(t *testing.T, number int, state checkpoint) *github.Issue {
 	}
 	return &github.Issue{
 		Number: new(number), State: new("open"), User: &github.User{Login: new("audit[bot]"), Type: new("Bot")},
-		Body: new("Native header\n\n" + marker + string(data) + "\n-->\n\n" + report(state.Areas...)),
+		Body: new("Native header\n\n" + marker + string(data) + "\n```\n\n" + report(state.Areas...)),
 	}
 }
 
@@ -227,7 +227,7 @@ func TestCheckpointOwnershipAndCorruption(t *testing.T) {
 		t.Fatal("spoofed metadata was accepted")
 	}
 	issue.User.Login = new("audit[bot]")
-	issue.Body = new(marker + "{}\n-->")
+	issue.Body = new(marker + "{}\n```")
 	if _, err := readCheckpoint(issue, "audit[bot]"); err == nil {
 		t.Fatal("corrupt state must fail instead of resetting progress")
 	}
@@ -278,7 +278,7 @@ func TestNativeIssueCreationAndRetryRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	items = outputItems(t, name)
-	if len(items) != 2 || items[0]["type"] != "update_issue" || items[0]["issue_number"] != float64(8) ||
+	if len(items) != 2 || items[0]["type"] != "update_issue" || items[0]["operation"] != "replace" || items[0]["issue_number"] != float64(8) ||
 		items[1]["type"] != "close_issue" || items[1]["issue_number"] != float64(7) {
 
 		t.Fatal("retry must update the existing report and finish closing its predecessor")
@@ -334,6 +334,16 @@ func TestFreshDraftUsesAuditedHeadAndRejectsBranchUpdates(t *testing.T) {
 	items := outputItems(t, name)
 	if len(items) != 2 || items[0]["draft"] != true || items[1]["item_number"] != float64(7) || !strings.Contains(items[0]["body"].(string), headSHA) {
 		t.Fatal("new migration must be a draft linked to the current tracker")
+	}
+	for _, body := range []string{
+		"Dependency audit area: other\n",
+		"Dependency audit replaces: 9\n",
+		"```dependency-audit-v1\n{}\n```",
+	} {
+		name = nativeOutput(t, map[string]any{"type": "create_pull_request", "branch": p.WorkBranch, "body": body})
+		if err := stamp(t.Context(), client, c, p, name); err == nil || !strings.Contains(err.Error(), "reserved automation markers") {
+			t.Fatalf("reserved marker %q was not rejected: %v", body, err)
+		}
 	}
 }
 

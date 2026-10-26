@@ -1,10 +1,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+# External callers may audit only their own repository. Central runs use
+# DEPENDENCY_AUDIT_REPOSITORIES. Use only one scheduler for each target.
+# Callers provide the DEPENDENCY_AUDIT_APP_ID variable and App private key.
+
 name: Prepare a dependency audit target
 
 on:
   workflow_call:
+    secrets:
+      DEPENDENCY_AUDIT_APP_PRIVATE_KEY:
+        description: "Private key for the GitHub App installed on the target repository"
+        required: true
     inputs:
       target_repo:
         required: true
@@ -37,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
+      control_sha: ${{ job.workflow_sha }}
       owner: ${{ steps.target.outputs.owner }}
       repo: ${{ steps.target.outputs.repo }}
       key: ${{ steps.target.outputs.key }}
@@ -50,7 +59,7 @@ jobs:
       replaces: ${{ steps.context.outputs.replaces_pr }}
       comment: ${{ steps.context.outputs.comment_id }}
     env:
-      DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
+      DEPENDENCY_AUDIT_REPOSITORIES: ${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}
       DEPENDENCY_AUDIT_ENABLE_APPLY: ${{ vars.DEPENDENCY_AUDIT_ENABLE_APPLY }}
       DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
       TARGET: ${{ inputs.target_repo }}
@@ -60,10 +69,10 @@ jobs:
       ISSUE: ${{ inputs.issue }}
       REPLACE_PR: ${{ inputs.replace_pr }}
     steps:
-      - name: Require the central default branch
+      - name: Require the caller's default branch
         if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
-          echo "::error::Dependency automation must run from the central default branch."
+          echo "::error::Dependency automation must run from the caller's default branch, not a fork."
           exit 1
       - name: Check the requested operation
         run: |
@@ -72,9 +81,11 @@ jobs:
             apply) [[ -n "$AREA" && -z "$INITIAL" ]] || { echo "::error::Apply requires an area and does not accept an initial SHA."; exit 1; } ;;
             *) echo "::error::Unknown dependency operation"; exit 1 ;;
           esac
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout the pinned go-infra implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: microsoft/go-infra
+          ref: ${{ job.workflow_sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -153,8 +164,8 @@ jobs:
       branch: ${{ needs.prepare.outputs.branch }}
       base: ${{ needs.prepare.outputs.base }}
       head: ${{ needs.prepare.outputs.head }}
-      control_repo: ${{ github.repository }}
-      control_sha: ${{ github.workflow_sha }}
+      control_repo: microsoft/go-infra
+      control_sha: ${{ needs.prepare.outputs.control_sha }}
 
   apply:
     needs: prepare
@@ -180,5 +191,5 @@ jobs:
       replaces: ${{ needs.prepare.outputs.replaces }}
       comment: ${{ needs.prepare.outputs.comment }}
       area: ${{ inputs.area }}
-      control_repo: ${{ github.repository }}
-      control_sha: ${{ github.workflow_sha }}
+      control_repo: microsoft/go-infra
+      control_sha: ${{ needs.prepare.outputs.control_sha }}

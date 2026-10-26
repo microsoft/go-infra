@@ -51,7 +51,7 @@ tools:
   edit:
   web-fetch:
 steps:
-  - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+  - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
     with:
       name: dependency-context-${{ inputs.key }}
       path: /tmp/gh-aw/dependency-audit
@@ -84,7 +84,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.agent.outputs.artifact_prefix }}agent
           path: ${{ runner.temp }}/agent
@@ -101,6 +101,14 @@ jobs:
             exit 1
           fi
           patch="${patches[0]}"
+          bundle=""
+          while IFS= read -r -d '' candidate; do
+            if [[ -n "$bundle" || "$candidate" != "${patch%.patch}.bundle" ]]; then
+              echo "::error::Unmatched or additional native bundle; patch and bundle must use the same basename."
+              exit 1
+            fi
+            bundle="$candidate"
+          done < <(find "$RUNNER_TEMP/agent" -type f -name '*.bundle' -print0)
           if grep -Fq aw_dep_fix "$patch"; then
             echo "::error::Temporary PR references must not change tested source."
             exit 1
@@ -128,8 +136,7 @@ jobs:
             echo "::error::A migration must change between 1 and 20 Go files."
             exit 1
           fi
-          bundle="${patch%.patch}.bundle"
-          if [[ -f "$bundle" ]]; then
+          if [[ -n "$bundle" ]]; then
             heads=()
             while IFS= read -r sha; do heads+=("$sha"); done < <(git bundle list-heads "$bundle" | awk '{print $1}' | sort -u)
             if [[ "${#heads[@]}" != 1 ]]; then
@@ -196,7 +203,7 @@ safe-outputs:
           echo "::error::Independent migration validation did not succeed; nothing will be published."
           exit 1
         fi
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: dependency-context-${{ inputs.key }}
         path: /tmp/gh-aw/dependency-audit
@@ -228,7 +235,7 @@ safe-outputs:
         TARGET: ${{ inputs.target_repo }}
         AREA: ${{ inputs.area }}
         REPLACE_PR: ${{ inputs.replaces }}
-        DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
+        DEPENDENCY_AUDIT_REPOSITORIES: ${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}
         DEPENDENCY_AUDIT_ENABLE_APPLY: ${{ vars.DEPENDENCY_AUDIT_ENABLE_APPLY }}
         DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
       run: |

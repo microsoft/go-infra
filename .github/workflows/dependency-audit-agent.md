@@ -40,7 +40,7 @@ tools:
   bash: ["cat:*", "find:*", "git show:*", "git log:*", "git grep:*", "head:*", "jq:*", "ls:*", "rg:*", "sed:*", "tail:*"]
   web-fetch:
 steps:
-  - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+  - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
     with:
       name: dependency-context-${{ inputs.key }}
       path: /tmp/gh-aw/dependency-audit
@@ -86,7 +86,7 @@ safe-outputs:
     target: "*"
     max: 1
   steps:
-    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
         name: dependency-context-${{ inputs.key }}
         path: /tmp/gh-aw/dependency-audit
@@ -115,7 +115,7 @@ safe-outputs:
         GH_TOKEN: ${{ steps.reader.outputs.token }}
         PUBLISHER: ${{ steps.reader.outputs.app-slug }}[bot]
         TARGET: ${{ inputs.target_repo }}
-        DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
+        DEPENDENCY_AUDIT_REPOSITORIES: ${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}
         DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
       run: |
         go -C control run ./cmd/dependencyaudit stamp -repo "$TARGET" -publisher-login "$PUBLISHER" \
@@ -176,8 +176,9 @@ assessment, and upstream sources for every version change.
 - `previous-slug`: concrete evidence that this previous area is resolved.
 
 ## Notes
-Limitations and unverified behavior. Apply one area manually with the central
-dependency-audit-apply.yml workflow using target_repo and area inputs.
+Limitations and unverified behavior. Apply one area manually with the
+dependency-audit-apply.yml workflow in the repository running this audit.
+Supply area and, for central runs, target_repo.
 ```
 
 Omit an empty Resolved areas section, but keep Summary, Inventory, Areas, and

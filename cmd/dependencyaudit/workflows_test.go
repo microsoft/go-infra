@@ -28,8 +28,11 @@ type workflow struct {
 		Push  any `yaml:"push-to-pull-request-branch"`
 	} `yaml:"safe-outputs"`
 	Jobs map[string]struct {
-		If    string
-		Steps []workflowStep
+		If      string
+		Env     map[string]string
+		Outputs map[string]string
+		With    map[string]string
+		Steps   []workflowStep
 	}
 }
 
@@ -62,6 +65,58 @@ func workflowStepByID(t *testing.T, steps []workflowStep, id string) workflowSte
 	}
 	t.Fatalf("workflow step %q is missing", id)
 	return workflowStep{}
+}
+
+func TestReusableWorkflowContracts(t *testing.T) {
+	router := loadWorkflow(t, "dependency-audit-target.yml")
+	prepare := router.Jobs["prepare"]
+	if prepare.Outputs["control_sha"] != "${{ job.workflow_sha }}" {
+		t.Fatal("the helper revision must come from the called workflow, not the caller")
+	}
+	foundCheckout := false
+	for _, step := range prepare.Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") {
+			foundCheckout = true
+			if step.With["repository"] != "microsoft/go-infra" || step.With["ref"] != prepare.Outputs["control_sha"] ||
+				step.With["persist-credentials"] != "false" {
+
+				t.Fatal("preparation must use the pinned go-infra source without persisting credentials")
+			}
+		}
+	}
+	if !foundCheckout {
+		t.Fatal("preparation is missing the go-infra checkout")
+	}
+	enrollment := `${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}`
+	if prepare.Env["DEPENDENCY_AUDIT_REPOSITORIES"] != enrollment {
+		t.Fatal("external callers must be restricted to their own repository; central runs require enrollment")
+	}
+	for _, mode := range []string{"audit", "apply"} {
+		t.Run(mode, func(t *testing.T) {
+			call := router.Jobs[mode]
+			if call.With["control_repo"] != "microsoft/go-infra" ||
+				call.With["control_sha"] != "${{ needs.prepare.outputs.control_sha }}" {
+
+				t.Fatal("publication must use the same trusted helper revision as preparation")
+			}
+			name := "dependency-audit-agent.md"
+			if mode == "apply" {
+				name = "dependency-audit-apply-agent.md"
+			}
+			foundEnrollment := false
+			for _, step := range loadWorkflow(t, name).SafeOutputs.Steps {
+				if value, ok := step.Env["DEPENDENCY_AUDIT_REPOSITORIES"]; ok {
+					foundEnrollment = true
+					if value != enrollment {
+						t.Fatal("publication must preserve the caller's target restriction")
+					}
+				}
+			}
+			if !foundEnrollment {
+				t.Fatal("publication must recheck target enrollment")
+			}
+		})
+	}
 }
 
 func TestApplyWorkflowContracts(t *testing.T) {
@@ -126,8 +181,18 @@ func writeFile(t *testing.T, name, body string) {
 func TestNativePatchAndBundleValidation(t *testing.T) {
 	flow := loadWorkflow(t, "dependency-audit-apply-agent.md")
 	script := workflowStepByID(t, flow.Jobs["validate"].Steps, "validate-patch").Run
-	for _, mismatch := range []bool{false, true} {
-		t.Run(map[bool]string{false: "matching-tree", true: "mismatched-tree"}[mismatch], func(t *testing.T) {
+	for _, test := range []struct {
+		name, bundle, extra, failure string
+		mismatch                     bool
+	}{
+		{name: "patch-only"},
+		{name: "matching-tree", bundle: "aw-test.bundle"},
+		{name: "mismatched-tree", bundle: "aw-test.bundle", mismatch: true, failure: "does not match"},
+		{name: "independently-named-bundle", bundle: "aw-o-r-test.bundle", mismatch: true, failure: "Unmatched or additional"},
+		{name: "independently-named-identical-tree", bundle: "aw-o-r-test.bundle", failure: "Unmatched or additional"},
+		{name: "additional-bundle", bundle: "aw-test.bundle", extra: "aw-o-r-test.bundle", failure: "Unmatched or additional"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			target, artifacts, bin := filepath.Join(root, "target"), filepath.Join(root, "agent"), filepath.Join(root, "bin")
 			for _, dir := range []string{target, artifacts, bin} {
@@ -147,12 +212,16 @@ func TestNativePatchAndBundleValidation(t *testing.T) {
 			writeFile(t, filepath.Join(target, "use.go"), "package test\nfunc use() { println(1) }\n")
 			patch := filepath.Join(artifacts, "aw-test.patch")
 			writeFile(t, patch, testGit(t, target, "diff", "--binary")+"\n")
-			if mismatch {
+			if test.mismatch {
 				writeFile(t, filepath.Join(target, "use.go"), "package test\nfunc use() { println(2) }\n")
 			}
 			testGit(t, target, "add", ".")
 			testGit(t, target, "commit", "-qm", "migration")
-			testGit(t, target, "bundle", "create", filepath.Join(artifacts, "aw-test.bundle"), base+"..HEAD")
+			for _, bundle := range []string{test.bundle, test.extra} {
+				if bundle != "" {
+					testGit(t, target, "bundle", "create", filepath.Join(artifacts, bundle), base+"..HEAD")
+				}
+			}
 			testGit(t, target, "checkout", "--detach", base)
 			docker := filepath.Join(bin, "docker")
 			writeFile(t, docker, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DOCKER_LOG\"\n")
@@ -166,9 +235,9 @@ func TestNativePatchAndBundleValidation(t *testing.T) {
 				"RUNNER_TEMP="+root, "GITHUB_WORKSPACE="+root, "TMPDIR="+root,
 				"MODULE=.", "TARGET_KEY=test", "GITHUB_RUN_ID=1", "DOCKER_LOG="+log)
 			output, err := command.CombinedOutput()
-			if mismatch {
-				if err == nil || !strings.Contains(string(output), "does not match") {
-					t.Fatalf("mismatched native bundle passed: %s, %v", output, err)
+			if test.failure != "" {
+				if err == nil || !strings.Contains(string(output), test.failure) {
+					t.Fatalf("invalid native bundle passed: %s, %v", output, err)
 				}
 				if _, err := os.Stat(log); !os.IsNotExist(err) {
 					t.Fatal("tests must not run against a different bundle tree")

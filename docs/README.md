@@ -4,7 +4,6 @@ This repository is used by Microsoft to build Go.
 See the root [README.md](../README.md) for the project overview, and the subdirectories here for more info about parts of the infra.
 
 * [automation/](automation/) - Some details about the automated infrastructure used to maintain a Go toolset fork.
-  * [Dependency history audits](automation/dependency-audit.md) - Central modernization audits, issue-based checkpoints, and manually selected draft fixes.
 * [fork/](fork/) - A description of how the Microsoft build of Go fork is set up and why we made certain decisions.
 * [release-process/](release-process/) - A description of how to release a Microsoft build of Go build, and details about the infra behind it.
 * [pipeline-yml-style.md](pipeline-yml-style.md) - Style principles and quirk notes for our YAML pipelines here and in microsoft/go.
