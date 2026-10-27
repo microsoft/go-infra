@@ -11,8 +11,199 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/microsoft/go-infra/gitcmd"
+	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goldentest"
 )
+
+func Test_changedBranch_pushLease(t *testing.T) {
+	tests := []struct {
+		name          string
+		exists        bool
+		change        string
+		wantRejection bool
+	}{
+		{name: "update existing branch", exists: true},
+		{name: "create new branch"},
+		{name: "concurrent commit", exists: true, change: "commit", wantRejection: true},
+		{name: "concurrent branch creation", change: "commit", wantRejection: true},
+		{name: "concurrent branch deletion", exists: true, change: "delete", wantRejection: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			local, remote := filepath.Join(dir, "local"), filepath.Join(dir, "remote")
+			if err := setupMockRepo(local, "main"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(remote, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := runGit(remote, "init", "--bare"); err != nil {
+				t.Fatal(err)
+			}
+			b := &changedBranch{
+				Refs: &gitpr.SyncPRRefSet{
+					PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+				},
+			}
+			ref := "refs/heads/" + b.Refs.PRBranch()
+			if err := runGit(local, "checkout", "-b", b.Refs.PRBranch()); err != nil {
+				t.Fatal(err)
+			}
+			if tt.exists {
+				if err := addMockFile(local, "previous-sync", "previous"); err != nil {
+					t.Fatal(err)
+				}
+				if err := runGit(local, "push", remote, b.Refs.PRBranchRefspec()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Inspect branches independently of whether an open PR exists.
+			if err := b.fetchRemoteCommit(local, remote); err != nil {
+				t.Fatal(err)
+			}
+			if (b.RemoteCommit != "") != tt.exists {
+				t.Fatalf("checked remote commit = %q, want branch existence = %v", b.RemoteCommit, tt.exists)
+			}
+			// Like sync, build a replacement that isn't based on the previous PR tip.
+			if err := runGit(local, "reset", "--hard", "main"); err != nil {
+				t.Fatal(err)
+			}
+			if err := addMockFile(local, "new-sync", "replacement"); err != nil {
+				t.Fatal(err)
+			}
+			switch tt.change {
+			case "commit":
+				if err := runGit(local, "checkout", "main"); err != nil {
+					t.Fatal(err)
+				}
+				if err := addMockFile(local, "manual-change", "preserve me"); err != nil {
+					t.Fatal(err)
+				}
+				if err := runGit(local, "push", "--force", remote, "HEAD:"+ref); err != nil {
+					t.Fatal(err)
+				}
+			case "delete":
+				if err := runGit(local, "push", remote, ":"+ref); err != nil {
+					t.Fatal(err)
+				}
+			}
+			remoteTip := func() string {
+				t.Helper()
+				out, err := exec.Command("git", "ls-remote", remote, ref).Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(out)
+			}
+			before := remoteTip()
+			err := runGit(local, "push", b.pushLease(), remote, b.Refs.PRBranchRefspec())
+			if (err != nil) != tt.wantRejection {
+				t.Fatalf("push error = %v, want rejection = %v", err, tt.wantRejection)
+			}
+			if tt.wantRejection {
+				if after := remoteTip(); after != before {
+					t.Fatalf("rejected push changed remote tip: before %q, after %q", before, after)
+				}
+			} else {
+				want, err := gitcmd.ShowQuietPretty(local, "%H", b.Refs.PRBranch())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := strings.Fields(remoteTip()); len(got) != 2 || got[0] != want {
+					t.Fatalf("remote tip = %v, want %s", got, want)
+				}
+			}
+		})
+	}
+}
+
+func Test_changedBranch_fetchRemoteCommitMissingWithTrace(t *testing.T) {
+	dir := t.TempDir()
+	if err := setupMockRepo(dir, "main"); err != nil {
+		t.Fatal(err)
+	}
+	b := &changedBranch{
+		Refs: &gitpr.SyncPRRefSet{
+			PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+		},
+		RemoteCommit: "previously checked tip",
+	}
+	t.Setenv("GIT_TRACE", "1")
+	if err := b.fetchRemoteCommit(dir, dir); err != nil {
+		t.Fatal(err)
+	}
+	if b.RemoteCommit != "" {
+		t.Fatalf("missing branch has remote commit %q", b.RemoteCommit)
+	}
+}
+
+func Test_changedBranch_checkRemoteAuthor(t *testing.T) {
+	tests := []struct {
+		name      string
+		exists    bool
+		openPR    bool
+		manual    bool
+		wantError bool
+		wantSkip  bool
+	}{
+		{name: "new branch"},
+		{name: "retained bot branch", exists: true},
+		{name: "open bot PR", exists: true, openPR: true},
+		{name: "retained manual branch", exists: true, manual: true, wantError: true},
+		{name: "open manual PR", exists: true, openPR: true, manual: true, wantSkip: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if err := setupMockRepo(dir, "main"); err != nil {
+				t.Fatal(err)
+			}
+			commit, err := gitcmd.ShowQuietPretty(dir, "%H", "HEAD")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := &changedBranch{
+				Refs: &gitpr.SyncPRRefSet{
+					PRRefSet: gitpr.PRRefSet{Name: "main", Purpose: "auto-sync"},
+				},
+				Result: &SyncResult{Commit: commit},
+			}
+			if tt.openPR {
+				b.ExistingPR = &gitpr.ExistingPR{}
+			}
+			if tt.manual {
+				if err := runGit(dir, "-c", "user.email=manual@example.com", "commit",
+					"--allow-empty", "--author=Manual <manual@example.com>", "-m", "Manual repair"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.exists {
+				b.RemoteCommit, err = gitcmd.ShowQuietPretty(dir, "%H", "HEAD")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = b.checkRemoteAuthor(dir)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("checkRemoteAuthor error = %v, want error = %v", err, tt.wantError)
+			}
+			if tt.wantError {
+				for _, want := range []string{b.Refs.PRBranch(), "manual@example.com", "reconcile or rename", "retrying sync"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q missing %q", err, want)
+					}
+				}
+			}
+			if (b.SkipReason != "") != tt.wantSkip {
+				t.Errorf("skip reason = %q, want skip = %v", b.SkipReason, tt.wantSkip)
+			}
+		})
+	}
+}
 
 func Test_createCommitMessageSnippet(t *testing.T) {
 	maxUpstreamCommitMessageInSnippet = 20

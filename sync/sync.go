@@ -236,10 +236,59 @@ type changedBranch struct {
 	PRRequest  *gitpr.GitHubRequest
 	ExistingPR *gitpr.ExistingPR
 
+	// RemoteCommit is the checked PR branch tip, or empty if the branch doesn't exist.
+	RemoteCommit string
+
 	SkipReason string
 
 	// Result contains this branch's [SyncResult] once a PR is submitted/updated.
 	Result *SyncResult
+}
+
+func (b *changedBranch) pushLease() string {
+	return "--force-with-lease=refs/heads/" + b.Refs.PRBranch() + ":" + b.RemoteCommit
+}
+
+func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
+	ref := "refs/heads/" + b.Refs.PRBranch()
+	cmd := exec.Command("git", "ls-remote", "--heads", remote, ref)
+	cmd.Dir = dir
+	output, err := executil.Output(cmd)
+	if err != nil {
+		return err
+	}
+	b.RemoteCommit = ""
+	if strings.TrimSpace(output) != "" {
+		b.RemoteCommit, err = gitcmd.FetchRefCommit(dir, remote, ref)
+	}
+	return err
+}
+
+func (b *changedBranch) checkRemoteAuthor(dir string) error {
+	if b.RemoteCommit == "" {
+		return nil
+	}
+	// Check if anyone else has pushed changes to the branch so we don't overwrite them.
+	myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", b.Result.Commit)
+	if err != nil {
+		return err
+	}
+	remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", b.RemoteCommit)
+	if err != nil {
+		return err
+	}
+	if myAuthorEmail != remoteAuthorEmail {
+		if b.ExistingPR == nil {
+			return fmt.Errorf("retained PR branch %q has a commit by %q, not %q; reconcile or rename the branch before retrying sync",
+				b.Refs.PRBranch(), remoteAuthorEmail, myAuthorEmail)
+		}
+		b.SkipReason = "PR branch already exists, but my author name (" +
+			myAuthorEmail +
+			") is different from the author of the remote commit (" +
+			remoteAuthorEmail +
+			"). Skipping PR submission."
+	}
+	return nil
 }
 
 // SyncResult is the result of a sync call.
@@ -745,32 +794,12 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		if err != nil {
 			return nil, err
 		}
-		if c.ExistingPR != nil {
-			// If the PR already exists, we need to check if anyone else has pushed changes to the
-			// branch to make sure we don't overwrite them.
-			remoteCommit, err := gitcmd.FetchRefCommit(
-				dir,
-				urlAuther.InsertAuth(entry.PRBranchStorageRepo()),
-				"refs/heads/"+c.Refs.PRBranch())
-			if err != nil {
-				return nil, err
-			}
-			myAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", c.Result.Commit)
-			if err != nil {
-				return nil, err
-			}
-			remoteAuthorEmail, err := gitcmd.ShowQuietPretty(dir, "%ae", remoteCommit)
-			if err != nil {
-				return nil, err
-			}
-
-			if myAuthorEmail != remoteAuthorEmail {
-				c.SkipReason = "PR already exists, but my author name (" +
-					myAuthorEmail +
-					") is different from the author of the remote commit (" +
-					remoteAuthorEmail +
-					"). Skipping PR submission."
-			}
+		// A branch may exist even without an open PR, such as after PR submission fails.
+		if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
+			return nil, err
+		}
+		if err := c.checkRemoteAuthor(dir); err != nil {
+			return nil, err
 		}
 	}
 
@@ -780,11 +809,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		return results, nil
 	}
 
-	newGitPushCommand := func(remote string, force bool, refspecs []string) *exec.Cmd {
+	newGitPushCommand := func(remote string, leases, refspecs []string) *exec.Cmd {
 		c := newGitCmd("push")
-		if force {
-			c.Args = append(c.Args, "--force")
-		}
+		c.Args = append(c.Args, leases...)
 		c.Args = append(c.Args, urlAuther.InsertAuth(remote))
 		c.Args = append(c.Args, refspecs...)
 		if *f.DryRun {
@@ -798,16 +825,19 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	//
 	// Even if we did base our branch on "to", we'd hit undesired behaviors if the branch still has
 	// changes from an old PR. There are ways to handle this, but no clear benefit. Force push is
-	// simple and makes the PR flow simple.
+	// simple and makes the PR flow simple. Each lease requires the remote branch to still be at
+	// the commit we checked above (or not exist for a new PR), so concurrent changes aren't lost.
 	mergePushRefspecs := make([]string, 0, len(changedBranches))
+	mergePushLeases := make([]string, 0, len(changedBranches))
 	for _, b := range changedBranches {
 		if b.SkipReason != "" {
 			continue
 		}
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
+		mergePushLeases = append(mergePushLeases, b.pushLease())
 	}
 	if len(mergePushRefspecs) > 0 {
-		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), true, mergePushRefspecs)); err != nil {
+		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), mergePushLeases, mergePushRefspecs)); err != nil {
 			return nil, err
 		}
 	}
