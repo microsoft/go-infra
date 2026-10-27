@@ -10,6 +10,17 @@ All steps written below are performed by the release pipeline (not by the dev) u
 
 See [/docs/README.md](../README.md) for information about how to use this infrastructure.
 
+## Release tracker pins
+
+`releasego create-release-day-issue` unpins old, closed release trackers before creating and pinning
+the new tracker. Open trackers and unrelated pinned issues are left alone. If GitHub's three pin slots
+are still full, it posts a warning on the new tracker and continues the release. Retries and reruns
+avoid duplicate warnings; other API failures remain errors.
+
+Cleanup happens when the next release tracker is created, not immediately when an issue is closed.
+Closed trackers can be unpinned manually on GitHub in the meantime, or with
+`releasego sync-release-issue-pin`.
+
 # Pipelines
 
 The pipeline flow is arranged like this, with an example 1.17 patch release shown:
