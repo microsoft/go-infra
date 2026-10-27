@@ -8,24 +8,9 @@ import (
 	"fmt"
 	"syscall"
 	"testing"
+
+	"golang.org/x/net/http2"
 )
-
-type testHTTP2StreamError struct {
-	StreamID uint32
-	Code     uint32
-	Cause    error
-}
-
-func (e testHTTP2StreamError) Error() string { return "HTTP/2 stream error" }
-
-func (e testHTTP2StreamError) As(target any) bool {
-	streamError, ok := target.(*http2StreamError)
-	if !ok {
-		return false
-	}
-	*streamError = http2StreamError(e)
-	return true
-}
 
 func TestIsKnownAPIFlakiness(t *testing.T) {
 	tests := []struct {
@@ -40,26 +25,26 @@ func TestIsKnownAPIFlakiness(t *testing.T) {
 		},
 		{
 			name: "peer cancelled HTTP/2 stream",
-			err: fmt.Errorf("wrapped: %w", testHTTP2StreamError{
+			err: fmt.Errorf("wrapped: %w", http2.StreamError{
 				StreamID: 1061,
-				Code:     http2ErrCodeCancel,
+				Code:     http2.ErrCodeCancel,
 				Cause:    errors.New(http2ErrFromPeer),
 			}),
 			want: true,
 		},
 		{
 			name: "other HTTP/2 stream error",
-			err: testHTTP2StreamError{
+			err: http2.StreamError{
 				StreamID: 1061,
-				Code:     http2ErrCodeCancel,
+				Code:     http2.ErrCodeCancel,
 				Cause:    errors.New("locally cancelled"),
 			},
 		},
 		{
 			name: "different HTTP/2 error code",
-			err: testHTTP2StreamError{
+			err: http2.StreamError{
 				StreamID: 1061,
-				Code:     0x1,
+				Code:     http2.ErrCodeProtocol,
 				Cause:    errors.New(http2ErrFromPeer),
 			},
 		},
