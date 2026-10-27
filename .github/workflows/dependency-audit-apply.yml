@@ -4,6 +4,27 @@
 name: Apply one dependency audit area
 
 on:
+  workflow_call:
+    secrets:
+      DEPENDENCY_AUDIT_APP_PRIVATE_KEY:
+        required: false
+    inputs:
+      target_repo:
+        required: true
+        type: string
+      area:
+        required: true
+        type: string
+      issue:
+        default: 0
+        type: number
+      replace_pr:
+        default: 0
+        type: number
+      app_id:
+        description: "Optional App client ID; without an App, publish an Open a PR link"
+        default: ""
+        type: string
   workflow_dispatch:
     inputs:
       target_repo:
@@ -24,56 +45,69 @@ on:
         type: number
 
 permissions:
-  actions: write
   contents: read
-  copilot-requests: write
+
+concurrency:
+  group: dependency-audit-${{ inputs.target_repo }}
+  cancel-in-progress: false
 
 jobs:
-  target:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  prepare:
+    uses: ./.github/workflows/dependency-audit-prepare.yml
+    secrets: inherit
     permissions:
       contents: read
-    outputs:
-      repository: ${{ steps.target.outputs.repository }}
-    steps:
-      - name: Require the central default branch
-        if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
-        run: |
-          echo "::error::Dependency migrations must run from the central repository's default branch."
-          exit 1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Validate enrollment and the apply gate
-        id: target
-        env:
-          DEPENDENCY_AUDIT_REPOSITORIES: ${{ vars.DEPENDENCY_AUDIT_REPOSITORIES }}
-          DEPENDENCY_AUDIT_ENABLE_APPLY: ${{ vars.DEPENDENCY_AUDIT_ENABLE_APPLY }}
-          TARGET_REPOSITORY: ${{ inputs.target_repo }}
-          AREA: ${{ inputs.area }}
-          TRACKER_ISSUE: ${{ inputs.issue }}
-          REPLACE_PR: ${{ inputs.replace_pr }}
-        run: go run ./cmd/dependencyaudit targets -repo "$TARGET_REPOSITORY" -area "$AREA" -issue "$TRACKER_ISSUE" -replace-pr "$REPLACE_PR"
+      issues: write
+      pull-requests: read
+    with:
+      mode: apply
+      target_repo: ${{ inputs.target_repo }}
+      area: ${{ inputs.area }}
+      issue: ${{ inputs.issue }}
+      replace_pr: ${{ inputs.replace_pr }}
+      app_id: ${{ inputs.app_id || vars.DEPENDENCY_AUDIT_APP_ID }}
 
   apply:
-    needs: target
+    needs: prepare
+    if: needs.prepare.outputs.existing == 'false'
     permissions:
       actions: write
       contents: write
       issues: write
       pull-requests: write
       copilot-requests: write
-    uses: ./.github/workflows/dependency-audit-target.yml
+    uses: ./.github/workflows/dependency-audit-apply-agent.lock.yml
     secrets: inherit
     with:
-      mode: apply
-      target_repo: ${{ needs.target.outputs.repository }}
+      target_repo: ${{ inputs.target_repo }}
+      owner: ${{ needs.prepare.outputs.owner }}
+      repo: ${{ needs.prepare.outputs.repo }}
+      key: ${{ needs.prepare.outputs.key }}
+      branch: ${{ needs.prepare.outputs.branch }}
+      head: ${{ needs.prepare.outputs.head }}
+      work_branch: ${{ needs.prepare.outputs.work_branch }}
+      module: ${{ needs.prepare.outputs.module }}
+      issue: ${{ needs.prepare.outputs.issue }}
+      replaces: ${{ needs.prepare.outputs.replaces }}
+      area: ${{ inputs.area }}
+      app_id: ${{ needs.prepare.outputs.app_id }}
+      publisher: ${{ needs.prepare.outputs.publisher }}
+      tracker: ${{ needs.prepare.outputs.tracker }}
+      control_repo: microsoft/go-infra
+      control_sha: ${{ needs.prepare.outputs.control_sha }}
+
+  link:
+    needs: [prepare, apply]
+    uses: ./.github/workflows/dependency-audit-prepare.yml
+    secrets: inherit
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    with:
+      mode: link
+      target_repo: ${{ inputs.target_repo }}
       area: ${{ inputs.area }}
       issue: ${{ inputs.issue }}
       replace_pr: ${{ inputs.replace_pr }}
+      app_id: ${{ needs.prepare.outputs.app_id }}

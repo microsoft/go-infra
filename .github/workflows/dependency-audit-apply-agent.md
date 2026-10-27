@@ -1,5 +1,5 @@
 ---
-description: Apply one dependency modernization area and publish a validated draft PR
+description: Apply one dependency modernization area and publish a draft PR or a validated branch link
 on:
   workflow_call:
     inputs:
@@ -13,10 +13,12 @@ on:
       module: {required: true, type: string}
       issue: {required: true, type: string}
       replaces: {default: "0", type: string}
-      comment: {default: "", type: string}
       area: {required: true, type: string}
       control_repo: {required: true, type: string}
       control_sha: {required: true, type: string}
+      app_id: {default: "", type: string}
+      publisher: {required: true, type: string}
+      tracker: {required: true, type: string}
 permissions:
   contents: read
   copilot-requests: write
@@ -29,16 +31,7 @@ checkout:
   path: target
   current: true
   fetch-depth: 0
-  github-app:
-    client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
-    private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-    owner: ${{ inputs.owner }}
-    repositories: ["${{ inputs.repo }}"]
-  safe-outputs-github-app:
-    client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
-    private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-    owner: ${{ inputs.owner }}
-    repositories: ["${{ inputs.repo }}"]
+  github-token: ${{ steps.checkout-reader.outputs.token || github.token }}
 network:
   allowed: [defaults, github, go, opentelemetry.io, learn.microsoft.com]
 tools:
@@ -61,17 +54,44 @@ steps:
       WORK_BRANCH: ${{ inputs.work_branch }}
     run: git switch -c "$WORK_BRANCH"
 jobs:
+  agent:
+    pre-steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: checkout-reader
+        if: inputs.app_id != ''
+        with:
+          client-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.owner }}
+          repositories: ${{ inputs.repo }}
+          permission-contents: read
+  safe_outputs:
+    pre-steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        id: checkout-reader
+        if: inputs.app_id != ''
+        with:
+          client-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.owner }}
+          repositories: ${{ inputs.repo }}
+          permission-contents: read
+          permission-issues: read
+          permission-pull-requests: read
   validate:
     needs: agent
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
+    outputs:
+      tree: ${{ steps.validate-patch.outputs.tree }}
     steps:
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         id: reader
+        if: inputs.app_id != ''
         with:
-          client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+          client-id: ${{ inputs.app_id }}
           private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
           owner: ${{ inputs.owner }}
           repositories: ${{ inputs.repo }}
@@ -82,7 +102,7 @@ jobs:
           ref: ${{ inputs.head }}
           path: target
           fetch-depth: 0
-          token: ${{ steps.reader.outputs.token }}
+          token: ${{ steps.reader.outputs.token || github.token }}
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -131,7 +151,7 @@ jobs:
               echo "::error::Migration crosses a module boundary or edits a symlink: $file"
               exit 1
             fi
-          done < <(git -C target diff --cached --name-only -z)
+          done < <(git -C target diff --cached --no-renames --name-only -z)
           if [[ "$count" -eq 0 || "$count" -gt 20 ]]; then
             echo "::error::A migration must change between 1 and 20 Go files."
             exit 1
@@ -163,7 +183,9 @@ jobs:
           docker run --name "$name-download" "${common[@]}" "$image" go mod download
           docker run --name "$name-test" --network=none "${common[@]}" "$image" \
             sh -ec 'test -z "$(gofmt -l .)" && go vet ./... && go test ./... && go build ./...'
+          echo "tree=$(git -C target write-tree)" >> "$GITHUB_OUTPUT"
 safe-outputs:
+  github-token: ${{ secrets.GITHUB_TOKEN }}
   needs: [validate]
   max-patch-size: 256
   report-failure-as-issue: false
@@ -172,8 +194,9 @@ safe-outputs:
   missing-data: {create-issue: false}
   report-incomplete: {create-issue: false}
   github-app:
-    client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+    client-id: ${{ inputs.app_id }}
     private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+    ignore-if-missing: true
     owner: ${{ inputs.owner }}
     repositories: ["${{ inputs.repo }}"]
   create-pull-request:
@@ -186,13 +209,11 @@ safe-outputs:
     max-patch-files: 20
     fallback-as-issue: false
     require-temporary-id: true
+    preserve-branch-name: true
     allowed-files: ["${{ inputs.module == '.' && '**/*.go' || format('{0}/**/*.go', inputs.module) }}"]
     excluded-files: ["**/vendor/**", "**/third_party/**"]
-  add-comment:
-    target-repo: ${{ inputs.target_repo }}
-    target: "*"
-    allows-comment-ids: ["${{ inputs.comment }}"]
-    max: 1
+  noop:
+    report-as-issue: false
   steps:
     - name: Require successful independent validation
       id: require-validation
@@ -217,21 +238,34 @@ safe-outputs:
       with:
         go-version-file: control/go.mod
         cache-dependency-path: control/go.sum
-    - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
-      id: reader
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      if: inputs.app_id == ''
       with:
-        client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
-        private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-        owner: ${{ inputs.owner }}
-        repositories: ${{ inputs.repo }}
-        permission-contents: read
-        permission-issues: read
-        permission-pull-requests: read
+        repository: ${{ inputs.target_repo }}
+        ref: ${{ inputs.head }}
+        path: migration
+        persist-credentials: false
+    - name: Reapply the native patch for manual PR publication
+      id: manual-patch
+      if: inputs.app_id == ''
+      env:
+        ARTIFACT_DIRECTORY: /tmp/gh-aw
+      run: |
+        patches=()
+        while IFS= read -r -d '' candidate; do patches+=("$candidate"); done < <(find "$ARTIFACT_DIRECTORY" -type f -name 'aw-*.patch' -print0)
+        if [[ ${#patches[@]} != 1 ]]; then
+          echo "::error::Expected exactly one validated migration patch."
+          exit 1
+        fi
+        git -C migration -c core.hooksPath=/dev/null apply --index "${patches[0]}"
     - name: Recheck the tracker and fresh-draft eligibility
       env:
         GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-        GH_TOKEN: ${{ steps.reader.outputs.token }}
-        PUBLISHER: ${{ steps.reader.outputs.app-slug }}[bot]
+        GH_TOKEN: ${{ steps.checkout-reader.outputs.token || github.token }}
+        PUBLISHER: ${{ inputs.publisher }}
+        TRACKER: ${{ inputs.tracker }}
+        WORKTREE: ${{ github.workspace }}/migration
+        VALIDATED_TREE: ${{ needs.validate.outputs.tree }}
         TARGET: ${{ inputs.target_repo }}
         AREA: ${{ inputs.area }}
         REPLACE_PR: ${{ inputs.replaces }}
@@ -240,6 +274,7 @@ safe-outputs:
         DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
       run: |
         go -C control run ./cmd/dependencyaudit stamp -repo "$TARGET" -area "$AREA" -replace-pr "$REPLACE_PR" -publisher-login "$PUBLISHER" \
+          -tracker-login "$TRACKER" -worktree "$WORKTREE" -validated-tree "$VALIDATED_TREE" \
           -input /tmp/gh-aw/dependency-audit/context.json
 ---
 
@@ -260,9 +295,11 @@ rebase, run target code, install tools, or request secrets. Format edited Go
 files. A separate credential-free job verifies the native patch and runs module
 download, formatting, vet, tests, and build before any GitHub writes.
 
-Always start from the captured audited revision and create a fresh draft.
+Always start from the captured audited revision and prepare a fresh migration.
 Call `create_pull_request` once with `branch` equal to context `work_branch`
-and a concise migration explanation. Never modify or update an existing PR.
+and a concise migration explanation. The trusted publisher creates a draft PR
+when an App is configured, or a validated branch and an Open a PR link otherwise.
+Never modify or update an existing PR.
 Do not call comment, merge, approval, or other publishing tools. The trusted
 step adds the tracker and replacement links and creates or updates its managed
 comment. Do not include reserved automation markers in the explanation.

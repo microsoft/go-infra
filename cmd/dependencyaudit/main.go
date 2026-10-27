@@ -25,7 +25,10 @@ import (
 	"github.com/microsoft/go-infra/githubutil"
 )
 
-const marker = "```dependency-audit-v1\n"
+const (
+	marker           = "```dependency-audit-v1\n"
+	actionsPublisher = "github-actions[bot]"
+)
 
 var (
 	repoPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$`)
@@ -49,6 +52,7 @@ type checkpoint struct {
 type prepared struct {
 	State      checkpoint `json:"checkpoint"`
 	Publisher  string     `json:"publisher"`
+	Tracker    string     `json:"tracker_publisher"`
 	Issue      int        `json:"issue"`
 	Previous   string     `json:"previous"`
 	Area       string     `json:"area"`
@@ -56,19 +60,18 @@ type prepared struct {
 	WorkBranch string     `json:"work_branch"`
 	Pull       int        `json:"pull_request"`
 	Replaces   int        `json:"replaces_pr"`
-	Comment    int64      `json:"comment_id"`
+	Pending    bool       `json:"pending_branch"`
 }
 
 type nativeRequest struct {
 	Type        string          `json:"type"`
+	Message     string          `json:"message,omitempty"`
 	Operation   string          `json:"operation,omitempty"`
 	Title       string          `json:"title,omitempty"`
 	Body        string          `json:"body,omitempty"`
 	Branch      string          `json:"branch,omitempty"`
 	Repo        string          `json:"repo,omitempty"`
 	IssueNumber int             `json:"issue_number,omitempty"`
-	ItemNumber  int             `json:"item_number,omitempty"`
-	CommentID   int64           `json:"comment_id,omitempty"`
 	TemporaryID string          `json:"temporary_id,omitempty"`
 	Draft       bool            `json:"draft,omitempty"`
 	Integrity   json.RawMessage `json:"integrity,omitempty"`
@@ -78,6 +81,7 @@ type nativeRequest struct {
 type config struct {
 	Command, Repository, Owner, Repo, Initial, Area string
 	Input, Output, Publisher, Token, GitHubOutput   string
+	Tracker, Worktree, Tree                         string
 	Issue, Replace                                  int
 	Repositories                                    []string
 	Private                                         bool
@@ -108,7 +112,10 @@ func parseConfig(args []string, getenv func(string) string, stderr io.Writer) (c
 	fs.IntVar(&c.Replace, "replace-pr", 0, "closed, unmerged migration PR to explicitly replace")
 	fs.StringVar(&c.Input, "input", "", "prepared context JSON")
 	fs.StringVar(&c.Output, "output", "", "prepared context JSON destination")
-	fs.StringVar(&c.Publisher, "publisher-login", "", "publishing GitHub App bot login")
+	fs.StringVar(&c.Publisher, "publisher-login", "", "migration publishing bot login")
+	fs.StringVar(&c.Tracker, "tracker-login", "", "tracker bot login; defaults to publisher-login")
+	fs.StringVar(&c.Worktree, "worktree", "", "independently validated migration worktree")
+	fs.StringVar(&c.Tree, "validated-tree", "", "independently validated Git tree SHA")
 	if err := fs.Parse(args[1:]); err != nil {
 		return c, err
 	}
@@ -155,8 +162,14 @@ func parseConfig(args []string, getenv func(string) string, stderr io.Writer) (c
 		c.Token = getenv("GITHUB_TOKEN")
 	}
 	c.Private = getenv("DEPENDENCY_AUDIT_CONTROL_PRIVATE") == "true"
-	if c.Command != "targets" && (c.Token == "" || !botPattern.MatchString(c.Publisher)) {
-		return c, errors.New("GH_TOKEN or GITHUB_TOKEN and publisher-login identifying a GitHub App bot are required")
+	if c.Tracker == "" {
+		c.Tracker = c.Publisher
+	}
+	if c.Command != "targets" && (c.Token == "" || !botPattern.MatchString(c.Publisher) || !botPattern.MatchString(c.Tracker)) {
+		return c, errors.New("GH_TOKEN or GITHUB_TOKEN and valid publisher-login and tracker-login bot identities are required")
+	}
+	if c.Command == "stamp" && apply && c.Publisher == actionsPublisher && (c.Worktree == "" || !shaPattern.MatchString(c.Tree)) {
+		return c, errors.New("manual PR publication requires a worktree and an independently validated tree SHA")
 	}
 	if (c.Command == "prepare" && c.Output == "") || (slices.Contains([]string{"stamp", "link"}, c.Command) && c.Input == "") {
 		return c, errors.New("prepare requires output; stamp and link require input")
@@ -197,7 +210,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(stdout, "Linked existing migration PR %s; no branch or PR was changed.\n", link)
+			fmt.Fprintf(stdout, "Linked existing migration %s; no branch or PR was changed.\n", link)
 			return nil
 		}
 		return stamp(ctx, client, c, p, getenv("GH_AW_AGENT_OUTPUT"))
@@ -213,10 +226,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	values["work_branch"], values["module"] = p.WorkBranch, p.Module
 	values["tracker_issue"], values["pull_request"] = fmt.Sprint(p.Issue), fmt.Sprint(p.Pull)
 	values["replaces_pr"] = fmt.Sprint(p.Replaces)
-	values["comment_id"] = ""
-	if p.Comment != 0 {
-		values["comment_id"] = fmt.Sprint(p.Comment)
-	}
+	values["existing"] = fmt.Sprint(p.Pull != 0 || p.Pending)
+	values["publisher"], values["tracker"] = p.Publisher, p.Tracker
 	return outputs(c.GitHubOutput, values)
 }
 
@@ -251,14 +262,14 @@ func readCheckpoint(issue *github.Issue, publisher string) (*checkpoint, error) 
 }
 
 func latest(ctx context.Context, client *github.Client, c config) (*github.Issue, *checkpoint, error) {
-	opts := &github.IssueListByRepoOptions{State: "all", Creator: c.Publisher, Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
+	opts := &github.IssueListByRepoOptions{State: "all", Creator: c.Tracker, Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
 	for {
 		issues, response, err := client.Issues.ListByRepo(ctx, c.Owner, c.Repo, opts)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, issue := range issues {
-			state, err := readCheckpoint(issue, c.Publisher)
+			state, err := readCheckpoint(issue, c.Tracker)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -295,13 +306,12 @@ func currentHead(ctx context.Context, client *github.Client, c config) (string, 
 }
 
 func prepare(ctx context.Context, client *github.Client, c config) (prepared, error) {
-	p := prepared{Publisher: c.Publisher, Area: c.Area}
+	p := prepared{Publisher: c.Publisher, Tracker: c.Tracker, Area: c.Area}
 	branch, head, err := currentHead(ctx, client, c)
 	if err != nil {
 		return p, err
 	}
 	p.State = checkpoint{Repository: c.Repository, Branch: branch, BaseSHA: c.Initial, HeadSHA: head, Areas: []string{}}
-	p.WorkBranch = "dev/dependency-audit/" + c.Area
 	issue, previous, err := latest(ctx, client, c)
 	if err != nil {
 		return p, err
@@ -327,17 +337,31 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 	if issue.GetState() != "open" || (c.Issue != 0 && c.Issue != p.Issue) || !slices.Contains(previous.Areas, c.Area) {
 		return p, errors.New("apply requires a selected area in the current open tracker")
 	}
-	pull, err := findPull(ctx, client, c, c.Area)
+	pull, pending, err := findMigration(ctx, client, c)
 	if err != nil {
 		return p, err
 	}
 	p.Replaces = c.Replace
 	if pull != nil && pull.GetState() == "open" {
-		if c.Replace != 0 && !strings.Contains(pull.GetBody(), areaMarker(c.Area)+replacementMarker(c.Replace)) {
+		if c.Replace != 0 && !matchesReplacement(pull, c.Area, c.Replace) {
 			return p, fmt.Errorf("migration PR #%d is still open; close it before explicitly replacing it", pull.GetNumber())
 		}
 		p.Pull = pull.GetNumber()
+		p.WorkBranch = pull.GetHead().GetRef()
+		if _, replaces, ok := parseMigrationBranch(p.WorkBranch, c.Area); ok {
+			p.Replaces = replaces
+		}
 	} else {
+		if pending != nil {
+			if c.Replace != 0 && pending.Replaces != c.Replace {
+				return p, errors.New("a different replacement branch is awaiting a PR")
+			}
+			p.Pending, p.WorkBranch, p.Replaces = true, pending.WorkBranch, pending.Replaces
+		}
+		if p.Pending {
+			_, err := findComment(ctx, client, c, p.Issue, c.Area)
+			return p, err
+		}
 		if previous.HeadSHA != head {
 			return p, errors.New("run an audit at the current default branch head before creating a fresh draft")
 		}
@@ -349,20 +373,15 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 				return p, err
 			}
 		}
+		p.WorkBranch = migrationBranch(c.Area, previous.HeadSHA, c.Replace)
 		module := moduleLine.FindStringSubmatch(areaSection(p.Previous, c.Area))
 		if len(module) != 2 || !safePath(module[1]) || path.Base(module[1]) != "go.mod" {
 			return p, errors.New("selected area must identify its owning go.mod with '- Module: `path/go.mod`'")
 		}
 		p.Module = path.Dir(module[1])
 	}
-	comment, err := findComment(ctx, client, c, p.Issue, c.Area)
-	if err != nil {
-		return p, err
-	}
-	if comment != nil {
-		p.Comment = comment.GetID()
-	}
-	return p, nil
+	_, err = findComment(ctx, client, c, p.Issue, c.Area)
+	return p, err
 }
 
 func findComment(ctx context.Context, client *github.Client, c config, issue int, area string) (*github.IssueComment, error) {
@@ -374,7 +393,9 @@ func findComment(ctx context.Context, client *github.Client, c config, issue int
 			return nil, err
 		}
 		for _, comment := range comments {
-			if comment.GetUser().GetLogin() == c.Publisher && strings.Contains(strings.ReplaceAll(comment.GetBody(), "\r\n", "\n"), areaMarker(area)) {
+			if comment.GetUser().GetLogin() == c.Tracker && comment.GetUser().GetType() == "Bot" &&
+				strings.Contains(strings.ReplaceAll(comment.GetBody(), "\r\n", "\n"), areaMarker(area)) {
+
 				if found != nil {
 					return nil, errors.New("multiple managed comments exist for the selected area")
 				}
@@ -395,38 +416,13 @@ func replacementMarker(number int) string {
 }
 
 func matchesArea(pull *github.PullRequest, c config, slug string) bool {
+	if pull.GetHead().GetRepo().GetFullName() == c.Repository {
+		if _, _, ok := parseMigrationBranch(pull.GetHead().GetRef(), slug); ok {
+			return true
+		}
+	}
 	return pull.GetUser().GetLogin() == c.Publisher && pull.GetUser().GetType() == "Bot" &&
 		(strings.Contains(strings.ReplaceAll(pull.GetBody(), "\r\n", "\n"), areaMarker(slug)) || pull.GetTitle() == "[dependency-audit] Modernize "+slug)
-}
-
-func findPull(ctx context.Context, client *github.Client, c config, slug string) (*github.PullRequest, error) {
-	opts := &github.PullRequestListOptions{State: "all", Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
-	var open, closed *github.PullRequest
-	for {
-		pulls, response, err := client.PullRequests.List(ctx, c.Owner, c.Repo, opts)
-		if err != nil {
-			return nil, err
-		}
-		for _, pull := range pulls {
-			if matchesArea(pull, c, slug) {
-				if pull.GetState() == "open" {
-					if open != nil {
-						return nil, errors.New("multiple open migration PRs exist for this area")
-					}
-					open = pull
-				} else if closed == nil {
-					closed = pull
-				}
-			}
-		}
-		if response.NextPage == 0 {
-			if open != nil {
-				return open, nil
-			}
-			return closed, nil
-		}
-		opts.Page = response.NextPage
-	}
 }
 
 func checkReplacement(ctx context.Context, client *github.Client, c config, number int) error {
@@ -441,7 +437,12 @@ func checkReplacement(ctx context.Context, client *github.Client, c config, numb
 }
 
 func migrationComment(p prepared, reference string) string {
-	body := areaMarker(p.Area) + "Migration PR: " + reference + ". "
+	body := areaMarker(p.Area)
+	if p.Pending {
+		body += "[Open a PR](" + reference + ") from `" + p.WorkBranch + "`. "
+	} else {
+		body += "Migration PR: " + reference + ". "
+	}
 	if p.Replaces != 0 {
 		body += fmt.Sprintf("Replaces #%d. ", p.Replaces)
 	}
@@ -449,7 +450,9 @@ func migrationComment(p prepared, reference string) string {
 }
 
 func linkExisting(ctx context.Context, client *github.Client, c config, p prepared) (string, error) {
-	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Area != c.Area || p.Replaces != c.Replace || p.Pull <= 0 {
+	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Tracker != c.Tracker || p.Area != c.Area ||
+		(c.Replace != 0 && p.Replaces != c.Replace) || (p.Pull <= 0 && !p.Pending) {
+
 		return "", errors.New("prepared existing-PR context does not match this apply request")
 	}
 	issue, state, err := latest(ctx, client, c)
@@ -461,21 +464,44 @@ func linkExisting(ctx context.Context, client *github.Client, c config, p prepar
 
 		return "", errors.New("selected tracker changed; rerun apply to refresh its existing PR link")
 	}
-	pull, _, err := client.PullRequests.Get(ctx, c.Owner, c.Repo, p.Pull)
-	if err != nil {
-		return "", err
+	reference := ""
+	if p.Pending {
+		pull, pending, err := findMigration(ctx, client, c)
+		if err != nil {
+			return "", err
+		}
+		if pull != nil && pull.GetHead().GetRef() == p.WorkBranch {
+			if pull.GetState() != "open" {
+				return "", errors.New("the manually opened migration PR is closed; review it before replacing it")
+			}
+			p.Pull, p.Pending = pull.GetNumber(), false
+		} else {
+			if pull != nil && pull.GetState() == "open" {
+				return "", errors.New("a different migration PR appeared; rerun apply to refresh its tracker link")
+			}
+			if pending == nil || pending.WorkBranch != p.WorkBranch {
+				return "", errors.New("pending migration branch changed or disappeared; rerun apply")
+			}
+			reference = manualPRURL(c, p)
+		}
 	}
-	if !matchesArea(pull, c, c.Area) || pull.GetState() != "open" {
-		return "", errors.New("existing migration PR changed or closed; rerun apply")
-	}
-	if p.Replaces != 0 && !strings.Contains(pull.GetBody(), areaMarker(c.Area)+replacementMarker(p.Replaces)) {
-		return "", errors.New("existing migration does not match the requested replacement")
+	if !p.Pending {
+		pull, _, err := client.PullRequests.Get(ctx, c.Owner, c.Repo, p.Pull)
+		if err != nil {
+			return "", err
+		}
+		if !matchesArea(pull, c, c.Area) || pull.GetState() != "open" {
+			return "", errors.New("existing migration PR changed or closed; rerun apply")
+		}
+		if p.Replaces != 0 && !matchesReplacement(pull, c.Area, p.Replaces) {
+			return "", errors.New("existing migration does not match the requested replacement")
+		}
+		reference = fmt.Sprintf("https://github.com/%s/pull/%d", c.Repository, p.Pull)
 	}
 	comment, err := findComment(ctx, client, c, p.Issue, c.Area)
 	if err != nil {
 		return "", err
 	}
-	reference := fmt.Sprintf("https://github.com/%s/pull/%d", c.Repository, p.Pull)
 	body := migrationComment(p, reference)
 	if comment == nil {
 		_, _, err = client.Issues.CreateComment(ctx, c.Owner, c.Repo, p.Issue, github.IssueCommentRequest{Body: body})
@@ -560,7 +586,7 @@ func reportAreas(body string, previous []string) ([]string, error) {
 }
 
 func stamp(ctx context.Context, client *github.Client, c config, p prepared, output string) error {
-	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Area != c.Area {
+	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Tracker != c.Tracker || p.Area != c.Area {
 		return errors.New("prepared context does not match the target, publishing identity, or selected area")
 	}
 	if !shaPattern.MatchString(p.State.BaseSHA) || !shaPattern.MatchString(p.State.HeadSHA) {
@@ -613,45 +639,52 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 
 			return errors.New("selected tracker changed during apply")
 		}
-		if p.Pull != 0 {
+		if p.Pull != 0 || p.Pending {
 			return errors.New("existing migration PRs must be linked without running the fix agent")
 		}
-		existing, err := findPull(ctx, client, c, c.Area)
+		existing, pending, err := findMigration(ctx, client, c)
 		if err != nil {
 			return err
 		}
 		if existing != nil && (existing.GetState() == "open" || p.Replaces == 0) {
 			return errors.New("a migration PR appeared during analysis; rerun apply to link it or explicitly replace a closed PR")
 		}
+		if pending != nil {
+			return errors.New("a migration branch appeared during analysis; rerun apply to link it instead")
+		}
 		if p.Replaces != 0 {
 			if err := checkReplacement(ctx, client, c, p.Replaces); err != nil {
 				return err
 			}
 		}
-		if item.Type != "create_pull_request" || item.Branch != p.WorkBranch {
+		if item.Type != "create_pull_request" || item.Branch != p.WorkBranch || p.WorkBranch != migrationBranch(c.Area, p.State.HeadSHA, p.Replaces) {
 			return errors.New("migration must create a fresh draft on the prepared branch")
 		}
 		body := item.Body
 		if strings.TrimSpace(body) == "" || len(body) > 58000 ||
 			strings.Contains(body, "Dependency audit area:") || strings.Contains(body, "Dependency audit replaces:") ||
+			strings.Contains(body, "Dependency audit source:") ||
 			strings.Contains(body, "```dependency-audit-") {
 
 			return errors.New("new migration draft requires a bounded explanation without reserved automation markers")
 		}
-		header := areaMarker(c.Area)
+		header := migrationHeader(p)
 		if p.Replaces != 0 {
-			header += replacementMarker(p.Replaces) + fmt.Sprintf("Replaces #%d.\n\n", p.Replaces)
+			header += fmt.Sprintf("Replaces #%d.\n\n", p.Replaces)
 		}
 		body = header + body + fmt.Sprintf("\n\nTracker: #%d. Source: `%s`. Nothing is automatically approved or merged.", p.Issue, p.State.HeadSHA)
 		write := nativeRequest{
 			Type: "create_pull_request", Branch: p.WorkBranch, Repo: c.Repository,
 			Title: "Modernize " + c.Area, TemporaryID: "aw_dep_fix", Draft: true, Body: body,
 		}
-		comment := nativeRequest{
-			Type: "add_comment", ItemNumber: p.Issue, CommentID: p.Comment,
-			Body: migrationComment(p, "#aw_dep_fix"),
+		if c.Publisher == actionsPublisher {
+			if err := publishManualBranch(ctx, client, c, p, body); err != nil {
+				return err
+			}
+			items = []nativeRequest{{Type: "noop", Message: "Published the independently validated migration branch; the caller will attach its Open a PR link."}}
+		} else {
+			items = []nativeRequest{write}
 		}
-		items = []nativeRequest{write, comment}
 	} else {
 		body := item.Body
 		if item.Type != "create_issue" || strings.Contains(body, "```dependency-audit-") {
@@ -678,7 +711,7 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 				if err != nil {
 					return err
 				}
-				checkpoint, err := readCheckpoint(old, c.Publisher)
+				checkpoint, err := readCheckpoint(old, c.Tracker)
 				if err != nil {
 					return err
 				}

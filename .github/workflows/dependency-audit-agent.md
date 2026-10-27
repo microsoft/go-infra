@@ -12,6 +12,8 @@ on:
       head: {required: true, type: string}
       control_repo: {required: true, type: string}
       control_sha: {required: true, type: string}
+      app_id: {default: "", type: string}
+      tracker: {required: true, type: string}
 permissions:
   contents: read
   copilot-requests: write
@@ -25,8 +27,9 @@ checkout:
   current: true
   fetch-depth: 0
   github-app:
-    client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+    client-id: ${{ inputs.app_id }}
     private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+    ignore-if-missing: true
     owner: ${{ inputs.owner }}
     repositories: ["${{ inputs.repo }}"]
 network:
@@ -59,14 +62,16 @@ steps:
         > /tmp/gh-aw/dependency-audit/history.patch
       jq -r .previous /tmp/gh-aw/dependency-audit/context.json > /tmp/gh-aw/dependency-audit/previous.md
 safe-outputs:
+  github-token: ${{ secrets.GITHUB_TOKEN }}
   report-failure-as-issue: false
   report-failed-jobs: false
   missing-tool: {create-issue: false}
   missing-data: {create-issue: false}
   report-incomplete: {create-issue: false}
   github-app:
-    client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+    client-id: ${{ inputs.app_id }}
     private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
+    ignore-if-missing: true
     owner: ${{ inputs.owner }}
     repositories: ["${{ inputs.repo }}"]
   create-issue:
@@ -102,8 +107,9 @@ safe-outputs:
         cache-dependency-path: control/go.sum
     - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
       id: reader
+      if: inputs.app_id != ''
       with:
-        client-id: ${{ vars.DEPENDENCY_AUDIT_APP_ID }}
+        client-id: ${{ inputs.app_id }}
         private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
         owner: ${{ inputs.owner }}
         repositories: ${{ inputs.repo }}
@@ -112,13 +118,13 @@ safe-outputs:
     - name: Validate the report and attach the trusted checkpoint
       env:
         GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-        GH_TOKEN: ${{ steps.reader.outputs.token }}
-        PUBLISHER: ${{ steps.reader.outputs.app-slug }}[bot]
+        GH_TOKEN: ${{ steps.reader.outputs.token || github.token }}
+        PUBLISHER: ${{ inputs.tracker }}
         TARGET: ${{ inputs.target_repo }}
         DEPENDENCY_AUDIT_REPOSITORIES: ${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}
         DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
       run: |
-        go -C control run ./cmd/dependencyaudit stamp -repo "$TARGET" -publisher-login "$PUBLISHER" \
+        go -C control run ./cmd/dependencyaudit stamp -repo "$TARGET" -publisher-login "$PUBLISHER" -tracker-login "$PUBLISHER" \
           -input /tmp/gh-aw/dependency-audit/context.json
 ---
 

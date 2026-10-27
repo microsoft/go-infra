@@ -5,9 +5,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,8 +25,25 @@ var (
 	headSHA = strings.Repeat("b", 40)
 )
 
+func testGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "git", append([]string{"-c", "core.hooksPath=/dev/null", "-C", dir}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s: %v", args, output, err)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func writeFile(t *testing.T, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(name, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testConfig() config {
-	return config{Repository: "o/r", Owner: "o", Repo: "r", Publisher: "audit[bot]"}
+	return config{Repository: "o/r", Owner: "o", Repo: "r", Publisher: "audit[bot]", Tracker: "audit[bot]"}
 }
 
 func testState() checkpoint {
@@ -60,6 +81,13 @@ type fixture struct {
 	AllowLinks bool
 	Created    int
 	Updated    int
+	Refs       []*github.Reference
+	Commits    map[string]*github.Commit
+	Tree       string
+	PullLists  int
+	RefWrites  int
+	GitFailure string
+	Entries    []*github.TreeEntry
 }
 
 func testAPI(t *testing.T, f *fixture) *github.Client {
@@ -70,7 +98,67 @@ func testAPI(t *testing.T, f *fixture) *github.Client {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method != http.MethodGet {
-			creating := r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues/7/comments"
+			if strings.HasPrefix(r.URL.Path, "/repos/o/r/git/") {
+				if f.Tree == "" || strings.HasSuffix(r.URL.Path, f.GitFailure) && f.GitFailure != "" {
+					http.Error(w, "Git publication rejected", http.StatusUnprocessableEntity)
+					return
+				}
+				var value any
+				switch r.URL.Path {
+				case "/repos/o/r/git/trees":
+					var request struct {
+						Base string              `json:"base_tree"`
+						Tree []*github.TreeEntry `json:"tree"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					if request.Base != f.Commits[f.Head].GetTree().GetSHA() {
+						t.Error("migration tree does not preserve the audited source")
+					}
+					f.Entries = request.Tree
+					value = &github.Tree{SHA: new(f.Tree)}
+				case "/repos/o/r/git/commits":
+					var request struct {
+						Message string   `json:"message"`
+						Tree    string   `json:"tree"`
+						Parents []string `json:"parents"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					if len(request.Parents) != 1 || request.Parents[0] != f.Head || request.Tree != f.Tree {
+						t.Error("migration commit lost its audited parent or validated tree")
+					}
+					commit := github.Commit{
+						SHA: new(strings.Repeat("d", 40)), Message: new(request.Message),
+						Tree: &github.Tree{SHA: new(request.Tree)}, Parents: []*github.Commit{{SHA: new(f.Head)}},
+					}
+					f.Commits[commit.GetSHA()] = &commit
+					value = &commit
+				case "/repos/o/r/git/refs":
+					var ref github.CreateRef
+					if err := json.NewDecoder(r.Body).Decode(&ref); err != nil {
+						t.Error(err)
+						return
+					}
+					f.RefWrites++
+					created := &github.Reference{Ref: new(ref.Ref), Object: &github.GitObject{SHA: new(ref.SHA)}}
+					value = created
+					f.Refs = append(f.Refs, created)
+				default:
+					t.Errorf("unexpected Git write: %s %s", r.Method, r.URL.Path)
+					http.Error(w, "write rejected", http.StatusBadRequest)
+					return
+				}
+				if err := json.NewEncoder(w).Encode(value); err != nil {
+					t.Error(err)
+				}
+				return
+			}
+			creating := r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues/"+strconv.Itoa(f.Issues[0].GetNumber())+"/comments"
 			updating := r.Method == http.MethodPatch && r.URL.Path == "/repos/o/r/issues/comments/12"
 			if !f.AllowLinks || (!creating && !updating) {
 				t.Errorf("unexpected write: %s %s", r.Method, r.URL.Path)
@@ -85,7 +173,7 @@ func testAPI(t *testing.T, f *fixture) *github.Client {
 			}
 			comment := &github.IssueComment{
 				ID: new(int64(12)), Body: new(request.Body),
-				User: &github.User{Login: new("audit[bot]"), Type: new("Bot")},
+				User: f.Issues[0].User,
 			}
 			if creating {
 				f.Created++
@@ -110,12 +198,26 @@ func testAPI(t *testing.T, f *fixture) *github.Client {
 		case strings.HasSuffix(r.URL.Path, "/comments"):
 			value = f.Comments
 		case r.URL.Path == "/repos/o/r/pulls":
-			value = []*github.PullRequest{}
+			f.PullLists++
+			pulls := []*github.PullRequest{}
 			if f.Pulls != nil {
-				value = f.Pulls
+				pulls = f.Pulls
 			} else if f.Pull != nil {
-				value = []*github.PullRequest{f.Pull}
+				pulls = []*github.PullRequest{f.Pull}
 			}
+			value = pulls
+		case strings.HasPrefix(r.URL.Path, "/repos/o/r/git/matching-refs/"):
+			value = f.Refs
+			if f.Refs == nil {
+				value = []*github.Reference{}
+			}
+		case strings.HasPrefix(r.URL.Path, "/repos/o/r/git/commits/"):
+			sha := strings.TrimPrefix(r.URL.Path, "/repos/o/r/git/commits/")
+			commit := f.Commits[sha]
+			if commit == nil {
+				t.Errorf("unexpected Git commit read: %s", sha)
+			}
+			value = commit
 		case strings.HasPrefix(r.URL.Path, "/repos/o/r/pulls/"):
 			pulls := f.Pulls
 			if f.Pull != nil {
@@ -288,7 +390,7 @@ func TestNativeIssueCreationAndRetryRecovery(t *testing.T) {
 func TestAuditRejectsRewrittenHistory(t *testing.T) {
 	c := testConfig()
 	client := testAPI(t, &fixture{Head: strings.Repeat("c", 40), Comparison: "diverged"})
-	p := prepared{Publisher: c.Publisher, State: testState()}
+	p := prepared{Publisher: c.Publisher, Tracker: c.Tracker, State: testState()}
 	name := nativeOutput(t, map[string]any{"type": "create_issue", "body": report()})
 	if err := stamp(t.Context(), client, c, p, name); err == nil {
 		t.Fatal("rewritten history advanced the checkpoint")
@@ -332,12 +434,15 @@ func TestFreshDraftUsesAuditedHeadAndRejectsBranchUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := outputItems(t, name)
-	if len(items) != 2 || items[0]["draft"] != true || items[1]["item_number"] != float64(7) || !strings.Contains(items[0]["body"].(string), headSHA) {
+	if len(items) != 1 || items[0]["draft"] != true || !strings.Contains(items[0]["body"].(string), "Tracker: #7") ||
+		!strings.Contains(items[0]["body"].(string), headSHA) {
+
 		t.Fatal("new migration must be a draft linked to the current tracker")
 	}
 	for _, body := range []string{
 		"Dependency audit area: other\n",
 		"Dependency audit replaces: 9\n",
+		"Dependency audit source: untrusted\n",
 		"```dependency-audit-v1\n{}\n```",
 	} {
 		name = nativeOutput(t, map[string]any{"type": "create_pull_request", "branch": p.WorkBranch, "body": body})
@@ -395,8 +500,8 @@ func TestClosedPRRequiresExplicitReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := outputItems(t, name)
-	if !strings.Contains(items[0]["body"].(string), "Replaces #9") || !strings.Contains(items[1]["body"].(string), "Replaces #9") {
-		t.Fatal("replacement draft and tracker comment must link the previous attempt")
+	if !strings.Contains(items[0]["body"].(string), "Replaces #9") {
+		t.Fatal("replacement draft must link the previous attempt")
 	}
 	f.Pulls = []*github.PullRequest{migrationPull(10, "open", items[0]["body"].(string)), f.Pull}
 	f.Pull = nil
@@ -518,6 +623,280 @@ func TestConfigAcceptsStandardGitHubTokenFallback(t *testing.T) {
 	}
 }
 
+func manualFixture(t *testing.T) (config, *fixture, *github.Client) {
+	t.Helper()
+	c, f, client := applyFixture(t)
+	c.Publisher, c.Tracker = actionsPublisher, actionsPublisher
+	c.Worktree = t.TempDir()
+	testGit(t, c.Worktree, "init", "-b", "main")
+	testGit(t, c.Worktree, "config", "user.name", "Audit test")
+	testGit(t, c.Worktree, "config", "user.email", "audit@example.test")
+	testGit(t, c.Worktree, "config", "commit.gpgsign", "false")
+	writeFile(t, filepath.Join(c.Worktree, "go.mod"), "module example.com/test\n")
+	writeFile(t, filepath.Join(c.Worktree, "use.go"), "package test\nfunc use() {}\n")
+	testGit(t, c.Worktree, "add", ".")
+	testGit(t, c.Worktree, "commit", "-qm", "base")
+	source := testGit(t, c.Worktree, "rev-parse", "HEAD")
+	state := testState()
+	state.HeadSHA, state.Areas = source, []string{c.Area}
+	f.Head, f.Issues = source, []*github.Issue{tracker(t, 7, state)}
+	f.Issues[0].User.Login = new(actionsPublisher)
+	f.Commits = map[string]*github.Commit{
+		source: {SHA: new(source), Tree: &github.Tree{SHA: new(testGit(t, c.Worktree, "rev-parse", "HEAD^{tree}"))}},
+	}
+	content := "package test\nfunc use() { println(1) }\n"
+	writeFile(t, filepath.Join(c.Worktree, "use.go"), content)
+	testGit(t, c.Worktree, "add", "use.go")
+	c.Tree = testGit(t, c.Worktree, "write-tree")
+	f.Tree = c.Tree
+	return c, f, client
+}
+
+func TestManualPublicationAndPendingBranchRetry(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := nativeOutput(t, map[string]any{"type": "create_pull_request", "branch": p.WorkBranch, "body": "Required migration."})
+	if err := stamp(t.Context(), client, c, p, name); err != nil {
+		t.Fatal(err)
+	}
+	items := outputItems(t, name)
+	if len(items) != 1 || items[0]["type"] != "noop" || f.RefWrites != 1 || len(f.Entries) != 1 || f.Entries[0].GetPath() != "use.go" {
+		t.Fatal("manual mode must publish exactly one validated branch without asking native outputs to open a PR")
+	}
+	f.AllowLinks = true
+	for range 2 {
+		retry, err := prepare(t.Context(), client, c)
+		if err != nil || !retry.Pending || retry.Pull != 0 || retry.Module != "" || retry.WorkBranch != p.WorkBranch {
+			t.Fatalf("pending branch context = %+v, %v", retry, err)
+		}
+		if _, err := linkExisting(t.Context(), client, c, retry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.RefWrites != 1 || f.Created != 1 || f.Updated != 0 || !strings.Contains(f.Comments[0].GetBody(), "[Open a PR](") {
+		t.Fatal("pending-branch retries must not update code or duplicate the tracker comment")
+	}
+	parsed, err := url.Parse(manualPRURL(c, p))
+	if err != nil || !strings.Contains(parsed.Query().Get("body"), p.State.HeadSHA) ||
+		parsed.Query().Get("title") != "[dependency-audit] Modernize "+c.Area {
+
+		t.Fatalf("manual PR link does not preserve the tracker and source: %s, %v", parsed, err)
+	}
+	pending, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Pull = migrationPull(9, "open", "Maintainer explanation.")
+	f.Pull.User = &github.User{Login: new("maintainer"), Type: new("User")}
+	f.Pull.Head.Ref = new(p.WorkBranch)
+	reference, err := linkExisting(t.Context(), client, c, pending)
+	if err != nil || reference != "https://github.com/o/r/pull/9" || f.Created != 1 || f.Updated != 1 || f.RefWrites != 1 {
+		t.Fatalf("manually opened PR was not linked in place: %q, %v", reference, err)
+	}
+}
+
+func TestHumanOpenedPRSurvivesAppOptIn(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Pull = migrationPull(9, "open", "Maintainer edited the description.")
+	f.Pull.User = &github.User{Login: new("maintainer"), Type: new("User")}
+	f.Pull.Head.Ref = new(p.WorkBranch)
+	f.AllowLinks = true
+	c.Publisher = "migration-app[bot]"
+	retry, err := prepare(t.Context(), client, c)
+	if err != nil || retry.Pull != 9 || retry.Pending || retry.Module != "" {
+		t.Fatalf("human PR after App opt-in = %+v, %v", retry, err)
+	}
+	if _, err := linkExisting(t.Context(), client, c, retry); err != nil {
+		t.Fatal(err)
+	}
+	if f.Created != 1 || f.RefWrites != 0 {
+		t.Fatal("App opt-in must reuse the existing human PR and keep the original tracker")
+	}
+	f.Pull.Head.Repo.FullName = new("fork/r")
+	if matchesArea(f.Pull, c, c.Area) {
+		t.Fatal("a fork PR must not claim a generated migration branch")
+	}
+}
+
+func TestManualPublicationFailsBeforeOrDuringRefCreation(t *testing.T) {
+	for _, failure := range []string{"wrong-tree", "wrong-source", "trees", "commits", "refs"} {
+		t.Run(failure, func(t *testing.T) {
+			c, f, client := manualFixture(t)
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch failure {
+			case "wrong-tree":
+				c.Tree = strings.Repeat("c", 40)
+			case "wrong-source":
+				p.State.HeadSHA = strings.Repeat("c", 40)
+			default:
+				f.GitFailure = failure
+			}
+			if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err == nil {
+				t.Fatal("manual publication failure was hidden")
+			}
+			if f.RefWrites != 0 || len(f.Refs) != 0 {
+				t.Fatal("failed publication created or changed a migration ref")
+			}
+		})
+	}
+}
+
+func TestManualBranchRaceAndExplicitReplacement(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+		t.Fatal(err)
+	}
+	name := nativeOutput(t, map[string]any{"type": "create_pull_request", "branch": p.WorkBranch, "body": "Duplicate migration."})
+	if err := stamp(t.Context(), client, c, p, name); err == nil {
+		t.Fatal("a racing branch was published twice")
+	}
+	f.Pull = migrationPull(9, "closed", "")
+	f.Pull.User = &github.User{Login: new("maintainer"), Type: new("User")}
+	f.Pull.Head.Ref = new(p.WorkBranch)
+	if _, err := prepare(t.Context(), client, c); err == nil {
+		t.Fatal("a manually closed migration was implicitly recreated")
+	}
+	c.Replace = 9
+	replacement, err := prepare(t.Context(), client, c)
+	if err != nil || replacement.Pending || replacement.WorkBranch == p.WorkBranch || replacement.Replaces != 9 {
+		t.Fatalf("fresh replacement branch = %+v, %v", replacement, err)
+	}
+	name = nativeOutput(t, map[string]any{"type": "create_pull_request", "branch": replacement.WorkBranch, "body": "Fresh replacement."})
+	if err := stamp(t.Context(), client, c, replacement, name); err != nil {
+		t.Fatal(err)
+	}
+	if f.RefWrites != 2 || f.Refs[0].GetRef() != "refs/heads/"+p.WorkBranch || f.Refs[1].GetRef() != "refs/heads/"+replacement.WorkBranch {
+		t.Fatal("a replacement must create a new branch and leave the previous attempt untouched")
+	}
+}
+
+func TestPendingBranchIsPreservedAcrossAudits(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+		t.Fatal(err)
+	}
+	state := testState()
+	state.Areas = []string{c.Area}
+	f.Head, f.Issues = headSHA, []*github.Issue{tracker(t, 8, state)}
+	f.Issues[0].User.Login = new(actionsPublisher)
+	f.AllowLinks = true
+	retry, err := prepare(t.Context(), client, c)
+	if err != nil || !retry.Pending || retry.Module != "" || retry.WorkBranch != p.WorkBranch || retry.State.HeadSHA != headSHA {
+		t.Fatalf("pending branch after next audit = %+v, %v", retry, err)
+	}
+	if _, err := linkExisting(t.Context(), client, c, retry); err != nil {
+		t.Fatal(err)
+	}
+	if f.RefWrites != 1 || f.Created != 1 || !strings.Contains(f.Comments[0].GetBody(), "[Open a PR](") {
+		t.Fatal("a later audit must link the existing branch without replacing its source")
+	}
+}
+
+func TestManualPublisherPreservesDeletionsAndNewFiles(t *testing.T) {
+	c, f, client := manualFixture(t)
+	testGit(t, c.Worktree, "rm", "-f", "use.go")
+	content := "package test\nfunc replacement() {}\n"
+	writeFile(t, filepath.Join(c.Worktree, "replacement.go"), content)
+	testGit(t, c.Worktree, "add", "replacement.go")
+	c.Tree = testGit(t, c.Worktree, "write-tree")
+	f.Tree = c.Tree
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 2 || f.Entries[0].GetPath() != "replacement.go" || f.Entries[0].GetContent() != content ||
+		f.Entries[1].GetPath() != "use.go" || f.Entries[1].SHA != nil || f.Entries[1].Content != nil {
+
+		t.Fatal("manual publication must preserve additions and deletions in the validated tree")
+	}
+}
+
+func TestPendingBranchesRejectAmbiguousOrModifiedAttempts(t *testing.T) {
+	for _, change := range []string{"modified", "multiple"} {
+		t.Run(change, func(t *testing.T) {
+			c, f, client := manualFixture(t)
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+				t.Fatal(err)
+			}
+			if change == "modified" {
+				f.Commits[f.Refs[0].GetObject().GetSHA()].Message = new("Maintainer changes")
+			} else {
+				other := p
+				other.Replaces = 9
+				sha := strings.Repeat("e", 40)
+				f.Commits[sha] = &github.Commit{
+					Message: new("Prepare dependency migration\n\n" + migrationHeader(other)),
+					Parents: []*github.Commit{{SHA: new(p.State.HeadSHA)}},
+				}
+				f.Refs = append(f.Refs, &github.Reference{
+					Ref:    new("refs/heads/" + migrationBranch(c.Area, p.State.HeadSHA, 9)),
+					Object: &github.GitObject{SHA: new(sha)},
+				})
+			}
+			if _, err := prepare(t.Context(), client, c); err == nil {
+				t.Fatal("an ambiguous or maintainer-modified pending branch was silently reused")
+			}
+			if f.RefWrites != 1 {
+				t.Fatal("existing migration branches must not be overwritten")
+			}
+		})
+	}
+}
+
+func TestManualPublicationFileLimits(t *testing.T) {
+	for _, count := range []int{0, 1, 20, 21} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			c, f, client := manualFixture(t)
+			if count == 0 {
+				writeFile(t, filepath.Join(c.Worktree, "use.go"), "package test\nfunc use() {}\n")
+				testGit(t, c.Worktree, "add", "use.go")
+			}
+			for i := 1; i < count; i++ {
+				name := fmt.Sprintf("change%d.go", i)
+				content := fmt.Sprintf("package test\nfunc change%d() {}\n", i)
+				writeFile(t, filepath.Join(c.Worktree, name), content)
+				testGit(t, c.Worktree, "add", name)
+			}
+			c.Tree = testGit(t, c.Worktree, "write-tree")
+			f.Tree = c.Tree
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration.")
+			valid := count >= 1 && count <= 20
+			if (err == nil) != valid || (f.RefWrites == 1) != valid {
+				t.Fatalf("publication of %d files: ref writes %d, error %v", count, f.RefWrites, err)
+			}
+		})
+	}
+}
+
 func TestMultipleOpenPRsAreNotChosenArbitrarily(t *testing.T) {
 	c, f, client := applyFixture(t)
 	f.Pulls = []*github.PullRequest{
@@ -526,5 +905,90 @@ func TestMultipleOpenPRsAreNotChosenArbitrarily(t *testing.T) {
 	}
 	if _, err := prepare(t.Context(), client, c); err == nil {
 		t.Fatal("ambiguous open PRs were silently selected")
+	}
+}
+
+func TestAuditPreparationDoesNotSelectAMigrationBranch(t *testing.T) {
+	c := testConfig()
+	f := &fixture{Issues: []*github.Issue{tracker(t, 7, testState())}}
+	p, err := prepare(t.Context(), testAPI(t, f), c)
+	if err != nil || p.WorkBranch != "" || p.Publisher != c.Publisher || p.Tracker != c.Tracker {
+		t.Fatalf("audit-only preparation = %+v, %v", p, err)
+	}
+}
+
+func TestMigrationDiscoveryReusesThePRListing(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []int{9, 10} {
+		branch := migrationBranch(c.Area, p.State.HeadSHA, number)
+		pull := migrationPull(number, "closed", "")
+		pull.Head.Ref = new(branch)
+		f.Pulls = append(f.Pulls, pull)
+		f.Refs = append(f.Refs, &github.Reference{Ref: new("refs/heads/" + branch)})
+	}
+	f.PullLists = 0
+	closed, pending, err := findMigration(t.Context(), client, c)
+	if err != nil || closed == nil || pending == nil || pending.WorkBranch != p.WorkBranch || f.PullLists != 1 {
+		t.Fatalf("migration discovery = %+v, %+v, %v; PR listings = %d", closed, pending, err, f.PullLists)
+	}
+}
+
+func TestLinkingPendingBranchRejectsADifferentOpenPR(t *testing.T) {
+	c, f, client := manualFixture(t)
+	p, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration."); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := prepare(t.Context(), client, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Pull = migrationPull(9, "open", "")
+	f.Pull.Head.Ref = new(migrationBranch(c.Area, strings.Repeat("e", 40), 0))
+	f.AllowLinks = true
+	if _, err := linkExisting(t.Context(), client, c, pending); err == nil || !strings.Contains(err.Error(), "different migration PR") {
+		t.Fatalf("a different PR raced the pending link: %v", err)
+	}
+	if f.Created != 0 || f.Updated != 0 || f.RefWrites != 1 {
+		t.Fatal("a racing PR must not cause another publication or a stale tracker link")
+	}
+}
+
+func TestManualPublicationSourceEncoding(t *testing.T) {
+	for _, test := range []struct {
+		name, content string
+		valid         bool
+	}{
+		{name: "utf8", content: "package test\n// \u03bb\nfunc use() {}\n", valid: true},
+		{name: "invalid-utf8", content: "package test\n// \xff\nfunc use() {}\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c, f, client := manualFixture(t)
+			writeFile(t, filepath.Join(c.Worktree, "use.go"), test.content)
+			testGit(t, c.Worktree, "add", "use.go")
+			c.Tree = testGit(t, c.Worktree, "write-tree")
+			f.Tree = c.Tree
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = publishManualBranch(t.Context(), client, c, p, migrationHeader(p)+"Required migration.")
+			if (err == nil) != test.valid || (f.RefWrites == 1) != test.valid {
+				t.Fatalf("publication of %s: %v", test.name, err)
+			}
+			if test.valid && (len(f.Entries) != 1 || f.Entries[0].GetContent() != test.content) {
+				t.Fatal("manual publication must preserve UTF-8 source exactly")
+			}
+		})
 	}
 }
