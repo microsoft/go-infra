@@ -81,16 +81,21 @@ func Apply(config *FoundConfig, mode ApplyMode) error {
 		}()
 	}
 
+	hasPatches := false
 	err = WalkGoPatches(config, func(file string) error {
 		file, err = index.restoreFile(file, tempDir)
 		if err != nil {
 			return err
 		}
 		cmd.Args = append(cmd.Args, file)
+		hasPatches = true
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+	if !hasPatches {
+		return nil
 	}
 
 	return executil.Run(cmd)

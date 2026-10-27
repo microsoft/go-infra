@@ -130,6 +130,70 @@ func TestTryThreeWayRebase(t *testing.T) {
 		verifyPatchSeriesApplies(t, repoDir, newBase, firstPatchPath, secondPatchPath)
 	})
 
+	t.Run("obsolete patch is removed and later patch remains unchanged", func(t *testing.T) {
+		repoDir, newBase, firstPatchPath, _ := setupThreeWayRebaseRepo(t, original, patched, patched)
+		secondPatchPath, secondPatch := addPatchAfterFirst(t, repoDir, newBase, firstPatchPath, "second.txt", "second patch\n")
+
+		updatedFiles, err := TryThreeWayRebase(repoDir, "go", newBase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUpdatedPath := filepath.Join("patches", filepath.Base(firstPatchPath))
+		if len(updatedFiles) != 1 || updatedFiles[0] != wantUpdatedPath {
+			t.Errorf("updatedFiles = %v, want [%v]", updatedFiles, wantUpdatedPath)
+		}
+		if _, err := os.Stat(firstPatchPath); !os.IsNotExist(err) {
+			t.Errorf("obsolete patch still exists: stat error = %v", err)
+		}
+		ensureThreeWayTestFileChanged(t, secondPatchPath, secondPatch, false)
+		verifyPatchSeriesApplies(t, repoDir, newBase, secondPatchPath)
+	})
+
+	t.Run("obsolete patch is removed from preserved index", func(t *testing.T) {
+		repoDir, newBase, patchPath, _ := setupThreeWayRebaseRepo(t, original, patched, patched)
+		indexPath, _ := enableThreeWayTestIndexPreservation(t, repoDir, patchPath)
+
+		updatedFiles, err := TryThreeWayRebase(repoDir, "go", newBase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantUpdatedFiles := []string{
+			filepath.Join("patches", filepath.Base(patchPath)),
+			filepath.Join("patches", IndexFileName),
+		}
+		for _, path := range wantUpdatedFiles {
+			if !slices.Contains(updatedFiles, path) {
+				t.Errorf("updatedFiles = %v, want it to contain %q", updatedFiles, path)
+			}
+		}
+		index, err := ReadIndex(filepath.Dir(indexPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(index) != 0 {
+			t.Errorf("preserved index entries = %v, want none", index)
+		}
+
+		runThreeWayTestGit(t, repoDir, "checkout", "--detach", newBase)
+		config := &FoundConfig{
+			RootDir: repoDir,
+			Config: Config{
+				SubmoduleDir:  ".",
+				PatchesDir:    "patches",
+				PreserveIndex: true,
+			},
+		}
+		for _, mode := range []ApplyMode{ApplyModeCommits, ApplyModeIndex} {
+			if err := Apply(config, mode); err != nil {
+				t.Fatalf("applying empty patch series in mode %v: %v", mode, err)
+			}
+			if head := threeWayTestGitOutput(t, repoDir, "rev-parse", "HEAD"); head != newBase {
+				t.Errorf("HEAD after applying empty patch series = %q, want %q", head, newBase)
+			}
+			runThreeWayTestGit(t, repoDir, "diff", "--exit-code", "HEAD")
+		}
+	})
+
 	t.Run("dependent patches both rebase", func(t *testing.T) {
 		longOriginal := "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n"
 		longPatched := strings.Replace(longOriginal, "10\n", "PATCH1\n", 1)
