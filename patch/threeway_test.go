@@ -173,6 +173,25 @@ func TestTryThreeWayRebase(t *testing.T) {
 		if len(index) != 0 {
 			t.Errorf("preserved index entries = %v, want none", index)
 		}
+
+		runThreeWayTestGit(t, repoDir, "checkout", "--detach", newBase)
+		config := &FoundConfig{
+			RootDir: repoDir,
+			Config: Config{
+				SubmoduleDir:  ".",
+				PatchesDir:    "patches",
+				PreserveIndex: true,
+			},
+		}
+		for _, mode := range []ApplyMode{ApplyModeCommits, ApplyModeIndex} {
+			if err := Apply(config, mode); err != nil {
+				t.Fatalf("applying empty patch series in mode %v: %v", mode, err)
+			}
+			if head := threeWayTestGitOutput(t, repoDir, "rev-parse", "HEAD"); head != newBase {
+				t.Errorf("HEAD after applying empty patch series = %q, want %q", head, newBase)
+			}
+			runThreeWayTestGit(t, repoDir, "diff", "--exit-code", "HEAD")
+		}
 	})
 
 	t.Run("dependent patches both rebase", func(t *testing.T) {
