@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/net/http2"
 )
 
 func init() {
@@ -97,5 +98,17 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 }
 
 func isKnownAPIFlakiness(err error) bool {
-	return errors.Is(err, syscall.ECONNRESET)
+	if errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+
+	var streamError http2.StreamError
+	return errors.As(err, &streamError) &&
+		streamError.Code == http2.ErrCodeCancel &&
+		streamError.Cause != nil &&
+		streamError.Cause.Error() == http2ErrFromPeer
 }
+
+const (
+	http2ErrFromPeer = "received from peer"
+)
