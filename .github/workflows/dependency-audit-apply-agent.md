@@ -23,6 +23,7 @@ permissions:
   contents: read
   copilot-requests: write
 engine: copilot
+inlined-imports: true
 strict: true
 timeout-minutes: 45
 checkout:
