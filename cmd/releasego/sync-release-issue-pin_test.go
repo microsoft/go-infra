@@ -96,6 +96,7 @@ func TestSyncReleaseIssuePinCommand(t *testing.T) {
 						queries.Add(1)
 						if !strings.Contains(query, "node(id: $issueID)") || !strings.Contains(query, "state isPinned") ||
 							!strings.Contains(query, "pinnedIssues(first: 1) { totalCount }") {
+
 							t.Errorf("unexpected issue state query: %s", query)
 						}
 						releaseGitHubJSON(t, w, http.StatusOK, fmt.Sprintf(`{"data":{"node":{"id":"I_tracker","state":%q,"isPinned":%t,"repository":{"pinnedIssues":{"totalCount":%d}}}}}`, tt.state, tt.pinned, tt.pinCount))
@@ -606,6 +607,7 @@ func TestReleaseDayIssuePinCleanup(t *testing.T) {
 					if strings.Contains(request.Query, "repository(owner:") {
 						if !reflect.DeepEqual(request.Variables, map[string]string{"owner": "o", "repo": "r"}) ||
 							!strings.Contains(request.Query, "nodes { issue {") {
+
 							t.Errorf("unexpected pinned issue query: %+v", request)
 						}
 						if created.Load() != 0 {
@@ -697,6 +699,7 @@ func TestReleaseDayIssuePinCleanup(t *testing.T) {
 			}
 			if created.Load() != 1 || lists.Load() != tt.listFailures+1 ||
 				unpins.Load() != int32(len(tt.wantUnpins))+tt.unpinFailures {
+
 				t.Errorf("got created=%d lists=%d unpins=%d", created.Load(), lists.Load(), unpins.Load())
 			}
 			if warnings.Load() != tt.wantWarnings || pins.Load() != 1-tt.wantWarnings || newPinned.Load() != (tt.wantWarnings == 0) {

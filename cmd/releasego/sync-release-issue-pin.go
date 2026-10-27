@@ -277,6 +277,7 @@ func getReleaseIssuePinState(ctx context.Context, client *github.Client, nodeID 
 	case "OPEN":
 		if !*issue.IsPinned && (issue.Repository == nil || issue.Repository.PinnedIssues == nil ||
 			issue.Repository.PinnedIssues.TotalCount == nil || *issue.Repository.PinnedIssues.TotalCount < 0) {
+
 			return nil, errors.New("GitHub did not return the repository's pinned issue count")
 		}
 	case "CLOSED":
@@ -303,6 +304,7 @@ func updateReleaseIssuePin(ctx context.Context, client *github.Client, nodeID st
 	result := response.Data.UpdateIssuePin
 	if result == nil || result.Issue == nil || result.Issue.ID != nodeID ||
 		result.Issue.IsPinned == nil || *result.Issue.IsPinned != pinned {
+
 		return fmt.Errorf("GitHub did not confirm release tracking issue %s has pinned=%t", nodeID, pinned)
 	}
 	return nil
