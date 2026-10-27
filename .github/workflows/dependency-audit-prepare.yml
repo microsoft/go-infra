@@ -111,7 +111,29 @@ jobs:
     steps:
       - name: Require the caller's default branch
         if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        # TEMP: remove this audit-only exception for framework PR #1323 after testing.
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_REF: ${{ github.ref }}
+          REPOSITORY_FORK: ${{ github.event.repository.fork }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_LABEL: ${{ github.event.label.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          if [[ "$CALLER_REPOSITORY" == microsoft/agent-framework-go && "$REPOSITORY_FORK" == false &&
+                "$CALLER_REF" == refs/pull/1323/merge &&
+                "$EVENT_NAME" == pull_request && "$EVENT_ACTION" == labeled && "$EVENT_LABEL" == dependency-audit-smoke &&
+                "$PR_NUMBER" == 1323 && "$PR_HEAD_REPOSITORY" == "$CALLER_REPOSITORY" &&
+                "$PR_HEAD_BRANCH" == dev/mclayton/dependency-audit-consumer && "$PR_BASE_BRANCH" == "$DEFAULT_BRANCH" &&
+                "$MODE" == audit && "$TARGET" == "$CALLER_REPOSITORY" ]]; then
+            echo "::notice::Allowing the temporary audit-only test for framework PR #1323."
+            exit 0
+          fi
           echo "::error::Dependency automation must run from the caller's default branch, not a fork."
           exit 1
       - name: Check the requested operation
