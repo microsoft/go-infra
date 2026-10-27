@@ -159,13 +159,22 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 	}
 
 	var replacements []fileReplacement
+	var obsoletePatches []string
+	indexChanged := false
 
 	for _, patchPath := range patchPaths {
+		baseTree, err := gitcmd.RevParse(workDir, "HEAD^{tree}")
+		if err != nil {
+			return nil, fmt.Errorf("failed to find patch base tree for %q: %w", patchPath, err)
+		}
 		applyPatchPath, err := index.restoreFile(patchPath, indexedPatchDir)
 		if err != nil {
 			return nil, fmt.Errorf("failed to restore index lines for patch %q: %w", patchPath, err)
 		}
 		if err := gitcmd.Am(workDir, "--quiet", applyPatchPath); err == nil {
+			if _, err := recordObsoletePatch(workDir, patchPath, baseTree, &obsoletePatches, index, &indexChanged); err != nil {
+				return nil, err
+			}
 			continue
 		} else {
 			log.Printf("Patch %q did not apply cleanly; retrying with a three-way merge: %v\n", filepath.Base(patchPath), err)
@@ -180,6 +189,14 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 			// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
 			_ = gitcmd.Run(workDir, "am", "--abort")
 			return nil, nil
+		}
+
+		obsolete, err := recordObsoletePatch(workDir, patchPath, baseTree, &obsoletePatches, index, &indexChanged)
+		if err != nil {
+			return nil, err
+		}
+		if obsolete {
+			continue
 		}
 
 		formatArgs := []string{"--stdout", "-1", "HEAD"}
@@ -207,7 +224,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		}
 	}
 
-	if config.PreserveIndex && len(replacements) > 0 {
+	if config.PreserveIndex && (len(replacements) > 0 || indexChanged) {
 		content, err := index.marshal()
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate patch index: %w", err)
@@ -219,5 +236,44 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		})
 	}
 
-	return writeFileReplacements(config.RootDir, replacements)
+	updatedFiles, err := writeFileReplacements(config.RootDir, replacements)
+	if err != nil {
+		return nil, err
+	}
+	for _, patchPath := range obsoletePatches {
+		if err := os.Remove(patchPath); err != nil {
+			return nil, fmt.Errorf("failed to remove obsolete patch %q: %w", patchPath, err)
+		}
+		relativePath, err := filepath.Rel(config.RootDir, patchPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine obsolete patch path: %w", err)
+		}
+		updatedFiles = append(updatedFiles, relativePath)
+	}
+	return updatedFiles, nil
+}
+
+func recordObsoletePatch(workDir, patchPath, baseTree string, obsoletePatches *[]string, index Index, indexChanged *bool) (bool, error) {
+	obsolete, err := patchTreeUnchanged(workDir, patchPath, baseTree)
+	if err != nil {
+		return false, err
+	}
+	if !obsolete {
+		return false, nil
+	}
+	*obsoletePatches = append(*obsoletePatches, patchPath)
+	if _, ok := index[filepath.Base(patchPath)]; ok {
+		delete(index, filepath.Base(patchPath))
+		*indexChanged = true
+	}
+	log.Printf("Patch %q is already present upstream; removing it from the patch set.\n", filepath.Base(patchPath))
+	return true, nil
+}
+
+func patchTreeUnchanged(workDir, patchPath, baseTree string) (bool, error) {
+	tree, err := gitcmd.RevParse(workDir, "HEAD^{tree}")
+	if err != nil {
+		return false, fmt.Errorf("failed to check whether patch %q is obsolete: %w", patchPath, err)
+	}
+	return tree == baseTree, nil
 }
