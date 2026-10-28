@@ -13,7 +13,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"unicode"
 
+	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
@@ -109,11 +112,28 @@ func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 	return nil
 }
 
+func dockerUpdateBuildNumber(assets *buildassets.BuildAssets, buildID string) string {
+	number := fmt.Sprintf("%s_%s_%s", buildID, assets.Branch, assets.Version)
+	// Azure build numbers forbid these characters, control characters, and a trailing period.
+	number = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`"'/\:<>|?@*`, r) {
+			return '_'
+		}
+		return r
+	}, number)
+	runes := []rune(number)
+	if len(runes) > 255 {
+		runes = runes[:255]
+	}
+	return strings.TrimRight(string(runes), ".")
+}
+
 // PRFlags is a list of flags used to submit a Docker update PR.
 type PRFlags struct {
-	dryRun       *bool
-	tempGitDir   *string
-	manualBranch *string
+	dryRun         *bool
+	tempGitDir     *string
+	manualBranch   *string
+	setBuildNumber *bool
 
 	origin *string
 	to     *string
@@ -130,9 +150,10 @@ type PRFlags struct {
 func BindPRFlags() *PRFlags {
 	artifactsDir := filepath.Join(getwd(), "eng", "artifacts")
 	return &PRFlags{
-		dryRun:       flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
-		tempGitDir:   flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
-		manualBranch: flag.String("manual-branch", "", "Branch to submit PR into. Overrides branch detection."),
+		dryRun:         flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
+		tempGitDir:     flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
+		manualBranch:   flag.String("manual-branch", "", "Branch to submit PR into. Overrides branch detection."),
+		setBuildNumber: flag.Bool("set-azdo-build-number", false, "Set the Azure Pipelines build number to include the source branch and version."),
 
 		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
@@ -148,17 +169,6 @@ func BindPRFlags() *PRFlags {
 // submits the resulting commit as a GitHub PR, approves with a second account, and enables the
 // GitHub auto-merge feature.
 func SubmitUpdatePR(f *PRFlags) error {
-	if !*f.skipDockerfiles {
-		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
-			return err
-		}
-	}
-
-	gitDir, err := executil.MakeWorkDir(*f.tempGitDir)
-	if err != nil {
-		return err
-	}
-
 	if *f.origin == "" {
 		fmt.Println("Origin not specified. Nothing to do.")
 		return nil
@@ -173,6 +183,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 		if err := stringutil.ReadJSONFile(*f.buildAssetJSON, &assets); err != nil {
 			return err
 		}
+		if *f.setBuildNumber {
+			azdo.LogCmdUpdateBuildNumber(dockerUpdateBuildNumber(assets, os.Getenv("BUILD_BUILDID")))
+		}
 	}
 
 	targetBranch := *f.manualBranch
@@ -181,9 +194,21 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 	if targetBranch == "" {
 		fmt.Println("This build assets JSON file isn't associated with any Docker image repo branch.\nSee the GetDockerRepoTargetBranch Go func in 'buildmodel/buildassets'.")
+		f.SetAzDOVariables("nil", "nil")
 		return nil
 	}
 	fmt.Printf("---- Target branch for PR: %v\n", targetBranch)
+
+	if !*f.skipDockerfiles {
+		if err := EnsureDockerfileGenerationPrerequisites(); err != nil {
+			return err
+		}
+	}
+
+	gitDir, err := executil.MakeWorkDir(*f.tempGitDir)
+	if err != nil {
+		return err
+	}
 
 	b := gitpr.PRRefSet{
 		Name:    targetBranch,
@@ -274,6 +299,11 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	// Make changes to the files in the temp repo.
 	if err := UpdateGoImagesRepo(gitDir, assets); err != nil {
+		if errors.Is(err, ErrNoMajorMinorUpgradeMatch) {
+			fmt.Printf("---- No Docker image version to update. Skipping: %v\n", err)
+			f.SetAzDOVariables("nil", "nil")
+			return nil
+		}
 		return err
 	}
 	if !*f.skipDockerfiles {

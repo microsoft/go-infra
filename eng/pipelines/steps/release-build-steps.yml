@@ -312,6 +312,7 @@ steps:
           sudo apt update && sudo apt install -y jq
 
           go run ./cmd/dockerupdatepr \
+            -set-azdo-build-number \
             -origin 'https://github.com/$(TargetGoImagesGitHubRepo)' \
             -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
             -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
@@ -90,6 +91,12 @@ func GetBuildWebURL(b *build.Build) (string, bool) {
 // https://docs.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#setvariable-initialize-or-modify-the-value-of-a-variable
 func LogCmdSetVariable(name, value string) {
 	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+}
+
+// LogCmdUpdateBuildNumber changes the build number displayed in the Azure Pipelines run list.
+func LogCmdUpdateBuildNumber(number string) {
+	escaped := strings.NewReplacer("%", "%AZP25", "\r", "%0D", "\n", "%0A").Replace(number)
+	fmt.Printf("##vso[build.updatebuildnumber]%v\n", escaped)
 }
 
 // LogCmdPrependPath uses an AzDO logging command to prepend a path to future steps' PATH env vars.
