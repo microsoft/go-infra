@@ -330,7 +330,20 @@ func QueryGraphQL(auther githubutil.HTTPRequestAuther, query string, variables m
 		return err
 	}
 
-	return sendJSONRequestSuccessful(httpRequest, result)
+	var response json.RawMessage
+	if err := sendJSONRequestSuccessful(httpRequest, &response); err != nil {
+		return err
+	}
+	var envelope struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if err := json.Unmarshal(response, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Errors) != 0 {
+		return fmt.Errorf("GitHub GraphQL errors: %s", envelope.Errors)
+	}
+	return json.Unmarshal(response, result)
 }
 
 func MutateGraphQL(auther githubutil.HTTPRequestAuther, query string, variables map[string]any) error {
