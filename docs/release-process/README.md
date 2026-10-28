@@ -17,9 +17,9 @@ the new tracker. Open trackers and unrelated pinned issues are left alone. If Gi
 are still full, it posts a warning on the new tracker and continues the release. Retries and reruns
 avoid duplicate warnings; other API failures remain errors.
 
-Cleanup happens when the next release tracker is created, not immediately when an issue is closed.
-Closed trackers can be unpinned manually on GitHub in the meantime, or with
-`releasego sync-release-issue-pin`.
+A successful final `release-go-images` report closes and unpins its tracker immediately.
+Trackers closed manually can be unpinned on GitHub or with `releasego sync-release-issue-pin`;
+otherwise, they are cleaned up when the next tracker is created.
 
 # Pipelines
 
@@ -42,7 +42,7 @@ Inputs:
         ```
 
 Steps:
-1. Create a tracking issue for the release event, and one for each release number.
+1. Create a tracking issue for the release event, shared by all release versions.
 1. Launch a "(2) release-build" for each release/issue.
 1. Launch one "(4) release-go-images" that includes all release version numbers.
     * This pipeline has to wait for (2) to finish. We just launch it now while we have all the info necessary to kick it off.
@@ -97,6 +97,11 @@ Steps:
 1. Run the go-images internal build pipeline in "build;publish" mode.
     * Unusual servicing events (e.g. a Microsoft-only revision) may only require a subset of platforms to be built, rather than the full set. In these cases, this pipeline shouldn't be used. The dev should reject the approval step and handle the steps themselves.
 1. Poll the build for successful completion.
+
+The `release-go-images` job explicitly enables `releasego report -complete-release` for its final
+report. A successful report with this flag closes the shared tracking issue as completed and unpins
+it, without relying on the pipeline name.
+Individual version releases and innerloop builds do not close it. Failed or canceled releases leave it open, and status reports do not reopen closed issues. The release runner can manually reopen the tracker if further work is needed.
 
 # Why not use AzDO's stage/job retries and Release Pipelines?
 

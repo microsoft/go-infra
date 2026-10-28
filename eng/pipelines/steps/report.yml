@@ -39,6 +39,10 @@ parameters:
   - name: start
     type: boolean
     default: false
+  # Close and unpin the release tracker if this report is successful.
+  - name: completeRelease
+    type: boolean
+    default: false
 
 steps:
   - ${{ if ne(parameters.releaseIssue, 'nil') }}:
@@ -51,6 +55,7 @@ steps:
           -build-id '${{ parameters.buildID }}' \
           -build-status '${{ parameters.buildStatus }}' \
           -build-start=${{ parameters.start }} \
+          -complete-release=${{ parameters.completeRelease }} \
           -github-app-client-id '$(GitHubApp-bot-for-go-client-id)' \
           -github-app-installation '$(GitHubApp-bot-for-go-microsoft-installation-id)' \
           -github-app-private-key '$(GitHubApp-bot-for-go-private-key-pem)'

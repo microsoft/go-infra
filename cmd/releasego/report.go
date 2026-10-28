@@ -43,6 +43,7 @@ func handleReport(p subcmd.ParseFunc) error {
 	buildID := flag.String("build-id", "", "[Required] The build ID to report.")
 
 	start := flag.Bool("build-start", false, "Assign the current time as the start time of the reported build.")
+	completeRelease := flag.Bool("complete-release", false, "Close and unpin the release tracking issue if the reported build succeeds.")
 
 	version := flag.String(
 		"version", "",
@@ -105,5 +106,5 @@ func handleReport(p subcmd.ParseFunc) error {
 
 	log.Printf("Reporting %#v\n", s)
 	ctx := context.Background()
-	return buildreport.Update(ctx, owner, name, *gitHubAuthFlags, *issue, s)
+	return buildreport.Update(ctx, owner, name, *gitHubAuthFlags, *issue, s, *completeRelease)
 }
