@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/go-test/deep"
@@ -104,6 +105,185 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 			t.Errorf("Version: want != %v, got %v", original.Version, got.Version)
 		}
 	})
+}
+
+func TestUpdateVersions_Preferred(t *testing.T) {
+	tests := []struct {
+		name     string
+		assets   buildassets.BuildAssets
+		versions dockerversions.Versions
+		want     []string
+	}{
+		{
+			name:   "new stable release",
+			assets: buildassets.BuildAssets{Version: "1.28.0-1"},
+			versions: dockerversions.Versions{
+				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
+				"1.27": {Version: "1.27.3"},
+			},
+			want: []string{"1.27"},
+		},
+		{
+			name:   "older patch update does not move preference backward",
+			assets: buildassets.BuildAssets{Version: "1.26.11-1"},
+			versions: dockerversions.Versions{
+				"1.25": {Version: "1.25.10"},
+				"1.26": {Version: "1.26.10"},
+				"1.27": {Version: "1.27.3", PreferredMinor: true, PreferredMajor: true},
+				"1.28": {Version: "1.28.0"},
+			},
+			want: []string{"1.27"},
+		},
+		{
+			name:   "repair existing preferences",
+			assets: buildassets.BuildAssets{Version: "1.28.1-1"},
+			versions: dockerversions.Versions{
+				"1.26": {Version: "1.26.10", PreferredMajor: true},
+				"1.27": {Version: "1.27.3"},
+				"1.28": {Version: "1.28.0", PreferredMinor: true},
+			},
+			want: []string{"1.27"},
+		},
+		{
+			name:   "numeric ordering",
+			assets: buildassets.BuildAssets{Version: "1.11.1-1"},
+			versions: dockerversions.Versions{
+				"1.9":  {Version: "1.9.7", PreferredMinor: true, PreferredMajor: true},
+				"1.10": {Version: "1.10.3"},
+				"1.11": {Version: "1.11.0"},
+			},
+			want: []string{"1.10"},
+		},
+		{
+			name:   "new beta does not advance preference",
+			assets: buildassets.BuildAssets{Version: "1.28beta1-1"},
+			versions: dockerversions.Versions{
+				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
+				"1.27": {Version: "1.27.3"},
+			},
+			want: []string{"1.26"},
+		},
+		{
+			name:   "release candidate is not preferred",
+			assets: buildassets.BuildAssets{Version: "1.28rc2-1"},
+			versions: dockerversions.Versions{
+				"1.26":    {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
+				"1.27":    {Version: "1.27.3"},
+				"1.28-rc": {Version: "1.28rc1"},
+			},
+			want: []string{"1.26"},
+		},
+		{
+			name:   "prerelease only",
+			assets: buildassets.BuildAssets{Version: "1.28rc2-1"},
+			versions: dockerversions.Versions{
+				"1.28-rc": {Version: "1.28rc1"},
+			},
+		},
+		{
+			name:   "main does not advance preference",
+			assets: buildassets.BuildAssets{Version: "1.27.4-1"},
+			versions: dockerversions.Versions{
+				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
+				"1.27": {Version: "1.27.3"},
+				"main": {Version: "main"},
+			},
+			want: []string{"1.26"},
+		},
+		{
+			name:   "single stable version preserves preference",
+			assets: buildassets.BuildAssets{Version: "1.27.4-1"},
+			versions: dockerversions.Versions{
+				"1.27": {Version: "1.27.3", PreferredMinor: true, PreferredMajor: true},
+			},
+			want: []string{"1.27"},
+		},
+		{
+			name:   "missing N-1 preserves preference",
+			assets: buildassets.BuildAssets{Version: "1.28.1-1"},
+			versions: dockerversions.Versions{
+				"1.25": {Version: "1.25.10", PreferredMinor: true, PreferredMajor: true},
+				"1.28": {Version: "1.28.0"},
+			},
+			want: []string{"1.25"},
+		},
+		{
+			name:   "branch suffixes are independent",
+			assets: buildassets.BuildAssets{Version: "1.28.0-1", Branch: "dev.boringcrypto.go1.28"},
+			versions: dockerversions.Versions{
+				"1.26":      {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
+				"1.27":      {Version: "1.27.3"},
+				"1.26-fips": {Version: "1.26.10", BranchSuffix: "-fips", PreferredMinor: true, PreferredMajor: true},
+				"1.27-fips": {Version: "1.27.3", BranchSuffix: "-fips"},
+			},
+			want: []string{"1.26", "1.27-fips"},
+		},
+		{
+			name:   "tag prefixes are independent",
+			assets: buildassets.BuildAssets{Version: "1.28.0-1"},
+			versions: dockerversions.Versions{
+				"1.26": {Version: "1.26.10", TagPrefix: "dev-", PreferredMinor: true, PreferredMajor: true},
+				"1.27": {Version: "1.27.3"},
+			},
+			want: []string{"1.26", "1.27"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Repeating the update must not change the selected preference.
+			for range 2 {
+				if err := UpdateVersions(&tt.assets, tt.versions); err != nil {
+					t.Fatal(err)
+				}
+				for key, v := range tt.versions {
+					want := slices.Contains(tt.want, key)
+					if v.PreferredMinor != want || v.PreferredMajor != want {
+						t.Errorf("%s: preferredMinor=%v, preferredMajor=%v; want both %v",
+							key, v.PreferredMinor, v.PreferredMajor, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateVersions_PreferredManifestTags(t *testing.T) {
+	arch := &dockerversions.Arch{
+		Env:       &dockerversions.ArchEnv{GOOS: "linux", GOARCH: "amd64"},
+		Supported: true,
+	}
+	versions := dockerversions.Versions{
+		"1.26": {
+			Version: "1.26.10", PreferredMinor: true, PreferredMajor: true,
+			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
+			Arches: map[string]*dockerversions.Arch{"amd64": arch},
+		},
+		"1.27": {
+			Version:  "1.27.3",
+			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
+			Arches: map[string]*dockerversions.Arch{"amd64": arch},
+		},
+	}
+	assets := &buildassets.BuildAssets{Version: "1.28.0-1", Arches: []*dockerversions.Arch{arch}}
+	if err := UpdateVersions(assets, versions); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &dockermanifest.Manifest{Repos: []*dockermanifest.Repo{{}}}
+	UpdateManifest(manifest, versions)
+	if len(manifest.Repos[0].Images) != 3 {
+		t.Fatalf("Expected all three releases to be retained, got %d images", len(manifest.Repos[0].Images))
+	}
+	for _, tag := range []string{"1", "latest", "1-bookworm", "bookworm"} {
+		var owners []string
+		for _, image := range manifest.Repos[0].Images {
+			if _, ok := image.SharedTags[tag]; ok {
+				owners = append(owners, image.ProductVersion)
+			}
+		}
+		if diff := deep.Equal(owners, []string{"1.27"}); diff != nil {
+			t.Errorf("Tag %q: %v", tag, diff)
+		}
+	}
 }
 
 func Test_makeOsArchPlatform(t *testing.T) {

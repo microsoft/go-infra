@@ -15,6 +15,10 @@ const description = `
 dockerupdate updates a local Go Docker image repository to build images that contain the build of Go
 specified by the given build asset JSON file.
 
+The preferredMinor and preferredMajor flags are assigned to N-1, the stable Go release immediately
+before the newest stable release in versions.json. Prereleases are ignored. Each tag prefix and
+branch suffix is handled independently; existing preferences are kept if N-1 is absent.
+
 Example: Update the existing repository in a specified directory to the new build listed in a
 assets.json file that has been downloaded to the local machine:
 

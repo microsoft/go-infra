@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/version"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -237,7 +239,8 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 var ErrNoMajorMinorUpgradeMatch = errors.New("no match found in existing versions.json file")
 
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
-// versions.json model to consume the new build.
+// versions.json model to consume the new build. It prefers the stable release immediately before
+// the newest stable release in the same tag namespace, if that previous release is present.
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
 	// First, try to update an existing major.minor version in the Docker versions file. If it
 	// doesn't exist, try to find the previous version and create a new Docker versions file entry
@@ -325,7 +328,48 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		// Copy the asset data into the versions file whether it's a new arch or not.
 		v.Arches[archKey] = arch
 	}
+	updatePreferredVersions(versions, v.TagPrefix, v.BranchSuffix)
 	return nil
+}
+
+func updatePreferredVersions(versions dockerversions.Versions, tagPrefix, branchSuffix string) {
+	var latest *goversion.GoVersion
+	for key, v := range versions {
+		if v.TagPrefix != tagPrefix || v.BranchSuffix != branchSuffix {
+			continue
+		}
+		parsed := goversion.New(v.Version)
+		// Only stable release entries count: ignore main, prereleases, and custom keys.
+		if !version.IsValid("go"+v.Version) || parsed.Prerelease != "" || key != parsed.MajorMinor()+branchSuffix {
+			continue
+		}
+		if latest == nil || version.Compare("go"+parsed.MajorMinor(), "go"+latest.MajorMinor()) > 0 {
+			latest = parsed
+		}
+	}
+	if latest == nil {
+		return
+	}
+
+	// IsValid above guarantees a numeric minor version. If N-1 isn't in this namespace,
+	// leave existing preferences alone rather than removing tags or preferring an older release.
+	minor, err := strconv.Atoi(latest.Minor)
+	if err != nil {
+		return
+	}
+	preferredKey := fmt.Sprintf("%s.%d%s", latest.Major, minor-1, branchSuffix)
+	preferred, ok := versions[preferredKey]
+	if !ok || preferred.TagPrefix != tagPrefix || preferred.BranchSuffix != branchSuffix ||
+		!version.IsValid("go"+preferred.Version) || goversion.New(preferred.Version).Prerelease != "" {
+		return
+	}
+
+	for key, v := range versions {
+		if v.TagPrefix == tagPrefix && v.BranchSuffix == branchSuffix {
+			v.PreferredMinor = key == preferredKey
+			v.PreferredMajor = key == preferredKey
+		}
+	}
 }
 
 // makeOSArchPlatform creates a Docker manifest platform based on the given OS, OS version, and
