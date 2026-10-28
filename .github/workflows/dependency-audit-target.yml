@@ -30,11 +30,6 @@ jobs:
       head: ${{ steps.context.outputs.head_sha }}
       control_sha: ${{ job.workflow_sha }}
     steps:
-      - name: Require the caller's default branch
-        if: github.event.repository.fork == true || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
-        run: |
-          echo "::error::Dependency automation must run from the caller's default branch, not a fork."
-          exit 1
       - name: Checkout go-infra
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -3,9 +3,15 @@ description: Audit dependency changes since the issue checkpoint and publish a m
 on:
   workflow_call:
     inputs:
-      base: {required: true, type: string}
-      head: {required: true, type: string}
-      control_sha: {required: true, type: string}
+      base:
+        required: true
+        type: string
+      head:
+        required: true
+        type: string
+      control_sha:
+        required: true
+        type: string
 permissions:
   contents: read
   copilot-requests: write
@@ -19,14 +25,30 @@ checkout:
   current: true
   fetch-depth: 0
 network:
-  allowed: [defaults, github, go, opentelemetry.io, learn.microsoft.com]
+  allowed:
+    - defaults
+    - github
+    - go
 tools:
   github:
+    # Match the reusable classifier and avoid starting a GitHub MCP server.
     mode: gh-proxy
-    toolsets: [repos]
+    toolsets:
+      - repos
     allowed-repos: public
     min-integrity: unapproved
-  bash: ["cat:*", "find:*", "git show:*", "git log:*", "git grep:*", "head:*", "jq:*", "ls:*", "rg:*", "sed:*", "tail:*"]
+  bash:
+    - "cat:*"
+    - "find:*"
+    - "git show:*"
+    - "git log:*"
+    - "git grep:*"
+    - "head:*"
+    - "jq:*"
+    - "ls:*"
+    - "rg:*"
+    - "sed:*"
+    - "tail:*"
   web-fetch:
 steps:
   - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -51,9 +73,12 @@ safe-outputs:
   github-token: ${{ secrets.GITHUB_TOKEN }}
   report-failure-as-issue: false
   report-failed-jobs: false
-  missing-tool: {create-issue: false}
-  missing-data: {create-issue: false}
-  report-incomplete: {create-issue: false}
+  missing-tool:
+    create-issue: false
+  missing-data:
+    create-issue: false
+  report-incomplete:
+    create-issue: false
   create-issue:
     title-prefix: "[dependency-audit] "
     close-older-issues: true

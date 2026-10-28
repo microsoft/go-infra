@@ -42,7 +42,8 @@ Replace `FULL_GO_INFRA_COMMIT_SHA` with the reviewed commit.
 Each target runs the shared audit with its own `GITHUB_TOKEN`.
 No GitHub App, personal access token, repository enrollment, or shared secrets are required.
 The repository must permit the required Actions and Copilot access.
-Fork and non-default-branch runs fail before accessing the target.
+Caller workflows may run from other branches or in forked repositories.
+The audit still reads a captured revision of that repository's default branch.
 
 ## Run an audit
 
