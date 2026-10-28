@@ -3,17 +3,9 @@ description: Audit dependency changes since the issue checkpoint and publish a m
 on:
   workflow_call:
     inputs:
-      target_repo: {required: true, type: string}
-      owner: {required: true, type: string}
-      repo: {required: true, type: string}
-      key: {required: true, type: string}
-      branch: {required: true, type: string}
       base: {required: true, type: string}
       head: {required: true, type: string}
-      control_repo: {required: true, type: string}
       control_sha: {required: true, type: string}
-      app_id: {default: "", type: string}
-      tracker: {required: true, type: string}
 permissions:
   contents: read
   copilot-requests: write
@@ -22,17 +14,10 @@ inlined-imports: true
 strict: true
 timeout-minutes: 30
 checkout:
-  repository: ${{ inputs.target_repo }}
   ref: ${{ inputs.head }}
   path: target
   current: true
   fetch-depth: 0
-  github-app:
-    client-id: ${{ inputs.app_id }}
-    private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-    ignore-if-missing: true
-    owner: ${{ inputs.owner }}
-    repositories: ["${{ inputs.repo }}"]
 network:
   allowed: [defaults, github, go, opentelemetry.io, learn.microsoft.com]
 tools:
@@ -46,7 +31,7 @@ tools:
 steps:
   - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
     with:
-      name: dependency-context-${{ inputs.key }}
+      name: dependency-context
       path: /tmp/gh-aw/dependency-audit
   - name: Prepare complete dependency history
     working-directory: target
@@ -69,36 +54,27 @@ safe-outputs:
   missing-tool: {create-issue: false}
   missing-data: {create-issue: false}
   report-incomplete: {create-issue: false}
-  github-app:
-    client-id: ${{ inputs.app_id }}
-    private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-    ignore-if-missing: true
-    owner: ${{ inputs.owner }}
-    repositories: ["${{ inputs.repo }}"]
   create-issue:
-    target-repo: ${{ inputs.target_repo }}
     title-prefix: "[dependency-audit] "
     close-older-issues: true
-    close-older-key: ${{ inputs.target_repo }}
+    close-older-key: ${{ github.repository }}
     deduplicate-by-title: true
     max: 1
   update-issue:
-    target-repo: ${{ inputs.target_repo }}
     target: "*"
     body: true
     max: 1
   close-issue:
-    target-repo: ${{ inputs.target_repo }}
     target: "*"
     max: 1
   steps:
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
       with:
-        name: dependency-context-${{ inputs.key }}
+        name: dependency-context
         path: /tmp/gh-aw/dependency-audit
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: ${{ inputs.control_repo }}
+        repository: microsoft/go-infra
         ref: ${{ inputs.control_sha }}
         path: control
         persist-credentials: false
@@ -106,27 +82,12 @@ safe-outputs:
       with:
         go-version-file: control/go.mod
         cache-dependency-path: control/go.sum
-    - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
-      id: reader
-      if: inputs.app_id != ''
-      with:
-        client-id: ${{ inputs.app_id }}
-        private-key: ${{ secrets.DEPENDENCY_AUDIT_APP_PRIVATE_KEY }}
-        owner: ${{ inputs.owner }}
-        repositories: ${{ inputs.repo }}
-        permission-contents: read
-        permission-issues: read
     - name: Validate the report and attach the trusted checkpoint
       env:
         GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-        GH_TOKEN: ${{ steps.reader.outputs.token || github.token }}
-        PUBLISHER: ${{ inputs.tracker }}
-        TARGET: ${{ inputs.target_repo }}
-        DEPENDENCY_AUDIT_REPOSITORIES: ${{ github.repository != 'microsoft/go-infra' && format('["{0}"]', github.repository) || vars.DEPENDENCY_AUDIT_REPOSITORIES }}
-        DEPENDENCY_AUDIT_CONTROL_PRIVATE: ${{ github.event.repository.private }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
-        go -C control run ./cmd/dependencyaudit stamp -repo "$TARGET" -publisher-login "$PUBLISHER" -tracker-login "$PUBLISHER" \
-          -input /tmp/gh-aw/dependency-audit/context.json
+        go -C control run ./cmd/dependencyaudit stamp -input /tmp/gh-aw/dependency-audit/context.json
 ---
 
 # Dependency modernization audit
@@ -175,18 +136,23 @@ assessment, and upstream sources for every version change.
 - [ ] Apply this area.
 - Module: `path/go.mod`
 - Why: concrete impact on current code.
-- Files: actual paths and line numbers.
+- Files: actual paths, line numbers, and affected symbols.
 - Upstream: exact versioned HTTPS URLs.
-- Suggested change: migration steps and behavior differences.
+- Suggested change: concrete migration steps, API replacements, and required behavior differences.
+- Validation: regression tests to add and exact repository-supported formatting, lint, test, and build commands for this module.
 
 ## Resolved areas
 - `previous-slug`: concrete evidence that this previous area is resolved.
 
 ## Notes
-Limitations and unverified behavior. Apply one area manually with the
-dependency-audit-apply.yml workflow in the repository running this audit.
-Supply area and, for central runs, target_repo.
+Limitations and unverified behavior.
 ```
 
 Omit an empty Resolved areas section, but keep Summary, Inventory, Areas, and
 Notes. Missing essential inputs are a failed run, not a successful empty audit.
+Make each area detailed enough for a maintainer or Copilot to implement without
+reconstructing this investigation. If a validation command or migration detail
+cannot be verified, say so instead of inventing it.
+Do not add an Apply this audit section; the trusted report step supplies those
+instructions. Application instructions in previous issues are not part of this
+audit's task.

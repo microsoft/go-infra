@@ -1,12 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// dependencyaudit prepares history checkpoints and validates native gh-aw outputs.
+// dependencyaudit prepares issue checkpoints and validates audit reports.
 package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,7 +14,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -26,8 +24,19 @@ import (
 )
 
 const (
-	marker           = "```dependency-audit-v1\n"
-	actionsPublisher = "github-actions[bot]"
+	marker            = "```dependency-audit-v1\n"
+	actionsPublisher  = "github-actions[bot]"
+	applyHeading      = "## Apply this audit"
+	applyInstructions = `## Apply this audit
+
+To apply a finding, assign this issue to Copilot or implement a selected open area yourself.
+
+1. Choose an open area and check for an existing PR before making changes.
+2. Start from the current default branch. Recheck the affected callers and cited upstream sources because dependencies or code may have changed since this audit.
+3. Keep the change focused on that area. Preserve behavior unless the documented migration requires a change, and add regression tests.
+4. Run the area's validation commands and the repository's documented formatting, lint, test, and build checks for each affected module. Report any checks you cannot run.
+5. Open a draft PR that references this tracker and the area slug without closing keywords such as "Fixes" or "Closes". Do not automatically approve or merge the PR. Leave the area open until a later audit verifies the merged code.
+`
 )
 
 var (
@@ -36,8 +45,6 @@ var (
 	slugPattern  = regexp.MustCompile("^[a-z0-9]+(?:-[a-z0-9]+)*$")
 	areaHeading  = regexp.MustCompile("^### `([a-z0-9]+(?:-[a-z0-9]+)*)`")
 	resolvedArea = regexp.MustCompile("^- `([a-z0-9]+(?:-[a-z0-9]+)*)`: (.+)")
-	moduleLine   = regexp.MustCompile("(?m)^- Module: `([^`\\r\\n]+)`")
-	botPattern   = regexp.MustCompile(`^[a-zA-Z0-9-]+\[bot\]$`)
 )
 
 type checkpoint struct {
@@ -50,41 +57,24 @@ type checkpoint struct {
 }
 
 type prepared struct {
-	State      checkpoint `json:"checkpoint"`
-	Publisher  string     `json:"publisher"`
-	Tracker    string     `json:"tracker_publisher"`
-	Issue      int        `json:"issue"`
-	Previous   string     `json:"previous"`
-	Area       string     `json:"area"`
-	Module     string     `json:"module"`
-	WorkBranch string     `json:"work_branch"`
-	Pull       int        `json:"pull_request"`
-	Replaces   int        `json:"replaces_pr"`
-	Pending    bool       `json:"pending_branch"`
+	State    checkpoint `json:"checkpoint"`
+	Issue    int        `json:"issue"`
+	Previous string     `json:"previous"`
 }
 
 type nativeRequest struct {
 	Type        string          `json:"type"`
-	Message     string          `json:"message,omitempty"`
 	Operation   string          `json:"operation,omitempty"`
 	Title       string          `json:"title,omitempty"`
 	Body        string          `json:"body,omitempty"`
-	Branch      string          `json:"branch,omitempty"`
-	Repo        string          `json:"repo,omitempty"`
 	IssueNumber int             `json:"issue_number,omitempty"`
-	TemporaryID string          `json:"temporary_id,omitempty"`
-	Draft       bool            `json:"draft,omitempty"`
 	Integrity   json.RawMessage `json:"integrity,omitempty"`
 	Secrecy     json.RawMessage `json:"secrecy,omitempty"`
 }
 
 type config struct {
-	Command, Repository, Owner, Repo, Initial, Area string
-	Input, Output, Publisher, Token, GitHubOutput   string
-	Tracker, Worktree, Tree                         string
-	Issue, Replace                                  int
-	Repositories                                    []string
-	Private                                         bool
+	Command, Repository, Owner, Repo, Initial string
+	Input, Output, Token, GitHubOutput        string
 }
 
 func main() {
@@ -92,126 +82,67 @@ func main() {
 	log.SetFlags(0)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	if err := run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
+	if err := run(ctx, os.Args[1:], os.Getenv, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
 		log.Fatal(err)
 	}
 }
 
 func parseConfig(args []string, getenv func(string) string, stderr io.Writer) (config, error) {
 	var c config
-	if len(args) == 0 || !slices.Contains([]string{"targets", "prepare", "stamp", "link"}, args[0]) {
-		return c, errors.New("expected targets, prepare, stamp, or link")
+	if len(args) == 0 || !slices.Contains([]string{"prepare", "stamp"}, args[0]) {
+		return c, errors.New("expected prepare or stamp")
 	}
 	c.Command = args[0]
 	fs := flag.NewFlagSet("dependencyaudit "+c.Command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&c.Repository, "repo", "", "enrolled owner/repo")
+	workflowRepo := strings.ToLower(getenv("GITHUB_REPOSITORY"))
+	fs.StringVar(&c.Repository, "repo", workflowRepo, "workflow repository in owner/repo form")
 	fs.StringVar(&c.Initial, "initial-sha", "", "exclusive starting commit for the first audit")
-	fs.StringVar(&c.Area, "area", "", "area to apply; empty means audit")
-	fs.IntVar(&c.Issue, "issue", 0, "optional assertion of the current tracker number")
-	fs.IntVar(&c.Replace, "replace-pr", 0, "closed, unmerged migration PR to explicitly replace")
 	fs.StringVar(&c.Input, "input", "", "prepared context JSON")
 	fs.StringVar(&c.Output, "output", "", "prepared context JSON destination")
-	fs.StringVar(&c.Publisher, "publisher-login", "", "migration publishing bot login")
-	fs.StringVar(&c.Tracker, "tracker-login", "", "tracker bot login; defaults to publisher-login")
-	fs.StringVar(&c.Worktree, "worktree", "", "independently validated migration worktree")
-	fs.StringVar(&c.Tree, "validated-tree", "", "independently validated Git tree SHA")
 	if err := fs.Parse(args[1:]); err != nil {
 		return c, err
 	}
 	if fs.NArg() != 0 {
 		return c, errors.New("unexpected positional arguments")
 	}
-	if err := json.Unmarshal([]byte(getenv("DEPENDENCY_AUDIT_REPOSITORIES")), &c.Repositories); err != nil {
-		return c, fmt.Errorf("DEPENDENCY_AUDIT_REPOSITORIES must be a JSON array: %w", err)
-	}
-	seen := make(map[string]bool)
-	for i, repository := range c.Repositories {
-		repository = strings.ToLower(repository)
-		if !repoPattern.MatchString(repository) || seen[repository] {
-			return c, fmt.Errorf("invalid or duplicate enrolled repository %q", repository)
-		}
-		seen[repository], c.Repositories[i] = true, repository
-	}
-	if len(c.Repositories) == 0 {
-		return c, errors.New("enroll at least one repository in DEPENDENCY_AUDIT_REPOSITORIES")
-	}
 	c.Repository = strings.ToLower(c.Repository)
-	if c.Repository != "" && !seen[c.Repository] {
-		return c, fmt.Errorf("repository %q is not enrolled", c.Repository)
+	if !repoPattern.MatchString(c.Repository) {
+		return c, errors.New("repo must be in owner/repo form")
 	}
-	if c.Repository == "" && c.Command != "targets" {
-		return c, errors.New("repo is required")
+	if workflowRepo != "" && c.Repository != workflowRepo {
+		return c, errors.New("repo must match the workflow's GITHUB_REPOSITORY")
 	}
-	if c.Initial != "" && (!shaPattern.MatchString(c.Initial) || c.Repository == "" || c.Area != "") {
-		return c, errors.New("initial-sha requires one audit target and a lowercase 40-character SHA")
-	}
-	apply := c.Area != ""
-	if apply && (c.Repository == "" || !slugPattern.MatchString(c.Area) || len(c.Area) > 80 || getenv("DEPENDENCY_AUDIT_ENABLE_APPLY") != "true") {
-		return c, errors.New("apply requires a valid area slug and DEPENDENCY_AUDIT_ENABLE_APPLY=true")
-	}
-	if c.Issue < 0 || (c.Issue != 0 && !apply) {
-		return c, errors.New("issue must be nonnegative and is only valid when applying an area")
-	}
-	if c.Replace < 0 || (c.Replace != 0 && !apply) || (c.Command == "link" && !apply) {
-		return c, errors.New("link and replace-pr require an apply area; replace-pr must be nonnegative")
+	if c.Initial != "" && (c.Command != "prepare" || !shaPattern.MatchString(c.Initial)) {
+		return c, errors.New("initial-sha requires prepare and a lowercase 40-character SHA")
 	}
 	c.Owner, c.Repo, _ = strings.Cut(c.Repository, "/")
-	c.Token, c.GitHubOutput = getenv("GH_TOKEN"), getenv("GITHUB_OUTPUT")
+	c.Token, c.GitHubOutput = getenv("GITHUB_TOKEN"), getenv("GITHUB_OUTPUT")
 	if c.Token == "" {
-		c.Token = getenv("GITHUB_TOKEN")
+		c.Token = getenv("GH_TOKEN")
 	}
-	c.Private = getenv("DEPENDENCY_AUDIT_CONTROL_PRIVATE") == "true"
-	if c.Tracker == "" {
-		c.Tracker = c.Publisher
+	if c.Token == "" {
+		return c, errors.New("GITHUB_TOKEN or GH_TOKEN is required")
 	}
-	if c.Command != "targets" && (c.Token == "" || !botPattern.MatchString(c.Publisher) || !botPattern.MatchString(c.Tracker)) {
-		return c, errors.New("GH_TOKEN or GITHUB_TOKEN and valid publisher-login and tracker-login bot identities are required")
-	}
-	if c.Command == "stamp" && apply && c.Publisher == actionsPublisher && (c.Worktree == "" || !shaPattern.MatchString(c.Tree)) {
-		return c, errors.New("manual PR publication requires a worktree and an independently validated tree SHA")
-	}
-	if (c.Command == "prepare" && c.Output == "") || (slices.Contains([]string{"stamp", "link"}, c.Command) && c.Input == "") {
-		return c, errors.New("prepare requires output; stamp and link require input")
+	if (c.Command == "prepare" && c.Output == "") || (c.Command == "stamp" && c.Input == "") {
+		return c, errors.New("prepare requires output; stamp requires input")
 	}
 	return c, nil
 }
 
-func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
+func run(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
 	c, err := parseConfig(args, getenv, stderr)
 	if err != nil {
 		return err
-	}
-	values := map[string]string{"owner": c.Owner, "repo": c.Repo, "repository": c.Repository, "key": fmt.Sprintf("%x", sha256.Sum256([]byte(c.Repository)))}
-	if c.Command == "targets" {
-		repositories := c.Repositories
-		if c.Repository != "" {
-			repositories = []string{c.Repository}
-		}
-		data, err := json.Marshal(repositories)
-		if err != nil {
-			return err
-		}
-		values["repositories"] = string(data)
-		fmt.Fprintln(stdout, string(data))
-		return outputs(c.GitHubOutput, values)
 	}
 	client, err := githubutil.NewClient(ctx, c.Token)
 	if err != nil {
 		return err
 	}
-	if c.Command == "stamp" || c.Command == "link" {
+	if c.Command == "stamp" {
 		var p prepared
 		if err := readJSON(c.Input, &p); err != nil {
 			return err
-		}
-		if c.Command == "link" {
-			link, err := linkExisting(ctx, client, c, p)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(stdout, "Linked existing migration %s; no branch or PR was changed.\n", link)
-			return nil
 		}
 		return stamp(ctx, client, c, p, getenv("GH_AW_AGENT_OUTPUT"))
 	}
@@ -222,17 +153,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if err := writeJSON(c.Output, p); err != nil {
 		return err
 	}
-	values["branch"], values["base_sha"], values["head_sha"] = p.State.Branch, p.State.BaseSHA, p.State.HeadSHA
-	values["work_branch"], values["module"] = p.WorkBranch, p.Module
-	values["tracker_issue"], values["pull_request"] = fmt.Sprint(p.Issue), fmt.Sprint(p.Pull)
-	values["replaces_pr"] = fmt.Sprint(p.Replaces)
-	values["existing"] = fmt.Sprint(p.Pull != 0 || p.Pending)
-	values["publisher"], values["tracker"] = p.Publisher, p.Tracker
-	return outputs(c.GitHubOutput, values)
+	return outputs(c.GitHubOutput, map[string]string{
+		"base_sha": p.State.BaseSHA, "head_sha": p.State.HeadSHA,
+	})
 }
 
-func readCheckpoint(issue *github.Issue, publisher string) (*checkpoint, error) {
-	if issue.IsPullRequest() || issue.GetUser().GetLogin() != publisher || issue.GetUser().GetType() != "Bot" {
+func readCheckpoint(issue *github.Issue) (*checkpoint, error) {
+	if issue.IsPullRequest() || issue.GetUser().GetLogin() != actionsPublisher || issue.GetUser().GetType() != "Bot" {
 		return nil, nil
 	}
 	body := strings.ReplaceAll(issue.GetBody(), "\r\n", "\n")
@@ -262,20 +189,20 @@ func readCheckpoint(issue *github.Issue, publisher string) (*checkpoint, error) 
 }
 
 func latest(ctx context.Context, client *github.Client, c config) (*github.Issue, *checkpoint, error) {
-	opts := &github.IssueListByRepoOptions{State: "all", Creator: c.Tracker, Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
+	opts := &github.IssueListByRepoOptions{State: "all", Creator: actionsPublisher, Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
 	for {
 		issues, response, err := client.Issues.ListByRepo(ctx, c.Owner, c.Repo, opts)
 		if err != nil {
 			return nil, nil, err
 		}
 		for _, issue := range issues {
-			state, err := readCheckpoint(issue, c.Tracker)
+			state, err := readCheckpoint(issue)
 			if err != nil {
 				return nil, nil, err
 			}
 			if state != nil {
 				if state.Repository != c.Repository {
-					return nil, nil, errors.New("checkpoint repository does not match the enrolled target")
+					return nil, nil, errors.New("checkpoint repository does not match the workflow repository")
 				}
 				return issue, state, nil
 			}
@@ -292,21 +219,21 @@ func currentHead(ctx context.Context, client *github.Client, c config) (string, 
 	if err != nil {
 		return "", "", err
 	}
-	if repo.GetPrivate() && !c.Private {
-		return "", "", errors.New("private target source cannot be copied into a public central repository")
+	if repo.GetDefaultBranch() == "" {
+		return "", "", errors.New("repository has no default branch")
 	}
 	branch, _, err := client.Repositories.GetBranch(ctx, c.Owner, c.Repo, repo.GetDefaultBranch(), 0)
 	if err != nil {
 		return "", "", err
 	}
-	if repo.GetDefaultBranch() == "" || !shaPattern.MatchString(branch.GetCommit().GetSHA()) {
-		return "", "", errors.New("target has no valid default branch head")
+	if !shaPattern.MatchString(branch.GetCommit().GetSHA()) {
+		return "", "", errors.New("repository has no valid default branch head")
 	}
 	return repo.GetDefaultBranch(), branch.GetCommit().GetSHA(), nil
 }
 
 func prepare(ctx context.Context, client *github.Client, c config) (prepared, error) {
-	p := prepared{Publisher: c.Publisher, Tracker: c.Tracker, Area: c.Area}
+	var p prepared
 	branch, head, err := currentHead(ctx, client, c)
 	if err != nil {
 		return p, err
@@ -317,7 +244,7 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 		return p, err
 	}
 	if previous == nil {
-		if c.Area != "" || c.Initial == "" {
+		if c.Initial == "" {
 			return p, errors.New("no checkpoint exists; run the first audit with an explicit initial-sha")
 		}
 		return p, nil
@@ -330,204 +257,7 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 	if previous.HeadSHA == head {
 		p.State = *previous
 	}
-	if c.Area == "" {
-		return p, nil
-	}
-	p.State = *previous
-	if issue.GetState() != "open" || (c.Issue != 0 && c.Issue != p.Issue) || !slices.Contains(previous.Areas, c.Area) {
-		return p, errors.New("apply requires a selected area in the current open tracker")
-	}
-	pull, pending, err := findMigration(ctx, client, c)
-	if err != nil {
-		return p, err
-	}
-	p.Replaces = c.Replace
-	if pull != nil && pull.GetState() == "open" {
-		if c.Replace != 0 && !matchesReplacement(pull, c.Area, c.Replace) {
-			return p, fmt.Errorf("migration PR #%d is still open; close it before explicitly replacing it", pull.GetNumber())
-		}
-		p.Pull = pull.GetNumber()
-		p.WorkBranch = pull.GetHead().GetRef()
-		if _, replaces, ok := parseMigrationBranch(p.WorkBranch, c.Area); ok {
-			p.Replaces = replaces
-		}
-	} else {
-		if pending != nil {
-			if c.Replace != 0 && pending.Replaces != c.Replace {
-				return p, errors.New("a different replacement branch is awaiting a PR")
-			}
-			p.Pending, p.WorkBranch, p.Replaces = true, pending.WorkBranch, pending.Replaces
-		}
-		if p.Pending {
-			_, err := findComment(ctx, client, c, p.Issue, c.Area)
-			return p, err
-		}
-		if previous.HeadSHA != head {
-			return p, errors.New("run an audit at the current default branch head before creating a fresh draft")
-		}
-		if c.Replace == 0 && pull != nil {
-			return p, fmt.Errorf("previous migration PR #%d is closed; review it and use replace-pr explicitly for a new draft", pull.GetNumber())
-		}
-		if c.Replace != 0 {
-			if err := checkReplacement(ctx, client, c, c.Replace); err != nil {
-				return p, err
-			}
-		}
-		p.WorkBranch = migrationBranch(c.Area, previous.HeadSHA, c.Replace)
-		module := moduleLine.FindStringSubmatch(areaSection(p.Previous, c.Area))
-		if len(module) != 2 || !safePath(module[1]) || path.Base(module[1]) != "go.mod" {
-			return p, errors.New("selected area must identify its owning go.mod with '- Module: `path/go.mod`'")
-		}
-		p.Module = path.Dir(module[1])
-	}
-	_, err = findComment(ctx, client, c, p.Issue, c.Area)
-	return p, err
-}
-
-func findComment(ctx context.Context, client *github.Client, c config, issue int, area string) (*github.IssueComment, error) {
-	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
-	var found *github.IssueComment
-	for {
-		comments, response, err := client.Issues.ListComments(ctx, c.Owner, c.Repo, issue, opts)
-		if err != nil {
-			return nil, err
-		}
-		for _, comment := range comments {
-			if comment.GetUser().GetLogin() == c.Tracker && comment.GetUser().GetType() == "Bot" &&
-				strings.Contains(strings.ReplaceAll(comment.GetBody(), "\r\n", "\n"), areaMarker(area)) {
-
-				if found != nil {
-					return nil, errors.New("multiple managed comments exist for the selected area")
-				}
-				found = comment
-			}
-		}
-		if response.NextPage == 0 {
-			return found, nil
-		}
-		opts.Page = response.NextPage
-	}
-}
-
-func areaMarker(slug string) string { return "Dependency audit area: " + slug + "\n" }
-
-func replacementMarker(number int) string {
-	return fmt.Sprintf("Dependency audit replaces: %d\n", number)
-}
-
-func matchesArea(pull *github.PullRequest, c config, slug string) bool {
-	if pull.GetHead().GetRepo().GetFullName() == c.Repository {
-		if _, _, ok := parseMigrationBranch(pull.GetHead().GetRef(), slug); ok {
-			return true
-		}
-	}
-	return pull.GetUser().GetLogin() == c.Publisher && pull.GetUser().GetType() == "Bot" &&
-		(strings.Contains(strings.ReplaceAll(pull.GetBody(), "\r\n", "\n"), areaMarker(slug)) || pull.GetTitle() == "[dependency-audit] Modernize "+slug)
-}
-
-func checkReplacement(ctx context.Context, client *github.Client, c config, number int) error {
-	pull, _, err := client.PullRequests.Get(ctx, c.Owner, c.Repo, number)
-	if err != nil {
-		return err
-	}
-	if !matchesArea(pull, c, c.Area) || pull.GetState() != "closed" || pull.GetMerged() {
-		return errors.New("replace-pr must identify a closed, unmerged migration PR for the selected area; PRs are never closed automatically")
-	}
-	return nil
-}
-
-func migrationComment(p prepared, reference string) string {
-	body := areaMarker(p.Area)
-	if p.Pending {
-		body += "[Open a PR](" + reference + ") from `" + p.WorkBranch + "`. "
-	} else {
-		body += "Migration PR: " + reference + ". "
-	}
-	if p.Replaces != 0 {
-		body += fmt.Sprintf("Replaces #%d. ", p.Replaces)
-	}
-	return body + "The area stays open until a later audit verifies the merged code."
-}
-
-func linkExisting(ctx context.Context, client *github.Client, c config, p prepared) (string, error) {
-	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Tracker != c.Tracker || p.Area != c.Area ||
-		(c.Replace != 0 && p.Replaces != c.Replace) || (p.Pull <= 0 && !p.Pending) {
-
-		return "", errors.New("prepared existing-PR context does not match this apply request")
-	}
-	issue, state, err := latest(ctx, client, c)
-	if err != nil {
-		return "", err
-	}
-	if issue == nil || issue.GetNumber() != p.Issue || issue.GetState() != "open" ||
-		state.HeadSHA != p.State.HeadSHA || !slices.Contains(state.Areas, c.Area) {
-
-		return "", errors.New("selected tracker changed; rerun apply to refresh its existing PR link")
-	}
-	reference := ""
-	if p.Pending {
-		pull, pending, err := findMigration(ctx, client, c)
-		if err != nil {
-			return "", err
-		}
-		if pull != nil && pull.GetHead().GetRef() == p.WorkBranch {
-			if pull.GetState() != "open" {
-				return "", errors.New("the manually opened migration PR is closed; review it before replacing it")
-			}
-			p.Pull, p.Pending = pull.GetNumber(), false
-		} else {
-			if pull != nil && pull.GetState() == "open" {
-				return "", errors.New("a different migration PR appeared; rerun apply to refresh its tracker link")
-			}
-			if pending == nil || pending.WorkBranch != p.WorkBranch {
-				return "", errors.New("pending migration branch changed or disappeared; rerun apply")
-			}
-			reference = manualPRURL(c, p)
-		}
-	}
-	if !p.Pending {
-		pull, _, err := client.PullRequests.Get(ctx, c.Owner, c.Repo, p.Pull)
-		if err != nil {
-			return "", err
-		}
-		if !matchesArea(pull, c, c.Area) || pull.GetState() != "open" {
-			return "", errors.New("existing migration PR changed or closed; rerun apply")
-		}
-		if p.Replaces != 0 && !matchesReplacement(pull, c.Area, p.Replaces) {
-			return "", errors.New("existing migration does not match the requested replacement")
-		}
-		reference = fmt.Sprintf("https://github.com/%s/pull/%d", c.Repository, p.Pull)
-	}
-	comment, err := findComment(ctx, client, c, p.Issue, c.Area)
-	if err != nil {
-		return "", err
-	}
-	body := migrationComment(p, reference)
-	if comment == nil {
-		_, _, err = client.Issues.CreateComment(ctx, c.Owner, c.Repo, p.Issue, github.IssueCommentRequest{Body: body})
-	} else if comment.GetBody() != body {
-		_, _, err = client.Issues.UpdateComment(ctx, c.Owner, c.Repo, comment.GetID(), github.IssueCommentRequest{Body: body})
-	}
-	return reference, err
-}
-
-func areaSection(body, slug string) string {
-	lines := reportLines(body)
-	start := -1
-	for i, line := range lines {
-		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
-			if start >= 0 {
-				return strings.Join(lines[start:i], "\n")
-			}
-			if match := areaHeading.FindStringSubmatch(line); len(match) == 2 && match[1] == slug {
-				start = i
-			}
-		}
-	}
-	if start >= 0 {
-		return strings.Join(lines[start:], "\n")
-	}
-	return ""
+	return p, nil
 }
 
 func reportLines(body string) []string {
@@ -577,6 +307,9 @@ func reportAreas(body string, previous []string) ([]string, error) {
 			return nil, fmt.Errorf("report is missing %s", heading)
 		}
 	}
+	if headings[applyHeading] {
+		return nil, errors.New("the trusted report step supplies the application instructions")
+	}
 	for _, slug := range previous {
 		if !covered[slug] {
 			return nil, fmt.Errorf("previous area %q must be carried forward or explicitly resolved", slug)
@@ -586,8 +319,8 @@ func reportAreas(body string, previous []string) ([]string, error) {
 }
 
 func stamp(ctx context.Context, client *github.Client, c config, p prepared, output string) error {
-	if p.State.Repository != c.Repository || p.Publisher != c.Publisher || p.Tracker != c.Tracker || p.Area != c.Area {
-		return errors.New("prepared context does not match the target, publishing identity, or selected area")
+	if p.State.Repository != c.Repository {
+		return errors.New("prepared context does not match the workflow repository")
 	}
 	if !shaPattern.MatchString(p.State.BaseSHA) || !shaPattern.MatchString(p.State.HeadSHA) {
 		return errors.New("prepared context contains invalid source revisions")
@@ -600,9 +333,6 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		return errors.New("default branch changed during analysis")
 	}
 	if head != p.State.HeadSHA {
-		if c.Area != "" {
-			return errors.New("default branch changed during apply; rerun the audit first")
-		}
 		comparison, _, err := client.Repositories.CompareCommits(ctx, c.Owner, c.Repo, p.State.HeadSHA, head, nil)
 		if err != nil {
 			return err
@@ -629,98 +359,40 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 	if err := json.Unmarshal(envelope["items"], &items); err != nil {
 		return fmt.Errorf("decode native publication request: %w", err)
 	}
-	if len(items) != 1 {
-		return errors.New("exactly one native publication request is required")
+	if len(items) != 1 || items[0].Type != "create_issue" || strings.Contains(items[0].Body, "```dependency-audit-") {
+		return errors.New("audit must submit one report without model-generated checkpoint metadata")
 	}
 	item := items[0]
-	if c.Area != "" {
-		if issue == nil || issue.GetNumber() != p.Issue || issue.GetState() != "open" || state.HeadSHA != p.State.HeadSHA ||
-			!slices.Contains(state.Areas, c.Area) || p.Replaces != c.Replace {
-
-			return errors.New("selected tracker changed during apply")
-		}
-		if p.Pull != 0 || p.Pending {
-			return errors.New("existing migration PRs must be linked without running the fix agent")
-		}
-		existing, pending, err := findMigration(ctx, client, c)
-		if err != nil {
-			return err
-		}
-		if existing != nil && (existing.GetState() == "open" || p.Replaces == 0) {
-			return errors.New("a migration PR appeared during analysis; rerun apply to link it or explicitly replace a closed PR")
-		}
-		if pending != nil {
-			return errors.New("a migration branch appeared during analysis; rerun apply to link it instead")
-		}
-		if p.Replaces != 0 {
-			if err := checkReplacement(ctx, client, c, p.Replaces); err != nil {
+	areas, err := reportAreas(item.Body, p.State.Areas)
+	if err != nil {
+		return err
+	}
+	p.State.Areas = areas
+	encoded, err := json.Marshal(p.State)
+	if err != nil {
+		return err
+	}
+	body := marker + string(encoded) + "\n```\n\n" + strings.TrimSpace(item.Body) + "\n\n" + applyInstructions
+	if len(body) > 60000 {
+		return errors.New("report exceeds the 60000-byte limit")
+	}
+	items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
+	if state != nil && state.HeadSHA == p.State.HeadSHA {
+		items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
+		if state.Previous != 0 {
+			old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, state.Previous)
+			if err != nil {
 				return err
 			}
-		}
-		if item.Type != "create_pull_request" || item.Branch != p.WorkBranch || p.WorkBranch != migrationBranch(c.Area, p.State.HeadSHA, p.Replaces) {
-			return errors.New("migration must create a fresh draft on the prepared branch")
-		}
-		body := item.Body
-		if strings.TrimSpace(body) == "" || len(body) > 58000 ||
-			strings.Contains(body, "Dependency audit area:") || strings.Contains(body, "Dependency audit replaces:") ||
-			strings.Contains(body, "Dependency audit source:") ||
-			strings.Contains(body, "```dependency-audit-") {
-
-			return errors.New("new migration draft requires a bounded explanation without reserved automation markers")
-		}
-		header := migrationHeader(p)
-		if p.Replaces != 0 {
-			header += fmt.Sprintf("Replaces #%d.\n\n", p.Replaces)
-		}
-		body = header + body + fmt.Sprintf("\n\nTracker: #%d. Source: `%s`. Nothing is automatically approved or merged.", p.Issue, p.State.HeadSHA)
-		write := nativeRequest{
-			Type: "create_pull_request", Branch: p.WorkBranch, Repo: c.Repository,
-			Title: "Modernize " + c.Area, TemporaryID: "aw_dep_fix", Draft: true, Body: body,
-		}
-		if c.Publisher == actionsPublisher {
-			if err := publishManualBranch(ctx, client, c, p, body); err != nil {
+			checkpoint, err := readCheckpoint(old)
+			if err != nil {
 				return err
 			}
-			items = []nativeRequest{{Type: "noop", Message: "Published the independently validated migration branch; the caller will attach its Open a PR link."}}
-		} else {
-			items = []nativeRequest{write}
-		}
-	} else {
-		body := item.Body
-		if item.Type != "create_issue" || strings.Contains(body, "```dependency-audit-") {
-			return errors.New("audit must submit one report without model-generated checkpoint metadata")
-		}
-		areas, err := reportAreas(body, p.State.Areas)
-		if err != nil {
-			return err
-		}
-		p.State.Areas = areas
-		encoded, err := json.Marshal(p.State)
-		if err != nil {
-			return err
-		}
-		body = marker + string(encoded) + "\n```\n\n" + body
-		if len(body) > 60000 {
-			return errors.New("report exceeds the 60000-byte limit")
-		}
-		items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
-		if state != nil && state.HeadSHA == p.State.HeadSHA {
-			items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
-			if state.Previous != 0 {
-				old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, state.Previous)
-				if err != nil {
-					return err
-				}
-				checkpoint, err := readCheckpoint(old, c.Tracker)
-				if err != nil {
-					return err
-				}
-				if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != state.Branch || checkpoint.HeadSHA != state.BaseSHA {
-					return errors.New("previous issue is not the expected automation-owned checkpoint")
-				}
-				if old.GetState() == "open" {
-					items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
-				}
+			if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != state.Branch || checkpoint.HeadSHA != state.BaseSHA {
+				return errors.New("previous issue is not the expected automation-owned checkpoint")
+			}
+			if old.GetState() == "open" {
+				items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
 			}
 		}
 	}
@@ -732,10 +404,6 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		return err
 	}
 	return writeJSON(output, envelope)
-}
-
-func safePath(name string) bool {
-	return name != "" && name != "." && !path.IsAbs(name) && path.Clean(name) == name && !strings.HasPrefix(name, "../") && !strings.ContainsAny(name, "\\:\x00\r\n")
 }
 
 func outputs(name string, values map[string]string) error {
