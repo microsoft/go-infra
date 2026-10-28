@@ -359,8 +359,10 @@ func updatePreferredVersions(versions dockerversions.Versions, tagPrefix, branch
 	}
 	preferredKey := fmt.Sprintf("%s.%d%s", latest.Major, minor-1, branchSuffix)
 	preferred, ok := versions[preferredKey]
-	if !ok || preferred.TagPrefix != tagPrefix || preferred.BranchSuffix != branchSuffix ||
-		!version.IsValid("go"+preferred.Version) || goversion.New(preferred.Version).Prerelease != "" {
+	if !ok || preferred.TagPrefix != tagPrefix || preferred.BranchSuffix != branchSuffix {
+		return
+	}
+	if !version.IsValid("go"+preferred.Version) || goversion.New(preferred.Version).Prerelease != "" {
 		return
 	}
 
