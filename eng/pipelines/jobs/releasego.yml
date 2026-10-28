@@ -16,6 +16,8 @@ parameters:
   releaseVersion: ''
   # The microsoft/go release issue to post a success/failure report to, or 'nil'.
   releaseIssue: nil
+  # Close and unpin the release tracker if this job's final report succeeds.
+  completeRelease: false
   # A string of flags to pass "add-retry-instructions" for this job, or empty string to skip.
   retryInstructionsFlags: ''
 
@@ -106,3 +108,4 @@ jobs:
           version: ${{ parameters.releaseVersion }}
           releaseIssue: ${{ parameters.releaseIssue }}
           reason: completion
+          completeRelease: ${{ parameters.completeRelease }}

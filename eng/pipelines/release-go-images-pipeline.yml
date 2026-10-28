@@ -124,6 +124,7 @@ extends:
           - template: /eng/pipelines/jobs/releasego.yml@self
             parameters:
               releaseIssue: ${{ parameters.releaseIssue }}
+              completeRelease: true
               retryInstructionsFlags: '-preapproval'
               variables:
                 poll1MicrosoftGoImagesCommitHash: ${{ parameters.poll1MicrosoftGoImagesCommitHash }}

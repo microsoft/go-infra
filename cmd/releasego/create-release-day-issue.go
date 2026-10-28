@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/azdo"
+	"github.com/microsoft/go-infra/buildreport"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
 )
@@ -33,7 +34,7 @@ func init() {
 const docPointerMarkdown = "For more information about the microsoft/go release process, see " +
 	"[docs/release-process in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/release-process)."
 
-const releaseDayIssueBodyPrefix = "This issue tracks the status of ongoing microsoft/go releases"
+const releaseDayIssueBodyPrefix = buildreport.ReleaseDayIssueBodyPrefix
 
 var releaseIssueLabels = []string{"Area-Release"}
 
@@ -83,7 +84,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if err := unpinClosedReleaseIssues(ctx, client, owner, name); err != nil {
+	if err := buildreport.UnpinClosedReleaseIssues(ctx, client, owner, name); err != nil {
 		return fmt.Errorf("clean up closed release tracker pins: %w", err)
 	}
 
@@ -106,7 +107,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	if err := syncReleaseIssuePin(ctx, client, owner, name, c); err != nil {
+	if err := buildreport.SyncIssuePin(ctx, client, owner, name, c); err != nil {
 		return fmt.Errorf("pin release tracking issue %s: %w", c.GetHTMLURL(), err)
 	}
 

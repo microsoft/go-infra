@@ -13,6 +13,13 @@ import (
 	"testing"
 )
 
+const releaseIssuePinCapacityWarningMarker = "<!-- releasego:issue-pin-capacity-warning -->"
+
+const releaseIssuePinCapacityWarning = releaseIssuePinCapacityWarningMarker + "\n\n> [!WARNING]\n" +
+	"> This release tracker could not be pinned because all three issue pin slots are in use. " +
+	"The release process will continue without pinning it. Unpin another issue and pin this tracker " +
+	"manually, or rerun `releasego sync-release-issue-pin` for this issue."
+
 const noPinnedIssuesResponse = `{"data":{"repository":{"pinnedIssues":{"totalCount":0,"nodes":[]}}}}`
 
 type releaseIssuePinTestRequest struct {

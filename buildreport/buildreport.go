@@ -77,16 +77,18 @@ var pipelinesWithRetryInstructions = map[string]struct{}{
 }
 
 // Update updates the report then sends a notification comment if necessary.
-func Update(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State) error {
-	if err := UpdateIssueBody(ctx, owner, repoName, gitHubAuthFlags, issue, s); err != nil {
+// If completeRelease is true, a successful report also closes and unpins the issue.
+func Update(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State, completeRelease bool) error {
+	if err := UpdateIssueBody(ctx, owner, repoName, gitHubAuthFlags, issue, s, completeRelease); err != nil {
 		return err
 	}
 	return Notify(ctx, owner, repoName, gitHubAuthFlags, issue, s)
 }
 
-// UpdateIssueBody updates the given issue with new state. Requires the target GitHub repo to have
-// the wiki activated to perform safer concurrent updates than a simple issue description edit.
-func UpdateIssueBody(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State) error {
+// UpdateIssueBody updates the given issue with new state. If completeRelease is true, a successful
+// report also closes and unpins the issue. Requires the target GitHub repo to have the wiki activated
+// to perform safer concurrent updates than a simple issue description edit.
+func UpdateIssueBody(ctx context.Context, owner, repoName string, gitHubAuthFlags githubutil.GitHubAuthFlags, issue int, s State, completeRelease bool) error {
 	client, err := gitHubAuthFlags.NewClient(ctx)
 	if err != nil {
 		return err
@@ -197,18 +199,34 @@ func UpdateIssueBody(ctx context.Context, owner, repoName string, gitHubAuthFlag
 	// data. The report includes a link to the actual data in case it's important to get the
 	// real data during a release.
 	log.Printf("Copying report to https://github.com/%v/%v/issues/%v description...", owner, repoName, issue)
-	return updateGitHubIssueBody(ctx, client, owner, repoName, issue, body)
+	return updateGitHubIssueBody(ctx, client, owner, repoName, issue, body, s, completeRelease)
 }
 
-func updateGitHubIssueBody(ctx context.Context, client *github.Client, owner, repoName string, issue int, body string) error {
-	return githubutil.Retry(func() error {
-		edit, _, err := client.Issues.Update(ctx, owner, repoName, issue, github.UpdateIssueRequest{Body: &body})
+func updateGitHubIssueBody(ctx context.Context, client *github.Client, owner, repoName string, issue int, body string, s State, completeRelease bool) error {
+	completed := completeRelease && s.Status == SymbolSucceeded
+	update := github.UpdateIssueRequest{Body: &body}
+	if completed {
+		update.State = new("closed")
+		update.StateReason = new("completed")
+	}
+	var edit *github.Issue
+	if err := githubutil.Retry(func() error {
+		var err error
+		edit, _, err = client.Issues.Update(ctx, owner, repoName, issue, update)
 		if err != nil {
 			return err
 		}
 		log.Printf("Edit successful:\n%v\n", edit.ID)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if completed {
+		if err := SyncIssuePin(ctx, client, owner, repoName, edit); err != nil {
+			return fmt.Errorf("sync completed release tracker pin for %s/%s#%d: %w", owner, repoName, issue, err)
+		}
+	}
+	return nil
 }
 
 // Notify determines if a notification is necessary for the given status update and sends it.
