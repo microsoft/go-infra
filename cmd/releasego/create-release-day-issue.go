@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -31,6 +32,8 @@ func init() {
 // docPointerMarkdown is a pointer to the release process docs with some context, as markdown text.
 const docPointerMarkdown = "For more information about the microsoft/go release process, see " +
 	"[docs/release-process in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/release-process)."
+
+const releaseDayIssueBodyPrefix = "This issue tracks the status of ongoing microsoft/go releases"
 
 var releaseIssueLabels = []string{"Area-Release"}
 
@@ -64,7 +67,7 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 	sort.Strings(releases)
 
 	title := time.Now().UTC().Format("2006-01-02") + " releases: " + strings.Join(releases, ", ")
-	desc := "This issue tracks the status of ongoing microsoft/go releases and the image release " +
+	desc := releaseDayIssueBodyPrefix + " and the image release " +
 		"from [microsoft/go-images](https://github.com/microsoft/go-images). " +
 		"I am a bot, and I'll keep the issue up to date and add a comment when I notice " +
 		"something happen that likely requires the release runner to take some manual action." +
@@ -80,7 +83,11 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 		return err
 	}
 
-	log.Printf("Creating comment on %v/%v with title %#q and content:\n%v\n", owner, name, title, desc)
+	if err := unpinClosedReleaseIssues(ctx, client, owner, name); err != nil {
+		return fmt.Errorf("clean up closed release tracker pins: %w", err)
+	}
+
+	log.Printf("Creating release tracking issue on %v/%v with title %#q and content:\n%v\n", owner, name, title, desc)
 
 	var c *github.Issue
 	if err = githubutil.Retry(func() error {
@@ -97,6 +104,10 @@ func handleCreateReleaseDayIssue(p subcmd.ParseFunc) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if err := syncReleaseIssuePin(ctx, client, owner, name, c); err != nil {
+		return fmt.Errorf("pin release tracking issue %s: %w", c.GetHTMLURL(), err)
 	}
 
 	if *setVariableName != "" {

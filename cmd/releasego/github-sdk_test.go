@@ -102,26 +102,47 @@ func TestGitHubTagRequest(t *testing.T) {
 }
 
 func TestGitHubReleaseDayIssueRequest(t *testing.T) {
-	var created atomic.Bool
+	var created, pinned atomic.Bool
 	newReleaseGitHubServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/repos/o/r/issues" {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues":
+			var body struct {
+				Title, Body string
+				Labels      []string
+			}
+			if json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasSuffix(body.Title, " releases: 1.26.1-1, 1.27.0-1") || !strings.Contains(body.Body, "/cc @runner") || !reflect.DeepEqual(body.Labels, []string{"Area-Release"}) {
+				t.Errorf("wrong release issue payload: %+v", body)
+			}
+			created.Store(true)
+			releaseGitHubJSON(t, w, http.StatusCreated, `{"number":42,"node_id":"I_tracker","html_url":"https://github.com/o/r/issues/42"}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+			query := readReleaseIssuePinQuery(t, r)
+			if strings.Contains(query, "repository(owner:") {
+				releaseGitHubJSON(t, w, http.StatusOK, noPinnedIssuesResponse)
+				return
+			}
+			if !created.Load() {
+				t.Error("attempted to pin before creating the tracker")
+			}
+			if strings.Contains(query, "mutation") {
+				if !strings.Contains(query, "updateIssuePin: pinIssue(") {
+					t.Errorf("unexpected mutation: %s", query)
+				}
+				pinned.Store(true)
+				releaseGitHubJSON(t, w, http.StatusOK, `{"data":{"updateIssuePin":{"issue":{"id":"I_tracker","isPinned":true}}}}`)
+			} else {
+				releaseGitHubJSON(t, w, http.StatusOK, `{"data":{"node":{"id":"I_tracker","state":"OPEN","isPinned":false,"repository":{"pinnedIssues":{"totalCount":2}}}}}`)
+			}
+		default:
 			t.Errorf("unexpected issue request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
 		}
-		var body struct {
-			Title, Body string
-			Labels      []string
-		}
-		if json.NewDecoder(r.Body).Decode(&body) != nil || !strings.HasSuffix(body.Title, " releases: 1.26.1-1, 1.27.0-1") || !strings.Contains(body.Body, "/cc @runner") || !reflect.DeepEqual(body.Labels, []string{"Area-Release"}) {
-			t.Errorf("wrong release issue payload: %+v", body)
-		}
-		created.Store(true)
-		releaseGitHubJSON(t, w, http.StatusCreated, `{"number":42,"html_url":"https://github.com/o/r/issues/42"}`)
 	})
 	if err := runGitHubCommand(t, handleCreateReleaseDayIssue, "-repo=o/r", "-releases=1.27.0-1,1.26.1-1", "-notify=runner"); err != nil {
 		t.Fatal(err)
 	}
-	if !created.Load() {
-		t.Fatal("issue was not created")
+	if !created.Load() || !pinned.Load() {
+		t.Fatal("release tracking issue was not created and pinned")
 	}
 }
 
