@@ -93,6 +93,94 @@ func TestPostGitHubSDK(t *testing.T) {
 	}
 }
 
+func TestAddPRLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		getStatus    int
+		createStatus int
+		verifyStatus int
+		addStatus    int
+		wantError    bool
+	}{
+		{name: "existing label", getStatus: 200, addStatus: 200},
+		{name: "missing label", getStatus: 404, createStatus: 201, addStatus: 200},
+		{name: "concurrent creation", getStatus: 404, createStatus: 422, verifyStatus: 200, addStatus: 200},
+		{name: "lookup denied", getStatus: 403, wantError: true},
+		{name: "creation denied", getStatus: 404, createStatus: 403, verifyStatus: 404, wantError: true},
+		{name: "adding denied", getStatus: 200, addStatus: 403, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var lookups, creates, adds int
+			testPRServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if _, password, ok := r.BasicAuth(); !ok || password != "test-pat" {
+					t.Error("label request lost authentication")
+				}
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/labels/sync:docs":
+					lookups++
+					status := tc.getStatus
+					if lookups > 1 {
+						status = tc.verifyStatus
+					}
+					writePRResponse(t, w, status, `{"name":"sync:docs"}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/labels":
+					creates++
+					var got github.CreateIssueLabelRequest
+					if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if got.Name != "sync:docs" || got.Color == nil || *got.Color != "C2E0C6" ||
+						got.Description == nil || *got.Description != "Documentation sync" {
+
+						t.Errorf("unexpected label definition: %+v", got)
+					}
+					writePRResponse(t, w, tc.createStatus, `{"name":"sync:docs"}`)
+				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/issues/42/labels":
+					adds++
+					var got []string
+					if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					if !reflect.DeepEqual(got, []string{"sync:docs"}) {
+						t.Errorf("labels = %v, want [sync:docs]", got)
+					}
+					writePRResponse(t, w, tc.addStatus, `[{"name":"sync:docs"},{"name":"kind:docs"}]`)
+				default:
+					t.Errorf("unexpected label request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			})
+			remote, err := ParseRemoteURL("https://github.com/o/r")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = AddPRLabel(remote, 42, "sync:docs", "C2E0C6", "Documentation sync",
+				githubutil.GitHubPATAuther{PAT: "test-pat"})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error = %v, want error = %v", err, tc.wantError)
+			}
+			wantLookups, wantCreates, wantAdds := 1, 0, 0
+			if tc.createStatus != 0 {
+				wantCreates = 1
+			}
+			if tc.verifyStatus != 0 {
+				wantLookups++
+			}
+			if tc.addStatus != 0 {
+				wantAdds = 1
+			}
+			if lookups != wantLookups || creates != wantCreates || adds != wantAdds {
+				t.Errorf("requests: get/create/add = %d/%d/%d, want %d/%d/%d",
+					lookups, creates, adds, wantLookups, wantCreates, wantAdds)
+			}
+		})
+	}
+}
+
 func TestPostGitHubErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

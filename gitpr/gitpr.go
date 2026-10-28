@@ -259,14 +259,7 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, auther githubutil.HTTP
 	if request == nil || auther == nil {
 		return nil, errors.New("GitHub request and authentication must be provided")
 	}
-	base := client.Transport
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	api, err := github.NewClient(
-		github.WithHTTPClient(&client),
-		github.WithTransport(authTransport{base: base, auther: auther}),
-	)
+	api, err := newClient(auther)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +282,51 @@ func PostGitHub(ownerRepo string, request *GitHubRequest, auther githubutil.HTTP
 		return nil, errors.New("GitHub did not return a created pull request")
 	}
 	return &GitHubResponse{HTMLURL: pr.GetHTMLURL(), NodeID: pr.GetNodeID(), Number: pr.GetNumber()}, nil
+}
+
+// AddPRLabel adds a label without replacing existing PR labels. It creates the repository label
+// if needed. If the label already exists, it doesn't modify its color and description.
+func AddPRLabel(remote *Remote, number int, name, color, description string, auther githubutil.HTTPRequestAuther) error {
+	api, err := newClient(auther)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	owner, repo := remote.GetOwner(), remote.GetRepo()
+	if _, response, err := api.Issues.GetLabel(ctx, owner, repo, name); err != nil {
+		if response == nil || response.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("get label %s: %w", name, err)
+		}
+		_, _, err := api.Issues.CreateLabel(ctx, owner, repo, github.CreateIssueLabelRequest{
+			Name: name, Color: &color, Description: &description,
+		})
+		if err != nil {
+			// If we raced with another call to create the label, we might find that even though our
+			// call failed to create the label, the other caller's attempt succeeded. Detect this
+			// case and ignore the creation error.
+			if _, _, verifyErr := api.Issues.GetLabel(ctx, owner, repo, name); verifyErr != nil {
+				return fmt.Errorf("create label %s: %w", name, err)
+			}
+		}
+	}
+	if _, _, err := api.Issues.AddLabelsToIssue(ctx, owner, repo, number, []string{name}); err != nil {
+		return fmt.Errorf("add label %s to PR #%d: %w", name, number, err)
+	}
+	return nil
+}
+
+func newClient(auther githubutil.HTTPRequestAuther) (*github.Client, error) {
+	if auther == nil {
+		return nil, errors.New("GitHub authentication must be provided")
+	}
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return github.NewClient(
+		github.WithHTTPClient(&client),
+		github.WithTransport(authTransport{base: base, auther: auther}),
+	)
 }
 
 type authTransport struct {

@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
 )
@@ -307,6 +308,16 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
+	if entry.SyncDocs {
+		if entry.MainBranch == "" ||
+			entry.SubmoduleTarget != "" ||
+			len(entry.BranchMap) != 0 ||
+			len(entry.AutoSyncBranches) != 0 {
+
+			return nil, errors.New("SyncDocs requires MainBranch and cannot be combined with SubmoduleTarget, BranchMap, or AutoSyncBranches")
+		}
+	}
+
 	urlAuther, err := f.ParseAuth()
 	if err != nil {
 		return nil, err
@@ -349,6 +360,17 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			nb.Commit = commit
 		}
 		branches = append(branches, nb)
+	}
+	if entry.SyncDocs {
+		for _, version := range []string{msmajorversions.Previous.Version, msmajorversions.Current.Version} {
+			branches = append(branches, &gitpr.SyncPRRefSet{
+				UpstreamName: entry.MainBranch,
+				PRRefSet: gitpr.PRRefSet{
+					Name:    "microsoft/release-branch.go" + version,
+					Purpose: "auto-sync-docs",
+				},
+			})
+		}
 	}
 	// Auto-mirrored branches are simpler: always get the latest commits to
 	// push to the mirror repo with the same branch name.
@@ -497,7 +519,14 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
 		var prTitle, commitMessage string
 
-		if entry.SubmoduleTarget == "" {
+		if entry.SyncDocs {
+			if err := syncDocs(dir, entry.Upstream, b); err != nil {
+				return nil, err
+			}
+			prTitle = fmt.Sprintf("Sync docs from %#q into %#q", b.UpstreamName, b.Name)
+			commitMessage = fmt.Sprintf("Sync docs from %v into %v", b.UpstreamName, b.Name)
+			prBody += fmt.Sprintf("\n\nThis PR copies documentation from %#q into %#q.", b.UpstreamName, b.Name)
+		} else if entry.SubmoduleTarget == "" {
 			// This is not a submodule update, so merge with the upstream repository.
 			if err := run(newGitCmd("merge", "--no-ff", "--no-commit", b.UpstreamLocalSyncTarget())); err != nil {
 				if exitError, ok := err.(*exec.ExitError); ok {
@@ -720,7 +749,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		}
 		c.Result.Commit = commit
 
-		if entry.SubmoduleTarget == "" {
+		if entry.SubmoduleTarget == "" && !entry.SyncDocs {
 			// Show a summary of which files are in our fork branch vs. upstream. This is just
 			// informational. CI is a better place to *enforce* a low diff: it's more visible, can
 			// be fixed up more easily, and doesn't block other branch mirror/merge operations.
@@ -898,10 +927,18 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 					return fmt.Errorf("submitted a fresh PR, but failure was expected because an existing PR was found")
 				}
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
+			}
 
+			if b.ExistingPR == nil {
 				fmt.Printf("---- Approving with reviewer account...\n")
 				if err = gitpr.ApprovePR(pr.NodeID, reviewAuther); err != nil {
 					return err
+				}
+			}
+
+			if name, description := syncPRLabel(entry); name != "" {
+				if err := gitpr.AddPRLabel(parsedPRTargetRemote, pr.Number, name, "C2E0C6", description, auther); err != nil {
+					fmt.Printf("---- %s: failed to add informational PR label: %v\n", prFlowDescription, err)
 				}
 			}
 
@@ -936,6 +973,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	}
 
 	return results, nil
+}
+
+func syncPRLabel(entry *ConfigEntry) (name, description string) {
+	if entry.SyncDocs {
+		return "sync:docs", "Copies documentation from the main branch"
+	}
+	if entry.SubmoduleTarget != "" {
+		return "sync:upstream", "Updates a submodule from upstream"
+	}
+	return "", ""
 }
 
 // run sets up the command so it logs directly to our stdout/stderr streams, then runs it.
