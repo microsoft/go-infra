@@ -31,8 +31,6 @@ network:
     - go
 tools:
   github:
-    # Match the reusable classifier and avoid starting a GitHub MCP server.
-    mode: gh-proxy
     toolsets:
       - repos
     allowed-repos: public
