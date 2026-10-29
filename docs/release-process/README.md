@@ -1,6 +1,6 @@
 # Release process
 
-This document describes how the Microsoft build of Go release automation works in detail.
+This document describes the pipeline flow for the Microsoft build of Go release automation.
 
 We have a handful of pipelines to manage the steps creating a release.
 
@@ -9,17 +9,6 @@ The goal is to have this system handle the easy stuff that's easy to mistype or 
 All steps written below are performed by the release pipeline (not by the dev) unless stated otherwise.
 
 See [/docs/README.md](../README.md) for information about how to use this infrastructure.
-
-## Release tracker pins
-
-`releasego create-release-day-issue` unpins old, closed release trackers before creating and pinning
-the new tracker. Open trackers and unrelated pinned issues are left alone. If GitHub's three pin slots
-are still full, it posts a warning on the new tracker and continues the release. Retries and reruns
-avoid duplicate warnings; other API failures remain errors.
-
-Cleanup happens when the next release tracker is created, not immediately when an issue is closed.
-Closed trackers can be unpinned manually on GitHub in the meantime, or with
-`releasego sync-release-issue-pin`.
 
 # Pipelines
 

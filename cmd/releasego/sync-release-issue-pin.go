@@ -34,6 +34,10 @@ func init() {
 
 Reads the issue's current state rather than relying on an event payload. Issues not created by
 create-release-day-issue are skipped.
+
+If GitHub's three pin slots are full, posts a warning on the open tracker and succeeds without pinning
+it. Retries and reruns avoid duplicate warnings; other API failures remain errors. Unpin another issue
+and rerun this command to pin the tracker.
 `,
 		Handle: handleSyncReleaseIssuePin,
 	})
