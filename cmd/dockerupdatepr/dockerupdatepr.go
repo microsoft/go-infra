@@ -22,6 +22,10 @@ The "-n" is the dry run arg. Removing that arg makes the command submit the chan
 
 This command creates a temporary copy of the Go Docker repository in 'eng/artifacts/' by default.
 
+Use -set-azdo-build-number to emit an Azure Pipelines logging command that changes the build number
+displayed in the run list to include the run ID, source branch, and version.
+If the target repository has no matching version slot, the command skips the update successfully.
+
 To run this command locally, it may be useful to specify Git addresses like
 'git@github.com:microsoft/go' to use SSH authentication.
 `

@@ -6,11 +6,44 @@ package azdo
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 )
+
+func TestEscapeLogCmdData(t *testing.T) {
+	for _, tt := range []struct {
+		input, want string
+	}{
+		{"plain text", "plain text"},
+		{"line1\r\nline2", "line1%0D%0Aline2"},
+		{"%0A %0D %AZP25 100%", "%AZP250A %AZP250D %AZP25AZP25 100%AZP25"},
+	} {
+		if got := EscapeLogCmdData(tt.input); got != tt.want {
+			t.Errorf("EscapeLogCmdData(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeBuildNumber(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, want string
+	}{
+		{"release", "123_release-branch.go1.42_1.42.1-2", "123_release-branch.go1.42_1.42.1-2"},
+		{"official", "123_dev/official/1.42_1.42.1", "123_dev_official_1.42_1.42.1"},
+		{"invalid characters", "123_\"'/\\:<>|?@*\r\n_1.42.", "123_" + strings.Repeat("_", 13) + "_1.42"},
+		{"length limit", "123_" + strings.Repeat("a", 300) + "_1.42", "123_" + strings.Repeat("a", 251)},
+		{"period at length limit", strings.Repeat("a", 254) + ".extra", strings.Repeat("a", 254)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SanitizeBuildNumber(tt.input); got != tt.want {
+				t.Errorf("SanitizeBuildNumber(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestClientFlagsV7Connection(t *testing.T) {
 	flags := ClientFlags{Org: new("https://dev.azure.com/example/"), Proj: new("project"), PAT: new("test-only-pat")}
