@@ -285,3 +285,83 @@ func TestPRAuthenticationScope(t *testing.T) {
 		})
 	}
 }
+
+func TestGraphQLResponses(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		call func(githubutil.HTTPRequestAuther) error
+	}{
+		{"query", func(auther githubutil.HTTPRequestAuther) error {
+			return QueryGraphQL(auther, "query { viewer { login } }", nil, &struct{}{})
+		}},
+		{"approve", func(auther githubutil.HTTPRequestAuther) error {
+			return ApprovePR("PR_node", auther)
+		}},
+		{"auto-merge", func(auther githubutil.HTTPRequestAuther) error {
+			return EnablePRAutoMerge("PR_node", auther)
+		}},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				status int
+				body   string
+				errors []string
+			}{
+				{"success", 200, `{"data":{"result":{"clientMutationId":null}}}`, nil},
+				{"empty errors", 200, `{"data":{},"errors":[]}`, nil},
+				{"null errors", 200, `{"data":{},"errors":null}`, nil},
+				{"auto-merge state", 200, `{"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","path":["enablePullRequestAutoMerge"],"message":"Pull request is not in the correct state to enable auto-merge"}]}`, []string{"Pull request is not in the correct state to enable auto-merge"}},
+				{"self approval", 200, `{"data":{"addPullRequestReview":null},"errors":[{"message":"Can not approve your own pull request"}]}`, []string{"Can not approve your own pull request"}},
+				{"not found", 200, `{"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a node with the global id of 'PR_node'"}]}`, []string{"Could not resolve to a node"}},
+				{"partial data", 200, `{"data":{"viewer":{"login":"bot"}},"errors":[{"message":"Permission denied"},{"message":"Another failure"}]}`, []string{"Permission denied", "Another failure"}},
+				{"HTTP failure", 403, `{"message":"Forbidden"}`, []string{"403"}},
+				{"invalid JSON", 200, `not JSON`, []string{"invalid character"}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					testPRServer(t, func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != http.MethodPost || r.URL.Path != "/graphql" {
+							t.Errorf("unexpected GraphQL request: %s %s", r.Method, r.URL.Path)
+						}
+						writePRResponse(t, w, tc.status, tc.body)
+					})
+					err := operation.call(testAuther(func(*http.Request) error { return nil }))
+					if len(tc.errors) == 0 {
+						if err != nil {
+							t.Fatal(err)
+						}
+						return
+					}
+					if err == nil {
+						t.Fatal("expected GraphQL request to fail")
+					}
+					for _, want := range tc.errors {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("error = %v, want to contain %q", err, want)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestQueryGraphQLResult(t *testing.T) {
+	testPRServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writePRResponse(t, w, http.StatusOK, `{"data":{"viewer":{"login":"bot"}}}`)
+	})
+	var result struct {
+		Data struct {
+			Viewer struct {
+				Login string
+			}
+		}
+	}
+	err := QueryGraphQL(testAuther(func(*http.Request) error { return nil }), "query { viewer { login } }", nil, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Data.Viewer.Login != "bot" {
+		t.Errorf("login = %q, want bot", result.Data.Viewer.Login)
+	}
+}
