@@ -251,8 +251,8 @@ func TestGitHubUpdateDLRequests(t *testing.T) {
 	oldUpdateDLRepo := updateDLRepo
 	t.Cleanup(func() { updateDLRepo = oldUpdateDLRepo })
 	updateDLRepo = func(update dlRepoUpdate) error {
-		if update.RepoURL != "https://github.com/o/dl.git" || update.PushURL == update.RepoURL {
-			t.Errorf("unexpected clone or push URL: clone=%q push=%q", update.RepoURL, update.PushURL)
+		if update.RepoURL != "https://github.com/o/dl.git" || update.Auther == nil {
+			t.Errorf("unexpected repository URL or missing authentication: %q", update.RepoURL)
 		}
 		if update.DryRun || update.KeepClone {
 			t.Errorf("unexpected run modes: dryRun=%v keepClone=%v", update.DryRun, update.KeepClone)
@@ -294,5 +294,51 @@ func TestGitHubUpdateDLRequests(t *testing.T) {
 	}
 	if !updated.Load() || !pull.Load() || mutations.Load() != 2 {
 		t.Fatal("update-dl did not complete its release workflow")
+	}
+}
+
+func TestGitHubUpdateDLDryRunRequests(t *testing.T) {
+	for _, token := range []string{"", "test-token"} {
+		t.Run("token="+token, func(t *testing.T) {
+			oldTransport, oldUpdate := http.DefaultTransport, updateDLRepo
+			t.Cleanup(func() {
+				http.DefaultTransport, updateDLRepo = oldTransport, oldUpdate
+			})
+			http.DefaultTransport = githubTestTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodGet {
+					t.Fatalf("dry run attempted %s request", r.Method)
+				}
+				var body string
+				switch r.URL.Path {
+				case "/repos/o/releases/releases/tags/v1.26.1-1":
+					body = `{"assets":[{"id":9,"name":"assets.json"}]}`
+				case "/repos/o/releases/releases/assets/9":
+					body = `{"version":"1.26.1-1"}`
+				default:
+					t.Fatalf("unexpected request: %s", r.URL)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    r,
+				}, nil
+			})
+			updated := false
+			updateDLRepo = func(update dlRepoUpdate) error {
+				updated = true
+				if !update.DryRun || (update.Auther == nil) != (token == "") {
+					t.Error("dry run did not preserve the supplied authentication")
+				}
+				return nil
+			}
+			if err := runGitHubCommand(t, updateDL, "-n", "-repo=o/dl", "-go-repo=o/releases",
+				"-versions=1.26.1-1", "-github-pat="+token); err != nil {
+				t.Fatal(err)
+			}
+			if !updated {
+				t.Fatal("dry run did not update the repository")
+			}
+		})
 	}
 }

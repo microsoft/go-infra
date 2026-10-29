@@ -53,7 +53,7 @@ type dlRelease struct {
 
 type dlRepoUpdate struct {
 	RepoURL   string
-	PushURL   string
+	Auther    githubutil.HTTPRequestAuther
 	Branch    string
 	Title     string
 	Releases  []dlRelease
@@ -94,7 +94,7 @@ func updateDL(p subcmd.ParseFunc) error {
 			return err
 		}
 
-		// Dry runs only read public release data and clone the public go-dl repository.
+		// Without credentials, dry runs can only read public repositories.
 		client, err = github.NewClient()
 		if err != nil {
 			return fmt.Errorf("create unauthenticated GitHub client: %w", err)
@@ -143,21 +143,16 @@ func updateDL(p subcmd.ParseFunc) error {
 	branchName := "dev/auto-sync-dl/msgo-" + strings.Join(versionStrings, "-") + "/" + fmt.Sprintf("%d", time.Now().Unix())
 
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", dlOwner, dlName)
-	var pushURL string
-	if !*dryRun {
-		// Keep credentials out of the configured remote. The authenticated URL is used only by git push.
-		auther, err := gitHubAuthFlags.NewAuther()
-		if err != nil {
-			return fmt.Errorf("failed to get GitHub auther: %w", err)
-		}
-		pushURL = auther.InsertAuth(repoURL)
+	auther, err := gitHubAuthFlags.NewAuther()
+	if err != nil && (!*dryRun || !errors.Is(err, githubutil.ErrNoAuthProvided)) {
+		return fmt.Errorf("failed to get GitHub auther: %w", err)
 	}
 
 	// Clone go-dl, add the manifests, regenerate its packages, and commit the result.
 	// A non-dry run also pushes the update branch.
 	if err := updateDLRepo(dlRepoUpdate{
 		RepoURL:   repoURL,
-		PushURL:   pushURL,
+		Auther:    auther,
 		Branch:    branchName,
 		Title:     title,
 		Releases:  releases,
@@ -262,7 +257,7 @@ func updateDLRepository(update dlRepoUpdate) error {
 
 	// Generation rewrites several directory trees, so use the repository's generator in a clone
 	// rather than trying to reproduce its output with the GitHub tree API.
-	if err := executil.Run(exec.Command("git", "clone", "--branch", "main", "--single-branch", update.RepoURL, repoDir)); err != nil {
+	if err := update.runGit("", "clone", "--branch", "main", "--single-branch", update.RepoURL, repoDir); err != nil {
 		return fmt.Errorf("clone %s: %w", update.RepoURL, err)
 	}
 	if err := gitcmd.Run(repoDir, "checkout", "-b", update.Branch); err != nil {
@@ -294,10 +289,46 @@ func updateDLRepository(update dlRepoUpdate) error {
 		}
 		return nil
 	}
-	if err := gitcmd.Run(repoDir, "push", update.PushURL, "HEAD:refs/heads/"+update.Branch); err != nil {
+	if err := update.runGit(repoDir, "push", update.RepoURL, "HEAD:refs/heads/"+update.Branch); err != nil {
 		return fmt.Errorf("push go-dl changes: %w", err)
 	}
 	return nil
+}
+
+func (update dlRepoUpdate) runGit(dir string, args ...string) error {
+	cmd, err := update.gitCommand(dir, args...)
+	if err != nil {
+		return err
+	}
+	return executil.Run(cmd)
+}
+
+func (update dlRepoUpdate) gitCommand(dir string, args ...string) (*exec.Cmd, error) {
+	if update.Auther == nil {
+		return executil.Dir(dir, "git", args...), nil
+	}
+	req, err := http.NewRequest(http.MethodGet, update.RepoURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := update.Auther.InsertHTTPAuth(req); err != nil {
+		return nil, fmt.Errorf("authenticate Git: %w", err)
+	}
+	if token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "token "); ok {
+		req.SetBasicAuth("x-access-token", token)
+	}
+	// Scope the header to this repository, and keep it out of logged arguments and saved config.
+	// Reset inherited headers and helpers so other credentials aren't sent or cached.
+	headerKey := "http." + update.RepoURL + ".extraHeader"
+	cmd := executil.Dir(dir, "git", append([]string{
+		"-c", headerKey + "=",
+		"-c", "credential.helper=",
+		"--config-env=" + headerKey + "=GO_DL_GIT_AUTH",
+	}, args...)...)
+	cmd.Env = append(cmd.Environ(),
+		"GO_DL_GIT_AUTH=Authorization: "+req.Header.Get("Authorization"),
+		"GIT_TERMINAL_PROMPT=0")
+	return cmd, nil
 }
 
 func writeDLManifests(repoDir string, releases []dlRelease) error {
