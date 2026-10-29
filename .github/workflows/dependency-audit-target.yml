@@ -1,0 +1,22 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Audit dependency history
+
+on:
+  workflow_call:
+    inputs:
+      initial_sha:
+        description: "Exclusive starting commit for the first audit, as a full SHA"
+        default: ""
+        type: string
+
+concurrency:
+  group: dependency-audit-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    uses: ./.github/workflows/dependency-audit-agent.lock.yml
+    with:
+      initial_sha: ${{ inputs.initial_sha }}
