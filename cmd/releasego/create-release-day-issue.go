@@ -22,10 +22,21 @@ import (
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
-		Name:        "create-release-day-issue",
-		Summary:     "Create the tracking issue for a day's worth of releases",
-		Description: "\n\n" + azdo.AzDOBuildDetectionDoc,
-		Handle:      handleCreateReleaseDayIssue,
+		Name:    "create-release-day-issue",
+		Summary: "Create the tracking issue for a day's worth of releases",
+		Description: `
+
+Unpins old, closed release trackers before creating and pinning the new tracker. Open trackers and
+unrelated pinned issues are left alone. If GitHub's three pin slots are still full, posts a warning on
+the new tracker and continues the release. Retries and reruns avoid duplicate warnings; other API
+failures remain errors.
+
+Cleanup happens when the next release tracker is created, not immediately when an issue is closed.
+Closed trackers can be unpinned manually on GitHub in the meantime, or with
+releasego sync-release-issue-pin.
+
+` + azdo.AzDOBuildDetectionDoc,
+		Handle: handleCreateReleaseDayIssue,
 	})
 }
 
