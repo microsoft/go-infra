@@ -11,60 +11,12 @@ on:
         default: ""
         type: string
 
-permissions:
-  contents: read
-
 concurrency:
   group: dependency-audit-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      issues: read
-    outputs:
-      base: ${{ steps.context.outputs.base_sha }}
-      head: ${{ steps.context.outputs.head_sha }}
-      control_sha: ${{ job.workflow_sha }}
-    steps:
-      - name: Checkout go-infra
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: microsoft/go-infra
-          ref: ${{ job.workflow_sha }}
-          path: control
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: control/go.mod
-          cache-dependency-path: control/go.sum
-      - name: Prepare the checkpoint
-        id: context
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          INITIAL_SHA: ${{ inputs.initial_sha }}
-        run: |
-          go -C control run ./cmd/dependencyaudit prepare -initial-sha "$INITIAL_SHA" \
-            -output "$RUNNER_TEMP/dependency-audit/context.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-context
-          path: ${{ runner.temp }}/dependency-audit/context.json
-          retention-days: 1
-          if-no-files-found: error
-
   audit:
-    needs: prepare
     uses: ./.github/workflows/dependency-audit-agent.lock.yml
-    permissions:
-      actions: write
-      contents: read
-      issues: write
-      copilot-requests: write
     with:
-      base: ${{ needs.prepare.outputs.base }}
-      head: ${{ needs.prepare.outputs.head }}
-      control_sha: ${{ needs.prepare.outputs.control_sha }}
+      initial_sha: ${{ inputs.initial_sha }}

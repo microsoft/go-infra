@@ -3,14 +3,9 @@ description: Audit dependency changes since the issue checkpoint and publish a m
 on:
   workflow_call:
     inputs:
-      base:
-        required: true
-        type: string
-      head:
-        required: true
-        type: string
-      control_sha:
-        required: true
+      initial_sha:
+        description: "Exclusive starting commit for the first audit, as a full SHA"
+        default: ""
         type: string
 permissions:
   contents: read
@@ -19,8 +14,44 @@ engine: copilot
 inlined-imports: true
 strict: true
 timeout-minutes: 30
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      base: ${{ steps.context.outputs.base_sha }}
+      head: ${{ steps.context.outputs.head_sha }}
+      context: ${{ steps.context.outputs.context }}
+    steps:
+      - name: Checkout go-infra
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: microsoft/go-infra
+          ref: ${{ job.workflow_sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: control/go.mod
+          cache-dependency-path: control/go.sum
+      - name: Prepare the checkpoint
+        id: context
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INITIAL_SHA: ${{ inputs.initial_sha }}
+        run: |
+          go -C control run ./cmd/dependencyaudit prepare -initial-sha "$INITIAL_SHA" \
+            -output "$RUNNER_TEMP/dependency-audit/context.json"
+          context=$(jq -c . "$RUNNER_TEMP/dependency-audit/context.json")
+          printf 'context=%s\n' "$context" >> "$GITHUB_OUTPUT"
+  safe_outputs:
+    needs:
+      - prepare
 checkout:
-  ref: ${{ inputs.head }}
+  ref: ${{ needs.prepare.outputs.head }}
   path: target
   current: true
   fetch-depth: 0
@@ -49,15 +80,17 @@ tools:
     - "tail:*"
   web-fetch:
 steps:
-  - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-    with:
-      name: dependency-context
-      path: /tmp/gh-aw/dependency-audit
+  - name: Restore the prepared context
+    env:
+      CONTEXT: ${{ needs.prepare.outputs.context }}
+    run: |
+      mkdir -p /tmp/gh-aw/dependency-audit
+      printf '%s\n' "$CONTEXT" > /tmp/gh-aw/dependency-audit/context.json
   - name: Prepare complete dependency history
     working-directory: target
     env:
-      BASE: ${{ inputs.base }}
-      HEAD: ${{ inputs.head }}
+      BASE: ${{ needs.prepare.outputs.base }}
+      HEAD: ${{ needs.prepare.outputs.head }}
     run: |
       if ! git merge-base --is-ancestor "$BASE" "$HEAD"; then
         echo "::error::Checkpoint is missing or is not an ancestor of the captured head."
@@ -91,14 +124,16 @@ safe-outputs:
     target: "*"
     max: 1
   steps:
-    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-      with:
-        name: dependency-context
-        path: /tmp/gh-aw/dependency-audit
+    - name: Restore the trusted context
+      env:
+        CONTEXT: ${{ needs.prepare.outputs.context }}
+      run: |
+        mkdir -p /tmp/gh-aw/dependency-audit
+        printf '%s\n' "$CONTEXT" > /tmp/gh-aw/dependency-audit/context.json
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: microsoft/go-infra
-        ref: ${{ inputs.control_sha }}
+        ref: ${{ job.workflow_sha }}
         path: control
         persist-credentials: false
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

@@ -30,7 +30,7 @@ jobs:
   audit:
     uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@FULL_GO_INFRA_COMMIT_SHA
     permissions:
-      actions: write
+      actions: read
       contents: read
       issues: write
       copilot-requests: write
@@ -42,6 +42,8 @@ Replace `FULL_GO_INFRA_COMMIT_SHA` with the reviewed commit.
 Each target runs the shared audit with its own `GITHUB_TOKEN`.
 No GitHub App, personal access token, repository enrollment, or shared secrets are required.
 The repository must permit the required Actions and Copilot access.
+The caller grants a permission ceiling because reusable workflows cannot elevate its token permissions.
+The shared wrapper inherits that ceiling, and the generated agent workflow narrows permissions for preparation, read-only analysis, and issue publishing.
 Caller workflows may run from other branches or in forked repositories.
 The audit still reads a captured revision of that repository's default branch.
 
@@ -77,7 +79,7 @@ The model cannot choose the checkpoint or request arbitrary issue updates.
 A new revision creates a new tracker and closes older trackers.
 Repeating the same revision replaces the existing report and recovers interrupted publication without resetting progress.
 No database or separate state branch is used.
-Prepared context artifacts expire after one day.
+The agent workflow prepares its own checkpoint and passes the trusted context to analysis and publication through job outputs, without a separate context artifact.
 Rewritten history, corrupt metadata, and changed default branches fail explicitly.
 
 Go declarations are not a resolved dependency graph.
