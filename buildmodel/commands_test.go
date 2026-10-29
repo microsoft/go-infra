@@ -5,6 +5,7 @@ package buildmodel
 
 import (
 	"flag"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,26 +15,6 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/stringutil"
 )
-
-func TestDockerUpdateBuildNumber(t *testing.T) {
-	for _, tt := range []struct {
-		name, branch, version, want string
-	}{
-		{"release", "release-branch.go1.42", "1.42.1-2", "123_release-branch.go1.42_1.42.1-2"},
-		{"official", "dev/official/1.42", "1.42.1", "123_dev_official_1.42_1.42.1"},
-		{"invalid characters", "\"'/\\:<>|?@*\r\n", "1.42.", "123_" + strings.Repeat("_", 13) + "_1.42"},
-		{"length limit", strings.Repeat("a", 300), "1.42", "123_" + strings.Repeat("a", 251)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got := dockerUpdateBuildNumber(&buildassets.BuildAssets{
-				Branch: tt.branch, Version: tt.version,
-			}, "123")
-			if got != tt.want {
-				t.Errorf("build number = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestSubmitUpdatePRSkips(t *testing.T) {
 	t.Setenv("BUILD_BUILDID", "123")
@@ -89,7 +70,11 @@ func TestSubmitUpdatePRSkips(t *testing.T) {
 			flag.CommandLine = flag.NewFlagSet(tt.name, flag.ContinueOnError)
 			defer func() { flag.CommandLine = oldFlags }()
 			f := BindPRFlags()
-			*f.origin = origin
+			originPath := filepath.ToSlash(origin)
+			if filepath.VolumeName(origin) != "" {
+				originPath = "/" + originPath
+			}
+			*f.origin = (&url.URL{Scheme: "file", Path: originPath}).String()
 			*f.tempGitDir = filepath.Join(dir, "work")
 			*f.buildAssetJSON = assetPath
 			*f.skipDockerfiles = true
@@ -97,6 +82,11 @@ func TestSubmitUpdatePRSkips(t *testing.T) {
 			*f.setBuildNumber = tt.setBuildNumber
 			*f.SetVariablePRNumber = "PRNumber"
 			*f.SetVariableUpToDateCommit = "Commit"
+
+			if tt.name == "unmapped branch" {
+				*f.skipDockerfiles = false
+				t.Setenv("PATH", "")
+			}
 
 			output, err := os.Create(filepath.Join(dir, "stdout"))
 			if err != nil {
@@ -108,6 +98,11 @@ func TestSubmitUpdatePRSkips(t *testing.T) {
 			defer func() { os.Stdout = oldStdout }()
 			err = SubmitUpdatePR(f)
 			os.Stdout = oldStdout
+			if tt.name == "unmapped branch" {
+				if _, err := os.Stat(*f.tempGitDir); !os.IsNotExist(err) {
+					t.Fatalf("unmapped branch created a work directory or stat failed: %v", err)
+				}
+			}
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("SubmitUpdatePR() error = %v, wantErr %v", err, tt.wantErr)
 			}

@@ -13,8 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
-	"unicode"
 
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -112,22 +110,6 @@ func GenerateBuildAssetJSON(f *BuildAssetJSONFlags) error {
 	return nil
 }
 
-func dockerUpdateBuildNumber(assets *buildassets.BuildAssets, buildID string) string {
-	number := fmt.Sprintf("%s_%s_%s", buildID, assets.Branch, assets.Version)
-	// Azure build numbers forbid these characters, control characters, and a trailing period.
-	number = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || strings.ContainsRune(`"'/\:<>|?@*`, r) {
-			return '_'
-		}
-		return r
-	}, number)
-	runes := []rune(number)
-	if len(runes) > 255 {
-		runes = runes[:255]
-	}
-	return strings.TrimRight(string(runes), ".")
-}
-
 // PRFlags is a list of flags used to submit a Docker update PR.
 type PRFlags struct {
 	dryRun         *bool
@@ -153,7 +135,7 @@ func BindPRFlags() *PRFlags {
 		dryRun:         flag.Bool("n", false, "Enable dry run: do not push, do not submit PR."),
 		tempGitDir:     flag.String("temp-git-dir", filepath.Join(artifactsDir, "sync-upstream-temp-repo"), "Location to create the temporary Git repo. Must not exist."),
 		manualBranch:   flag.String("manual-branch", "", "Branch to submit PR into. Overrides branch detection."),
-		setBuildNumber: flag.Bool("set-azdo-build-number", false, "Set the Azure Pipelines build number to include the source branch and version."),
+		setBuildNumber: flag.Bool("set-azdo-build-number", false, "Emit an Azure Pipelines logging command to set the build number to include the run ID, source branch, and version."),
 
 		origin: flag.String("origin", "git@github.com:microsoft/go-images", "Submit PR to this repo. \n[Need fetch Git permission.]"),
 		to:     flag.String("to", "", "Push PR branch to this Git repository. Defaults to the same repo as 'origin' if not set.\n[Need push Git permission.]"),
@@ -184,7 +166,8 @@ func SubmitUpdatePR(f *PRFlags) error {
 			return err
 		}
 		if *f.setBuildNumber {
-			azdo.LogCmdUpdateBuildNumber(dockerUpdateBuildNumber(assets, os.Getenv("BUILD_BUILDID")))
+			number := fmt.Sprintf("%s_%s_%s", os.Getenv("BUILD_BUILDID"), assets.Branch, assets.Version)
+			azdo.LogCmdUpdateBuildNumber(azdo.SanitizeBuildNumber(number))
 		}
 	}
 

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
@@ -90,19 +91,41 @@ func GetBuildWebURL(b *build.Build) (string, bool) {
 // LogCmdSetVariable uses an AzDO logging command to set a variable in the current (build) context.
 // https://docs.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#setvariable-initialize-or-modify-the-value-of-a-variable
 func LogCmdSetVariable(name, value string) {
-	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, value)
+	fmt.Printf("##vso[task.setvariable variable=%v]%v\n", name, EscapeLogCmdData(value))
+}
+
+// EscapeLogCmdData escapes the data portion of an Azure Pipelines logging command.
+// The agent decodes %0D and %0A as line breaks, then %AZP25 as a literal percent sign.
+// Escaping percent signs first preserves literal escape sequences in the input.
+func EscapeLogCmdData(data string) string {
+	return strings.NewReplacer("%", "%AZP25", "\r", "%0D", "\n", "%0A").Replace(data)
+}
+
+// SanitizeBuildNumber replaces forbidden characters with underscores, truncates to
+// Azure Pipelines' 255-character limit, and removes trailing periods.
+func SanitizeBuildNumber(number string) string {
+	number = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`"'/\:<>|?@*`, r) {
+			return '_'
+		}
+		return r
+	}, number)
+	runes := []rune(number)
+	if len(runes) > 255 {
+		runes = runes[:255]
+	}
+	return strings.TrimRight(string(runes), ".")
 }
 
 // LogCmdUpdateBuildNumber changes the build number displayed in the Azure Pipelines run list.
 func LogCmdUpdateBuildNumber(number string) {
-	escaped := strings.NewReplacer("%", "%AZP25", "\r", "%0D", "\n", "%0A").Replace(number)
-	fmt.Printf("##vso[build.updatebuildnumber]%v\n", escaped)
+	fmt.Printf("##vso[build.updatebuildnumber]%v\n", EscapeLogCmdData(number))
 }
 
 // LogCmdPrependPath uses an AzDO logging command to prepend a path to future steps' PATH env vars.
 // https://learn.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#prependpath-prepend-a-path-to-the--path-environment-variable
 func LogCmdPrependPath(path string) {
-	fmt.Printf("##vso[task.prependpath]%v\n", path)
+	fmt.Printf("##vso[task.prependpath]%v\n", EscapeLogCmdData(path))
 }
 
 // LogCmdUploadSummary uses an AzDO logging command to upload a summary file. The file is shown on
@@ -110,7 +133,7 @@ func LogCmdPrependPath(path string) {
 // Markdown features. The path must be a full path.
 // https://docs.microsoft.com/en-us/azure/devops/pipelines/scripts/logging-commands?view=azure-devops&tabs=bash#uploadsummary-add-some-markdown-content-to-the-build-summary
 func LogCmdUploadSummary(path string) {
-	fmt.Printf("##vso[task.uploadsummary]%v\n", path)
+	fmt.Printf("##vso[task.uploadsummary]%v\n", EscapeLogCmdData(path))
 }
 
 // AzDOBuildDetectionDoc describes how AzDO build detection works, listing the env vars used. Use
