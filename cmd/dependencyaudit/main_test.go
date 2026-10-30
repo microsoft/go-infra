@@ -964,3 +964,88 @@ func TestInvalidPreparedCheckpointCannotDisableCarryForwardValidation(t *testing
 		t.Fatal("invalid prepared context disabled carry-forward validation")
 	}
 }
+
+func TestCleanRetryClosesAnInterruptedPublicationsPredecessor(t *testing.T) {
+	c := testConfig(t)
+	previous := testState()
+	previous.BaseSHA, previous.HeadSHA = strings.Repeat("c", 40), baseSHA
+	published := testState()
+	published.Previous, published.Areas = 7, []string{"dep-api"}
+	current := tracker(t, 8, published)
+	old := tracker(t, 7, previous)
+	f := &fixture{Issues: []*github.Issue{current, old}}
+	client := testAPI(t, f)
+	for _, currentState := range []string{"open", "closed"} {
+		t.Run(currentState, func(t *testing.T) {
+			current.State = new(currentState)
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := report() + "## Resolved areas\n- `dep-api`: the merged code uses the replacement API.\n"
+			name := nativeOutput(t, map[string]any{"type": "create_issue", "body": body})
+			if err := stamp(t.Context(), client, c, p, name); err != nil {
+				t.Fatal(err)
+			}
+			items := outputItems(t, name)
+			closed := make(map[int]bool)
+			for _, item := range items {
+				switch item["type"] {
+				case "noop":
+				case "close_issue":
+					closed[int(item["issue_number"].(float64))] = true
+				default:
+					t.Fatalf("clean retry created or updated an issue: %v", items)
+				}
+			}
+			if !closed[7] || closed[8] != (currentState == "open") {
+				t.Fatalf("interrupted publication left an open tracker behind: %v", items)
+			}
+			var saved runCheckpoint
+			if err := readJSON(c.Output, &saved); err != nil {
+				t.Fatal(err)
+			}
+			if saved.State.HeadSHA != headSHA || len(saved.State.Areas) != 0 {
+				t.Fatalf("clean retry did not save its resolved checkpoint: %+v", saved)
+			}
+		})
+	}
+}
+
+func TestCleanRetryValidatesItsPredecessorBeforeClosingIt(t *testing.T) {
+	for _, invalid := range []string{"owner", "repository", "branch", "history"} {
+		t.Run(invalid, func(t *testing.T) {
+			c := testConfig(t)
+			previous := testState()
+			previous.HeadSHA = baseSHA
+			published := testState()
+			published.Previous, published.Areas = 7, []string{"dep-api"}
+			switch invalid {
+			case "repository":
+				previous.Repository = "another/repo"
+			case "branch":
+				previous.Branch = "release"
+			case "history":
+				previous.HeadSHA = strings.Repeat("c", 40)
+			}
+			old := tracker(t, 7, previous)
+			if invalid == "owner" {
+				old.User.Login = new("someone")
+			}
+			f := &fixture{Issues: []*github.Issue{tracker(t, 8, published), old}, Comparison: "diverged"}
+			client := testAPI(t, f)
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := report() + "## Resolved areas\n- `dep-api`: the merged code uses the replacement API.\n"
+			name := nativeOutput(t, map[string]any{"type": "create_issue", "body": body})
+			if err := stamp(t.Context(), client, c, p, name); err == nil {
+				t.Fatal("clean retry accepted an untrusted predecessor")
+			}
+			if _, err := os.Stat(c.Output); !os.IsNotExist(err) {
+				t.Fatal("failed predecessor validation advanced the checkpoint")
+			}
+		})
+	}
+}

@@ -407,6 +407,14 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 	if len(item.Body) > 60000 {
 		return errors.New("report exceeds the 60000-byte limit")
 	}
+	var published *checkpoint
+	if issue != nil {
+		published, err = readCheckpoint(issue)
+		if err != nil {
+			return err
+		}
+	}
+	updating := published != nil && published.HeadSHA == p.State.HeadSHA
 	if len(areas) == 0 {
 		if c.Summary == "" {
 			return errors.New("GITHUB_STEP_SUMMARY is required for a clean audit")
@@ -424,14 +432,6 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 			})
 		}
 	} else {
-		var published *checkpoint
-		if issue != nil {
-			published, err = readCheckpoint(issue)
-			if err != nil {
-				return err
-			}
-		}
-		updating := published != nil && published.HeadSHA == p.State.HeadSHA
 		if updating {
 			p.State.Previous = published.Previous
 		}
@@ -449,31 +449,31 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 			if issue.GetState() == "closed" && len(state.Areas) == 0 {
 				items[0].Status = "open"
 			}
-			if published.Previous != 0 {
-				old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, published.Previous)
-				if err != nil {
-					return err
-				}
-				checkpoint, err := readCheckpoint(old)
-				if err != nil {
-					return err
-				}
-				if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != p.State.Branch {
-					return errors.New("previous issue is not the expected automation-owned checkpoint")
-				}
-				if checkpoint.HeadSHA != p.State.BaseSHA {
-					comparison, _, err := client.Repositories.CompareCommits(ctx, c.Owner, c.Repo, checkpoint.HeadSHA, p.State.BaseSHA, nil)
-					if err != nil {
-						return err
-					}
-					if comparison.GetStatus() != "ahead" {
-						return errors.New("previous issue is not on the audited checkpoint history")
-					}
-				}
-				if old.GetState() == "open" {
-					items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
-				}
+		}
+	}
+	if published != nil && published.Previous != 0 && (len(areas) == 0 || updating) {
+		old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, published.Previous)
+		if err != nil {
+			return err
+		}
+		checkpoint, err := readCheckpoint(old)
+		if err != nil {
+			return err
+		}
+		if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != p.State.Branch {
+			return errors.New("previous issue is not the expected automation-owned checkpoint")
+		}
+		if checkpoint.HeadSHA != p.State.BaseSHA {
+			comparison, _, err := client.Repositories.CompareCommits(ctx, c.Owner, c.Repo, checkpoint.HeadSHA, p.State.BaseSHA, nil)
+			if err != nil {
+				return err
 			}
+			if comparison.GetStatus() != "ahead" {
+				return errors.New("previous issue is not on the audited checkpoint history")
+			}
+		}
+		if old.GetState() == "open" {
+			items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
 		}
 	}
 	for i := range items {

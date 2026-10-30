@@ -126,7 +126,8 @@ safe-outputs:
     max: 1
   close-issue:
     target: "*"
-    max: 1
+    # A clean retry may close both the tracker and its predecessor.
+    max: 2
   steps:
     - name: Restore the trusted context
       env:

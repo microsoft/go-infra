@@ -83,6 +83,7 @@ Actionable tracker issues also retain the visible `dependency-audit-v1` fenced J
 The model cannot choose the checkpoint or request arbitrary issue updates.
 A new revision with findings creates a new tracker and closes older trackers.
 When no findings remain, the workflow writes the full report to its summary and closes the previous tracker without creating a replacement.
+Retries also finish closing that tracker's predecessor if an interrupted publication left it open.
 Repeating the same revision replaces the existing report and recovers interrupted publication without resetting progress.
 Findings that reappear after a clean audit at the same revision reopen the matching tracker.
 No database or separate state branch is used.
