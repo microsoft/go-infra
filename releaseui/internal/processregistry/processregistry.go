@@ -29,6 +29,11 @@ type Process struct {
 	Group          *Group
 }
 
+// DisplayName combines the registered group and process names for release records.
+func (p *Process) DisplayName() string {
+	return p.Group.Identity.Name + " \u00b7 " + p.Definition.Name
+}
+
 // Group is one validated process group.
 type Group struct {
 	Identity  contract.Identity

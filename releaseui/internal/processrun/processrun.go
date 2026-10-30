@@ -323,7 +323,7 @@ func (s *Manager) Start(ctx context.Context, processID string, start webview.Rel
 	}
 	state.Started = true
 	state.UpdatedAt = run.TakeView().UpdatedAt
-	record, err := s.store.Create(ctx, state, run.TakeView(), plan)
+	record, err := s.store.Create(ctx, registered.DisplayName(), state, run.TakeView(), plan)
 	if err != nil {
 		checkpointer.Close()
 		cancel()
