@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// dependencyaudit prepares issue checkpoints and validates audit reports.
+// dependencyaudit prepares audit checkpoints and validates audit reports.
 package main
 
 import (
@@ -17,7 +17,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
@@ -48,12 +50,14 @@ var (
 )
 
 type checkpoint struct {
-	Repository string   `json:"repository"`
-	Branch     string   `json:"branch"`
-	BaseSHA    string   `json:"base_sha"`
-	HeadSHA    string   `json:"head_sha"`
-	Previous   int      `json:"previous_issue"`
-	Areas      []string `json:"areas"`
+	Repository string    `json:"repository"`
+	Branch     string    `json:"branch"`
+	BaseSHA    string    `json:"base_sha"`
+	HeadSHA    string    `json:"head_sha"`
+	Previous   int       `json:"previous_issue"`
+	Areas      []string  `json:"areas"`
+	RunID      int64     `json:"run_id,omitempty"`
+	AuditedAt  time.Time `json:"audited_at,omitzero"`
 }
 
 type prepared struct {
@@ -68,6 +72,8 @@ type nativeRequest struct {
 	Title       string          `json:"title,omitempty"`
 	Body        string          `json:"body,omitempty"`
 	IssueNumber int             `json:"issue_number,omitempty"`
+	Status      string          `json:"status,omitempty"`
+	Message     string          `json:"message,omitempty"`
 	Integrity   json.RawMessage `json:"integrity,omitempty"`
 	Secrecy     json.RawMessage `json:"secrecy,omitempty"`
 }
@@ -75,6 +81,8 @@ type nativeRequest struct {
 type config struct {
 	Command, Repository, Owner, Repo, Initial string
 	Input, Output, Token, GitHubOutput        string
+	Summary                                   string
+	RunID                                     int64
 }
 
 func main() {
@@ -99,7 +107,7 @@ func parseConfig(args []string, getenv func(string) string, stderr io.Writer) (c
 	fs.StringVar(&c.Repository, "repo", workflowRepo, "workflow repository in owner/repo form")
 	fs.StringVar(&c.Initial, "initial-sha", "", "exclusive starting commit for the first audit")
 	fs.StringVar(&c.Input, "input", "", "prepared context JSON")
-	fs.StringVar(&c.Output, "output", "", "prepared context JSON destination")
+	fs.StringVar(&c.Output, "output", "", "prepared context or validated checkpoint JSON destination")
 	if err := fs.Parse(args[1:]); err != nil {
 		return c, err
 	}
@@ -118,14 +126,23 @@ func parseConfig(args []string, getenv func(string) string, stderr io.Writer) (c
 	}
 	c.Owner, c.Repo, _ = strings.Cut(c.Repository, "/")
 	c.Token, c.GitHubOutput = getenv("GITHUB_TOKEN"), getenv("GITHUB_OUTPUT")
+	c.Summary = getenv("GITHUB_STEP_SUMMARY")
+	var err error
+	c.RunID, err = strconv.ParseInt(getenv("GITHUB_RUN_ID"), 10, 64)
+	if err != nil {
+		return c, fmt.Errorf("GITHUB_RUN_ID must identify the current workflow run: %w", err)
+	}
+	if c.RunID < 1 {
+		return c, errors.New("GITHUB_RUN_ID must be positive")
+	}
 	if c.Token == "" {
 		c.Token = getenv("GH_TOKEN")
 	}
 	if c.Token == "" {
 		return c, errors.New("GITHUB_TOKEN or GH_TOKEN is required")
 	}
-	if (c.Command == "prepare" && c.Output == "") || (c.Command == "stamp" && c.Input == "") {
-		return c, errors.New("prepare requires output; stamp requires input")
+	if c.Output == "" || (c.Command == "stamp" && c.Input == "") {
+		return c, errors.New("prepare requires output; stamp requires input and output")
 	}
 	return c, nil
 }
@@ -172,23 +189,33 @@ func readCheckpoint(issue *github.Issue) (*checkpoint, error) {
 	}
 	encoded, _, ok := strings.Cut(strings.TrimPrefix(body[start:], marker), "\n```")
 	var state checkpoint
-	if !ok || json.Unmarshal([]byte(encoded), &state) != nil || !repoPattern.MatchString(state.Repository) ||
-		state.Branch == "" || !shaPattern.MatchString(state.BaseSHA) || !shaPattern.MatchString(state.HeadSHA) ||
-		state.Areas == nil || state.Previous < 0 || state.Previous == issue.GetNumber() {
-
+	if !ok || json.Unmarshal([]byte(encoded), &state) != nil || state.Previous == issue.GetNumber() {
 		return nil, fmt.Errorf("tracker #%d has corrupt checkpoint metadata", issue.GetNumber())
 	}
-	seen := make(map[string]bool)
-	for _, slug := range state.Areas {
-		if !slugPattern.MatchString(slug) || seen[slug] {
-			return nil, errors.New("checkpoint contains invalid or duplicate area slugs")
-		}
-		seen[slug] = true
+	if err := validateCheckpoint(state); err != nil {
+		return nil, fmt.Errorf("tracker #%d has corrupt checkpoint metadata: %w", issue.GetNumber(), err)
 	}
 	return &state, nil
 }
 
-func latest(ctx context.Context, client *github.Client, c config) (*github.Issue, *checkpoint, error) {
+func validateCheckpoint(state checkpoint) error {
+	if !repoPattern.MatchString(state.Repository) || state.Branch == "" ||
+		!shaPattern.MatchString(state.BaseSHA) || !shaPattern.MatchString(state.HeadSHA) ||
+		state.Areas == nil || state.Previous < 0 || state.RunID < 0 || (state.RunID != 0 && state.AuditedAt.IsZero()) {
+
+		return errors.New("invalid checkpoint fields")
+	}
+	seen := make(map[string]bool)
+	for _, slug := range state.Areas {
+		if !slugPattern.MatchString(slug) || seen[slug] {
+			return errors.New("checkpoint contains invalid or duplicate area slugs")
+		}
+		seen[slug] = true
+	}
+	return nil
+}
+
+func latestIssue(ctx context.Context, client *github.Client, c config) (*github.Issue, *checkpoint, error) {
 	opts := &github.IssueListByRepoOptions{State: "all", Creator: actionsPublisher, Sort: "created", Direction: "desc", ListOptions: github.ListOptions{PerPage: 100}}
 	for {
 		issues, response, err := client.Issues.ListByRepo(ctx, c.Owner, c.Repo, opts)
@@ -239,7 +266,7 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 		return p, err
 	}
 	p.State = checkpoint{Repository: c.Repository, Branch: branch, BaseSHA: c.Initial, HeadSHA: head, Areas: []string{}}
-	issue, previous, err := latest(ctx, client, c)
+	issue, previous, report, err := latest(ctx, client, c)
 	if err != nil {
 		return p, err
 	}
@@ -252,9 +279,9 @@ func prepare(ctx context.Context, client *github.Client, c config) (prepared, er
 	if previous.Branch != branch || c.Initial != "" {
 		return p, errors.New("default branch changed or initial-sha would reset an existing checkpoint")
 	}
-	p.Issue, p.Previous = issue.GetNumber(), issue.GetBody()
+	p.Issue, p.Previous = issue.GetNumber(), report
 	p.State.BaseSHA, p.State.Previous, p.State.Areas = previous.HeadSHA, p.Issue, previous.Areas
-	if previous.HeadSHA == head {
+	if previous.HeadSHA == head && len(previous.Areas) != 0 {
 		p.State = *previous
 	}
 	return p, nil
@@ -280,23 +307,30 @@ func reportLines(body string) []string {
 	return lines
 }
 
+// A nil previous slice checks a saved report without repeating its carry-forward checks.
 func reportAreas(body string, previous []string) ([]string, error) {
 	headings := make(map[string]bool)
 	areas, covered := []string{}, make(map[string]bool)
 	section := ""
 	for _, line := range reportLines(body) {
+		if trimmed := strings.TrimLeft(line, " "); len(line)-len(trimmed) < 4 {
+			line = trimmed
+		}
 		if strings.HasPrefix(line, "## ") {
 			section = line
 			headings[line] = true
 		}
-		if match := areaHeading.FindStringSubmatch(line); section == "## Areas" && len(match) == 2 {
+		if match := areaHeading.FindStringSubmatch(line); section == "## Areas" && strings.HasPrefix(line, "###") {
+			if len(match) != 2 {
+				return nil, errors.New("area headings must start with a backtick-quoted stable slug")
+			}
 			if covered[match[1]] {
 				return nil, errors.New("duplicate area slug")
 			}
 			areas, covered[match[1]] = append(areas, match[1]), true
 		}
 		if match := resolvedArea.FindStringSubmatch(line); section == "## Resolved areas" && len(match) == 3 {
-			if covered[match[1]] || !slices.Contains(previous, match[1]) || strings.TrimSpace(match[2]) == "" {
+			if covered[match[1]] || (previous != nil && !slices.Contains(previous, match[1])) || strings.TrimSpace(match[2]) == "" {
 				return nil, errors.New("resolved area must name a previous unresolved slug once and explain its resolution")
 			}
 			covered[match[1]] = true
@@ -322,8 +356,8 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 	if p.State.Repository != c.Repository {
 		return errors.New("prepared context does not match the workflow repository")
 	}
-	if !shaPattern.MatchString(p.State.BaseSHA) || !shaPattern.MatchString(p.State.HeadSHA) {
-		return errors.New("prepared context contains invalid source revisions")
+	if err := validateCheckpoint(p.State); err != nil {
+		return fmt.Errorf("invalid prepared checkpoint: %w", err)
 	}
 	branch, head, err := currentHead(ctx, client, c)
 	if err != nil {
@@ -341,7 +375,7 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 			return errors.New("audited head is no longer on the default branch history")
 		}
 	}
-	issue, state, err := latest(ctx, client, c)
+	issue, state, _, err := latest(ctx, client, c)
 	if err != nil {
 		return err
 	}
@@ -368,31 +402,77 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		return err
 	}
 	p.State.Areas = areas
-	encoded, err := json.Marshal(p.State)
-	if err != nil {
-		return err
-	}
-	body := marker + string(encoded) + "\n```\n\n" + strings.TrimSpace(item.Body) + "\n\n" + applyInstructions
-	if len(body) > 60000 {
+	p.State.RunID = c.RunID
+	p.State.AuditedAt = time.Now().UTC()
+	if len(item.Body) > 60000 {
 		return errors.New("report exceeds the 60000-byte limit")
 	}
-	items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
-	if state != nil && state.HeadSHA == p.State.HeadSHA {
-		items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
-		if state.Previous != 0 {
-			old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, state.Previous)
+	if len(areas) == 0 {
+		if c.Summary == "" {
+			return errors.New("GITHUB_STEP_SUMMARY is required for a clean audit")
+		}
+		summary := fmt.Sprintf("## Dependency audit\n\nNo actionable or unresolved findings in `%s..%s`.\n\n%s\n",
+			p.State.BaseSHA, p.State.HeadSHA, strings.TrimSpace(item.Body))
+		if err := appendSummary(c.Summary, summary); err != nil {
+			return err
+		}
+		items = []nativeRequest{{Type: "noop", Message: "No actionable or unresolved findings. See the workflow summary."}}
+		if issue != nil && issue.GetState() == "open" {
+			items = append(items, nativeRequest{
+				Type: "close_issue", IssueNumber: issue.GetNumber(),
+				Body: fmt.Sprintf("No unresolved dependency audit findings remain at `%s`. See the audit workflow summary.", p.State.HeadSHA),
+			})
+		}
+	} else {
+		var published *checkpoint
+		if issue != nil {
+			published, err = readCheckpoint(issue)
 			if err != nil {
 				return err
 			}
-			checkpoint, err := readCheckpoint(old)
-			if err != nil {
-				return err
+		}
+		updating := published != nil && published.HeadSHA == p.State.HeadSHA
+		if updating {
+			p.State.Previous = published.Previous
+		}
+		encoded, err := json.Marshal(p.State)
+		if err != nil {
+			return err
+		}
+		body := marker + string(encoded) + "\n```\n\n" + strings.TrimSpace(item.Body) + "\n\n" + applyInstructions
+		if len(body) > 60000 {
+			return errors.New("report exceeds the 60000-byte limit")
+		}
+		items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
+		if updating {
+			items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
+			if issue.GetState() == "closed" && len(state.Areas) == 0 {
+				items[0].Status = "open"
 			}
-			if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != state.Branch || checkpoint.HeadSHA != state.BaseSHA {
-				return errors.New("previous issue is not the expected automation-owned checkpoint")
-			}
-			if old.GetState() == "open" {
-				items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
+			if published.Previous != 0 {
+				old, _, err := client.Issues.Get(ctx, c.Owner, c.Repo, published.Previous)
+				if err != nil {
+					return err
+				}
+				checkpoint, err := readCheckpoint(old)
+				if err != nil {
+					return err
+				}
+				if checkpoint == nil || checkpoint.Repository != c.Repository || checkpoint.Branch != p.State.Branch {
+					return errors.New("previous issue is not the expected automation-owned checkpoint")
+				}
+				if checkpoint.HeadSHA != p.State.BaseSHA {
+					comparison, _, err := client.Repositories.CompareCommits(ctx, c.Owner, c.Repo, checkpoint.HeadSHA, p.State.BaseSHA, nil)
+					if err != nil {
+						return err
+					}
+					if comparison.GetStatus() != "ahead" {
+						return errors.New("previous issue is not on the audited checkpoint history")
+					}
+				}
+				if old.GetState() == "open" {
+					items = append(items, nativeRequest{Type: "close_issue", IssueNumber: old.GetNumber(), Body: fmt.Sprintf("Superseded by #%d.", issue.GetNumber())})
+				}
 			}
 		}
 	}
@@ -403,7 +483,21 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 	if err != nil {
 		return err
 	}
-	return writeJSON(output, envelope)
+	if err := writeJSON(output, envelope); err != nil {
+		return err
+	}
+	return writeJSON(c.Output, runCheckpoint{Version: 1, State: p.State, Report: strings.TrimSpace(item.Body)})
+}
+
+func appendSummary(name, body string) error {
+	f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(f, body); err != nil {
+		return errors.Join(err, f.Close())
+	}
+	return f.Close()
 }
 
 func outputs(name string, values map[string]string) error {

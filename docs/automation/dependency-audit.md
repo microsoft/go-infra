@@ -1,6 +1,7 @@
 # Dependency history audits
 
-The shared workflow audits landed Go dependency changes in Git history and publishes a tracker issue in the repository running the audit.
+The shared workflow audits landed Go dependency changes in Git history and publishes a tracker issue only when actionable or unresolved findings remain.
+Clean audits write their report to the Actions summary instead of creating an issue.
 It does not depend on which tool opened the dependency update.
 Maintainers can assign the tracker to Copilot or apply its findings themselves.
 The audit does not change code, create branches, or open PRs.
@@ -66,7 +67,8 @@ gh workflow run dependency-audit.yml --repo OWNER/REPOSITORY
 Supplying another starting SHA fails rather than resetting progress.
 Scheduled runs resume from the existing checkpoint.
 
-The [checkpoint helper](../../cmd/dependencyaudit/main.go) reads the latest Actions-bot-owned tracker, including closed issues, and captures an immutable default-branch head.
+The [checkpoint helper](../../cmd/dependencyaudit/main.go) reads the checkpoint artifact from the previous successful run of the same caller workflow and captures an immutable default-branch head.
+It also recognizes existing Actions-bot-owned tracker checkpoints, including closed issues, so repositories can adopt the new behavior without resetting progress.
 The [audit agent](../../.github/workflows/dependency-audit-agent.md) reads complete first-parent Go manifest/checksum patches and the current callers without executing target code.
 It includes intermediate landed upgrades and reversions, checks versioned upstream sources, and reports what it could not verify.
 
@@ -74,11 +76,21 @@ Reports contain Summary, Inventory, Areas, and Notes sections, plus Resolved are
 Each area identifies its owning module, affected files and symbols, upstream sources, migration steps, behavior changes, and validation commands.
 Every previous unresolved area must be carried forward or explicitly resolved.
 
-The trusted helper attaches a visible `dependency-audit-v1` fenced JSON checkpoint and instructions for applying the audit.
+The trusted helper saves a versioned `dependency-audit-checkpoint` artifact for each validated report.
+Artifacts from failed, cancelled, or in-progress runs never advance the next audit's checkpoint.
+Checkpoint ordering follows upload and audit times rather than numeric run IDs, so rerunning an older workflow does not rewind progress.
+Actionable tracker issues also retain the visible `dependency-audit-v1` fenced JSON checkpoint and instructions for applying the audit.
 The model cannot choose the checkpoint or request arbitrary issue updates.
-A new revision creates a new tracker and closes older trackers.
+A new revision with findings creates a new tracker and closes older trackers.
+When no findings remain, the workflow writes the full report to its summary and closes the previous tracker without creating a replacement.
 Repeating the same revision replaces the existing report and recovers interrupted publication without resetting progress.
+Findings that reappear after a clean audit at the same revision reopen the matching tracker.
 No database or separate state branch is used.
+Checkpoint artifacts follow the repository's configured Actions artifact retention.
+Keep that retention longer than the audit schedule interval.
+Each successful audit refreshes the checkpoint, including clean audits.
+If artifacts expire or are deleted, the helper can resume from an existing trusted tracker checkpoint and reports that fallback.
+If no usable checkpoint remains, the audit fails and requires an explicit starting SHA rather than silently resetting progress.
 The agent workflow prepares its own checkpoint and passes the trusted context to analysis and publication through job outputs, without a separate context artifact.
 Rewritten history, corrupt metadata, and changed default branches fail explicitly.
 
@@ -112,4 +124,4 @@ go test -race ./cmd/dependencyaudit
 ```
 
 Keep the artifact-download action override in [.github/aw/actions-lock.json](../../.github/aw/actions-lock.json) when regenerating the lock.
-The helper tests cover checkpoint ownership, bootstrap and resume behavior, carry-forward and resolution, retry replacement, history changes, native output metadata, and application instructions.
+The helper tests cover issue and successful-run checkpoint recovery, clean bootstrap and repeated audits, carry-forward and resolution, retry replacement after clean runs, expired or corrupt artifacts, history changes, native output metadata, and application instructions.

@@ -1,5 +1,5 @@
 ---
-description: Audit dependency changes since the issue checkpoint and publish a modernization tracker
+description: Audit dependency changes since the last checkpoint and publish actionable findings
 on:
   workflow_call:
     inputs:
@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      actions: read
       contents: read
       issues: read
     outputs:
@@ -50,6 +51,8 @@ jobs:
   safe_outputs:
     needs:
       - prepare
+    permissions:
+      actions: read
 checkout:
   ref: ${{ needs.prepare.outputs.head }}
   path: target
@@ -119,6 +122,7 @@ safe-outputs:
   update-issue:
     target: "*"
     body: true
+    status:
     max: 1
   close-issue:
     target: "*"
@@ -145,7 +149,15 @@ safe-outputs:
         GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        go -C control run ./cmd/dependencyaudit stamp -input /tmp/gh-aw/dependency-audit/context.json
+        go -C control run ./cmd/dependencyaudit stamp -input /tmp/gh-aw/dependency-audit/context.json \
+          -output /tmp/gh-aw/dependency-audit-checkpoint/checkpoint.json
+    - name: Save the validated checkpoint
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: dependency-audit-checkpoint
+        path: /tmp/gh-aw/dependency-audit-checkpoint/checkpoint.json
+        if-no-files-found: error
+        overwrite: true
 ---
 
 # Dependency modernization audit
@@ -179,6 +191,9 @@ import version. Verify the specific APIs used.
 
 Call `create_issue` exactly once, including when there are no new findings.
 Do not call update/close tools; the trusted checkpoint step handles retries.
+The trusted report step creates issues only when actionable or unresolved areas
+remain. Otherwise, it writes the report to the Actions summary and closes the
+previous tracker. Only successful runs can supply the next audit's checkpoint.
 Do not include checkpoint metadata. Use this report format:
 
 ```markdown
