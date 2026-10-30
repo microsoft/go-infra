@@ -6,14 +6,18 @@ package buildmodel
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-test/deep"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
@@ -108,6 +112,15 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 }
 
 func TestUpdateVersions_Preferred(t *testing.T) {
+	// Express versions relative to the previous stable branch so the test doesn't need to change
+	// every time msmajorversions.Current moves.
+	prevMinor, err := strconv.Atoi(strings.TrimPrefix(msmajorversions.Previous.Version, "1."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ver := func(offset int) string { return fmt.Sprintf("1.%d", prevMinor+offset) }
+	patch := func(offset int, p string) string { return ver(offset) + "." + p }
+
 	tests := []struct {
 		name     string
 		assets   buildassets.BuildAssets
@@ -116,116 +129,73 @@ func TestUpdateVersions_Preferred(t *testing.T) {
 	}{
 		{
 			name:   "new stable release",
-			assets: buildassets.BuildAssets{Version: "1.28.0-1"},
+			assets: buildassets.BuildAssets{Version: patch(2, "0-1")},
 			versions: dockerversions.Versions{
-				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
-				"1.27": {Version: "1.27.3"},
+				ver(-1): {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "3")},
 			},
-			want: []string{"1.27"},
+			want: []string{ver(0)},
 		},
 		{
 			name:   "older patch update does not move preference backward",
-			assets: buildassets.BuildAssets{Version: "1.26.11-1"},
+			assets: buildassets.BuildAssets{Version: patch(-1, "11-1")},
 			versions: dockerversions.Versions{
-				"1.25": {Version: "1.25.10"},
-				"1.26": {Version: "1.26.10"},
-				"1.27": {Version: "1.27.3", PreferredMinor: true, PreferredMajor: true},
-				"1.28": {Version: "1.28.0"},
+				ver(-1): {Version: patch(-1, "10")},
+				ver(0):  {Version: patch(0, "3"), PreferredMinor: true, PreferredMajor: true},
+				ver(1):  {Version: patch(1, "0")},
 			},
-			want: []string{"1.27"},
+			want: []string{ver(0)},
 		},
 		{
 			name:   "repair existing preferences",
-			assets: buildassets.BuildAssets{Version: "1.28.1-1"},
+			assets: buildassets.BuildAssets{Version: patch(1, "1-1")},
 			versions: dockerversions.Versions{
-				"1.26": {Version: "1.26.10", PreferredMajor: true},
-				"1.27": {Version: "1.27.3"},
-				"1.28": {Version: "1.28.0", PreferredMinor: true},
+				ver(-1): {Version: patch(-1, "10"), PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "0"), PreferredMinor: true},
 			},
-			want: []string{"1.27"},
+			want: []string{ver(0)},
 		},
 		{
-			name:   "numeric ordering",
-			assets: buildassets.BuildAssets{Version: "1.11.1-1"},
+			name:   "main does not affect preference",
+			assets: buildassets.BuildAssets{Version: patch(1, "4-1")},
 			versions: dockerversions.Versions{
-				"1.9":  {Version: "1.9.7", PreferredMinor: true, PreferredMajor: true},
-				"1.10": {Version: "1.10.3"},
-				"1.11": {Version: "1.11.0"},
+				ver(-1): {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "3")},
+				"main":  {Version: "main"},
 			},
-			want: []string{"1.10"},
+			want: []string{ver(0)},
 		},
 		{
-			name:   "new beta does not advance preference",
-			assets: buildassets.BuildAssets{Version: "1.28beta1-1"},
+			name:   "missing previous stable preserves preference",
+			assets: buildassets.BuildAssets{Version: patch(1, "1-1")},
 			versions: dockerversions.Versions{
-				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
-				"1.27": {Version: "1.27.3"},
+				ver(-2): {Version: patch(-2, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(1):  {Version: patch(1, "0")},
 			},
-			want: []string{"1.26"},
-		},
-		{
-			name:   "release candidate is not preferred",
-			assets: buildassets.BuildAssets{Version: "1.28rc2-1"},
-			versions: dockerversions.Versions{
-				"1.26":    {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
-				"1.27":    {Version: "1.27.3"},
-				"1.28-rc": {Version: "1.28rc1"},
-			},
-			want: []string{"1.26"},
-		},
-		{
-			name:   "prerelease only",
-			assets: buildassets.BuildAssets{Version: "1.28rc2-1"},
-			versions: dockerversions.Versions{
-				"1.28-rc": {Version: "1.28rc1"},
-			},
-		},
-		{
-			name:   "main does not advance preference",
-			assets: buildassets.BuildAssets{Version: "1.27.4-1"},
-			versions: dockerversions.Versions{
-				"1.26": {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
-				"1.27": {Version: "1.27.3"},
-				"main": {Version: "main"},
-			},
-			want: []string{"1.26"},
-		},
-		{
-			name:   "single stable version preserves preference",
-			assets: buildassets.BuildAssets{Version: "1.27.4-1"},
-			versions: dockerversions.Versions{
-				"1.27": {Version: "1.27.3", PreferredMinor: true, PreferredMajor: true},
-			},
-			want: []string{"1.27"},
-		},
-		{
-			name:   "missing N-1 preserves preference",
-			assets: buildassets.BuildAssets{Version: "1.28.1-1"},
-			versions: dockerversions.Versions{
-				"1.25": {Version: "1.25.10", PreferredMinor: true, PreferredMajor: true},
-				"1.28": {Version: "1.28.0"},
-			},
-			want: []string{"1.25"},
+			want: []string{ver(-2)},
 		},
 		{
 			name:   "branch suffixes are independent",
-			assets: buildassets.BuildAssets{Version: "1.28.0-1", Branch: "dev.boringcrypto.go1.28"},
+			assets: buildassets.BuildAssets{Version: patch(1, "0-1"), Branch: "dev.boringcrypto.go" + ver(1)},
 			versions: dockerversions.Versions{
-				"1.26":      {Version: "1.26.10", PreferredMinor: true, PreferredMajor: true},
-				"1.27":      {Version: "1.27.3"},
-				"1.26-fips": {Version: "1.26.10", BranchSuffix: "-fips", PreferredMinor: true, PreferredMajor: true},
-				"1.27-fips": {Version: "1.27.3", BranchSuffix: "-fips"},
+				ver(-1):           {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):            {Version: patch(0, "3")},
+				ver(-1) + "-fips": {Version: patch(-1, "10"), BranchSuffix: "-fips", PreferredMinor: true, PreferredMajor: true},
+				ver(0) + "-fips":  {Version: patch(0, "3"), BranchSuffix: "-fips"},
 			},
-			want: []string{"1.26", "1.27-fips"},
+			want: []string{ver(-1), ver(0) + "-fips"},
 		},
 		{
 			name:   "tag prefixes are independent",
-			assets: buildassets.BuildAssets{Version: "1.28.0-1"},
+			assets: buildassets.BuildAssets{Version: patch(1, "0-1")},
 			versions: dockerversions.Versions{
-				"1.26": {Version: "1.26.10", TagPrefix: "dev-", PreferredMinor: true, PreferredMajor: true},
-				"1.27": {Version: "1.27.3"},
+				ver(-1): {Version: patch(-1, "10"), TagPrefix: "dev-", PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
 			},
-			want: []string{"1.26", "1.27"},
+			want: []string{ver(-1), ver(0)},
 		},
 	}
 	for _, tt := range tests {
@@ -252,19 +222,26 @@ func TestUpdateVersions_PreferredManifestTags(t *testing.T) {
 		Env:       &dockerversions.ArchEnv{GOOS: "linux", GOARCH: "amd64"},
 		Supported: true,
 	}
+	prevMinor, err := strconv.Atoi(strings.TrimPrefix(msmajorversions.Previous.Version, "1."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := msmajorversions.Previous.Version
+	older := fmt.Sprintf("1.%d", prevMinor-1)
+	newer := fmt.Sprintf("1.%d", prevMinor+1)
 	versions := dockerversions.Versions{
-		"1.26": {
-			Version: "1.26.10", PreferredMinor: true, PreferredMajor: true,
+		older: {
+			Version: older + ".10", PreferredMinor: true, PreferredMajor: true,
 			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
 			Arches: map[string]*dockerversions.Arch{"amd64": arch},
 		},
-		"1.27": {
-			Version:  "1.27.3",
+		prev: {
+			Version:  prev + ".3",
 			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
 			Arches: map[string]*dockerversions.Arch{"amd64": arch},
 		},
 	}
-	assets := &buildassets.BuildAssets{Version: "1.28.0-1", Arches: []*dockerversions.Arch{arch}}
+	assets := &buildassets.BuildAssets{Version: newer + ".0-1", Arches: []*dockerversions.Arch{arch}}
 	if err := UpdateVersions(assets, versions); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +257,7 @@ func TestUpdateVersions_PreferredManifestTags(t *testing.T) {
 				owners = append(owners, image.ProductVersion)
 			}
 		}
-		if diff := deep.Equal(owners, []string{"1.27"}); diff != nil {
+		if diff := deep.Equal(owners, []string{prev}); diff != nil {
 			t.Errorf("Tag %q: %v", tag, diff)
 		}
 	}
