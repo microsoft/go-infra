@@ -53,7 +53,7 @@ type dlRelease struct {
 
 type dlRepoUpdate struct {
 	RepoURL   string
-	Auther    githubutil.HTTPRequestAuther
+	Auther    gitcmd.URLAuther
 	Branch    string
 	Title     string
 	Releases  []dlRelease
@@ -255,9 +255,14 @@ func updateDLRepository(update dlRepoUpdate) error {
 	}
 	log.Printf("Temporary go-dl clone: %s\n", repoDir)
 
+	urlAuther := update.Auther
+	if urlAuther == nil {
+		urlAuther = gitcmd.NoAuther{}
+	}
+
 	// Generation rewrites several directory trees, so use the repository's generator in a clone
 	// rather than trying to reproduce its output with the GitHub tree API.
-	if err := update.runGit("", "clone", "--branch", "main", "--single-branch", update.RepoURL, repoDir); err != nil {
+	if err := gitcmd.Run("", "clone", "--branch", "main", "--single-branch", urlAuther.InsertAuth(update.RepoURL), repoDir); err != nil {
 		return fmt.Errorf("clone %s: %w", update.RepoURL, err)
 	}
 	if err := gitcmd.Run(repoDir, "checkout", "-b", update.Branch); err != nil {
@@ -289,46 +294,10 @@ func updateDLRepository(update dlRepoUpdate) error {
 		}
 		return nil
 	}
-	if err := update.runGit(repoDir, "push", update.RepoURL, "HEAD:refs/heads/"+update.Branch); err != nil {
+	if err := gitcmd.Run(repoDir, "push", urlAuther.InsertAuth(update.RepoURL), "HEAD:refs/heads/"+update.Branch); err != nil {
 		return fmt.Errorf("push go-dl changes: %w", err)
 	}
 	return nil
-}
-
-func (update dlRepoUpdate) runGit(dir string, args ...string) error {
-	cmd, err := update.gitCommand(dir, args...)
-	if err != nil {
-		return err
-	}
-	return executil.Run(cmd)
-}
-
-func (update dlRepoUpdate) gitCommand(dir string, args ...string) (*exec.Cmd, error) {
-	if update.Auther == nil {
-		return executil.Dir(dir, "git", args...), nil
-	}
-	req, err := http.NewRequest(http.MethodGet, update.RepoURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := update.Auther.InsertHTTPAuth(req); err != nil {
-		return nil, fmt.Errorf("authenticate Git: %w", err)
-	}
-	if token, ok := strings.CutPrefix(req.Header.Get("Authorization"), "token "); ok {
-		req.SetBasicAuth("x-access-token", token)
-	}
-	// Scope the header to this repository, and keep it out of logged arguments and saved config.
-	// Reset inherited headers and helpers so other credentials aren't sent or cached.
-	headerKey := "http." + update.RepoURL + ".extraHeader"
-	cmd := executil.Dir(dir, "git", append([]string{
-		"-c", headerKey + "=",
-		"-c", "credential.helper=",
-		"--config-env=" + headerKey + "=GO_DL_GIT_AUTH",
-	}, args...)...)
-	cmd.Env = append(cmd.Environ(),
-		"GO_DL_GIT_AUTH=Authorization: "+req.Header.Get("Authorization"),
-		"GIT_TERMINAL_PROMPT=0")
-	return cmd, nil
 }
 
 func writeDLManifests(repoDir string, releases []dlRelease) error {

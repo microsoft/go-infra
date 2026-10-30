@@ -254,6 +254,16 @@ func TestGitHubUpdateDLRequests(t *testing.T) {
 		if update.RepoURL != "https://github.com/o/dl.git" || update.Auther == nil {
 			t.Errorf("unexpected repository URL or missing authentication: %q", update.RepoURL)
 		}
+		if update.Auther != nil {
+			u, err := url.Parse(update.Auther.InsertAuth(update.RepoURL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			password, ok := u.User.Password()
+			if u.User.Username() != "_" || !ok || password != "test-token" {
+				t.Error("Git URL did not include the supplied PAT")
+			}
+		}
 		if update.DryRun || update.KeepClone {
 			t.Errorf("unexpected run modes: dryRun=%v keepClone=%v", update.DryRun, update.KeepClone)
 		}
@@ -329,6 +339,16 @@ func TestGitHubUpdateDLDryRunRequests(t *testing.T) {
 				updated = true
 				if !update.DryRun || (update.Auther == nil) != (token == "") {
 					t.Error("dry run did not preserve the supplied authentication")
+				}
+				if update.Auther != nil {
+					u, err := url.Parse(update.Auther.InsertAuth(update.RepoURL))
+					if err != nil {
+						t.Fatal(err)
+					}
+					password, ok := u.User.Password()
+					if !ok || password != token {
+						t.Error("dry run Git URL did not include the supplied PAT")
+					}
 				}
 				return nil
 			}
