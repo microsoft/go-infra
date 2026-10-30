@@ -6,13 +6,18 @@ package buildmodel
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-test/deep"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
+	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
@@ -104,6 +109,158 @@ func TestBuildAssets_UpdateVersions(t *testing.T) {
 			t.Errorf("Version: want != %v, got %v", original.Version, got.Version)
 		}
 	})
+}
+
+func TestUpdateVersions_Preferred(t *testing.T) {
+	// Express versions relative to the previous stable branch so the test doesn't need to change
+	// every time msmajorversions.Current moves.
+	prevMinor, err := strconv.Atoi(strings.TrimPrefix(msmajorversions.Previous.Version, "1."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ver := func(offset int) string { return fmt.Sprintf("1.%d", prevMinor+offset) }
+	patch := func(offset int, p string) string { return ver(offset) + "." + p }
+
+	tests := []struct {
+		name     string
+		assets   buildassets.BuildAssets
+		versions dockerversions.Versions
+		want     []string
+	}{
+		{
+			name:   "new stable release",
+			assets: buildassets.BuildAssets{Version: patch(2, "0-1")},
+			versions: dockerversions.Versions{
+				ver(-1): {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "3")},
+			},
+			want: []string{ver(0)},
+		},
+		{
+			name:   "older patch update does not move preference backward",
+			assets: buildassets.BuildAssets{Version: patch(-1, "11-1")},
+			versions: dockerversions.Versions{
+				ver(-1): {Version: patch(-1, "10")},
+				ver(0):  {Version: patch(0, "3"), PreferredMinor: true, PreferredMajor: true},
+				ver(1):  {Version: patch(1, "0")},
+			},
+			want: []string{ver(0)},
+		},
+		{
+			name:   "repair existing preferences",
+			assets: buildassets.BuildAssets{Version: patch(1, "1-1")},
+			versions: dockerversions.Versions{
+				ver(-1): {Version: patch(-1, "10"), PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "0"), PreferredMinor: true},
+			},
+			want: []string{ver(0)},
+		},
+		{
+			name:   "main does not affect preference",
+			assets: buildassets.BuildAssets{Version: patch(1, "4-1")},
+			versions: dockerversions.Versions{
+				ver(-1): {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+				ver(1):  {Version: patch(1, "3")},
+				"main":  {Version: "main"},
+			},
+			want: []string{ver(0)},
+		},
+		{
+			name:   "missing previous stable preserves preference",
+			assets: buildassets.BuildAssets{Version: patch(1, "1-1")},
+			versions: dockerversions.Versions{
+				ver(-2): {Version: patch(-2, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(1):  {Version: patch(1, "0")},
+			},
+			want: []string{ver(-2)},
+		},
+		{
+			name:   "branch suffixes are independent",
+			assets: buildassets.BuildAssets{Version: patch(1, "0-1"), Branch: "dev.boringcrypto.go" + ver(1)},
+			versions: dockerversions.Versions{
+				ver(-1):           {Version: patch(-1, "10"), PreferredMinor: true, PreferredMajor: true},
+				ver(0):            {Version: patch(0, "3")},
+				ver(-1) + "-fips": {Version: patch(-1, "10"), BranchSuffix: "-fips", PreferredMinor: true, PreferredMajor: true},
+				ver(0) + "-fips":  {Version: patch(0, "3"), BranchSuffix: "-fips"},
+			},
+			want: []string{ver(-1), ver(0) + "-fips"},
+		},
+		{
+			name:   "tag prefixes are independent",
+			assets: buildassets.BuildAssets{Version: patch(1, "0-1")},
+			versions: dockerversions.Versions{
+				ver(-1): {Version: patch(-1, "10"), TagPrefix: "dev-", PreferredMinor: true, PreferredMajor: true},
+				ver(0):  {Version: patch(0, "3")},
+			},
+			want: []string{ver(-1), ver(0)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Repeating the update must not change the selected preference.
+			for range 2 {
+				if err := UpdateVersions(&tt.assets, tt.versions); err != nil {
+					t.Fatal(err)
+				}
+				for key, v := range tt.versions {
+					want := slices.Contains(tt.want, key)
+					if v.PreferredMinor != want || v.PreferredMajor != want {
+						t.Errorf("%s: preferredMinor=%v, preferredMajor=%v; want both %v",
+							key, v.PreferredMinor, v.PreferredMajor, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateVersions_PreferredManifestTags(t *testing.T) {
+	arch := &dockerversions.Arch{
+		Env:       &dockerversions.ArchEnv{GOOS: "linux", GOARCH: "amd64"},
+		Supported: true,
+	}
+	prevMinor, err := strconv.Atoi(strings.TrimPrefix(msmajorversions.Previous.Version, "1."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := msmajorversions.Previous.Version
+	older := fmt.Sprintf("1.%d", prevMinor-1)
+	newer := fmt.Sprintf("1.%d", prevMinor+1)
+	versions := dockerversions.Versions{
+		older: {
+			Version: older + ".10", PreferredMinor: true, PreferredMajor: true,
+			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
+			Arches: map[string]*dockerversions.Arch{"amd64": arch},
+		},
+		prev: {
+			Version:  prev + ".3",
+			Variants: []string{"bookworm"}, PreferredVariant: "bookworm",
+			Arches: map[string]*dockerversions.Arch{"amd64": arch},
+		},
+	}
+	assets := &buildassets.BuildAssets{Version: newer + ".0-1", Arches: []*dockerversions.Arch{arch}}
+	if err := UpdateVersions(assets, versions); err != nil {
+		t.Fatal(err)
+	}
+	manifest := &dockermanifest.Manifest{Repos: []*dockermanifest.Repo{{}}}
+	UpdateManifest(manifest, versions)
+	if len(manifest.Repos[0].Images) != 3 {
+		t.Fatalf("Expected all three releases to be retained, got %d images", len(manifest.Repos[0].Images))
+	}
+	for _, tag := range []string{"1", "latest", "1-bookworm", "bookworm"} {
+		var owners []string
+		for _, image := range manifest.Repos[0].Images {
+			if _, ok := image.SharedTags[tag]; ok {
+				owners = append(owners, image.ProductVersion)
+			}
+		}
+		if diff := deep.Equal(owners, []string{prev}); diff != nil {
+			t.Errorf("Tag %q: %v", tag, diff)
+		}
+	}
 }
 
 func Test_makeOsArchPlatform(t *testing.T) {

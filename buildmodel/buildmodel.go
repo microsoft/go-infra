@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/go-infra/buildmodel/dockermanifest"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/goversion"
+	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/stringutil"
 )
 
@@ -237,7 +238,8 @@ func UpdateManifest(manifest *dockermanifest.Manifest, versions dockerversions.V
 var ErrNoMajorMinorUpgradeMatch = errors.New("no match found in existing versions.json file")
 
 // UpdateVersions takes a build asset file containing a list of build outputs and updates a
-// versions.json model to consume the new build.
+// versions.json model to consume the new build. It prefers msmajorversions.Previous
+// in the same tag namespace, if that release is present.
 func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Versions) error {
 	// First, try to update an existing major.minor version in the Docker versions file. If it
 	// doesn't exist, try to find the previous version and create a new Docker versions file entry
@@ -325,7 +327,24 @@ func UpdateVersions(assets *buildassets.BuildAssets, versions dockerversions.Ver
 		// Copy the asset data into the versions file whether it's a new arch or not.
 		v.Arches[archKey] = arch
 	}
+	updatePreferredVersions(versions, v.TagPrefix, v.BranchSuffix)
 	return nil
+}
+
+func updatePreferredVersions(versions dockerversions.Versions, tagPrefix, branchSuffix string) {
+	// If the previous stable branch isn't in this namespace, leave existing preferences alone
+	// rather than removing tags or preferring a different release.
+	preferredKey := msmajorversions.Previous.Version + branchSuffix
+	preferred, ok := versions[preferredKey]
+	if !ok || preferred.TagPrefix != tagPrefix || preferred.BranchSuffix != branchSuffix {
+		return
+	}
+	for key, v := range versions {
+		if v.TagPrefix == tagPrefix && v.BranchSuffix == branchSuffix {
+			v.PreferredMinor = key == preferredKey
+			v.PreferredMajor = key == preferredKey
+		}
+	}
 }
 
 // makeOSArchPlatform creates a Docker manifest platform based on the given OS, OS version, and
