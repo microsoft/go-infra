@@ -90,10 +90,14 @@ func TestProcessPlanUsesBrowserJSONShape(t *testing.T) {
 	}
 
 	var payload struct {
-		Plan json.RawMessage `json:"plan"`
+		Plan  json.RawMessage    `json:"plan"`
+		Steps []webview.PlanStep `json:"steps"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
+	}
+	if len(payload.Steps) != 1 || payload.Steps[0].Status != string(coordinator.StepStatusWaiting) {
+		t.Fatalf("prepared steps = %#v", payload.Steps)
 	}
 	var plan map[string]json.RawMessage
 	if err := json.Unmarshal(payload.Plan, &plan); err != nil {
@@ -165,7 +169,7 @@ func startExample(t *testing.T, server *Server, digest string) *httptest.Respons
 		strings.NewReader(`{"planDigest":"`+digest+`","confirmed":true}`),
 	)
 	request.Header.Set("Origin", "http://localhost")
-	server.handleStartProcessRun("example", response, request)
+	server.handleStartProcessRun("example", response, request, false)
 	return response
 }
 
@@ -269,7 +273,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 	}
 }
 
-func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
+func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 	store := newMemoryProcessRunStore()
 	process := exampleProcess()
 	var executed atomic.Bool
@@ -307,6 +311,28 @@ func TestRestoreIncompleteProcessRunResumesExecution(t *testing.T) {
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf("select status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if executed.Load() {
+		t.Fatal("opening a saved graph executed a step")
+	}
+	stored, err := store.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != record.Revision {
+		t.Fatal("viewing the saved graph wrote a checkpoint")
+	}
+	resumed := httptest.NewRecorder()
+	body, err := json.Marshal(webview.ReleaseStartRequest{
+		PlanDigest: state.Digest, Confirmed: true, Revision: record.Revision,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Handler().ServeHTTP(resumed, authenticatedRequest(t, server, http.MethodPost,
+		"/api/processes/example/resume", string(body)))
+	if resumed.Code != http.StatusAccepted {
+		t.Fatalf("resume status = %d, body = %s", resumed.Code, resumed.Body.String())
 	}
 	store.waitForCompleted(t, 1)
 	if !executed.Load() || store.latest(t).Result != string(runstore.StatusSucceeded) {

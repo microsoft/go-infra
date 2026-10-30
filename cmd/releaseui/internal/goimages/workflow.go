@@ -66,25 +66,7 @@ type State struct {
 type RunService interface {
 	PollMirror(context.Context, string) error
 	QueuePipeline(context.Context, map[string]string) (string, error)
-	PollPipeline(context.Context, string) error
-}
-
-// PipelineResultError reports a known terminal pipeline outcome.
-type PipelineResultError struct {
-	Result string
-	Err    error
-}
-
-func (e *PipelineResultError) Error() string {
-	return e.Err.Error()
-}
-
-func (e *PipelineResultError) Unwrap() error {
-	return e.Err
-}
-
-func (e *PipelineResultError) Is(target error) bool {
-	return target == coordinator.ErrCanceled && e.Result == "canceled"
+	GetPipelineStatus(context.Context, string) (*coordinator.Observation, error)
 }
 
 // CheckpointFunc reports that State changed. The state pointer is valid only during the call.
@@ -216,36 +198,32 @@ func NewGraphWithCheckpoint(
 			})
 		},
 	)
-	wait := queue.Then(
+	wait, err := coordinator.NewMonitor(
 		"⌚ Wait for go-images release",
 		officialPipelineTimeout,
-		func(ctx context.Context) error {
-			if state.Complete {
-				return nil
+		func(ctx context.Context) (*coordinator.Observation, error) {
+			if state.BuildID == "" {
+				return nil, nil
 			}
-			buildID := state.BuildID
-			if err := service.PollPipeline(ctx, buildID); err != nil {
-				var resultError *PipelineResultError
-				if !errors.As(err, &resultError) {
-					return err
-				}
-				if resultError.Result != "failed" && resultError.Result != "canceled" {
-					return fmt.Errorf("invalid terminal pipeline result %q: %w", resultError.Result, err)
-				}
-				if checkpointErr := access.update(ctx, func() {
-					state.Complete = true
-					state.Result = resultError.Result
-				}); checkpointErr != nil {
-					return errors.Join(err, fmt.Errorf("checkpoint terminal pipeline result: %w", checkpointErr))
-				}
-				return err
+			return service.GetPipelineStatus(ctx, state.BuildID)
+		},
+		func(observation *coordinator.Observation) (*coordinator.Observation, error) {
+			return observation, nil
+		},
+		func(ctx context.Context, observation *coordinator.Observation) error {
+			if !observation.Terminal() || state.Complete && state.Result == string(observation.Status) {
+				return nil
 			}
 			return access.update(ctx, func() {
 				state.Complete = true
-				state.Result = "succeeded"
+				state.Result = string(observation.Status)
 			})
 		},
 	)
+	if err != nil {
+		return nil, nil, err
+	}
+	wait.DependsOn = []*coordinator.Step{queue}
 	steps, err := wait.TransitiveDependencies()
 	if err != nil {
 		return nil, nil, err

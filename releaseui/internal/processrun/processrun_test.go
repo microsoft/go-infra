@@ -23,6 +23,7 @@ type testRun struct {
 	snapshot *contract.StateSnapshot
 	plan     *contract.Plan
 	view     *contract.RunView
+	build    func(context.Context, contract.CheckpointFunc) ([]*coordinator.Step, error)
 }
 
 func (r *testRun) TakeSnapshot() *contract.StateSnapshot {
@@ -41,7 +42,10 @@ func (r *testRun) Plan() *contract.Plan {
 	return r.plan
 }
 
-func (r *testRun) Build(context.Context, contract.CheckpointFunc) ([]*coordinator.Step, error) {
+func (r *testRun) Build(ctx context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
+	if r.build != nil {
+		return r.build(ctx, checkpoint)
+	}
 	return nil, errors.New("test run does not build an execution graph")
 }
 
@@ -78,8 +82,13 @@ func (s *testStore) Create(
 	return nil, errors.New("test store does not create records")
 }
 
-func (s *testStore) Get(context.Context, int) (*runstore.Record, error) {
-	return nil, errors.New("test store does not load records")
+func (s *testStore) Get(_ context.Context, id int) (*runstore.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.record == nil || s.record.ID != id {
+		return nil, errors.New("test store record not found")
+	}
+	return cloneTestRecord(s.record), nil
 }
 
 func (s *testStore) Update(
@@ -294,6 +303,47 @@ func TestProcessRunOutcome(t *testing.T) {
 				t.Fatalf("outcome = (%v, %q), want (%v, %q)", complete, result, test.complete, test.result)
 			}
 		})
+	}
+}
+
+func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) {
+	manager, session, run, store, cancel := checkpointTestRun(t)
+	defer cancel()
+	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
+	checkpointed, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(func() { unblock(); <-done })
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context) error {
+		coordinator.ReportProgress(ctx, coordinator.StepProgress{Completed: 5, Total: 30})
+		checkpointer.Checkpoint()
+		close(checkpointed)
+		<-release
+		return nil
+	})}
+	go func() {
+		defer close(done)
+		manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
+	}()
+	waitForTestSignal(t, checkpointed)
+	record, err := store.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph := record.Run.Execution
+	if graph.Active || len(graph.Steps) != 1 || graph.Steps[0].Status != coordinator.StepStatusRunning ||
+		graph.Steps[0].Progress == nil || graph.Steps[0].Progress.Completed != 5 {
+
+		t.Fatalf("saved graph = %#v", graph)
+	}
+	unblock()
+	waitForTestSignal(t, done)
+	record, err = store.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.Run.Complete || record.Run.Execution.Steps[0].Status != coordinator.StepStatusSucceeded {
+		t.Fatalf("final saved graph = %#v", record.Run)
 	}
 }
 

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,11 +99,11 @@ func TestDashboardQueriesReleaseRecords(t *testing.T) {
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
 	if response.StatusCode != http.StatusOK || dashboard.TrackingError != "" ||
-		len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 0 || len(dashboard.Recent) != 2 {
+		len(dashboard.Ongoing) != 0 || len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 2 {
 
 		t.Fatalf("dashboard = %#v", dashboard)
 	}
-	if dashboard.Ongoing[0].RecordID != 2 || dashboard.Ongoing[0].Status != string(runstore.StatusRunning) ||
+	if dashboard.NeedsAttention[0].RecordID != 2 || dashboard.NeedsAttention[0].Status != "saved" ||
 		dashboard.Recent[0].RecordID != 3 || dashboard.Recent[0].Status != string(runstore.StatusCanceled) ||
 		dashboard.Recent[1].RecordID != 1 || dashboard.Recent[1].Status != string(runstore.StatusSucceeded) {
 
@@ -127,10 +128,10 @@ func TestDashboardRetainsReleasesWhenQueryReturnsPartialResults(t *testing.T) {
 	defer response.Body.Close()
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
-	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 1 || len(dashboard.Recent) != 1 {
+	if response.StatusCode != http.StatusOK || len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 1 {
 		t.Fatalf("status = %d, dashboard = %#v", response.StatusCode, dashboard)
 	}
-	if dashboard.Ongoing[0].RecordID != 42 || dashboard.Recent[0].RecordID != 43 ||
+	if dashboard.NeedsAttention[0].RecordID != 42 || dashboard.Recent[0].RecordID != 43 ||
 		!strings.Contains(dashboard.TrackingError, "release record 41") {
 
 		t.Fatalf("partial dashboard = %#v", dashboard)
@@ -172,12 +173,18 @@ func TestDashboardGroupsReadOnlyRecordsByWorkItemState(t *testing.T) {
 	defer response.Body.Close()
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
-	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 1 ||
-		len(dashboard.NeedsAttention) != 2 || len(dashboard.Recent) != 1 {
+	if response.StatusCode != http.StatusOK || len(dashboard.Ongoing) != 0 ||
+		len(dashboard.NeedsAttention) != 3 || len(dashboard.Recent) != 1 {
 
 		t.Fatalf("status = %d, dashboard = %#v", response.StatusCode, dashboard)
 	}
 	for _, release := range append(dashboard.NeedsAttention, dashboard.Recent...) {
+		if release.RecordID == 42 {
+			if release.Issue != nil || release.Href == "" || release.Status != "saved" {
+				t.Errorf("saved graph card = %#v", release)
+			}
+			continue
+		}
 		if release.Issue == nil || release.RecordURL == "" || release.Href != "" ||
 			release.Issue.Message == "" || release.Issue.Guidance == "" || release.Issue.Detail == "" {
 
@@ -244,35 +251,42 @@ func TestDashboardWithoutDescriptiveMetadataDoesNotUseTheIDAsItsName(t *testing.
 	}
 }
 
-func TestDashboardInspectsStaleHistoryWithoutExecutionOrWrites(t *testing.T) {
+func TestDashboardObservesSavedGraphsWithoutExecutionOrWrites(t *testing.T) {
 	for _, test := range []struct {
-		name          string
-		status        string
-		closed        bool
-		inspectionErr error
-		wantStatus    string
+		name       string
+		closed     bool
+		status     string
+		observeErr error
 	}{
-		{name: "closed canceled", status: "canceled", closed: true, wantStatus: "canceled"},
-		{name: "closed still running", status: "running", closed: true, wantStatus: "running"},
-		{name: "open running", status: "running", wantStatus: "running"},
-		{name: "unavailable", closed: true, inspectionErr: errors.New("Azure status lookup unavailable"), wantStatus: "uncertain"},
+		{name: "closed canceled run", closed: true, status: "canceled"},
+		{name: "open canceled run", status: "canceled"},
+		{name: "open running run", status: "running"},
+		{name: "external success leaves saved release unfinished", status: "succeeded"},
+		{name: "lookup unavailable", observeErr: errors.New("fake Azure lookup unavailable")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const runURL = "https://example.invalid/runs/888"
-			var inspections, builds atomic.Int32
+			var builds, executions, observations atomic.Int32
 			process := &fakeProcess{
 				definition: testProcessDefinition("example"),
 				view:       &contract.RunView{Test: true, RunURL: runURL},
-				inspect: func(ctx context.Context, _ *contract.StateSnapshot) (*contract.RunInspection, error) {
-					inspections.Add(1)
-					if _, ok := ctx.Deadline(); !ok {
-						t.Error("read-only inspection has no deadline")
-					}
-					return &contract.RunInspection{RunURL: runURL, Status: test.status}, test.inspectionErr
-				},
 				build: func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error) {
 					builds.Add(1)
-					return nil, errors.New("dashboard must never build executable steps")
+					steps := exampleProcessSteps(func(context.Context) error {
+						executions.Add(1)
+						return nil
+					})
+					steps[0].Observe = func(ctx context.Context) (*coordinator.Observation, error) {
+						observations.Add(1)
+						if _, ok := ctx.Deadline(); !ok {
+							t.Error("observation has no deadline")
+						}
+						return &coordinator.Observation{
+							Status:   coordinator.StepStatus(test.status),
+							Progress: coordinator.StepProgress{RunURL: runURL},
+						}, test.observeErr
+					}
+					return steps, nil
 				},
 			}
 			running := testProcessRun(t)
@@ -293,29 +307,42 @@ func TestDashboardInspectsStaleHistoryWithoutExecutionOrWrites(t *testing.T) {
 					t.Fatalf("closed dashboard = %#v", dashboard)
 				}
 				release = dashboard.Recent[0]
-				if release.Issue == nil || release.Href != "" || !release.Closed {
-					t.Fatalf("closed read-only card = %#v", release)
-				}
-			} else {
+			} else if test.status == "running" {
 				if len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 0 {
-					t.Fatalf("open dashboard = %#v", dashboard)
+					t.Fatalf("running dashboard = %#v", dashboard)
 				}
 				release = dashboard.Ongoing[0]
-				if release.Issue != nil || release.Href == "" {
-					t.Fatalf("open running card lost its existing selection action: %#v", release)
+			} else {
+				if len(dashboard.Ongoing) != 0 || len(dashboard.NeedsAttention) != 1 {
+					t.Fatalf("open dashboard = %#v", dashboard)
 				}
+				release = dashboard.NeedsAttention[0]
 			}
-			if release.Status != test.wantStatus || release.SavedStatus != "running" || release.RunURL != runURL {
+			wantStatus := test.status
+			if test.observeErr != nil {
+				wantStatus = "saved"
+				if !strings.Contains(dashboard.TrackingError, test.observeErr.Error()) {
+					t.Fatalf("observation failure was hidden: %#v", dashboard)
+				}
+			} else if dashboard.TrackingError != "" {
+				t.Fatalf("observation error = %q", dashboard.TrackingError)
+			}
+			if test.status == "succeeded" {
+				wantStatus = "saved"
+			}
+			if release.Issue != nil || release.Href == "" || release.Closed != test.closed ||
+				release.Status != wantStatus || release.ExternalStatus != test.status ||
+				release.SavedStatus != "running" || release.RunURL != runURL {
+
 				t.Fatalf("status and link = %#v", release)
 			}
-			if test.inspectionErr == nil && release.ExternalStatus != test.status {
-				t.Fatalf("verified status = %#v", release)
+			if builds.Load() != 1 || observations.Load() != 1 {
+				t.Fatalf("dashboard built %d graphs and made %d lookups", builds.Load(), observations.Load())
 			}
-			if test.inspectionErr != nil && (release.ExternalStatus != "" || !strings.Contains(release.Issue.Detail, test.inspectionErr.Error())) {
-				t.Fatalf("inspection failure was hidden: %#v", release)
-			}
-			if inspections.Load() != 1 || builds.Load() != 0 {
-				t.Fatalf("inspections = %d, executable graphs = %d", inspections.Load(), builds.Load())
+			selected := postJSON(t, ui, "/api/releases/42/select", `{}`)
+			defer selected.Body.Close()
+			if selected.StatusCode != http.StatusOK || executions.Load() != 0 {
+				t.Fatalf("viewing ran steps: status=%d, executions=%d", selected.StatusCode, executions.Load())
 			}
 			stored, err := store.Get(context.Background(), 42)
 			if err != nil {
@@ -324,14 +351,137 @@ func TestDashboardInspectsStaleHistoryWithoutExecutionOrWrites(t *testing.T) {
 			if stored.Revision != 1 || stored.Run.Complete || stored.Run.Result != "" || stored.Closed != test.closed {
 				t.Fatalf("read-only lookup changed the record: %#v", stored)
 			}
-			if test.closed {
-				selected := postJSON(t, ui, "/api/releases/42/select", `{}`)
-				defer selected.Body.Close()
-				if selected.StatusCode != http.StatusConflict || builds.Load() != 0 {
-					t.Fatalf("closed unfinished record resumed: status=%d, builds=%d", selected.StatusCode, builds.Load())
-				}
+		})
+	}
+}
+
+func TestSavedRunEventSubscriberFollowsResumeFromAnotherViewer(t *testing.T) {
+	process := exampleProcess()
+	var executions atomic.Int32
+	refresh := make(chan struct{})
+	var refreshOnce sync.Once
+	refreshStatus := func() { refreshOnce.Do(func() { close(refresh) }) }
+	defer refreshStatus()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	process.build = func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error) {
+		steps := exampleProcessSteps(func(ctx context.Context) error {
+			executions.Add(1)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		})
+		steps[0].Observe = func(ctx context.Context) (*coordinator.Observation, error) {
+			select {
+			case <-refresh:
+				return &coordinator.Observation{
+					Status: coordinator.StepStatusRunning,
+					Progress: coordinator.StepProgress{
+						Summary: "External operation running", Completed: 6, Total: 30,
+						RunURL: "https://example.invalid/runs/888",
+					},
+				}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return steps, nil
+	}
+	state := testProcessRun(t)
+	state.Started, state.Checkpointed = true, true
+	state.Execution.Steps[0].Status = coordinator.StepStatusRunning
+	state.Execution.Steps[0].Progress = &coordinator.StepProgress{Completed: 5, Total: 30}
+	store := newMemoryProcessRunStore()
+	seedReleaseRecord(store, testReleaseRunRecord(42, state, false, time.Now().UTC()))
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+	selected := postJSON(t, ui, "/api/releases/42/select", `{}`)
+	closeResponse(t, selected)
+	if selected.StatusCode != http.StatusOK {
+		t.Fatalf("select status = %d", selected.StatusCode)
+	}
+	before, _, _ := ui.server.runs.Active("example")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+"/api/processes/example/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := ui.client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Body.Close()
+	scanner := bufio.NewScanner(events.Body)
+	next := func() coordinator.Snapshot {
+		for scanner.Scan() {
+			data, ok := strings.CutPrefix(scanner.Text(), "data: ")
+			if !ok {
+				continue
+			}
+			var snapshot coordinator.Snapshot
+			if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			return snapshot
+		}
+		t.Fatalf("event stream ended: %v", scanner.Err())
+		return coordinator.Snapshot{}
+	}
+	initial := next()
+	if initial.Active || initial.Steps[0].Progress == nil || initial.Steps[0].Progress.Completed != 5 {
+		t.Fatalf("saved event = %#v", initial)
+	}
+	refreshStatus()
+	observed := next()
+	if observed.Active || observed.Steps[0].Status != coordinator.StepStatusRunning ||
+		observed.Steps[0].Progress.Completed != 6 || observed.Steps[0].ObservedAt.IsZero() ||
+		observed.Steps[0].Progress.RunURL != "https://example.invalid/runs/888" || executions.Load() != 0 {
+
+		t.Fatalf("read-only event executed work or lost observation data: %#v", observed)
+	}
+	stored, err := store.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Revision != 1 || stored.Run.Execution.Steps[0].Progress.Completed != 5 {
+		t.Fatalf("read-only event changed the stored checkpoint: %#v", stored)
+	}
+	current, ok := ui.server.runs.Current("example")
+	if !ok {
+		t.Fatal("another viewer could not read the saved plan")
+	}
+	body, err := json.Marshal(webview.ReleaseStartRequest{
+		PlanDigest: current.Execution.PlanDigest, Revision: current.Execution.Record.Revision, Confirmed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := postJSON(t, ui, "/api/processes/example/resume", string(body))
+	closeResponse(t, resumed)
+	if resumed.StatusCode != http.StatusAccepted {
+		t.Fatalf("resume status = %d", resumed.StatusCode)
+	}
+	after, _, _ := ui.server.runs.Active("example")
+	if before != after {
+		t.Fatal("resuming replaced the subscribed runner")
+	}
+	for snapshot := next(); !snapshot.Active; snapshot = next() {
+	}
+	unblock()
+	for snapshot := next(); ; snapshot = next() {
+		if !snapshot.Active {
+			if snapshot.Error != "" || snapshot.Steps[0].Status != coordinator.StepStatusSucceeded ||
+				!snapshot.Steps[0].ObservedAt.IsZero() || snapshot.Steps[0].ObservationError != "" {
+
+				t.Fatalf("final event = %#v", snapshot)
+			}
+			break
+		}
 	}
 }
 
@@ -416,13 +566,14 @@ func TestRestoringReleaseDoesNotReplaceConcurrentPreparation(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
+	var builds atomic.Int32
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	process.build = func(
 		ctx context.Context,
 		run *fakeReleaseRun,
 		checkpoint contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
-		if checkpoint != nil {
+		if builds.Add(1) == 1 {
 			close(entered)
 			<-release
 		}

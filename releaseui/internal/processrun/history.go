@@ -14,15 +14,16 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/internal/processregistry"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
 const (
-	dashboardActiveLimit       = 50
-	dashboardRecentLimit       = 10
-	dashboardInspectionTimeout = 5 * time.Second
+	dashboardActiveLimit        = 50
+	dashboardRecentLimit        = 10
+	dashboardObservationTimeout = 5 * time.Second
 )
 
 // History provides access to durable release records managed by a Manager.
@@ -44,7 +45,7 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 	records := append(active, recent...)
 	summaries := make([]webview.ReleaseSummary, len(records))
 	summaryErrors := make([]error, len(records))
-	inspectionContext, cancel := context.WithTimeout(ctx, dashboardInspectionTimeout)
+	observationContext, cancel := context.WithTimeout(ctx, dashboardObservationTimeout)
 	defer cancel()
 	var workers sync.WaitGroup
 	limit := make(chan struct{}, 4)
@@ -52,13 +53,13 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 		limit <- struct{}{}
 		workers.Go(func() {
 			defer func() { <-limit }()
-			summaries[index], summaryErrors[index] = h.releaseSummary(inspectionContext, record)
+			summaries[index], summaryErrors[index] = h.releaseSummary(observationContext, record)
 		})
 	}
 	workers.Wait()
 	for index, record := range records {
 		summary, err := summaries[index], summaryErrors[index]
-		if err != nil {
+		if err != nil && summary.RecordID == 0 {
 			if record != nil && record.ID > 0 {
 				problem := &runstore.RecordError{
 					ID: record.ID, URL: record.URL, Err: err,
@@ -82,6 +83,9 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 			addTrackingError(&result, err)
 			continue
 		}
+		if err != nil {
+			addTrackingError(&result, err)
+		}
 		if record.Closed {
 			result.Recent = append(result.Recent, summary)
 		} else {
@@ -91,7 +95,7 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 	return result
 }
 
-// Select restores a durable release record into its process session.
+// Select opens a durable release record for viewing without resuming execution.
 func (h *History) Select(ctx context.Context, id int) (string, error) {
 	record, err := h.manager.store.Get(ctx, id)
 	if err != nil {
@@ -117,7 +121,7 @@ func (h *History) Select(ctx context.Context, id int) (string, error) {
 	if selected {
 		return href, nil
 	}
-	href, err = h.restore(record)
+	href, err = h.restore(ctx, record)
 	if err != nil {
 		return "", errorf(ErrorConflict, "restore release record: %v", err)
 	}
@@ -190,7 +194,7 @@ func (h *History) Import(
 				errors.New("restart without selecting this release before importing repaired state"),
 			)
 	}
-	run, err := h.validateImport(current.Run, imported.Run)
+	run, err := h.validateImport(ctx, current.Run, imported.Run)
 	if err != nil {
 		return webview.ReleaseRecordExport[*runstore.State]{}, newError(ErrorInvalid, err)
 	}
@@ -206,17 +210,17 @@ func (h *History) Import(
 	return exportRecord(updated), nil
 }
 
-func (h *History) restore(record *runstore.Record) (string, error) {
-	if err := validateRecordForExecution(record); err != nil {
+func (h *History) restore(ctx context.Context, record *runstore.Record) (string, error) {
+	if err := runstore.ValidateRecord(record); err != nil {
 		return "", err
 	}
-	if err := h.manager.restoreProcessRunRecord(record); err != nil {
+	if err := h.manager.restoreProcessRunRecord(ctx, record); err != nil {
 		return "", err
 	}
 	return processregistry.Path(record.Run.ProcessID), nil
 }
 
-func (h *History) validateImport(current, candidate *runstore.State) (contract.Run, error) {
+func (h *History) validateImport(ctx context.Context, current, candidate *runstore.State) (contract.Run, error) {
 	if err := current.Validate(); err != nil {
 		return nil, err
 	}
@@ -241,6 +245,9 @@ func (h *History) validateImport(current, candidate *runstore.State) (contract.R
 	if !reflect.DeepEqual(currentRun.Plan(), run.Plan()) {
 		return nil, errors.New("import cannot change the reviewed plan")
 	}
+	if _, _, err := buildReadOnlyGraph(ctx, run, candidate); err != nil {
+		return nil, err
+	}
 	return run, nil
 }
 
@@ -257,6 +264,10 @@ func (h *History) releaseSummary(ctx context.Context, record *runstore.Record) (
 	if err != nil {
 		return webview.ReleaseSummary{}, fmt.Errorf("validate release record %d: %w", record.ID, err)
 	}
+	_, runner, err := buildReadOnlyGraph(ctx, run, record.Run)
+	if err != nil {
+		return webview.ReleaseSummary{}, fmt.Errorf("restore release record %d: %w", record.ID, err)
+	}
 	status, err := record.Run.Status()
 	if err != nil {
 		return webview.ReleaseSummary{}, err
@@ -270,39 +281,16 @@ func (h *History) releaseSummary(ctx context.Context, record *runstore.Record) (
 	summary.RecordURL = record.URL
 	summary.Closed = record.Closed
 	session, _ := h.manager.processSession(record.Run.ProcessID)
-	if record.Run.Started && !record.Run.Complete && !session.isRunningRecord(record.ID) &&
-		(record.Closed || summary.RunURL != "") {
-
-		summary.Name = registered.DisplayName()
-		summary.Href = ""
-		summary.Status = resultUncertain
-		summary.Issue = &webview.ReleaseIssue{
-			Message:  "This UI is not monitoring the saved run.",
-			Guidance: "The saved status is not a live status. No run was started or resumed by loading this page.",
+	if record.Run.Started && !record.Run.Complete && !session.isRunningRecord(record.ID) {
+		summary.Status = "saved"
+		if err := runner.Observe(ctx); err != nil {
+			return summary, fmt.Errorf("could not refresh external status for %s, tracking item %d; showing saved progress: %w",
+				registered.DisplayName(), record.ID, err)
 		}
-		if view != nil && view.RunURL != "" {
-			if inspector, ok := run.(contract.RunInspector); ok {
-				inspection, inspectErr := inspector.Inspect(ctx)
-				if inspectErr == nil {
-					inspectErr = validateInspection(inspection, view.RunURL)
-				}
-				if inspectErr != nil {
-					summary.Issue.Message = "The external run's current status could not be verified."
-					summary.Issue.Guidance = "Open the release run to check it, or reload to retry. The saved record was not changed."
-					summary.Issue.Detail = inspectErr.Error()
-				} else {
-					summary.Status = inspection.Status
-					summary.ExternalStatus = inspection.Status
-					summary.RunURL = inspection.RunURL
-					summary.Issue.Message = "External run status was checked without resuming the release."
-					summary.Issue.Guidance = "The saved record was not changed. Open the release run for its full details."
-					if inspection.Status != "waiting" && inspection.Status != "running" {
-						summary.Issue.Message = "The external run has finished; the saved release checkpoint has not been updated."
-					} else if !record.Closed {
-						summary.Issue = nil
-						summary.Href = processregistry.Path(record.Run.ProcessID)
-					}
-				}
+		if externalStatus := observedStatus(runner.Snapshot()); externalStatus != "" {
+			summary.ExternalStatus = externalStatus
+			if externalStatus != resultSucceeded {
+				summary.Status = externalStatus
 			}
 		}
 	}
@@ -352,16 +340,22 @@ func (h *History) processSummaries() []webview.ProcessSummary {
 	return summaries
 }
 
-func validateInspection(inspection *contract.RunInspection, runURL string) error {
-	if inspection == nil || inspection.RunURL != runURL {
-		return errors.New("external status lookup did not match the saved run link")
+func observedStatus(snapshot coordinator.Snapshot) string {
+	statuses := make(map[coordinator.StepStatus]bool)
+	for _, step := range snapshot.Steps {
+		if !step.ObservedAt.IsZero() {
+			statuses[step.Status] = true
+		}
 	}
-	switch inspection.Status {
-	case "waiting", "running", "succeeded", "failed", "canceled":
-		return nil
-	default:
-		return fmt.Errorf("external status lookup returned unsupported status %q", inspection.Status)
+	for _, status := range []coordinator.StepStatus{
+		coordinator.StepStatusFailed, coordinator.StepStatusCanceled, coordinator.StepStatusRunning,
+		coordinator.StepStatusWaiting, coordinator.StepStatusSucceeded,
+	} {
+		if statuses[status] {
+			return string(status)
+		}
 	}
+	return ""
 }
 
 func addTrackingError(result *webview.DashboardResponse, err error) {
@@ -437,7 +431,7 @@ func addDashboardRelease(result *webview.DashboardResponse, summary webview.Rele
 	switch summary.Status {
 	case resultSucceeded:
 		result.Recent = append(result.Recent, summary)
-	case resultFailed, resultCanceled, resultUncertain:
+	case resultFailed, resultCanceled, resultUncertain, "saved":
 		result.NeedsAttention = append(result.NeedsAttention, summary)
 	default:
 		result.Ongoing = append(result.Ongoing, summary)

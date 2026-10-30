@@ -44,7 +44,7 @@ func TestLoadResumesKnownWorkflowRunWithoutDispatchingAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := github.stats()
-	if len(stats.dispatches) != 0 || stats.pollCalls != 1 {
+	if len(stats.dispatches) != 0 || stats.runReads != 1 {
 		t.Fatalf("stats = %#v", stats)
 	}
 }

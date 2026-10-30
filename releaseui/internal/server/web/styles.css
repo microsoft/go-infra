@@ -234,6 +234,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan-deep); box-
 .step-card[data-status="failed"] .status-badge, .step-card[data-status="canceled"] .status-badge { background: rgb(255 123 135 / 12%); color: var(--red); }
 .step-card[data-status="blocked"] .status-badge { background: rgb(241 199 91 / 12%); color: var(--yellow); }
 .step-error { margin: 8px 0 0; color: var(--red); font-size: 12px; line-height: 1.45; }
+.step-run-link { color: var(--cyan); font-size: 12px; }
+.step-observation-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .step-live-progress { margin: 12px -4px -2px; padding: 11px; border: 1px solid rgb(57 213 255 / 20%); border-radius: 9px; background: rgb(4 15 27 / 58%); }
 .step-progress-summary { display: block; color: var(--cyan); font-size: 12px; line-height: 1.4; }
 .step-progress-detail { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

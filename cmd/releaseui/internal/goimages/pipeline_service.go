@@ -15,7 +15,6 @@ import (
 	"time"
 
 	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
-	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
@@ -59,7 +58,6 @@ type PipelineRunConfig struct {
 	SourceVersion        string
 	VerifyMirrorCommit   func(context.Context, string) error
 	MirrorPollInterval   time.Duration
-	PollInterval         time.Duration
 	PreviousQueueAttempt bool
 	ReconcileAttempts    int
 	ReconcileInterval    time.Duration
@@ -99,9 +97,6 @@ func NewPipelineRunService(reader PipelineReader, queue QueueClient, config Pipe
 	versionSet, err := CanonicalVersionSet(config.Versions)
 	if err != nil {
 		return nil, err
-	}
-	if config.PollInterval <= 0 {
-		config.PollInterval = 5 * time.Second
 	}
 	if config.MirrorPollInterval <= 0 {
 		config.MirrorPollInterval = 5 * time.Second
@@ -239,15 +234,15 @@ func templateParameterString(value any) (string, bool) {
 	return valueString, ok
 }
 
-// InspectPipeline validates and reads a known run without polling or changing execution state.
-func (s *PipelineRunService) InspectPipeline(ctx context.Context, buildID string) (*contract.RunInspection, error) {
+// GetPipelineStatus reads and validates the known run once, for both execution and observation.
+func (s *PipelineRunService) GetPipelineStatus(ctx context.Context, buildID string) (*coordinator.Observation, error) {
 	id, err := strconv.Atoi(buildID)
 	if err != nil || id <= 0 {
 		return nil, fmt.Errorf("invalid go-images release build ID %q", buildID)
 	}
 	build, err := s.reader.Get(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("inspect go-images release build %d: %w", id, err)
+		return nil, fmt.Errorf("get go-images release build %d: %w", id, err)
 	}
 	if build == nil || build.ID != id {
 		return nil, fmt.Errorf("azure returned a different go-images build for %d", id)
@@ -259,67 +254,37 @@ func (s *PipelineRunService) InspectPipeline(ctx context.Context, buildID string
 	if err != nil {
 		return nil, fmt.Errorf("interpret go-images release build %d: %w", id, err)
 	}
-	return &contract.RunInspection{RunURL: pipelineRunURL(buildID), Status: string(status)}, nil
-}
-
-// PollPipeline waits for the correlated release run using read-only GET requests.
-func (s *PipelineRunService) PollPipeline(ctx context.Context, buildID string) error {
-	id, err := strconv.Atoi(buildID)
-	if err != nil || id <= 0 {
-		return fmt.Errorf("invalid go-images release build ID %q", buildID)
+	observation := &coordinator.Observation{
+		Status: coordinator.StepStatus(status),
+		Progress: coordinator.StepProgress{
+			Summary: "Azure pipeline " + string(status),
+			Detail:  fmt.Sprintf("Build %d is %s", id, status),
+			RunURL:  pipelineRunURL(buildID),
+		},
 	}
-	for {
-		build, err := s.reader.Get(ctx, id)
-		if err != nil {
-			return fmt.Errorf("get go-images release build %d: %w", id, err)
-		}
-		if build.DefinitionID != DefinitionID {
-			return fmt.Errorf("build %d belongs to pipeline %d, expected %d", id, build.DefinitionID, DefinitionID)
-		}
-		state, err := build.State()
-		if err != nil {
-			return fmt.Errorf("interpret go-images release build %d: %w", id, err)
-		}
-		switch state {
-		case azdopipeline.RunStateSucceeded:
-			coordinator.ReportProgress(ctx, coordinator.StepProgress{
-				Summary:   "Azure pipeline completed successfully",
-				Detail:    fmt.Sprintf("Build %d completed", id),
-				Completed: 1,
-				Total:     1,
-			})
-			return nil
-		case azdopipeline.RunStateFailed, azdopipeline.RunStateCanceled:
-			detail := fmt.Sprintf("Build %d finished with result %s", id, build.Result)
-			failure := fmt.Sprintf("go-images release build %d %s", id, state)
-			if state == azdopipeline.RunStateFailed {
-				if summary := s.failureSummary(ctx, id); summary != "" {
-					detail = summary
-					failure += ": " + summary
-				} else {
-					failure += fmt.Sprintf(" with result %q", build.Result)
-				}
+	if status == azdopipeline.RunStateSucceeded {
+		observation.Progress.Completed, observation.Progress.Total = 1, 1
+	}
+	if status == azdopipeline.RunStateFailed || status == azdopipeline.RunStateCanceled {
+		observation.Error = fmt.Sprintf("go-images release build %d %s with result %q", id, status, build.Result)
+		if status == azdopipeline.RunStateFailed {
+			if summary := s.failureSummary(ctx, id); summary != "" {
+				observation.Error += ": " + summary
+				observation.Progress.Detail = summary
 			}
-			coordinator.ReportProgress(ctx, coordinator.StepProgress{
-				Summary: fmt.Sprintf("Azure pipeline %s", state),
-				Detail:  detail,
-			})
-			if build.WebURL != "" {
-				failure += ". Inspect the Azure run: " + build.WebURL
-			}
-			return &PipelineResultError{Result: string(state), Err: errors.New(failure)}
-		case azdopipeline.RunStateWaiting, azdopipeline.RunStateRunning:
-			s.reportPipelineProgress(ctx, id, state)
-			if err := s.sleep(ctx, s.config.PollInterval); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("go-images release build %d has unsupported state %q", id, state)
 		}
 	}
+	return observation, nil
 }
 
 func (s *PipelineRunService) failureSummary(ctx context.Context, buildID int) string {
+	// Reserve time to publish the confirmed result even when optional diagnostics are slow.
+	timeout := time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		timeout = min(timeout, time.Until(deadline)/2)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	failures, err := s.reader.GetFailures(ctx, buildID)
 	if err != nil || len(failures) == 0 {
 		return ""
@@ -347,18 +312,6 @@ func truncateFailureMessage(message string) string {
 		return message
 	}
 	return string(runes[:maxRunes]) + "..."
-}
-
-func (s *PipelineRunService) reportPipelineProgress(ctx context.Context, buildID int, state azdopipeline.RunState) {
-	progress := coordinator.StepProgress{
-		Summary: "Azure pipeline is queued",
-		Detail:  fmt.Sprintf("Waiting for build %d to start", buildID),
-	}
-	if state == azdopipeline.RunStateRunning {
-		progress.Summary = "Azure pipeline is running"
-		progress.Detail = fmt.Sprintf("Build %d is in progress", buildID)
-	}
-	coordinator.ReportProgress(ctx, progress)
 }
 
 func sleepContext(ctx context.Context, duration time.Duration) error {

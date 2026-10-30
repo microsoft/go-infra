@@ -6,27 +6,38 @@ package goimages
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
+	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 const serviceTestCommit = "81ce9afc2b75ec4e153dd15fc3c7539b12024945"
 
 type fakeReader struct {
-	builds      []*azdopipeline.Build
-	recent      [][]*azdopipeline.Build
-	failures    []azdopipeline.BuildFailure
-	failureErr  error
-	gets        int
-	lists       int
-	failureGets int
+	builds       []*azdopipeline.Build
+	recent       [][]*azdopipeline.Build
+	failures     []azdopipeline.BuildFailure
+	failureErr   error
+	failureBlock bool
+	getDelay     time.Duration
+	gets         int
+	lists        int
+	failureGets  int
 }
 
-func (r *fakeReader) Get(context.Context, int) (*azdopipeline.Build, error) {
+func (r *fakeReader) Get(ctx context.Context, _ int) (*azdopipeline.Build, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r.getDelay > 0 {
+		if err := sleepContext(ctx, r.getDelay); err != nil {
+			return nil, err
+		}
+	}
 	index := r.gets
 	r.gets++
 	if index >= len(r.builds) {
@@ -47,8 +58,12 @@ func (r *fakeReader) ListRecent(context.Context, int) ([]*azdopipeline.Build, er
 	return r.recent[index], nil
 }
 
-func (r *fakeReader) GetFailures(context.Context, int) ([]azdopipeline.BuildFailure, error) {
+func (r *fakeReader) GetFailures(ctx context.Context, _ int) ([]azdopipeline.BuildFailure, error) {
 	r.failureGets++
+	if r.failureBlock {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return r.failures, r.failureErr
 }
 
@@ -63,7 +78,7 @@ func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) 
 	return 888, nil
 }
 
-func TestInspectPipelineReadsOnlyItsValidatedTestRun(t *testing.T) {
+func TestPipelineStatusValidatesIdentityAndTarget(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		change func(*azdopipeline.Build)
@@ -71,43 +86,31 @@ func TestInspectPipelineReadsOnlyItsValidatedTestRun(t *testing.T) {
 		{name: "canceled test run"},
 		{name: "different build", change: func(build *azdopipeline.Build) { build.ID = 889 }},
 		{name: "different definition", change: func(build *azdopipeline.Build) { build.DefinitionID = 1 }},
+		{name: "different branch", change: func(build *azdopipeline.Build) { build.SourceBranch = "refs/heads/other" }},
+		{name: "different source", change: func(build *azdopipeline.Build) { build.SourceVersion = strings.Repeat("a", 40) }},
 		{name: "different intent", change: func(build *azdopipeline.Build) { build.Parameters[executionDigestVariable] = "wrong-intent" }},
+		{name: "different session", change: func(build *azdopipeline.Build) { build.Parameters[correlationVariable] = "other" }},
+		{name: "different versions", change: func(build *azdopipeline.Build) { build.Parameters[versionsVariable] = `["1.25.1-1"]` }},
 		{name: "different mode", change: func(build *azdopipeline.Build) { build.Parameters[modeVariable] = "normal" }},
 		{name: "publication target", change: func(build *azdopipeline.Build) { build.TemplateParameters["publishRepoPrefix"] = "public/" }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			parameters, err := PipelineParameters(ModeTest, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			template := make(map[string]any, len(parameters))
-			for name, value := range parameters {
-				template[name] = value
-			}
-			build := &azdopipeline.Build{
-				ID: 888, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
-				Status: "completed", Result: "canceled",
-				Parameters: map[string]string{
-					correlationVariable: "session", executionDigestVariable: testDigest,
-					modeVariable: "test", versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
-				},
-				TemplateParameters: template,
-			}
+			build := testPipelineBuild(t, ModeTest, "completed", "canceled")
 			if test.change != nil {
 				test.change(build)
 			}
 			reader, queue := &fakeReader{builds: []*azdopipeline.Build{build}}, &fakeQueueClient{}
 			service := newTestService(t, reader, queue, PipelineRunConfig{Mode: ModeTest})
-			inspection, err := service.InspectPipeline(context.Background(), "888")
+			observation, err := service.GetPipelineStatus(context.Background(), "888")
 			if test.change == nil {
-				if err != nil || inspection.Status != "canceled" || inspection.RunURL != pipelineRunURL("888") {
-					t.Fatalf("inspection = %#v, error = %v", inspection, err)
+				if err != nil || observation.Status != coordinator.StepStatusCanceled || observation.Progress.RunURL != pipelineRunURL("888") {
+					t.Fatalf("observation = %#v, error = %v", observation, err)
 				}
 			} else if err == nil {
-				t.Fatalf("unrelated build was accepted: %#v", inspection)
+				t.Fatalf("unrelated build was accepted: %#v", observation)
 			}
 			if queue.calls != 0 || reader.gets != 1 || reader.lists != 0 || reader.failureGets != 0 {
-				t.Fatalf("inspection caused extra actions: queue=%d, get=%d, list=%d, failures=%d",
+				t.Fatalf("observation caused extra actions: queue=%d, get=%d, list=%d, failures=%d",
 					queue.calls, reader.gets, reader.lists, reader.failureGets)
 			}
 		})
@@ -282,10 +285,10 @@ func TestReconciliationRejectsConflictingCorrelation(t *testing.T) {
 	}
 }
 
-func TestPollPipeline(t *testing.T) {
+func TestPipelineStatusReadsOnceWithoutPolling(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{
-		{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"},
-		{ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "succeeded"},
+		testPipelineBuild(t, ModeNormal, "inProgress", ""),
+		testPipelineBuild(t, ModeNormal, "completed", "succeeded"),
 	}}
 	sleeps := 0
 	service, err := NewPipelineRunService(reader, &fakeQueueClient{}, completeConfig(PipelineRunConfig{
@@ -297,55 +300,127 @@ func TestPollPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollPipeline(context.Background(), "888"); err != nil {
-		t.Fatal(err)
-	}
-	if reader.gets != 2 || reader.failureGets != 0 || sleeps != 1 {
-		t.Fatalf("gets = %d, failure gets = %d, sleeps = %d", reader.gets, reader.failureGets, sleeps)
+	for index, status := range []coordinator.StepStatus{coordinator.StepStatusRunning, coordinator.StepStatusSucceeded} {
+		observation, err := service.GetPipelineStatus(context.Background(), "888")
+		if err != nil || observation.Status != status || reader.gets != index+1 || reader.failureGets != 0 || sleeps != 0 {
+			t.Fatalf("observation=%#v, err=%v, gets=%d, failure gets=%d, sleeps=%d",
+				observation, err, reader.gets, reader.failureGets, sleeps)
+		}
 	}
 }
 
-func TestPollPipelineReportsFailure(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
-	}}, failures: []azdopipeline.BuildFailure{{
-		Path: "Build > Linux arm32 > Build Images", Message: "PowerShell exited with code 1",
-	}}}
+func TestPipelineStatusReportsFailure(t *testing.T) {
+	reader := &fakeReader{
+		builds: []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
+		failures: []azdopipeline.BuildFailure{{
+			Path: "Build > Linux arm32 > Build Images", Message: "PowerShell exited with code 1",
+		}},
+	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
-	err := service.PollPipeline(context.Background(), strconv.Itoa(888))
-	var resultError *PipelineResultError
-	if err == nil || !strings.Contains(err.Error(), "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
-		!strings.Contains(err.Error(), "https://example/build/888") || reader.failureGets != 1 ||
-		!errors.As(err, &resultError) || resultError.Result != "failed" {
+	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	if err != nil || observation.Status != coordinator.StepStatusFailed ||
+		!strings.Contains(observation.Error, "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
+		observation.Progress.RunURL != pipelineRunURL("888") || reader.failureGets != 1 {
 
-		t.Fatalf("error = %v", err)
+		t.Fatalf("observation=%#v, err=%v", observation, err)
 	}
 }
 
-func TestPollPipelineReportsCancellation(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "canceled", WebURL: "https://example/build/888",
-	}}}
+func TestPipelineStatusReportsCancellation(t *testing.T) {
+	reader := &fakeReader{builds: []*azdopipeline.Build{testPipelineBuild(t, ModeTest, "completed", "canceled")}}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeTest})
-	err := service.PollPipeline(context.Background(), "888")
-	var resultError *PipelineResultError
-	if err == nil || !errors.As(err, &resultError) || resultError.Result != "canceled" ||
-		!strings.Contains(err.Error(), "go-images release build 888 canceled") || reader.failureGets != 0 {
+	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	if err != nil || observation.Status != coordinator.StepStatusCanceled ||
+		!strings.Contains(observation.Error, "go-images release build 888 canceled") || reader.failureGets != 0 {
 
-		t.Fatalf("error = %v, result error = %#v", err, resultError)
+		t.Fatalf("observation=%#v, err=%v", observation, err)
 	}
 }
 
-func TestPollPipelineFailureDetailsAreOptional(t *testing.T) {
-	reader := &fakeReader{builds: []*azdopipeline.Build{{
-		ID: 888, DefinitionID: DefinitionID, Status: "completed", Result: "failed", WebURL: "https://example/build/888",
-	}}, failureErr: errors.New("timeline unavailable")}
+func TestPipelineStatusFailureDetailsAreOptional(t *testing.T) {
+	reader := &fakeReader{
+		builds:     []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
+		failureErr: errors.New("timeline unavailable"),
+	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
-	err := service.PollPipeline(context.Background(), "888")
-	if err == nil || !strings.Contains(err.Error(), `failed with result "failed"`) ||
-		!strings.Contains(err.Error(), "https://example/build/888") {
+	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	if err != nil || !strings.Contains(observation.Error, `failed with result "failed"`) ||
+		observation.Progress.RunURL != pipelineRunURL("888") {
 
-		t.Fatalf("error = %v", err)
+		t.Fatalf("observation=%#v, err=%v", observation, err)
+	}
+}
+
+func TestPipelineDiagnosticTimeoutKeepsConfirmedFailure(t *testing.T) {
+	for _, test := range []struct {
+		timeout  time.Duration
+		readTime time.Duration
+	}{
+		{timeout: 5 * time.Second},
+		{timeout: 200 * time.Millisecond},
+		{timeout: 5 * time.Second, readTime: 4900 * time.Millisecond},
+	} {
+		t.Run(test.timeout.String()+"/read-"+test.readTime.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				reader := &fakeReader{
+					builds:       []*azdopipeline.Build{testPipelineBuild(t, ModeNormal, "completed", "failed")},
+					failureBlock: true,
+					getDelay:     test.readTime,
+				}
+				queue := new(fakeQueueClient)
+				service := newTestService(t, reader, queue, PipelineRunConfig{Mode: ModeNormal})
+				input := &Input{Versions: []string{"1.26.5-2"}, Mode: ModeNormal, SourceVersion: serviceTestCommit}
+				state, err := NewState(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				state.VerifiedMirroredCommit, state.QueueAttempted, state.BuildID = serviceTestCommit, true, "888"
+				checkpoints := 0
+				steps, _, err := NewGraphWithCheckpoint(input, state, service, func(*State) { checkpoints++ })
+				if err != nil {
+					t.Fatal(err)
+				}
+				runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				saved := runner.ExecutionSnapshot()
+				last := len(saved.Steps) - 1
+				saved.Steps[last].Status = coordinator.StepStatusRunning
+				runner, err = coordinator.NewStepRunner(steps, saved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
+				defer cancel()
+				started := time.Now()
+				if err := runner.Observe(ctx); err != nil {
+					t.Fatalf("optional diagnostics invalidated the confirmed failure: %v", err)
+				}
+				snapshot := runner.Snapshot()
+				if snapshot.Steps[last].ObservationError != "" || snapshot.Steps[last].Status != coordinator.StepStatusFailed ||
+					snapshot.Steps[last].Progress.RunURL != pipelineRunURL("888") ||
+					!strings.Contains(snapshot.Steps[last].Error, `failed with result "failed"`) ||
+					ctx.Err() != nil || time.Since(started) != test.readTime+min(time.Second, (test.timeout-test.readTime)/2) {
+
+					t.Fatalf("confirmed failure was lost or diagnostics consumed the refresh budget: %#v", snapshot)
+				}
+				if state.Complete || checkpoints != 0 || queue.calls != 0 || reader.gets != 1 ||
+					reader.failureGets != 1 || runner.ExecutionSnapshot().Steps[last].Status != coordinator.StepStatusRunning {
+
+					t.Fatal("read-only refresh changed execution or made unexpected provider calls")
+				}
+				cancel()
+				err = runner.Execute(context.Background(), steps)
+				if err == nil || !strings.Contains(err.Error(), `failed with result "failed"`) ||
+					errors.Is(err, context.DeadlineExceeded) || !state.Complete || state.Result != "failed" ||
+					checkpoints != 1 || queue.calls != 0 || reader.gets != 2 || reader.failureGets != 2 {
+
+					t.Fatalf("execution did not preserve the same confirmed outcome: error=%v, state=%#v, checkpoints=%d",
+						err, state, checkpoints)
+				}
+			})
+		})
 	}
 }
 
@@ -358,7 +433,7 @@ func TestNewRejectsInvalidRollbackBuild(t *testing.T) {
 	}
 }
 
-func TestPollHonorsCancellation(t *testing.T) {
+func TestPipelineReadHonorsCancellation(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{{ID: 888, DefinitionID: DefinitionID, Status: "inProgress"}}}
 	service, err := NewPipelineRunService(reader, &fakeQueueClient{}, completeConfig(PipelineRunConfig{
 		Mode: ModeNormal,
@@ -368,7 +443,7 @@ func TestPollHonorsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := service.PollPipeline(ctx, "888"); !errors.Is(err, context.Canceled) {
+	if _, err := service.GetPipelineStatus(ctx, "888"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -390,7 +465,27 @@ func completeConfig(config PipelineRunConfig) PipelineRunConfig {
 	if config.VerifyMirrorCommit == nil {
 		config.VerifyMirrorCommit = func(context.Context, string) error { return nil }
 	}
-	config.PollInterval = time.Millisecond
 	config.ReconcileInterval = time.Millisecond
 	return config
+}
+
+func testPipelineBuild(t *testing.T, mode Mode, status, result string) *azdopipeline.Build {
+	t.Helper()
+	parameters, err := PipelineParameters(mode, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := make(map[string]any, len(parameters))
+	for name, value := range parameters {
+		template[name] = value
+	}
+	return &azdopipeline.Build{
+		ID: 888, DefinitionID: DefinitionID, SourceBranch: SourceBranch, SourceVersion: serviceTestCommit,
+		Status: status, Result: result,
+		Parameters: map[string]string{
+			correlationVariable: "session", executionDigestVariable: testDigest,
+			modeVariable: string(mode), versionsVariable: `["1.26.5-2"]`, sourceBuildVariable: "",
+		},
+		TemplateParameters: template,
+	}
 }

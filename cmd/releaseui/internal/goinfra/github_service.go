@@ -161,15 +161,6 @@ func (s *Service) GetWorkflowRun(ctx context.Context, id int64) (WorkflowRun, er
 	return s.client.GetWorkflowRun(ctx, workflowTarget(), id)
 }
 
-// PollWorkflowRun waits until the allowlisted run completes and reports each observed state.
-func (s *Service) PollWorkflowRun(ctx context.Context, id int64, report func(WorkflowRun) error) (WorkflowRun, error) {
-	run, err := s.client.PollWorkflowRun(ctx, workflowTarget(), id, report)
-	if err != nil {
-		return run, fmt.Errorf("monitor go-infra patch-release workflow: %w", err)
-	}
-	return run, nil
-}
-
 func validateWorkflowContract(data []byte) error {
 	var workflow struct {
 		RunName string `yaml:"run-name"`

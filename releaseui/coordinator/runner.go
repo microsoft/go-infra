@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -40,15 +42,20 @@ type StepSnapshot struct {
 	DependsOn []string      `json:"dependsOn,omitempty"`
 	Progress  *StepProgress `json:"progress,omitempty"`
 	Error     string        `json:"error,omitempty"`
+	// ObservedAt identifies a fresh read in this viewer, not a saved execution transition.
+	ObservedAt       time.Time `json:"observedAt,omitzero"`
+	ObservationError string    `json:"observationError,omitempty"`
 }
 
 // StepProgress is optional live detail reported by a running step. Completed and Total can render
-// a determinate progress indicator when Total is positive.
+// a determinate progress indicator when Total is positive. RunURL identifies this step's external
+// operation in both saved progress and read-only observations.
 type StepProgress struct {
 	Summary   string `json:"summary,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	Completed int    `json:"completed,omitempty"`
 	Total     int    `json:"total,omitempty"`
+	RunURL    string `json:"runUrl,omitempty"`
 }
 
 type progressReporterKey struct{}
@@ -76,16 +83,68 @@ type Snapshot struct {
 
 // StepRunner executes a release step graph and publishes race-free snapshots of its state.
 type StepRunner struct {
-	mu sync.RWMutex
+	mu        sync.RWMutex
+	observeMu sync.Mutex
 
-	states   map[*Step]*stepState
-	ordered  []*stepState
-	active   bool
-	runError string
-	sequence uint64
+	states     map[*Step]*stepState
+	ordered    []*stepState
+	active     bool
+	runError   string
+	sequence   uint64
+	generation uint64
 
 	nextSubscriberID uint64
 	subscribers      map[uint64]chan Snapshot
+}
+
+// NewStepRunner constructs a graph without executing it. saved may be empty for a new plan.
+// A restored snapshot describes last-saved progress, never an active local executor.
+func NewStepRunner(steps []*Step, saved Snapshot) (*StepRunner, error) {
+	initial := Snapshot{Steps: make([]StepSnapshot, len(steps))}
+	for index, step := range steps {
+		if step == nil {
+			return nil, errors.New("graph contains a nil step")
+		}
+		initial.Steps[index] = StepSnapshot{Name: step.Name, Status: StepStatusWaiting}
+		for _, dependency := range step.DependsOn {
+			if dependency == nil {
+				return nil, errors.New("graph contains a nil dependency")
+			}
+			initial.Steps[index].DependsOn = append(initial.Steps[index].DependsOn, dependency.Name)
+		}
+	}
+	if err := initial.Validate(); err != nil {
+		return nil, err
+	}
+	if len(saved.Steps) != 0 {
+		if err := saved.Validate(); err != nil {
+			return nil, err
+		}
+		if err := validateStepsMatch(steps, saved.Steps); err != nil {
+			return nil, err
+		}
+		initial = saved.Clone()
+	}
+	runner := &StepRunner{sequence: initial.Sequence, runError: initial.Error}
+	runner.initializeLocked(steps)
+	for index, savedStep := range initial.Steps {
+		state := runner.ordered[index]
+		state.status, state.progress = savedStep.Status, savedStep.Progress
+		if savedStep.Error != "" {
+			state.err = errors.New(savedStep.Error)
+		}
+	}
+	return runner, nil
+}
+
+// ValidateSteps checks that execution uses the graph already prepared or opened by this runner.
+func (r *StepRunner) ValidateSteps(steps []*Step) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.active {
+		return errAlreadyActive
+	}
+	return validateStepsMatch(steps, r.snapshotLocked(false).Steps)
 }
 
 // Execute runs a group of steps, blocking until all are complete.
@@ -105,19 +164,15 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 		r.mu.Unlock()
 		return errAlreadyActive
 	}
-	r.states = make(map[*Step]*stepState, len(steps))
-	r.ordered = make([]*stepState, 0, len(steps))
+	if len(r.ordered) != 0 {
+		if err := validateStepsMatch(steps, r.snapshotLocked(false).Steps); err != nil {
+			r.mu.Unlock()
+			return err
+		}
+	}
+	r.initializeLocked(steps)
 	r.active = true
 	r.runError = ""
-	for _, step := range steps {
-		state := &stepState{
-			step:     step,
-			status:   StepStatusWaiting,
-			complete: make(chan struct{}),
-		}
-		r.states[step] = state
-		r.ordered = append(r.ordered, state)
-	}
 	r.publishLocked()
 	r.mu.Unlock()
 
@@ -148,7 +203,74 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 func (r *StepRunner) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.snapshotLocked()
+	return r.snapshotLocked(true)
+}
+
+// ExecutionSnapshot returns only execution-owned progress, without read-only observations.
+// Use it for durable checkpoints, not the viewer's derived display.
+func (r *StepRunner) ExecutionSnapshot() Snapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.snapshotLocked(false)
+}
+
+// Observe refreshes only the read-only callbacks of an inactive graph. It never executes steps,
+// calls their checkpoint callbacks, or changes their saved execution state.
+func (r *StepRunner) Observe(ctx context.Context) error {
+	r.observeMu.Lock()
+	defer r.observeMu.Unlock()
+	r.mu.RLock()
+	if r.active {
+		r.mu.RUnlock()
+		return errors.New("cannot observe an executing graph")
+	}
+	generation := r.generation
+	states := append([]*stepState(nil), r.ordered...)
+	r.mu.RUnlock()
+	var failures []error
+	for _, state := range states {
+		if state.step.Observe == nil {
+			continue
+		}
+		var observation *Observation
+		err := ctx.Err()
+		if err == nil {
+			observation, err = state.step.Observe(ctx)
+		}
+		if err == nil && observation != nil {
+			err = observation.Validate()
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
+		if err == nil {
+			err = ctx.Err()
+		}
+		r.mu.Lock()
+		if r.active || r.generation != generation {
+			r.mu.Unlock()
+			return context.Canceled
+		}
+		state.observationErr = err
+		if err != nil {
+			failures = append(failures, fmt.Errorf("observe %s: %w", state.step.Name, err))
+		} else if observation != nil {
+			value := *observation
+			state.observation = &value
+			state.observedAt = time.Now().UTC()
+		} else {
+			state.observation = nil
+			state.observedAt = time.Time{}
+		}
+		r.mu.Unlock()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active || r.generation != generation {
+		return context.Canceled
+	}
+	r.publishLocked()
+	return errors.Join(failures...)
 }
 
 // Subscribe atomically returns the current snapshot and subscribes to future snapshots. The
@@ -167,7 +289,7 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 	id := r.nextSubscriberID
 	updates := make(chan Snapshot, buffer)
 	r.subscribers[id] = updates
-	initial := r.snapshotLocked()
+	initial := r.snapshotLocked(true)
 	r.mu.Unlock()
 
 	var once sync.Once
@@ -184,7 +306,7 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 	return initial, updates, cancel
 }
 
-func (r *StepRunner) snapshotLocked() Snapshot {
+func (r *StepRunner) snapshotLocked(includeObservations bool) Snapshot {
 	snapshot := Snapshot{
 		Sequence: r.sequence,
 		Active:   r.active,
@@ -207,9 +329,34 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 		if state.err != nil {
 			stepSnapshot.Error = state.err.Error()
 		}
+		if includeObservations && !r.active {
+			if state.observation != nil {
+				stepSnapshot.Status = state.observation.Status
+				progress := state.observation.Progress
+				stepSnapshot.Progress = &progress
+				stepSnapshot.Error = state.observation.Error
+				stepSnapshot.ObservedAt = state.observedAt
+			}
+			if state.observationErr != nil {
+				stepSnapshot.ObservationError = state.observationErr.Error()
+			}
+		}
 		snapshot.Steps = append(snapshot.Steps, stepSnapshot)
 	}
 	return snapshot
+}
+
+func (r *StepRunner) initializeLocked(steps []*Step) {
+	r.generation++
+	r.states = make(map[*Step]*stepState, len(steps))
+	r.ordered = make([]*stepState, 0, len(steps))
+	for _, step := range steps {
+		state := &stepState{
+			step: step, status: StepStatusWaiting, complete: make(chan struct{}),
+		}
+		r.states[step] = state
+		r.ordered = append(r.ordered, state)
+	}
 }
 
 func (r *StepRunner) transition(state *stepState, status StepStatus, err error) {
@@ -232,7 +379,7 @@ func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
 
 func (r *StepRunner) publishLocked() {
 	r.sequence++
-	snapshot := r.snapshotLocked()
+	snapshot := r.snapshotLocked(true)
 	for id, updates := range r.subscribers {
 		select {
 		case updates <- snapshot:
@@ -243,9 +390,69 @@ func (r *StepRunner) publishLocked() {
 	}
 }
 
+// Clone returns an independent snapshot.
+func (s Snapshot) Clone() Snapshot {
+	clone := s
+	clone.Steps = make([]StepSnapshot, len(s.Steps))
+	for index, step := range s.Steps {
+		clone.Steps[index] = step
+		clone.Steps[index].DependsOn = slices.Clone(step.DependsOn)
+		if step.Progress != nil {
+			progress := *step.Progress
+			clone.Steps[index].Progress = &progress
+		}
+	}
+	return clone
+}
+
+// Validate checks the statuses and dependency order of a saved graph.
+func (s Snapshot) Validate() error {
+	seen := make(map[string]bool, len(s.Steps))
+	for _, step := range s.Steps {
+		if step.Name == "" || seen[step.Name] {
+			return fmt.Errorf("saved graph has an empty or duplicate step name %q", step.Name)
+		}
+		for _, dependency := range step.DependsOn {
+			if !seen[dependency] {
+				return fmt.Errorf("saved graph step %q has an unordered or missing dependency %q", step.Name, dependency)
+			}
+		}
+		switch step.Status {
+		case StepStatusWaiting, StepStatusRunning, StepStatusSucceeded, StepStatusFailed, StepStatusBlocked, StepStatusCanceled:
+		default:
+			return fmt.Errorf("saved graph step %q has invalid status %q", step.Name, step.Status)
+		}
+		if step.Progress != nil {
+			if err := validateRunURL(step.Progress.RunURL); err != nil {
+				return fmt.Errorf("saved graph step %q progress: %w", step.Name, err)
+			}
+		}
+		seen[step.Name] = true
+	}
+	return nil
+}
+
+func validateStepsMatch(steps []*Step, saved []StepSnapshot) error {
+	if len(steps) != len(saved) {
+		return errors.New("execution graph does not match the saved graph")
+	}
+	for index, step := range steps {
+		prior := saved[index]
+		if step == nil || step.Name != prior.Name || len(step.DependsOn) != len(prior.DependsOn) {
+			return errors.New("execution graph does not match the saved graph")
+		}
+		for dependencyIndex, dependency := range step.DependsOn {
+			if dependency == nil || dependency.Name != prior.DependsOn[dependencyIndex] {
+				return errors.New("execution graph does not match the saved graph")
+			}
+		}
+	}
+	return nil
+}
+
 func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
-		current.Completed != next.Completed || current.Total != next.Total {
+		current.Completed != next.Completed || current.Total != next.Total || current.RunURL != next.RunURL {
 
 		return false
 	}
@@ -255,9 +462,12 @@ func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 type stepState struct {
 	step *Step
 
-	err      error
-	status   StepStatus
-	progress *StepProgress
+	err            error
+	status         StepStatus
+	progress       *StepProgress
+	observation    *Observation
+	observedAt     time.Time
+	observationErr error
 	// complete is closed after err and status are updated.
 	complete chan struct{}
 }

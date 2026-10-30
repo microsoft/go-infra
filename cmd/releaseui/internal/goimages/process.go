@@ -51,7 +51,6 @@ type ProcessService interface {
 	ResolveCurrentSource(context.Context) (Source, error)
 	ValidateRollback(context.Context, int) (RollbackSource, error)
 	NewRunService(RunRequest) (RunService, error)
-	InspectRun(context.Context, RunRequest, string) (*contract.RunInspection, error)
 }
 
 // RunRequest binds one real run to a confirmed durable plan.
@@ -256,9 +255,9 @@ func prepareGoImages(
 		Versions: versions, Mode: normalized.Mode, SourceVersion: source.Commit,
 		SourceBuildID: normalized.SourceBuildID,
 	}
-	_, workflowState, err := NewGraphWithCheckpoint(workflowInput, nil, disabledGoImagesService{}, nil)
+	workflowState, err := NewState(workflowInput)
 	if err != nil {
-		return nil, fmt.Errorf("create go-images plan: %w", err)
+		return nil, fmt.Errorf("create go-images state: %w", err)
 	}
 	document, err := NewDocument(workflowInput, workflowState, time.Now())
 	if err != nil {
@@ -331,17 +330,6 @@ func (r *goImagesRun) TakeView() *contract.RunView {
 	return view
 }
 
-func (r *goImagesRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
-	r.mu.RLock()
-	buildID := r.state.Workflow.BuildID
-	request := goImagesRunRequest(r.state)
-	r.mu.RUnlock()
-	if buildID == "" {
-		return nil, nil
-	}
-	return r.service.InspectRun(ctx, request, buildID)
-}
-
 func (r *goImagesRun) Plan() *contract.Plan {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -349,12 +337,7 @@ func (r *goImagesRun) Plan() *contract.Plan {
 	if err != nil {
 		panic(err)
 	}
-	input := r.state.Document.Input
-	steps, _, err := NewGraphWithCheckpoint(&input, &r.state.Workflow, disabledGoImagesService{}, nil)
-	if err != nil {
-		panic(err)
-	}
-	return goImagesPlan(r.input, r.state.Source, r.state.RollbackSource, parameters, len(steps))
+	return goImagesPlan(r.input, r.state.Source, r.state.RollbackSource, parameters)
 }
 
 func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
@@ -367,29 +350,12 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 	request := goImagesRunRequest(r.state)
 	r.mu.RUnlock()
 
-	var service RunService = disabledGoImagesService{}
+	service, err := r.service.NewRunService(request)
+	if err != nil {
+		return nil, fmt.Errorf("create go-images execution service: %w", err)
+	}
 	workflowCheckpoint := CheckpointFunc(nil)
 	if checkpoint != nil {
-		if state.BuildID == "" {
-			current, err := r.service.ResolveCurrentSource(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("re-resolve current microsoft/main: %w", err)
-			}
-			if current.Branch != SourceBranch || current.Commit != input.SourceVersion {
-				return nil, errors.New("microsoft/main changed after this plan was prepared; refresh the plan before queueing")
-			}
-			if input.Mode == ModeRollback {
-				buildID, _ := strconv.Atoi(input.SourceBuildID)
-				if _, err := r.service.ValidateRollback(ctx, buildID); err != nil {
-					return nil, fmt.Errorf("revalidate rollback source: %w", err)
-				}
-			}
-		}
-		var err error
-		service, err = r.service.NewRunService(request)
-		if err != nil {
-			return nil, fmt.Errorf("create go-images execution service: %w", err)
-		}
 		workflowCheckpoint = func(state *State) {
 			r.mu.Lock()
 			r.state.Workflow = *state

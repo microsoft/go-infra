@@ -247,12 +247,14 @@
   async function startRelease() {
     const session = selectedSession;
     const digest = plan.execution.planDigest;
+    const resume = plan.execution.canResume;
+    const revision = plan.execution.record?.revision;
     submitting = "start";
     updateActionButtons();
     try {
-      await requestJSON(`${session.endpoint}/start`, {
+      await requestJSON(`${session.endpoint}/${resume ? "resume" : "start"}`, {
         method: "POST",
-        body: JSON.stringify({ planDigest: digest, confirmed: true }),
+        body: JSON.stringify({ planDigest: digest, confirmed: true, revision }),
       });
       if (selectedSession !== session) return;
       runConfirmationPending = false;
@@ -292,6 +294,7 @@
     updateProgress(snapshot);
     renderLinks(nextPlan.execution);
     renderExecution(nextPlan.execution, review);
+    renderPreflight();
     updateActionButtons();
   }
 
@@ -314,20 +317,27 @@
 
   function renderExecution(execution, review) {
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const visible = preflightReady;
+    const visible = preflightReady || Boolean(execution?.record);
     executionControls.hidden = !visible;
     const unavailableReason = preflightReady ? "" : preflightFailureSummary();
     executionUnavailable.hidden = visible || !unavailableReason;
     executionUnavailable.textContent = unavailableReason;
 
-    if (executionControls.dataset.planDigest !== execution?.planDigest) {
+    const reviewedState = `${execution?.planDigest}:${execution?.record?.revision}`;
+    if (executionControls.dataset.planDigest !== reviewedState) {
       runConfirmationPending = false;
-      executionControls.dataset.planDigest = execution?.planDigest || "";
+      executionControls.dataset.planDigest = reviewedState;
     }
     executionControls.dataset.buttonLabel = review.ExecutionButtonLabel || "Run release";
-    executionControls.dataset.title = "Run release";
-    executionWarning.textContent = "This starts the configured external release workflow.";
-    runConfirmationCopy.textContent = "Confirm this release before starting it.";
+    executionControls.dataset.title = execution?.canResume ? "Resume release" : "Run release";
+    executionWarning.textContent = execution?.saved
+      ? execution.canResume
+        ? "Viewing and refreshing external status does not execute action steps. Resume continues the saved release and may perform external actions."
+        : "This saved release is read-only. External status checks do not resume it."
+      : "This starts the configured external release workflow.";
+    runConfirmationCopy.textContent = execution?.canResume
+      ? "Confirm that you want to continue this saved release from its checkpoint."
+      : "Confirm this release before starting it.";
     updateExecutionButton();
   }
 
@@ -386,7 +396,16 @@
     const progressFill = document.createElement("span");
     progressTrack.append(progressFill);
     liveProgress.append(progressSummary, progressDetail, progressTrack);
-    item.append(head, liveProgress);
+    const runLink = document.createElement("a");
+    runLink.className = "step-run-link";
+    runLink.textContent = "Open external run";
+    runLink.target = "_blank";
+    runLink.rel = "noopener noreferrer";
+    runLink.hidden = true;
+    const observationNote = document.createElement("p");
+    observationNote.className = "step-observation-note";
+    observationNote.hidden = true;
+    item.append(head, liveProgress, runLink, observationNote);
     return item;
   }
 
@@ -505,13 +524,22 @@
       if (!card) continue;
       card.dataset.status = step.status || "waiting";
       card.querySelector(".status-badge").textContent = statusText(step.status || "waiting");
-      card.querySelector(".step-error")?.remove();
-      if (step.error) {
+      card.querySelectorAll(".step-error").forEach((error) => error.remove());
+      for (const message of [step.error, step.observationError && `Unable to refresh external status: ${step.observationError}`].filter(Boolean)) {
         const error = document.createElement("p");
         error.className = "step-error";
-        error.textContent = step.error;
+        error.textContent = message;
         card.append(error);
       }
+      const link = card.querySelector(".step-run-link");
+      const runURL = step.progress?.runUrl;
+      link.hidden = !runURL;
+      if (runURL) link.href = runURL;
+      const observationNote = card.querySelector(".step-observation-note");
+      observationNote.hidden = !step.observedAt;
+      observationNote.textContent = step.observedAt
+        ? `Last checked ${new Date(step.observedAt).toLocaleTimeString()}`
+        : "";
       updateStepProgress(card, step.progress);
     }
     requestAnimationFrame(renderGraphEdges);
@@ -541,6 +569,9 @@
     progressBar.style.width = `${steps.length ? Math.round((complete / steps.length) * 100) : 0}%`;
     progressLabel.textContent = snapshot.active
       ? "Release workflow in progress"
+      : steps.some((step) => step.observationError) ? "External status refresh failed; showing last known progress"
+      : steps.some((step) => step.observedAt) ? "Saved graph with refreshed external-step status"
+      : plan?.execution?.saved ? "Last saved graph progress, not live status"
       : snapshot.error ? "Workflow stopped; review the error"
       : complete === steps.length && steps.length
         ? succeeded === steps.length ? "Workflow completed successfully" : "Workflow stopped"
@@ -592,12 +623,13 @@
   function updateExecutionButton() {
     const execution = plan?.execution;
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
-    const enabled = sessionReady && preflightReady && Boolean(plan) && !submitting;
+    const enabled = sessionReady && (preflightReady || execution?.canResume) && Boolean(plan) && !submitting;
     const complete = Boolean(execution?.run?.complete);
-    runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
+    const readOnly = execution?.saved && !execution.canResume;
+    runConfirmation.hidden = !runConfirmationPending || complete || executionActive || readOnly;
     executionCancel.hidden = runConfirmation.hidden;
     executionTitle.textContent = runConfirmationPending ? "Confirm release" : executionControls.dataset.title || "Run release";
-    executionButton.disabled = !enabled || complete || executionActive;
+    executionButton.disabled = !enabled || complete || executionActive || readOnly;
     const completionLabel = {
       succeeded: "Release completed",
       failed: "Release failed",
@@ -606,11 +638,14 @@
     }[execution?.run?.result] || "Outcome needs attention";
     executionButton.textContent = complete
       ? completionLabel
+      : readOnly ? "Read-only saved run"
       : submitting === "start"
-        ? "Starting release…"
+        ? execution?.canResume ? "Resuming release…" : "Starting release…"
         : executionActive
         ? "Monitoring release…"
-        : runConfirmationPending ? "Confirm run" : executionControls.dataset.buttonLabel || "Run release";
+        : runConfirmationPending
+          ? execution?.canResume ? "Confirm resume" : "Confirm run"
+          : execution?.canResume ? "Resume release" : executionControls.dataset.buttonLabel || "Run release";
   }
 
   function connectEvents(session) {
@@ -680,6 +715,9 @@
     if (preflight.externalExecutionEnabled) {
       safetyTitle.textContent = "External execution enabled";
       safetyCopy.textContent = "Preparing a plan does not start it. Every run requires explicit confirmation.";
+    } else if (plan?.execution?.canResume) {
+      safetyTitle.textContent = "Review readiness before resuming";
+      safetyCopy.textContent = `New release preparation is blocked. Resuming this saved release remains available with confirmation. ${preflightFailureSummary()}`;
     } else {
       safetyTitle.textContent = "Planning is blocked";
       safetyCopy.textContent = preflightFailureSummary();

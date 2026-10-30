@@ -5,14 +5,15 @@ package goimages
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	azdopipeline "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/pipeline"
 	azdorepo "github.com/microsoft/go-infra/cmd/releaseui/internal/azdo/repo"
-	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 const (
@@ -23,10 +24,17 @@ const (
 	versionsJSON    = "/src/microsoft/versions.json"
 )
 
+type sourceRepository interface {
+	GetBranchTip(context.Context, string) (azdorepo.BranchTip, error)
+	GetFileAtCommit(context.Context, string, string) ([]byte, error)
+	GetJSONFileAtCommit(context.Context, string, string, any) error
+	VerifyCommit(context.Context, string) error
+}
+
 // AzureService implements the fixed Azure operations required by the Go-images process.
 type AzureService struct {
 	pipelines  *azdopipeline.Client
-	repository *azdorepo.Client
+	repository sourceRepository
 	queue      QueueClient
 }
 
@@ -100,22 +108,9 @@ func (s *AzureService) ValidateRollback(ctx context.Context, buildID int) (Rollb
 	return ValidateRollbackSource(ctx, s.pipelines, s, buildID)
 }
 
-// NewRunService creates the queue-and-monitor service for one confirmed run.
+// NewRunService constructs a run service without contacting external services.
 func (s *AzureService) NewRunService(request RunRequest) (RunService, error) {
-	return s.newPipelineRunService(request)
-}
-
-// InspectRun reads the known build without queueing or monitoring execution.
-func (s *AzureService) InspectRun(ctx context.Context, request RunRequest, buildID string) (*contract.RunInspection, error) {
-	service, err := s.newPipelineRunService(request)
-	if err != nil {
-		return nil, err
-	}
-	return service.InspectPipeline(ctx, buildID)
-}
-
-func (s *AzureService) newPipelineRunService(request RunRequest) (*PipelineRunService, error) {
-	return NewPipelineRunService(s.pipelines, s.queue, PipelineRunConfig{
+	return NewPipelineRunService(s.pipelines, s, PipelineRunConfig{
 		Mode:                 request.Mode,
 		SessionID:            request.SessionID,
 		ExecutionDigest:      request.ExecutionDigest,
@@ -124,11 +119,31 @@ func (s *AzureService) newPipelineRunService(request RunRequest) (*PipelineRunSe
 		SourceVersion:        request.SourceVersion,
 		VerifyMirrorCommit:   s.repository.VerifyCommit,
 		MirrorPollInterval:   5 * time.Second,
-		PollInterval:         5 * time.Second,
 		PreviousQueueAttempt: request.PreviousQueueAttempt,
 		ReconcileAttempts:    6,
 		ReconcileInterval:    5 * time.Second,
 	}, nil)
+}
+
+// QueueRelease revalidates the source immediately before the only build-queue mutation.
+func (s *AzureService) QueueRelease(ctx context.Context, request QueueRequest) (int, error) {
+	current, err := s.ResolveCurrentSource(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("re-resolve current microsoft/main: %w", err)
+	}
+	if current.Branch != SourceBranch || current.Commit != request.SourceVersion {
+		return 0, errors.New("microsoft/main changed after this plan was prepared; refresh the plan before queueing")
+	}
+	if request.Mode == ModeRollback {
+		buildID, err := strconv.Atoi(request.SourceBuildID)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := s.ValidateRollback(ctx, buildID); err != nil {
+			return 0, fmt.Errorf("revalidate rollback source: %w", err)
+		}
+	}
+	return s.queue.QueueRelease(ctx, request)
 }
 
 var _ ProcessService = (*AzureService)(nil)
