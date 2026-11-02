@@ -120,6 +120,27 @@ func (f *fakeGoInfraGitHub) GetWorkflowRun(_ context.Context, id int64) (GoInfra
 	return f.workflowRun, nil
 }
 
+func (f *fakeGoInfraGitHub) PollWorkflowRun(
+	ctx context.Context, id int64, report func(GoInfraWorkflowRun) error,
+) (GoInfraWorkflowRun, error) {
+	for {
+		run, err := f.GetWorkflowRun(ctx, id)
+		if err != nil {
+			return run, err
+		}
+		if err := report(run); err != nil {
+			return run, err
+		}
+		if run.Status == "completed" {
+			if run.Conclusion != "success" {
+				return run, errors.New("workflow " + run.Conclusion)
+			}
+			return run, nil
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
 func (f *fakeGoInfraGitHub) stats() fakeGoInfraGitHubStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -216,7 +237,7 @@ func TestReleaseOnMergeProcess(t *testing.T) {
 	}
 }
 
-func TestDryRunGraphObservationDoesNotDispatchOrMutateSavedState(t *testing.T) {
+func TestDryRunGraphConstructionDoesNotContactGitHub(t *testing.T) {
 	github := &fakeGoInfraGitHub{workflowRun: testGoInfraWorkflowRun("completed", "cancelled")}
 	process := NewProcess(github.integration()).Processes()[1]
 	snapshot, err := process.Prepare(context.Background(), nil)
@@ -242,22 +263,14 @@ func TestDryRunGraphObservationDoesNotDispatchOrMutateSavedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Observe(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	observation := runner.Snapshot().Steps[1]
-	if observation.Status != coordinator.StepStatusCanceled || observation.Progress.RunURL != saved.URL {
-		t.Fatalf("observation = %#v", observation)
+	if len(steps) != 2 {
+		t.Fatalf("steps = %d", len(steps))
 	}
 	after := run.TakeSnapshot()
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 		t.Fatal("workflow observation changed the saved snapshot")
 	}
-	if stats := github.stats(); stats.labelCalls != 0 || len(stats.dispatches) != 0 || stats.runReads != 1 {
+	if stats := github.stats(); stats.labelCalls != 0 || len(stats.dispatches) != 0 || stats.runReads != 0 {
 		t.Fatalf("workflow observation executed actions: %#v", stats)
 	}
 }
@@ -313,7 +326,7 @@ func TestKnownWorkflowMonitorPreservesTerminalProviderConclusions(t *testing.T) 
 	}
 }
 
-func TestPreparedGraphObservationDoesNotDiscoverOrStartAWorkflow(t *testing.T) {
+func TestPreparedGraphDoesNotDiscoverOrStartAWorkflow(t *testing.T) {
 	github := new(fakeGoInfraGitHub)
 	process := NewProcess(github.integration()).Processes()[1]
 	snapshot, err := process.Prepare(context.Background(), nil)
@@ -328,12 +341,8 @@ func TestPreparedGraphObservationDoesNotDiscoverOrStartAWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Observe(context.Background()); err != nil {
-		t.Fatal(err)
+	if len(steps) != 2 {
+		t.Fatalf("steps = %d", len(steps))
 	}
 	if stats := github.stats(); stats.runReads != 0 || len(stats.dispatches) != 0 || stats.labelCalls != 0 {
 		t.Fatalf("observation without a saved ID contacted the provider: %#v", stats)

@@ -76,9 +76,6 @@ type ExecutionResponse struct {
 
 	// CanResume permits an explicit confirmed resume of the selected saved checkpoint.
 	CanResume bool `json:"canResume"`
-
-	// Saved reports a non-executing saved run. Its external steps may have read-only observations.
-	Saved bool `json:"saved"`
 }
 
 // DashboardResponse contains the release and process cards shown on the dashboard.
@@ -115,9 +112,6 @@ type ReleaseSummary struct {
 
 	// SavedStatus is the last persisted status, separate from an external observation.
 	SavedStatus string `json:"savedStatus,omitempty"`
-
-	// ExternalStatus summarizes graph observations of known external operations, not release completion.
-	ExternalStatus string `json:"externalStatus,omitempty"`
 
 	// RunURL links to the process-owned pipeline or workflow.
 	RunURL string `json:"runUrl,omitempty"`
@@ -303,6 +297,13 @@ type ReleaseStartRequest struct {
 
 	// Revision is required when resuming an existing record.
 	Revision int `json:"revision,omitempty"`
+	RecordID int `json:"recordId,omitempty"`
+}
+
+// ReleaseViewResponse contains only published display data and an optional execution endpoint.
+type ReleaseViewResponse[T any] struct {
+	Record    T      `json:"record"`
+	ResumeURL string `json:"resumeUrl,omitempty"`
 }
 
 // ReleaseRecordExport is the portable representation of a durable release record.

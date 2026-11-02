@@ -16,7 +16,6 @@ import (
 
 	azdotoken "github.com/microsoft/go-infra/azdo/token"
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
-	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -74,13 +73,12 @@ func (s *store) Create(
 	ctx context.Context,
 	name string,
 	run *runstore.State,
-	view *contract.RunView,
-	plan *contract.Plan,
+	view *runstore.View,
 ) (*runstore.Record, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("release run name is empty")
 	}
-	snapshot, err := releaseRunSnapshot(run, view, plan)
+	snapshot, err := releaseRunSnapshot(run, view)
 	if err != nil {
 		return nil, err
 	}
@@ -104,13 +102,12 @@ func (s *store) Update(
 	ctx context.Context,
 	current *runstore.Record,
 	run *runstore.State,
-	view *contract.RunView,
-	plan *contract.Plan,
+	view *runstore.View,
 ) (*runstore.Record, error) {
 	if current == nil || current.ID <= 0 || current.Revision <= 0 {
 		return nil, errors.New("current release run record is invalid")
 	}
-	snapshot, err := releaseRunSnapshot(run, view, plan)
+	snapshot, err := releaseRunSnapshot(run, view)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +127,20 @@ func (s *store) Update(
 	return releaseRunRecord(item)
 }
 
-func (s *store) Query(ctx context.Context, closed bool, limit int) ([]*runstore.Record, error) {
+func (s *store) GetView(ctx context.Context, id int) (*runstore.ViewRecord, error) {
+	item, err := s.client.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return releaseViewRecord(item)
+}
+
+func (s *store) QueryViews(ctx context.Context, closed bool, limit int) ([]*runstore.ViewRecord, error) {
 	items, queryErr := s.client.Query(ctx, closed, limit)
-	records := make([]*runstore.Record, 0, len(items))
+	records := make([]*runstore.ViewRecord, 0, len(items))
 	recordErrors := []error{releaseQueryError(queryErr)}
 	for _, item := range items {
-		record, err := releaseRunRecord(item)
+		record, err := releaseViewRecord(item)
 		if err != nil {
 			if item != nil {
 				problem := &runstore.RecordError{
@@ -202,14 +207,24 @@ func releaseRecordTitle(title string) string {
 
 func releaseRunSnapshot(
 	run *runstore.State,
-	view *contract.RunView,
-	plan *contract.Plan,
+	view *runstore.View,
 ) (*azdoworkitem.Snapshot, error) {
 	status, err := run.Status()
 	if err != nil {
 		return nil, fmt.Errorf("refuse to persist invalid process run: %w", err)
 	}
-	payload, err := json.Marshal(run)
+	if err := view.Validate(); err != nil {
+		return nil, fmt.Errorf("refuse to persist invalid release view: %w", err)
+	}
+	if view.ProcessID != run.ProcessID || view.Digest != run.Digest || view.Status != status ||
+		view.Executing != run.Executing {
+
+		return nil, errors.New("published view does not match the execution checkpoint")
+	}
+	payload, err := json.Marshal(struct {
+		Run  *runstore.State `json:"run"`
+		View *runstore.View  `json:"view"`
+	}{Run: run, View: view})
 	if err != nil {
 		return nil, fmt.Errorf("marshal process run: %w", err)
 	}
@@ -217,36 +232,29 @@ func releaseRunSnapshot(
 		SchemaVersion: azdoworkitem.CurrentSchemaVersion,
 		ProcessID:     run.ProcessID,
 		Status:        azdoworkitem.Status(status),
-		Test:          view != nil && view.Test,
+		Test:          view.Test,
 		IntentDigest:  run.Digest,
 		Payload:       payload,
-		Description:   releaseRunDescription(run, view, plan),
+		Description:   releaseRunDescription(view),
 	}, nil
 }
 
-func releaseRunDescription(
-	run *runstore.State,
-	view *contract.RunView,
-	plan *contract.Plan,
-) *azdoworkitem.DescriptionSummary {
+func releaseRunDescription(view *runstore.View) *azdoworkitem.DescriptionSummary {
 	fields := make([]azdoworkitem.DescriptionField, 0)
 	if view != nil {
 		if view.RunURL != "" {
 			fields = append(fields, azdoworkitem.DescriptionField{Label: "External run", Value: "Open release run", URL: view.RunURL})
 		}
-		if strings.TrimSpace(view.Summary) != "" {
-			fields = append(fields, azdoworkitem.DescriptionField{Label: "Status", Value: view.Summary})
-		}
 		if strings.TrimSpace(view.Detail) != "" {
 			fields = append(fields, azdoworkitem.DescriptionField{Label: "Detail", Value: view.Detail})
 		}
 	}
-	if plan != nil {
-		for _, fact := range plan.Facts {
+	if view.Plan != nil {
+		for _, fact := range view.Plan.Facts {
 			fields = append(fields, azdoworkitem.DescriptionField{Label: fact.Label, Value: fact.Value})
 		}
 	}
-	return &azdoworkitem.DescriptionSummary{ProcessName: run.ProcessID, Fields: fields}
+	return &azdoworkitem.DescriptionSummary{ProcessName: view.Name, Fields: fields}
 }
 
 func releaseRunRecord(item *azdoworkitem.WorkItem) (*runstore.Record, error) {
@@ -255,13 +263,17 @@ func releaseRunRecord(item *azdoworkitem.WorkItem) (*runstore.Record, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(item.Snapshot.Payload))
 	decoder.DisallowUnknownFields()
-	var run runstore.State
-	if err := decoder.Decode(&run); err != nil {
+	var payload struct {
+		Run  *runstore.State `json:"run"`
+		View json.RawMessage `json:"view"`
+	}
+	if err := decoder.Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode process run: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("decode process run: trailing JSON content")
 	}
+	run := payload.Run
 	status, err := run.Status()
 	if err != nil {
 		return nil, fmt.Errorf("validate process run: %w", err)
@@ -278,6 +290,33 @@ func releaseRunRecord(item *azdoworkitem.WorkItem) (*runstore.Record, error) {
 		Title:  releaseRecordTitle(item.Title),
 		Closed: item.State == "Closed", UpdatedAt: item.ChangedAt, Run: run.Clone(),
 	}, nil
+}
+
+func releaseViewRecord(item *azdoworkitem.WorkItem) (*runstore.ViewRecord, error) {
+	if item == nil || item.Snapshot == nil {
+		return nil, errors.New("release work item is empty")
+	}
+	// Deliberately decode only display data. Process payloads may belong to another application
+	// or a version this observer cannot execute.
+	var payload struct {
+		View *runstore.View `json:"view"`
+	}
+	if err := json.Unmarshal(item.Snapshot.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("decode release view: %w", err)
+	}
+	record := &runstore.ViewRecord{
+		ID: item.ID, Revision: item.Revision, URL: item.URL,
+		Title: releaseRecordTitle(item.Title), Closed: item.State == "Closed", View: payload.View,
+	}
+	if err := runstore.ValidateViewRecord(record); err != nil {
+		return nil, err
+	}
+	if payload.View.ProcessID != item.Snapshot.ProcessID || payload.View.Digest != item.Snapshot.IntentDigest ||
+		string(payload.View.Status) != string(item.Snapshot.Status) {
+
+		return nil, errors.New("release work item metadata does not match its published view")
+	}
+	return record, nil
 }
 
 var _ runstore.Store = (*store)(nil)

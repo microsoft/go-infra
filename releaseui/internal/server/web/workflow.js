@@ -54,10 +54,17 @@
   let lastRefreshSignature = "";
   let refreshInFlight = null;
   let toastTimer = null;
+  const savedRecordID = location.pathname.startsWith("/releases/") ? Number(location.pathname.split("/").at(-1)) : 0;
+  let publishedRecord = null;
+  let resumeURL = "";
 
   initialize().catch((error) => showError(error.message));
 
   async function initialize() {
+    if (savedRecordID) {
+      await observeSavedRelease();
+      return;
+    }
     processDefinition = await globalThis.releaseProcessReady;
     workflow = processDefinition.workflow;
 
@@ -249,12 +256,13 @@
     const digest = plan.execution.planDigest;
     const resume = plan.execution.canResume;
     const revision = plan.execution.record?.revision;
+    const recordId = plan.execution.record?.id;
     submitting = "start";
     updateActionButtons();
     try {
       await requestJSON(`${session.endpoint}/${resume ? "resume" : "start"}`, {
         method: "POST",
-        body: JSON.stringify({ planDigest: digest, confirmed: true, revision }),
+        body: JSON.stringify({ planDigest: digest, confirmed: true, revision, recordId }),
       });
       if (selectedSession !== session) return;
       runConfirmationPending = false;
@@ -330,10 +338,9 @@
     }
     executionControls.dataset.buttonLabel = review.ExecutionButtonLabel || "Run release";
     executionControls.dataset.title = execution?.canResume ? "Resume release" : "Run release";
-    executionWarning.textContent = execution?.saved
-      ? execution.canResume
-        ? "Viewing and refreshing external status does not execute action steps. Resume continues the saved release and may perform external actions."
-        : "This saved release is read-only. External status checks do not resume it."
+    executionWarning.textContent = execution?.canResume
+      ? "This run was interrupted. Resuming may perform external actions."
+      : execution?.run?.complete ? "This release has finished."
       : "This starts the configured external release workflow.";
     runConfirmationCopy.textContent = execution?.canResume
       ? "Confirm that you want to continue this saved release from its checkpoint."
@@ -402,10 +409,7 @@
     runLink.target = "_blank";
     runLink.rel = "noopener noreferrer";
     runLink.hidden = true;
-    const observationNote = document.createElement("p");
-    observationNote.className = "step-observation-note";
-    observationNote.hidden = true;
-    item.append(head, liveProgress, runLink, observationNote);
+    item.append(head, liveProgress, runLink);
     return item;
   }
 
@@ -525,7 +529,7 @@
       card.dataset.status = step.status || "waiting";
       card.querySelector(".status-badge").textContent = statusText(step.status || "waiting");
       card.querySelectorAll(".step-error").forEach((error) => error.remove());
-      for (const message of [step.error, step.observationError && `Unable to refresh external status: ${step.observationError}`].filter(Boolean)) {
+      for (const message of [step.error].filter(Boolean)) {
         const error = document.createElement("p");
         error.className = "step-error";
         error.textContent = message;
@@ -535,11 +539,6 @@
       const runURL = step.progress?.runUrl;
       link.hidden = !runURL;
       if (runURL) link.href = runURL;
-      const observationNote = card.querySelector(".step-observation-note");
-      observationNote.hidden = !step.observedAt;
-      observationNote.textContent = step.observedAt
-        ? `Last checked ${new Date(step.observedAt).toLocaleTimeString()}`
-        : "";
       updateStepProgress(card, step.progress);
     }
     requestAnimationFrame(renderGraphEdges);
@@ -569,9 +568,6 @@
     progressBar.style.width = `${steps.length ? Math.round((complete / steps.length) * 100) : 0}%`;
     progressLabel.textContent = snapshot.active
       ? "Release workflow in progress"
-      : steps.some((step) => step.observationError) ? "External status refresh failed; showing last known progress"
-      : steps.some((step) => step.observedAt) ? "Saved graph with refreshed external-step status"
-      : plan?.execution?.saved ? "Last saved graph progress, not live status"
       : snapshot.error ? "Workflow stopped; review the error"
       : complete === steps.length && steps.length
         ? succeeded === steps.length ? "Workflow completed successfully" : "Workflow stopped"
@@ -587,6 +583,126 @@
 
   function statusText(status) {
     return status === "running" ? "in progress" : status;
+  }
+
+  async function observeSavedRelease() {
+    workflowSection.hidden = false;
+    workflowSection.classList.add("saved-release");
+    form.closest("aside").hidden = true;
+    document.querySelector(".release-plan-panel .panel-heading h2").textContent = "Published progress";
+    processSafety.hidden = false;
+    safetyTitle.textContent = "Published release progress";
+    safetyCopy.textContent = "Only the runner publishes progress. This page reads the saved view, not the process checkpoint.";
+    preflightList.replaceChildren();
+    executionButton.addEventListener("click", resumeSavedRelease);
+    executionCancel.addEventListener("click", () => {
+      runConfirmationPending = false;
+      renderSavedControls();
+    });
+    const controller = new AbortController();
+    let timer;
+    globalThis.addEventListener("pagehide", () => {
+      controller.abort();
+      clearTimeout(timer);
+    }, { once: true });
+    const refresh = async () => {
+      try {
+        const response = await requestJSON(`/api/releases/${savedRecordID}/view`, {
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+        });
+        if (controller.signal.aborted) return;
+        if (publishedRecord?.revision !== response.record.revision) runConfirmationPending = false;
+        publishedRecord = response.record;
+        resumeURL = response.resumeUrl || "";
+        renderSavedRelease();
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        showError(`Unable to refresh published progress: ${error.message}`);
+      }
+      if (!controller.signal.aborted) timer = setTimeout(refresh, 5000);
+    };
+    if ("ResizeObserver" in globalThis) new ResizeObserver(renderGraphEdges).observe(stepList);
+    await refresh();
+  }
+
+  function renderSavedRelease() {
+    const view = publishedRecord.view;
+    document.title = `${view.name} · Release UI`;
+    document.querySelector("#process-name").textContent = view.name;
+    document.querySelector("#process-mark").textContent = view.mark;
+    document.querySelector("#process-description").textContent = view.detail || "";
+    emptyState.hidden = true;
+    planContent.hidden = false;
+    planSubtitle.textContent = view.plan?.Subtitle || "Published release graph";
+    planFacts.replaceChildren(...(view.plan?.Facts || []).map((fact) => {
+      const card = document.createElement("article");
+      card.className = "source-card";
+      const label = document.createElement("span");
+      label.textContent = fact.Label;
+      const value = document.createElement("strong");
+      value.textContent = fact.Value;
+      card.append(label, value);
+      return card;
+    }));
+    const topology = JSON.stringify(view.graph.steps.map((step) => [step.name, step.dependsOn]));
+    if (stepList.dataset.topology !== topology) {
+      plan = { steps: view.graph.steps };
+      renderStepGraph(view.graph.steps);
+      stepList.dataset.topology = topology;
+    }
+    updateSteps(view.graph);
+    updateProgress(view.graph);
+    const age = Math.max(0, Math.floor((Date.now() - new Date(view.updatedAt).getTime()) / 1000));
+    progressLabel.textContent = `Last published ${new Date(view.updatedAt).toLocaleString()} · ${age}s ago`;
+    safetyCopy.textContent = age >= 30 && view.executing
+      ? "The runner has not published recently. Progress may be stale. Opening this page does not restart it."
+      : "This page reads published progress. It does not check external runs or execute release steps.";
+    if (view.graph.error) showError(view.graph.error);
+    renderLinks({ runUrl: view.runUrl, record: publishedRecord });
+    renderSavedControls();
+  }
+
+  function renderSavedControls() {
+    executionControls.hidden = false;
+    executionTitle.textContent = resumeURL ? "Resume saved release" : "Read-only release";
+    executionWarning.textContent = publishedRecord.view.executing
+      ? "This release is reserved by a runner. If it stopped unexpectedly, confirm it is stopped before repairing the checkpoint."
+      : resumeURL ? "Resuming may perform external actions and will load the process checkpoint."
+      : "This release is read-only here. Resuming requires an open unfinished record and a configured process.";
+    runConfirmation.hidden = !runConfirmationPending;
+    runConfirmationCopy.textContent = "Confirm that the previous runner has stopped and you want to resume this release.";
+    executionCancel.hidden = !runConfirmationPending;
+    executionButton.disabled = !resumeURL || Boolean(submitting);
+    executionButton.textContent = submitting ? "Resuming release…"
+      : !resumeURL ? "Read-only release"
+      : runConfirmationPending ? "Confirm resume" : "Resume release";
+  }
+
+  async function resumeSavedRelease() {
+    if (!resumeURL || submitting) return;
+    if (!runConfirmationPending) {
+      runConfirmationPending = true;
+      renderSavedControls();
+      return;
+    }
+    submitting = "resume";
+    renderSavedControls();
+    try {
+      const response = await requestJSON(resumeURL, {
+        method: "POST",
+        body: JSON.stringify({
+          recordId: savedRecordID, revision: publishedRecord.revision,
+          planDigest: publishedRecord.view.digest, confirmed: true,
+        }),
+      });
+      location.assign(response.href);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      submitting = "";
+      runConfirmationPending = false;
+      renderSavedControls();
+    }
   }
 
   function renderLinks(execution) {
@@ -625,11 +741,10 @@
     const preflightReady = Boolean(preflight?.externalExecutionEnabled);
     const enabled = sessionReady && (preflightReady || execution?.canResume) && Boolean(plan) && !submitting;
     const complete = Boolean(execution?.run?.complete);
-    const readOnly = execution?.saved && !execution.canResume;
-    runConfirmation.hidden = !runConfirmationPending || complete || executionActive || readOnly;
+    runConfirmation.hidden = !runConfirmationPending || complete || executionActive;
     executionCancel.hidden = runConfirmation.hidden;
     executionTitle.textContent = runConfirmationPending ? "Confirm release" : executionControls.dataset.title || "Run release";
-    executionButton.disabled = !enabled || complete || executionActive || readOnly;
+    executionButton.disabled = !enabled || complete || executionActive;
     const completionLabel = {
       succeeded: "Release completed",
       failed: "Release failed",
@@ -638,7 +753,6 @@
     }[execution?.run?.result] || "Outcome needs attention";
     executionButton.textContent = complete
       ? completionLabel
-      : readOnly ? "Read-only saved run"
       : submitting === "start"
         ? execution?.canResume ? "Resuming release…" : "Starting release…"
         : executionActive

@@ -111,10 +111,8 @@ type Run interface {
 	// Build does not change the Run state or mutate an external service. Only execution of the
 	// returned steps may do so.
 	//
-	// This method is called at most once per instance of [Run]. A nil checkpoint constructs a
-	// graph for viewing only and must not require execution readiness or contact external services.
-	// Steps may expose read-only observations for known external operations; those callbacks must
-	// not change the Run state or invoke checkpoint.
+	// This method is called at most once per instance of [Run]. It always constructs executable
+	// steps. Observers use the runner's published display data and never call Build.
 	Build(context.Context, CheckpointFunc) ([]*coordinator.Step, error)
 }
 

@@ -279,27 +279,6 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 	return view
 }
 
-func (r *goInfraRun) readWorkflowRun(ctx context.Context) (*GoInfraWorkflowRun, error) {
-	r.mu.RLock()
-	if r.state.WorkflowRun == nil {
-		r.mu.RUnlock()
-		return nil, nil
-	}
-	saved := *r.state.WorkflowRun
-	r.mu.RUnlock()
-	run, err := r.github.GetWorkflowRun(ctx, saved.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateGoInfraWorkflowRun(&run); err != nil {
-		return nil, err
-	}
-	if run.ID != saved.ID || run.HeadSHA != saved.HeadSHA || run.URL != saved.URL {
-		return nil, errors.New("inspected GitHub workflow does not match the saved run")
-	}
-	return &run, nil
-}
-
 func (r *goInfraRun) Plan() *contract.Plan {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -363,19 +342,39 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 		}
 		return r.checkpoint(ctx, run, checkpoint)
 	})
-	monitor, err := coordinator.NewMonitor(
+	monitor := dispatch.Then(
 		"Monitor patch-release workflow",
 		goInfraWorkflowTimeout,
-		r.readWorkflowRun,
-		describeWorkflowRun,
-		func(ctx context.Context, run *GoInfraWorkflowRun) error {
-			return r.checkpoint(ctx, *run, checkpoint)
+		func(ctx context.Context) error {
+			r.mu.RLock()
+			saved := *r.state.WorkflowRun
+			r.mu.RUnlock()
+			if saved.Status == "completed" {
+				if saved.Conclusion == "success" {
+					return nil
+				}
+				err := fmt.Errorf("saved workflow run completed with conclusion %q", saved.Conclusion)
+				if saved.Conclusion == "cancelled" {
+					return errors.Join(coordinator.ErrCanceled, err)
+				}
+				return err
+			}
+			completed, err := r.github.PollWorkflowRun(ctx, saved.ID, func(run GoInfraWorkflowRun) error {
+				if run.ID != saved.ID || run.URL != saved.URL || run.HeadSHA != saved.HeadSHA {
+					return errors.New("workflow read does not match the saved run")
+				}
+				coordinator.ReportProgress(ctx, coordinator.StepProgress{
+					Summary: "GitHub workflow " + run.Status,
+					Detail:  fmt.Sprintf("Run %d: %s", run.ID, run.Conclusion), RunURL: run.URL,
+				})
+				return r.checkpoint(ctx, run, checkpoint)
+			})
+			if err != nil && completed.Status == "completed" && completed.Conclusion == "cancelled" {
+				return errors.Join(coordinator.ErrCanceled, err)
+			}
+			return err
 		},
 	)
-	if err != nil {
-		return nil, err
-	}
-	monitor.DependsOn = []*coordinator.Step{dispatch}
 	return monitor.TransitiveDependencies()
 }
 
@@ -391,42 +390,6 @@ func (r *goInfraRun) checkpoint(ctx context.Context, run GoInfraWorkflowRun, che
 		checkpoint()
 	}
 	return ctx.Err()
-}
-
-func describeWorkflowRun(run *GoInfraWorkflowRun) (*coordinator.Observation, error) {
-	if run == nil {
-		return nil, nil
-	}
-	status := coordinator.StepStatusWaiting
-	switch run.Status {
-	case "in_progress":
-		status = coordinator.StepStatusRunning
-	case "completed":
-		switch run.Conclusion {
-		case "success":
-			status = coordinator.StepStatusSucceeded
-		case "cancelled":
-			status = coordinator.StepStatusCanceled
-		case "failure", "timed_out", "action_required", "startup_failure", "stale", "neutral", "skipped":
-			status = coordinator.StepStatusFailed
-		default:
-			return nil, fmt.Errorf("workflow run has unsupported conclusion %q", run.Conclusion)
-		}
-	}
-	observation := &coordinator.Observation{
-		Status: status,
-		Progress: coordinator.StepProgress{
-			Summary: "GitHub workflow " + string(status),
-			Detail:  fmt.Sprintf("Run %d is %s", run.ID, status),
-			RunURL:  run.URL,
-		},
-	}
-	if status == coordinator.StepStatusSucceeded {
-		observation.Progress.Completed, observation.Progress.Total = 1, 1
-	} else if observation.Terminal() {
-		observation.Error = fmt.Sprintf("workflow run %d completed with conclusion %q", run.ID, run.Conclusion)
-	}
-	return observation, nil
 }
 
 func encodeGoInfraSnapshot(input goInfraPlanInput, state goInfraSnapshotState) (*contract.StateSnapshot, error) {

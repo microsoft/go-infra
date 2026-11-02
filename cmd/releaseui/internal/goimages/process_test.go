@@ -81,13 +81,6 @@ func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {
 	if plan == nil || plan.ExecutionButtonLabel != "Run production release" || len(steps) == 0 {
 		t.Fatalf("plan = %#v, steps = %d", plan, len(steps))
 	}
-	runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Observe(context.Background()); err != nil {
-		t.Fatalf("an unstarted graph tried to read an unknown build: %v", err)
-	}
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 		t.Fatal("Plan or Build changed the run state")
 	}
@@ -172,7 +165,7 @@ func TestProcessBuildUsesDocumentExecutionIdentity(t *testing.T) {
 	}
 }
 
-func TestTestReleaseGraphObservationDoesNotChangeSavedState(t *testing.T) {
+func TestTestReleaseGraphConstructionDoesNotReadExternalRun(t *testing.T) {
 	service := &observingProcessService{fakeService: fakeService{status: coordinator.StepStatusCanceled}}
 	process := NewProcess(service).Processes()[2]
 	snapshot, err := process.Prepare(context.Background(), nil)
@@ -199,20 +192,11 @@ func TestTestReleaseGraphObservationDoesNotChangeSavedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := runner.Observe(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	observation := runner.Snapshot().Steps[2]
 	after := run.TakeSnapshot()
-	if observation.Status != coordinator.StepStatusCanceled || observation.Progress.RunURL != pipelineRunURL("888") ||
-		service.polls != 1 || service.mirrors != 0 || service.queues != 0 || service.request.Mode != ModeTest ||
+	if len(steps) != 3 || service.polls != 0 || service.mirrors != 0 || service.queues != 0 || service.request.Mode != ModeTest ||
 		service.request.SessionID != state.Document.ID || service.request.ExecutionDigest != state.Document.ExecutionDigest {
 
-		t.Fatalf("observation = %#v, service = %#v", observation, service)
+		t.Fatalf("graph construction contacted a provider: %#v", service)
 	}
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 		t.Fatal("read-only graph observation changed the saved run state")

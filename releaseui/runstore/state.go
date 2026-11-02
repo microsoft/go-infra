@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
-	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 // Status is the lifecycle status of a started release run.
@@ -31,16 +30,17 @@ var processIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // State is releaseui-owned state wrapped around a process-owned snapshot.
 type State struct {
-	ProcessID string                  `json:"processId"`
-	Snapshot  *contract.StateSnapshot `json:"snapshot"`
-	// Execution contains saved execution progress, never read-only observations or an active runner.
-	Execution    coordinator.Snapshot `json:"execution"`
-	Digest       string               `json:"digest"`
-	Started      bool                 `json:"started"`
-	Checkpointed bool                 `json:"checkpointed,omitempty"`
-	Complete     bool                 `json:"complete"`
-	Result       string               `json:"result,omitempty"`
-	UpdatedAt    time.Time            `json:"-"`
+	ProcessID    string                  `json:"processId"`
+	Snapshot     *contract.StateSnapshot `json:"snapshot"`
+	Digest       string                  `json:"digest"`
+	Started      bool                    `json:"started"`
+	Checkpointed bool                    `json:"checkpointed,omitempty"`
+	Complete     bool                    `json:"complete"`
+	// Executing reserves the record until the runner releases it. Abandoned reservations require
+	// explicit operator repair after confirming that the previous runner has stopped.
+	Executing bool      `json:"executing,omitempty"`
+	Result    string    `json:"result,omitempty"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // NewState creates a release state with an immutable intent digest.
@@ -71,7 +71,6 @@ func (s *State) Clone() *State {
 	}
 	clone := *s
 	clone.Snapshot = CloneSnapshot(s.Snapshot)
-	clone.Execution = s.Execution.Clone()
 	return &clone
 }
 
@@ -86,16 +85,8 @@ func (s *State) Validate() error {
 	if err := ValidateSnapshot(s.Snapshot); err != nil {
 		return err
 	}
-	if err := s.Execution.Validate(); err != nil {
-		return fmt.Errorf("invalid saved execution: %w", err)
-	}
-	if s.Execution.Active {
-		return errors.New("stored execution cannot claim an active local runner")
-	}
-	for _, step := range s.Execution.Steps {
-		if !step.ObservedAt.IsZero() || step.ObservationError != "" {
-			return errors.New("stored execution cannot contain read-only observations")
-		}
+	if s.Executing && (!s.Started || s.Complete) {
+		return errors.New("only an unfinished started run can have an execution reservation")
 	}
 	if s.Digest == "" {
 		return errors.New("process run digest is empty")

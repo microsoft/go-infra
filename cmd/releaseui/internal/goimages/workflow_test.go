@@ -45,21 +45,22 @@ func (service *fakeService) QueuePipeline(_ context.Context, parameters map[stri
 	return "888", nil
 }
 
-func (service *fakeService) GetPipelineStatus(_ context.Context, buildID string) (*coordinator.Observation, error) {
+func (service *fakeService) PollPipeline(_ context.Context, buildID string) error {
 	service.polls++
 	if buildID != "888" {
-		return nil, errors.New("unexpected build ID")
+		return errors.New("unexpected build ID")
 	}
 	if service.pollErr != nil {
-		return nil, service.pollErr
+		return service.pollErr
 	}
 	status := service.status
 	if status == "" {
 		status = coordinator.StepStatusSucceeded
 	}
-	return &coordinator.Observation{
-		Status: status, Progress: coordinator.StepProgress{RunURL: pipelineRunURL(buildID)},
-	}, nil
+	if status == coordinator.StepStatusFailed || status == coordinator.StepStatusCanceled {
+		return &PipelineResultError{Result: string(status), Err: errors.New("pipeline " + string(status))}
+	}
+	return nil
 }
 
 func TestPipelineParameters(t *testing.T) {
@@ -140,6 +141,32 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 			}
 			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
 				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)
+			}
+		})
+	}
+}
+
+func TestGraphRecoveryHonorsSavedTerminalOutcome(t *testing.T) {
+	for _, result := range []string{"succeeded", "failed", "canceled"} {
+		t.Run(result, func(t *testing.T) {
+			state, err := NewState(testInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.VerifiedMirroredCommit = testInput.SourceVersion
+			state.QueueAttempted, state.BuildID = true, "888"
+			state.Complete, state.Result = true, result
+			service := &fakeService{pollErr: errors.New("provider unavailable")}
+			steps, _, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = (&coordinator.StepRunner{}).Execute(context.Background(), steps)
+			if (err == nil) != (result == "succeeded") ||
+				errors.Is(err, coordinator.ErrCanceled) != (result == "canceled") ||
+				service.polls != 0 || service.queues != 0 || service.mirrors != 0 {
+
+				t.Fatalf("saved outcome %s was lost: error=%v, service=%#v", result, err, service)
 			}
 		})
 	}

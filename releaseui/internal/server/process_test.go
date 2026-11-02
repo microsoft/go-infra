@@ -290,7 +290,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 
 	state := testProcessRun(t)
 	state.Started = true
-	record, err := store.Create(context.Background(), "Examples \u00b7 example", state, process.view, process.plan)
+	record, err := store.Create(context.Background(), "Examples \u00b7 example", state, testStoredView(state, time.Now().UTC()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 	server.Handler().ServeHTTP(
 		response,
 		authenticatedRequest(
-			t, server, http.MethodPost, "/api/releases/"+strconv.Itoa(record.ID)+"/select", `{}`,
+			t, server, http.MethodGet, "/api/releases/"+strconv.Itoa(record.ID)+"/view", "",
 		),
 	)
 	if response.Code != http.StatusOK {
@@ -324,7 +324,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 	}
 	resumed := httptest.NewRecorder()
 	body, err := json.Marshal(webview.ReleaseStartRequest{
-		PlanDigest: state.Digest, Confirmed: true, Revision: record.Revision,
+		PlanDigest: state.Digest, Confirmed: true, Revision: record.Revision, RecordID: record.ID,
 	})
 	if err != nil {
 		t.Fatal(err)

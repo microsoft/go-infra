@@ -66,6 +66,12 @@ type PipelineRunConfig struct {
 // Sleeper waits between status checks and is replaceable in tests.
 type Sleeper func(context.Context, time.Duration) error
 
+type pipelineStatus struct {
+	Status   coordinator.StepStatus
+	Progress coordinator.StepProgress
+	Error    string
+}
+
 // PipelineRunService implements only the queue-and-monitor surface required by the focused DAG.
 type PipelineRunService struct {
 	reader     PipelineReader
@@ -234,8 +240,29 @@ func templateParameterString(value any) (string, bool) {
 	return valueString, ok
 }
 
-// GetPipelineStatus reads and validates the known run once, for both execution and observation.
-func (s *PipelineRunService) GetPipelineStatus(ctx context.Context, buildID string) (*coordinator.Observation, error) {
+// PollPipeline monitors the fixed release run as part of execution.
+func (s *PipelineRunService) PollPipeline(ctx context.Context, buildID string) error {
+	for {
+		status, err := s.readPipelineStatus(ctx, buildID)
+		if err != nil {
+			return err
+		}
+		coordinator.ReportProgress(ctx, status.Progress)
+		switch status.Status {
+		case coordinator.StepStatusSucceeded:
+			return nil
+		case coordinator.StepStatusFailed, coordinator.StepStatusCanceled:
+			return &PipelineResultError{
+				Result: string(status.Status), Err: fmt.Errorf("%s: %s", status.Error, status.Progress.RunURL),
+			}
+		}
+		if err := s.sleep(ctx, 5*time.Second); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *PipelineRunService) readPipelineStatus(ctx context.Context, buildID string) (*pipelineStatus, error) {
 	id, err := strconv.Atoi(buildID)
 	if err != nil || id <= 0 {
 		return nil, fmt.Errorf("invalid go-images release build ID %q", buildID)
@@ -254,7 +281,7 @@ func (s *PipelineRunService) GetPipelineStatus(ctx context.Context, buildID stri
 	if err != nil {
 		return nil, fmt.Errorf("interpret go-images release build %d: %w", id, err)
 	}
-	observation := &coordinator.Observation{
+	observation := &pipelineStatus{
 		Status: coordinator.StepStatus(status),
 		Progress: coordinator.StepProgress{
 			Summary: "Azure pipeline " + string(status),

@@ -101,7 +101,7 @@ func TestPipelineStatusValidatesIdentityAndTarget(t *testing.T) {
 			}
 			reader, queue := &fakeReader{builds: []*azdopipeline.Build{build}}, &fakeQueueClient{}
 			service := newTestService(t, reader, queue, PipelineRunConfig{Mode: ModeTest})
-			observation, err := service.GetPipelineStatus(context.Background(), "888")
+			observation, err := service.readPipelineStatus(context.Background(), "888")
 			if test.change == nil {
 				if err != nil || observation.Status != coordinator.StepStatusCanceled || observation.Progress.RunURL != pipelineRunURL("888") {
 					t.Fatalf("observation = %#v, error = %v", observation, err)
@@ -301,7 +301,7 @@ func TestPipelineStatusReadsOnceWithoutPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, status := range []coordinator.StepStatus{coordinator.StepStatusRunning, coordinator.StepStatusSucceeded} {
-		observation, err := service.GetPipelineStatus(context.Background(), "888")
+		observation, err := service.readPipelineStatus(context.Background(), "888")
 		if err != nil || observation.Status != status || reader.gets != index+1 || reader.failureGets != 0 || sleeps != 0 {
 			t.Fatalf("observation=%#v, err=%v, gets=%d, failure gets=%d, sleeps=%d",
 				observation, err, reader.gets, reader.failureGets, sleeps)
@@ -317,7 +317,7 @@ func TestPipelineStatusReportsFailure(t *testing.T) {
 		}},
 	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
-	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	observation, err := service.readPipelineStatus(context.Background(), "888")
 	if err != nil || observation.Status != coordinator.StepStatusFailed ||
 		!strings.Contains(observation.Error, "Build > Linux arm32 > Build Images: PowerShell exited with code 1") ||
 		observation.Progress.RunURL != pipelineRunURL("888") || reader.failureGets != 1 {
@@ -329,7 +329,7 @@ func TestPipelineStatusReportsFailure(t *testing.T) {
 func TestPipelineStatusReportsCancellation(t *testing.T) {
 	reader := &fakeReader{builds: []*azdopipeline.Build{testPipelineBuild(t, ModeTest, "completed", "canceled")}}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeTest})
-	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	observation, err := service.readPipelineStatus(context.Background(), "888")
 	if err != nil || observation.Status != coordinator.StepStatusCanceled ||
 		!strings.Contains(observation.Error, "go-images release build 888 canceled") || reader.failureGets != 0 {
 
@@ -343,7 +343,7 @@ func TestPipelineStatusFailureDetailsAreOptional(t *testing.T) {
 		failureErr: errors.New("timeline unavailable"),
 	}
 	service := newTestService(t, reader, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
-	observation, err := service.GetPipelineStatus(context.Background(), "888")
+	observation, err := service.readPipelineStatus(context.Background(), "888")
 	if err != nil || !strings.Contains(observation.Error, `failed with result "failed"`) ||
 		observation.Progress.RunURL != pipelineRunURL("888") {
 
@@ -380,41 +380,23 @@ func TestPipelineDiagnosticTimeoutKeepsConfirmedFailure(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				runner, err := coordinator.NewStepRunner(steps, coordinator.Snapshot{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				saved := runner.ExecutionSnapshot()
-				last := len(saved.Steps) - 1
-				saved.Steps[last].Status = coordinator.StepStatusRunning
-				runner, err = coordinator.NewStepRunner(steps, saved)
-				if err != nil {
-					t.Fatal(err)
-				}
 				ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
 				defer cancel()
 				started := time.Now()
-				if err := runner.Observe(ctx); err != nil {
-					t.Fatalf("optional diagnostics invalidated the confirmed failure: %v", err)
-				}
+				runner := new(coordinator.StepRunner)
+				err = runner.Execute(ctx, steps)
 				snapshot := runner.Snapshot()
-				if snapshot.Steps[last].ObservationError != "" || snapshot.Steps[last].Status != coordinator.StepStatusFailed ||
+				last := len(snapshot.Steps) - 1
+				if snapshot.Steps[last].Status != coordinator.StepStatusFailed ||
 					snapshot.Steps[last].Progress.RunURL != pipelineRunURL("888") ||
 					!strings.Contains(snapshot.Steps[last].Error, `failed with result "failed"`) ||
 					ctx.Err() != nil || time.Since(started) != test.readTime+min(time.Second, (test.timeout-test.readTime)/2) {
 
 					t.Fatalf("confirmed failure was lost or diagnostics consumed the refresh budget: %#v", snapshot)
 				}
-				if state.Complete || checkpoints != 0 || queue.calls != 0 || reader.gets != 1 ||
-					reader.failureGets != 1 || runner.ExecutionSnapshot().Steps[last].Status != coordinator.StepStatusRunning {
-
-					t.Fatal("read-only refresh changed execution or made unexpected provider calls")
-				}
-				cancel()
-				err = runner.Execute(context.Background(), steps)
 				if err == nil || !strings.Contains(err.Error(), `failed with result "failed"`) ||
 					errors.Is(err, context.DeadlineExceeded) || !state.Complete || state.Result != "failed" ||
-					checkpoints != 1 || queue.calls != 0 || reader.gets != 2 || reader.failureGets != 2 {
+					checkpoints != 1 || queue.calls != 0 || reader.gets != 1 || reader.failureGets != 1 {
 
 					t.Fatalf("execution did not preserve the same confirmed outcome: error=%v, state=%#v, checkpoints=%d",
 						err, state, checkpoints)
@@ -443,7 +425,7 @@ func TestPipelineReadHonorsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := service.GetPipelineStatus(ctx, "888"); !errors.Is(err, context.Canceled) {
+	if _, err := service.readPipelineStatus(ctx, "888"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v", err)
 	}
 }

@@ -22,7 +22,7 @@ func execute(t *testing.T, step *Step) error {
 	return sr.Execute(context.Background(), steps)
 }
 
-func TestNewStepRunnerDisplaysSavedGraphWithoutExecuting(t *testing.T) {
+func TestNewStepRunnerInitializesGraphWithoutExecuting(t *testing.T) {
 	executions := 0
 	action := func(context.Context) error {
 		executions++
@@ -30,35 +30,16 @@ func TestNewStepRunnerDisplaysSavedGraphWithoutExecuting(t *testing.T) {
 	}
 	first := NewRootStep("Initialize", time.Minute, action)
 	second := first.Then("Work", time.Minute, action)
-	saved := Snapshot{
-		Sequence: 7, Active: true, Error: "last recorded error",
-		Steps: []StepSnapshot{
-			{Name: "Initialize", DependsOn: []string{}, Status: StepStatusSucceeded},
-			{
-				Name: "Work", DependsOn: []string{"Initialize"}, Status: StepStatusRunning,
-				Progress: &StepProgress{Completed: 5, Total: 30, Summary: "Saved work"},
-			},
-		},
-	}
-	runner, err := NewStepRunner([]*Step{first, second}, saved)
+	runner, err := NewStepRunner([]*Step{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot := runner.Snapshot()
-	if executions != 0 || snapshot.Active || snapshot.Sequence != saved.Sequence || snapshot.Error != saved.Error {
+	if executions != 0 || snapshot.Active || snapshot.Error != "" {
 		t.Fatalf("view = %#v, executions = %d", snapshot, executions)
 	}
-	if !reflect.DeepEqual(snapshot.Steps, saved.Steps) {
-		t.Fatalf("restored steps = %#v, want %#v", snapshot.Steps, saved.Steps)
-	}
-	saved.Steps[1].Progress.Completed = 30
-	saved.Steps[1].DependsOn[0] = "changed"
-	if got := runner.Snapshot(); got.Steps[1].Progress.Completed != 5 || got.Steps[1].DependsOn[0] != "Initialize" {
-		t.Fatalf("caller mutated the restored graph: %#v", got)
-	}
-	snapshot.Steps[1].Progress.Completed = 99
-	if got := runner.Snapshot(); got.Steps[1].Progress.Completed != 5 {
-		t.Fatal("returned snapshot mutated the restored graph")
+	if snapshot.Steps[0].Status != StepStatusWaiting || snapshot.Steps[1].DependsOn[0] != "Initialize" {
+		t.Fatalf("initial graph = %#v", snapshot)
 	}
 	if err := runner.Execute(context.Background(), []*Step{first, second}); err != nil {
 		t.Fatal(err)
@@ -68,22 +49,16 @@ func TestNewStepRunnerDisplaysSavedGraphWithoutExecuting(t *testing.T) {
 	}
 }
 
-func TestNewStepRunnerRejectsIncompatibleSavedGraph(t *testing.T) {
-	first := NewRootStep("First", time.Minute, func(context.Context) error { return nil })
-	second := first.Then("Second", time.Minute, func(context.Context) error { return nil })
+func TestSnapshotRejectsInvalidGraph(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		saved []StepSnapshot
 	}{
-		{name: "missing step", saved: []StepSnapshot{{Name: "First", Status: StepStatusSucceeded}}},
 		{name: "duplicate name", saved: []StepSnapshot{
 			{Name: "First", Status: StepStatusSucceeded}, {Name: "First", Status: StepStatusWaiting},
 		}},
 		{name: "unknown status", saved: []StepSnapshot{
 			{Name: "First", Status: "guess"}, {Name: "Second", DependsOn: []string{"First"}, Status: StepStatusWaiting},
-		}},
-		{name: "different dependency", saved: []StepSnapshot{
-			{Name: "First", Status: StepStatusSucceeded}, {Name: "Second", Status: StepStatusWaiting},
 		}},
 		{name: "unordered dependency", saved: []StepSnapshot{
 			{Name: "First", DependsOn: []string{"Second"}, Status: StepStatusSucceeded},
@@ -91,7 +66,7 @@ func TestNewStepRunnerRejectsIncompatibleSavedGraph(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := NewStepRunner([]*Step{first, second}, Snapshot{Steps: test.saved}); err == nil {
+			if err := (Snapshot{Steps: test.saved}).Validate(); err == nil {
 				t.Fatal("invalid saved graph was accepted")
 			}
 		})
@@ -104,7 +79,7 @@ func TestStepRunnerRejectsChangedExecutionGraphWithoutChangingSavedView(t *testi
 		called = true
 		return nil
 	})
-	runner, err := NewStepRunner([]*Step{step}, Snapshot{})
+	runner, err := NewStepRunner([]*Step{step})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -108,7 +108,7 @@ func (s *AzureService) ValidateRollback(ctx context.Context, buildID int) (Rollb
 	return ValidateRollbackSource(ctx, s.pipelines, s, buildID)
 }
 
-// NewRunService constructs a run service without contacting external services.
+// NewRunService binds execution operations to the reviewed release identity.
 func (s *AzureService) NewRunService(request RunRequest) (RunService, error) {
 	return NewPipelineRunService(s.pipelines, s, PipelineRunConfig{
 		Mode:                 request.Mode,
@@ -125,7 +125,7 @@ func (s *AzureService) NewRunService(request RunRequest) (RunService, error) {
 	}, nil)
 }
 
-// QueueRelease revalidates the source immediately before the only build-queue mutation.
+// QueueRelease checks the reviewed source is still current, then queues the release.
 func (s *AzureService) QueueRelease(ctx context.Context, request QueueRequest) (int, error) {
 	current, err := s.ResolveCurrentSource(ctx)
 	if err != nil {

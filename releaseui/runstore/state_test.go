@@ -5,6 +5,7 @@ package runstore
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -59,40 +60,34 @@ func TestRecordReadsClosedIncompleteRun(t *testing.T) {
 	}
 }
 
-func TestStateCloneOwnsSavedGraph(t *testing.T) {
-	state := &State{Execution: coordinator.Snapshot{Steps: []coordinator.StepSnapshot{
+func TestViewCloneOwnsGraph(t *testing.T) {
+	state := &View{Graph: coordinator.Snapshot{Steps: []coordinator.StepSnapshot{
 		{
 			Name: "Work", Status: coordinator.StepStatusRunning, DependsOn: []string{"Initialize"},
 			Progress: &coordinator.StepProgress{Completed: 5, Total: 30},
 		},
 	}}}
 	clone := state.Clone()
-	clone.Execution.Steps[0].DependsOn[0] = "changed"
-	clone.Execution.Steps[0].Progress.Completed = 30
-	if state.Execution.Steps[0].DependsOn[0] != "Initialize" || state.Execution.Steps[0].Progress.Completed != 5 {
+	clone.Graph.Steps[0].DependsOn[0] = "changed"
+	clone.Graph.Steps[0].Progress.Completed = 30
+	if state.Graph.Steps[0].DependsOn[0] != "Initialize" || state.Graph.Steps[0].Progress.Completed != 5 {
 		t.Fatal("cloned execution mutated the stored graph")
 	}
 }
 
-func TestStateRejectsReadOnlyObservationMetadataInDurableExecution(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		change func(*coordinator.Snapshot)
-	}{
-		{name: "step observation error", change: func(snapshot *coordinator.Snapshot) { snapshot.Steps[0].ObservationError = "read failed" }},
-		{name: "step observation time", change: func(snapshot *coordinator.Snapshot) { snapshot.Steps[0].ObservedAt = time.Now().UTC() }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+func TestStateRejectsInvalidExecutionReservation(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(fmt.Sprint(started), func(t *testing.T) {
 			state, err := NewState("example", &contract.StateSnapshot{
 				Input: json.RawMessage(`{}`), State: json.RawMessage(`{}`),
 			}, time.Now().UTC())
 			if err != nil {
 				t.Fatal(err)
 			}
-			state.Execution = coordinator.Snapshot{Steps: []coordinator.StepSnapshot{
-				{Name: "Monitor", Status: coordinator.StepStatusRunning},
-			}}
-			test.change(&state.Execution)
+			state.Started, state.Executing = started, true
+			if started {
+				state.Complete, state.Result = true, string(StatusSucceeded)
+			}
 			if err := state.Validate(); err == nil {
 				t.Fatal("durable state accepted read-only observation metadata")
 			}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/internal/processregistry"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
@@ -65,6 +66,7 @@ type testStore struct {
 	mu sync.Mutex
 
 	record        *runstore.Record
+	view          *runstore.View
 	updateErr     error
 	updateStarted chan struct{}
 	updateRelease <-chan struct{}
@@ -76,8 +78,7 @@ func (s *testStore) Create(
 	context.Context,
 	string,
 	*runstore.State,
-	*contract.RunView,
-	*contract.Plan,
+	*runstore.View,
 ) (*runstore.Record, error) {
 	return nil, errors.New("test store does not create records")
 }
@@ -95,18 +96,20 @@ func (s *testStore) Update(
 	_ context.Context,
 	current *runstore.Record,
 	state *runstore.State,
-	_ *contract.RunView,
-	_ *contract.Plan,
+	view *runstore.View,
 ) (*runstore.Record, error) {
 	s.updates.Add(1)
+	s.mu.Lock()
+	updateErr := s.updateErr
+	s.mu.Unlock()
 	if s.updateStarted != nil {
 		s.startOnce.Do(func() { close(s.updateStarted) })
 	}
 	if s.updateRelease != nil {
 		<-s.updateRelease
 	}
-	if s.updateErr != nil {
-		return nil, s.updateErr
+	if updateErr != nil {
+		return nil, updateErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,11 +120,29 @@ func (s *testStore) Update(
 		ID: current.ID, Revision: current.Revision + 1, URL: current.URL,
 		UpdatedAt: time.Now().UTC(), Run: state.Clone(),
 	}
+	s.view = view.Clone()
 	return cloneTestRecord(s.record), nil
 }
 
 func (s *testStore) Query(context.Context, bool, int) ([]*runstore.Record, error) {
 	return nil, errors.New("test store does not query records")
+}
+
+func (s *testStore) GetView(context.Context, int) (*runstore.ViewRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &runstore.ViewRecord{
+		ID: s.record.ID, Revision: s.record.Revision, URL: s.record.URL, Title: s.record.Title,
+		Closed: s.record.Closed, View: s.view.Clone(),
+	}, nil
+}
+
+func (s *testStore) QueryViews(ctx context.Context, closed bool, _ int) ([]*runstore.ViewRecord, error) {
+	if s.record.Closed != closed {
+		return nil, nil
+	}
+	record, err := s.GetView(ctx, s.record.ID)
+	return []*runstore.ViewRecord{record}, err
 }
 
 func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
@@ -206,9 +227,9 @@ func TestValidateRecordForExecution(t *testing.T) {
 	}{
 		{name: "open unfinished"},
 		{name: "closed unfinished", closed: true, wantError: true},
-		{name: "open succeeded", complete: true, result: resultSucceeded},
-		{name: "closed succeeded", closed: true, complete: true, result: resultSucceeded},
-		{name: "closed canceled", closed: true, complete: true, result: resultCanceled},
+		{name: "open succeeded", complete: true, result: resultSucceeded, wantError: true},
+		{name: "closed succeeded", closed: true, complete: true, result: resultSucceeded, wantError: true},
+		{name: "closed canceled", closed: true, complete: true, result: resultCanceled, wantError: true},
 		{name: "missing identity", malformed: "id", wantError: true},
 		{name: "missing state", malformed: "state", wantError: true},
 		{name: "missing timestamp", malformed: "timestamp", wantError: true},
@@ -330,7 +351,7 @@ func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph := record.Run.Execution
+	graph := store.view.Graph
 	if graph.Active || len(graph.Steps) != 1 || graph.Steps[0].Status != coordinator.StepStatusRunning ||
 		graph.Steps[0].Progress == nil || graph.Steps[0].Progress.Completed != 5 {
 
@@ -342,8 +363,26 @@ func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !record.Run.Complete || record.Run.Execution.Steps[0].Status != coordinator.StepStatusSucceeded {
+	if !record.Run.Complete || store.view.Graph.Steps[0].Status != coordinator.StepStatusSucceeded {
 		t.Fatalf("final saved graph = %#v", record.Run)
+	}
+}
+
+func TestFinalViewValidationFailureIsVisible(t *testing.T) {
+	manager, session, run, store, cancel := checkpointTestRun(t)
+	defer cancel()
+	session.runner = &coordinator.StepRunner{}
+	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context) error {
+		coordinator.ReportProgress(ctx, coordinator.StepProgress{RunURL: "javascript:alert(1)"})
+		return nil
+	})}
+	manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
+	current, ok := manager.Current("example")
+	if !ok || manager.Running("example") || current.Execution.Run.Result != resultUncertain ||
+		!strings.Contains(session.runner.Snapshot().Error, "invalid HTTPS link") || store.updates.Load() != 0 {
+
+		t.Fatalf("invalid display produced a success-shaped result: %#v", current)
 	}
 }
 
@@ -375,6 +414,9 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			manager, session, run, store, cancel := checkpointTestRun(t)
 			defer cancel()
+			if phase == "completion" {
+				session.runner = &coordinator.StepRunner{}
+			}
 			store.updateStarted = make(chan struct{})
 			release := make(chan struct{})
 			store.updateRelease = release
@@ -416,6 +458,7 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 func TestFinalPersistenceFailureIsVisible(t *testing.T) {
 	manager, session, run, store, cancel := checkpointTestRun(t)
 	defer cancel()
+	session.runner = &coordinator.StepRunner{}
 	store.updateErr = errors.New("revision changed during final persistence")
 	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
 	steps := []*coordinator.Step{
@@ -550,6 +593,16 @@ func checkpointTestRun(
 	manager := &Manager{
 		ctx: ctx, store: store, sessions: map[string]*processSession{"example": session},
 	}
+	registry, err := processregistry.New(viewingTestGroup{process: viewingTestProcess{run: run}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.processes = registry
+	runner, err := coordinator.NewStepRunner([]*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(context.Context) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.runner = runner
 	return manager, session, run, store, cancel
 }
 

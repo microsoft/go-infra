@@ -354,13 +354,12 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 	if err != nil {
 		return nil, fmt.Errorf("create go-images execution service: %w", err)
 	}
-	workflowCheckpoint := CheckpointFunc(nil)
-	if checkpoint != nil {
-		workflowCheckpoint = func(state *State) {
-			r.mu.Lock()
-			r.state.Workflow = *state
-			r.state.UpdatedAt = time.Now().UTC()
-			r.mu.Unlock()
+	workflowCheckpoint := func(state *State) {
+		r.mu.Lock()
+		r.state.Workflow = *state
+		r.state.UpdatedAt = time.Now().UTC()
+		r.mu.Unlock()
+		if checkpoint != nil {
 			checkpoint()
 		}
 	}

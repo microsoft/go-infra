@@ -108,11 +108,7 @@ function createReleaseCard(release) {
     }
   } else {
     details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()}`;
-    if (release.externalStatus) {
-      details.textContent += ` · External status: ${statusText(release.externalStatus)}`;
-    } else if (release.status === "saved") {
-      details.textContent += " · Not executing in this UI. Open to view progress and available external status.";
-    }
+    details.textContent += " · Last published by the runner";
     body.append(details);
   }
 
@@ -148,7 +144,7 @@ function createReleaseCard(release) {
     open.type = "button";
     open.textContent = "Open";
     const openRelease = () => {
-      if (!open.disabled) selectRelease(release, open, "Open");
+      if (!open.disabled) location.assign(release.href);
     };
     open.addEventListener("click", openRelease);
     card.classList.add("release-card-selectable");
@@ -171,20 +167,6 @@ function createReleaseCard(release) {
   }
   card.append(icon, body, actions);
   return card;
-}
-
-async function selectRelease(release, button, label) {
-  setButtonBusy(button, true, "Opening…");
-  try {
-    const selected = await requestJSON(`/api/releases/${release.recordId}/select`, {
-      method: "POST",
-      body: "{}",
-    });
-    location.assign(selected.href);
-  } catch (error) {
-    showTrackingError(error.message);
-    setButtonBusy(button, false, label);
-  }
 }
 
 async function openJSON(release) {

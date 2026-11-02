@@ -7,10 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"runtime/debug"
 	"slices"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -42,14 +42,11 @@ type StepSnapshot struct {
 	DependsOn []string      `json:"dependsOn,omitempty"`
 	Progress  *StepProgress `json:"progress,omitempty"`
 	Error     string        `json:"error,omitempty"`
-	// ObservedAt identifies a fresh read in this viewer, not a saved execution transition.
-	ObservedAt       time.Time `json:"observedAt,omitzero"`
-	ObservationError string    `json:"observationError,omitempty"`
 }
 
 // StepProgress is optional live detail reported by a running step. Completed and Total can render
 // a determinate progress indicator when Total is positive. RunURL identifies this step's external
-// operation in both saved progress and read-only observations.
+// operation in both live and published progress.
 type StepProgress struct {
 	Summary   string `json:"summary,omitempty"`
 	Detail    string `json:"detail,omitempty"`
@@ -83,23 +80,20 @@ type Snapshot struct {
 
 // StepRunner executes a release step graph and publishes race-free snapshots of its state.
 type StepRunner struct {
-	mu        sync.RWMutex
-	observeMu sync.Mutex
+	mu sync.RWMutex
 
-	states     map[*Step]*stepState
-	ordered    []*stepState
-	active     bool
-	runError   string
-	sequence   uint64
-	generation uint64
+	states   map[*Step]*stepState
+	ordered  []*stepState
+	active   bool
+	runError string
+	sequence uint64
 
 	nextSubscriberID uint64
 	subscribers      map[uint64]chan Snapshot
 }
 
-// NewStepRunner constructs a graph without executing it. saved may be empty for a new plan.
-// A restored snapshot describes last-saved progress, never an active local executor.
-func NewStepRunner(steps []*Step, saved Snapshot) (*StepRunner, error) {
+// NewStepRunner initializes the graph's waiting state before execution.
+func NewStepRunner(steps []*Step) (*StepRunner, error) {
 	initial := Snapshot{Steps: make([]StepSnapshot, len(steps))}
 	for index, step := range steps {
 		if step == nil {
@@ -116,24 +110,8 @@ func NewStepRunner(steps []*Step, saved Snapshot) (*StepRunner, error) {
 	if err := initial.Validate(); err != nil {
 		return nil, err
 	}
-	if len(saved.Steps) != 0 {
-		if err := saved.Validate(); err != nil {
-			return nil, err
-		}
-		if err := validateStepsMatch(steps, saved.Steps); err != nil {
-			return nil, err
-		}
-		initial = saved.Clone()
-	}
-	runner := &StepRunner{sequence: initial.Sequence, runError: initial.Error}
+	runner := &StepRunner{}
 	runner.initializeLocked(steps)
-	for index, savedStep := range initial.Steps {
-		state := runner.ordered[index]
-		state.status, state.progress = savedStep.Status, savedStep.Progress
-		if savedStep.Error != "" {
-			state.err = errors.New(savedStep.Error)
-		}
-	}
 	return runner, nil
 }
 
@@ -144,7 +122,7 @@ func (r *StepRunner) ValidateSteps(steps []*Step) error {
 	if r.active {
 		return errAlreadyActive
 	}
-	return validateStepsMatch(steps, r.snapshotLocked(false).Steps)
+	return validateStepsMatch(steps, r.snapshotLocked().Steps)
 }
 
 // Execute runs a group of steps, blocking until all are complete.
@@ -165,7 +143,7 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 		return errAlreadyActive
 	}
 	if len(r.ordered) != 0 {
-		if err := validateStepsMatch(steps, r.snapshotLocked(false).Steps); err != nil {
+		if err := validateStepsMatch(steps, r.snapshotLocked().Steps); err != nil {
 			r.mu.Unlock()
 			return err
 		}
@@ -203,74 +181,7 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 func (r *StepRunner) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.snapshotLocked(true)
-}
-
-// ExecutionSnapshot returns only execution-owned progress, without read-only observations.
-// Use it for durable checkpoints, not the viewer's derived display.
-func (r *StepRunner) ExecutionSnapshot() Snapshot {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.snapshotLocked(false)
-}
-
-// Observe refreshes only the read-only callbacks of an inactive graph. It never executes steps,
-// calls their checkpoint callbacks, or changes their saved execution state.
-func (r *StepRunner) Observe(ctx context.Context) error {
-	r.observeMu.Lock()
-	defer r.observeMu.Unlock()
-	r.mu.RLock()
-	if r.active {
-		r.mu.RUnlock()
-		return errors.New("cannot observe an executing graph")
-	}
-	generation := r.generation
-	states := append([]*stepState(nil), r.ordered...)
-	r.mu.RUnlock()
-	var failures []error
-	for _, state := range states {
-		if state.step.Observe == nil {
-			continue
-		}
-		var observation *Observation
-		err := ctx.Err()
-		if err == nil {
-			observation, err = state.step.Observe(ctx)
-		}
-		if err == nil && observation != nil {
-			err = observation.Validate()
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return ctx.Err()
-		}
-		if err == nil {
-			err = ctx.Err()
-		}
-		r.mu.Lock()
-		if r.active || r.generation != generation {
-			r.mu.Unlock()
-			return context.Canceled
-		}
-		state.observationErr = err
-		if err != nil {
-			failures = append(failures, fmt.Errorf("observe %s: %w", state.step.Name, err))
-		} else if observation != nil {
-			value := *observation
-			state.observation = &value
-			state.observedAt = time.Now().UTC()
-		} else {
-			state.observation = nil
-			state.observedAt = time.Time{}
-		}
-		r.mu.Unlock()
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.active || r.generation != generation {
-		return context.Canceled
-	}
-	r.publishLocked()
-	return errors.Join(failures...)
+	return r.snapshotLocked()
 }
 
 // Subscribe atomically returns the current snapshot and subscribes to future snapshots. The
@@ -289,7 +200,7 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 	id := r.nextSubscriberID
 	updates := make(chan Snapshot, buffer)
 	r.subscribers[id] = updates
-	initial := r.snapshotLocked(true)
+	initial := r.snapshotLocked()
 	r.mu.Unlock()
 
 	var once sync.Once
@@ -306,7 +217,7 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 	return initial, updates, cancel
 }
 
-func (r *StepRunner) snapshotLocked(includeObservations bool) Snapshot {
+func (r *StepRunner) snapshotLocked() Snapshot {
 	snapshot := Snapshot{
 		Sequence: r.sequence,
 		Active:   r.active,
@@ -329,25 +240,12 @@ func (r *StepRunner) snapshotLocked(includeObservations bool) Snapshot {
 		if state.err != nil {
 			stepSnapshot.Error = state.err.Error()
 		}
-		if includeObservations && !r.active {
-			if state.observation != nil {
-				stepSnapshot.Status = state.observation.Status
-				progress := state.observation.Progress
-				stepSnapshot.Progress = &progress
-				stepSnapshot.Error = state.observation.Error
-				stepSnapshot.ObservedAt = state.observedAt
-			}
-			if state.observationErr != nil {
-				stepSnapshot.ObservationError = state.observationErr.Error()
-			}
-		}
 		snapshot.Steps = append(snapshot.Steps, stepSnapshot)
 	}
 	return snapshot
 }
 
 func (r *StepRunner) initializeLocked(steps []*Step) {
-	r.generation++
 	r.states = make(map[*Step]*stepState, len(steps))
 	r.ordered = make([]*stepState, 0, len(steps))
 	for _, step := range steps {
@@ -379,7 +277,7 @@ func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
 
 func (r *StepRunner) publishLocked() {
 	r.sequence++
-	snapshot := r.snapshotLocked(true)
+	snapshot := r.snapshotLocked()
 	for id, updates := range r.subscribers {
 		select {
 		case updates <- snapshot:
@@ -462,12 +360,9 @@ func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 type stepState struct {
 	step *Step
 
-	err            error
-	status         StepStatus
-	progress       *StepProgress
-	observation    *Observation
-	observedAt     time.Time
-	observationErr error
+	err      error
+	status   StepStatus
+	progress *StepProgress
 	// complete is closed after err and status are updated.
 	complete chan struct{}
 }
@@ -550,4 +445,15 @@ func (e *errDependencyFailed) Error() string {
 
 func (e *errDependencyFailed) Unwrap() error {
 	return e.err
+}
+
+func validateRunURL(runURL string) error {
+	if runURL == "" {
+		return nil
+	}
+	link, err := url.Parse(runURL)
+	if err != nil || link.Scheme != "https" || link.Host == "" || link.User != nil {
+		return errors.New("external operation has an invalid HTTPS link")
+	}
+	return nil
 }

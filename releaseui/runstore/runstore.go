@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/microsoft/go-infra/releaseui/contract"
 )
 
 // ErrConflict reports that a stored release changed before an update completed.
@@ -20,23 +18,17 @@ var ErrConflict = errors.New("release run revision changed")
 // Implementations must use revision checks in Update and return [ErrConflict] when the record
 // changed after the caller read it. Implementations must not retain or mutate arguments.
 type Store interface {
+	Reader
 	// Create stores run before releaseui starts external execution. name is the non-empty
-	// host-generated name combining the registered group and process names. view and plan contain
-	// derived display data for the same run and may be nil.
-	Create(ctx context.Context, name string, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
+	// host-generated name combining the registered group and process names. view contains
+	// the complete published display data for the same run.
+	Create(ctx context.Context, name string, run *State, view *View) (*Record, error)
 
 	// Get returns the record identified by id.
 	Get(ctx context.Context, id int) (*Record, error)
 
-	// Update replaces current with run when current.Revision still matches storage. view and plan
-	// contain derived display data for run and may be nil.
-	Update(ctx context.Context, current *Record, run *State, view *contract.RunView, plan *contract.Plan) (*Record, error)
-
-	// Query returns at most limit records whose closed state equals closed, newest first.
-	// If individual records cannot be read, it may return valid records alongside an error
-	// describing the failures. A RecordError preserves read-only metadata and recovery guidance.
-	// Callers must handle both the records and the error.
-	Query(ctx context.Context, closed bool, limit int) ([]*Record, error)
+	// Update atomically saves the checkpoint and published view if current.Revision matches storage.
+	Update(ctx context.Context, current *Record, run *State, view *View) (*Record, error)
 }
 
 // Record is one revisioned release run returned by a Store.

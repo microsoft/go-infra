@@ -191,39 +191,42 @@ The current prototype can show older test records as **Cannot open in this sessi
 This is an unreleased prototype. Compatibility with data from earlier prototype builds is not
 guaranteed, and older test records may remain read-only. Supported current-format records can
 still be reopened in another UI session.
-Opening a supported record reconstructs its graph without executing steps or writing a checkpoint.
-The graph starts with each step's saved status, progress, and error. For unfinished records with a
-known Azure build or GitHub workflow ID, monitor steps refresh external status every five seconds
-using the same validated reads as normal execution. Each observed step shows its own run link and
-last-check time. Viewing never queues or dispatches an operation, runs an action step, or writes a
-checkpoint. A failed lookup keeps the last known progress visible and reports the refresh error.
-Slow optional diagnostic requests do not hide a confirmed Azure build result.
-The dashboard uses these graph observations too. An external run succeeding does not mark an
-unfinished release complete or start its remaining actions.
+The runner publishes a self-contained graph view alongside its execution checkpoint. It contains
+step names, dependencies, progress, errors, and external-run links. The shared writer saves each
+checkpoint, publishes progress and a heartbeat every five seconds, and saves the final outcome.
+All writes use the same revision-checked persistence path.
 
-Use a step's **Open external run** link or **Open release run** for full pipeline or workflow details.
-If this server is already executing the selected run, its graph shows execution progress, including
-for other viewers connected before a resume. Read-only refreshes stop before execution resumes and
-when the selected graph is replaced or the server stops.
+Opening a release reads only this published view. It does not load the process checkpoint,
+construct executable steps, or query Azure builds or GitHub workflows. The view can be opened
+even when the matching process is not configured or its checkpoint uses an unsupported format.
+The dashboard uses the same published data.
 
-Work executing in this UI appears under **Ongoing releases**. Open failed, canceled, uncertain, and
-unmonitored unfinished work appears
+Release pages refresh the stored view every five seconds and show its last-published timestamp.
+If the runner stops publishing, the page keeps the last saved progress and warns that it may be
+stale. It does not independently monitor or restart the external operation. Use a step's
+**Open external run** link or **Open release run** to inspect the provider directly.
+
+Records whose last publication reports an executing runner appear under **Ongoing releases**.
+Open failed, canceled, uncertain, and interrupted unfinished work appears
 under **Needs attention**. Successful work and manually closed terminal outcomes appear under
 **Recent history** without rewriting the execution result. Closed unfinished records remain read-only.
-Clicking an available card or **Open** selects
-one work item for its process session without resuming it. Its Azure DevOps browser link appears on the dashboard and selected
-release page. **View JSON** exports its snapshot for manual repair and imports edited JSON only when
-the exported Azure DevOps revision is still current. Import validates the process payload and rebuilt
-graph before updating the record. Missing or incompatible graph steps are rejected. Import cannot
-change the process ID or immutable intent digest. Restart without a selected release before
-repairing that release's state. Reopening the currently selected work item is idempotent; selecting a
-different work item still requires restarting the server.
+Clicking a card or **Open** opens its published release page. Its Azure DevOps browser link appears
+on the dashboard and release page. **View JSON** explicitly exports the execution checkpoint for
+manual repair and imports edited JSON only when the exported revision is still current. Import
+validates the process payload and executable graph before updating the record. It cannot change
+the process ID, input, or immutable intent digest. Stop the previous runner before
+repairing that release's state. Viewing any number of releases is independent of the configured
+execution sessions. Executing a different release for the same process still requires restarting
+that process session.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
-An open unfinished saved run instead offers **Resume release** then **Confirm resume**.
-Resuming continues the existing record and requires its reviewed revision to remain current.
-It may perform external actions; opening the graph never authorizes those actions.
+An open unfinished record offers **Resume release** then **Confirm resume** when its process is
+configured and it is not reserved by a runner. Only that confirmed operation loads the checkpoint.
+It rechecks execution readiness and claims the reviewed record revision before any actions run.
+A durable execution reservation prevents another server from resuming the same record.
+Graceful completion or interruption releases it. If the runner crashes, verify it has stopped,
+then use **View JSON** to clear `executing` before resuming. Do not clear an active runner's reservation.
 Normal and rollback runs can publish production images under `public/`.
 Test runs are fixed to `dev/`.
 Do not confirm a real execution without authorization.
@@ -257,8 +260,8 @@ resume runs its steps. Process-owned checkpoints and reconciliation still determ
 step can continue without duplicating an external action.
 
 The Go-images document stores only standalone input and state. `Run.Build` reconstructs the
-executable graph without running it. The shared lifecycle saves graph display snapshots alongside
-the process checkpoint; those snapshots do not authorize or skip external actions.
+executable graph without running it. The shared lifecycle writes a separate display snapshot
+alongside the process checkpoint. Execution recovery never uses the display snapshot.
 The release UI stores the document inside the
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
