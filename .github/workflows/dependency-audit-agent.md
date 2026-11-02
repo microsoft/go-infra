@@ -153,6 +153,8 @@ safe-outputs:
         go -C control run ./cmd/dependencyaudit stamp -input /tmp/gh-aw/dependency-audit/context.json \
           -output /tmp/gh-aw/dependency-audit-checkpoint/checkpoint.json
     - name: Save the validated checkpoint
+      # Warnings can leave the detection job successful.
+      if: needs.detection.outputs.detection_conclusion == 'success'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: dependency-audit-checkpoint

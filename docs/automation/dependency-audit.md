@@ -86,7 +86,7 @@ After the PR merges, the next audit rechecks the finding and reports whether it 
 ## Recover a missing checkpoint
 
 Keep Actions artifact retention longer than the interval between audits.
-Each successful audit saves a `dependency-audit-checkpoint` artifact for the next run.
+Successful runs with a clean threat-detection verdict save a `dependency-audit-checkpoint` artifact for the next run.
 If the artifact is unavailable, the workflow can resume from a tracker issue, including a closed issue.
 
 If no usable checkpoint remains, choose a commit before the dependency updates you need to recheck.
