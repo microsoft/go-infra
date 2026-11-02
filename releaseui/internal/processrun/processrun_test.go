@@ -351,6 +351,9 @@ func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !record.Run.Checkpointed || record.Run.Complete {
+		t.Fatalf("checkpoint was not saved as unfinished: %#v", record.Run)
+	}
 	graph := store.view.Graph
 	if graph.Active || len(graph.Steps) != 1 || graph.Steps[0].Status != coordinator.StepStatusRunning ||
 		graph.Steps[0].Progress == nil || graph.Steps[0].Progress.Completed != 5 {

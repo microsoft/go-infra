@@ -106,6 +106,7 @@ func TestPublishedViewRoutesDoNotLoadProcessOrCheckpoint(t *testing.T) {
 			decodeResponse(t, response, &data)
 			if data.Record.View.Graph.Steps[0].Name != "Run example" ||
 				foreign && data.ResumeURL != "" || !foreign && data.ResumeURL == "" {
+
 				t.Fatalf("published view=%#v", data)
 			}
 			if store.records[42].Revision != 1 || ui.server.runs.Running("example") {
@@ -136,6 +137,7 @@ func TestDashboardUsesPublishedLifecycleStatus(t *testing.T) {
 	decodeResponse(t, response, &dashboard)
 	if dashboard.TrackingError != "" || len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 1 ||
 		len(dashboard.Recent) != 2 || dashboard.NeedsAttention[0].Status != "saved" {
+
 		t.Fatalf("dashboard=%#v", dashboard)
 	}
 }
@@ -159,6 +161,7 @@ func TestDashboardRetainsValidViewsAndReadOnlyProblems(t *testing.T) {
 	decodeResponse(t, response, &dashboard)
 	if len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 1 ||
 		dashboard.Recent[0].Issue == nil || !strings.Contains(dashboard.TrackingError, "tracking temporarily unavailable") {
+
 		t.Fatalf("partial dashboard=%#v", dashboard)
 	}
 }

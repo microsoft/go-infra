@@ -71,11 +71,13 @@ func TestViewingUsesOnlyPublishedData(t *testing.T) {
 				}
 				if response.Record.View.Graph.Steps[0].Progress.Completed != 5 ||
 					foreign && response.ResumeURL != "" {
+
 					t.Fatalf("published view = %#v", response)
 				}
 				dashboard := manager.History().Dashboard(context.Background())
 				if dashboard.TrackingError != "" || len(dashboard.NeedsAttention) != 1 ||
 					dashboard.NeedsAttention[0].Href != "/releases/1" {
+
 					t.Fatalf("dashboard = %#v", dashboard)
 				}
 			}
@@ -84,6 +86,7 @@ func TestViewingUsesOnlyPublishedData(t *testing.T) {
 			}
 			if loads.Load() != 0 || executions.Load() != 0 || store.updates.Load() != 0 ||
 				!reflect.DeepEqual(before, store.view) {
+
 				t.Fatal("viewing loaded process code, executed work or changed published data")
 			}
 		})
@@ -177,6 +180,7 @@ func TestResumeChecksPreflightBeforeLoadingExecution(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "target rejected") || loads.Load() != 0 ||
 		executions.Load() != 0 || store.updates.Load() != 0 {
+
 		t.Fatalf("resume preflight error=%v", err)
 	}
 }
@@ -231,6 +235,7 @@ func TestRunnerPublishesProgressAndHeartbeatThroughCheckpointWriter(t *testing.T
 		store.mu.Unlock()
 		if !published.UpdatedAt.After(before.UpdatedAt) || published.Graph.Steps[0].Progress.Completed != 6 ||
 			!published.Executing || !reflect.DeepEqual(originalCheckpoint, checkpoint) {
+
 			t.Fatalf("progress/heartbeat altered recovery state or was not published: %#v", published)
 		}
 		time.Sleep(5 * time.Second)
@@ -248,6 +253,7 @@ func TestRunnerPublishesProgressAndHeartbeatThroughCheckpointWriter(t *testing.T
 		if !store.record.Run.Complete || store.record.Run.Executing ||
 			store.view.Status != runstore.StatusSucceeded || store.view.Executing ||
 			store.view.Graph.Steps[0].Status != coordinator.StepStatusSucceeded {
+
 			t.Fatalf("final published result=%#v, checkpoint=%#v", store.view, store.record.Run)
 		}
 	})
