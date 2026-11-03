@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -19,6 +20,83 @@ func execute(t *testing.T, step *Step) error {
 	}
 	var sr StepRunner
 	return sr.Execute(context.Background(), steps)
+}
+
+func TestNewStepRunnerInitializesGraphWithoutExecuting(t *testing.T) {
+	executions := 0
+	action := func(context.Context) error {
+		executions++
+		return nil
+	}
+	first := NewRootStep("Initialize", time.Minute, action)
+	second := first.Then("Work", time.Minute, action)
+	runner, err := NewStepRunner([]*Step{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := runner.Snapshot()
+	if executions != 0 || snapshot.Active || snapshot.Error != "" {
+		t.Fatalf("view = %#v, executions = %d", snapshot, executions)
+	}
+	if snapshot.Steps[0].Status != StepStatusWaiting || snapshot.Steps[1].DependsOn[0] != "Initialize" {
+		t.Fatalf("initial graph = %#v", snapshot)
+	}
+	if err := runner.Execute(context.Background(), []*Step{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if executions != 2 {
+		t.Fatalf("explicit execution calls = %d, want 2", executions)
+	}
+}
+
+func TestSnapshotRejectsInvalidGraph(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		saved []StepSnapshot
+	}{
+		{name: "duplicate name", saved: []StepSnapshot{
+			{Name: "First", Status: StepStatusSucceeded}, {Name: "First", Status: StepStatusWaiting},
+		}},
+		{name: "unknown status", saved: []StepSnapshot{
+			{Name: "First", Status: "guess"}, {Name: "Second", DependsOn: []string{"First"}, Status: StepStatusWaiting},
+		}},
+		{name: "unordered dependency", saved: []StepSnapshot{
+			{Name: "First", DependsOn: []string{"Second"}, Status: StepStatusSucceeded},
+			{Name: "Second", Status: StepStatusWaiting},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := (Snapshot{Steps: test.saved}).Validate(); err == nil {
+				t.Fatal("invalid saved graph was accepted")
+			}
+		})
+	}
+}
+
+func TestStepRunnerRejectsChangedExecutionGraphWithoutChangingSavedView(t *testing.T) {
+	called := false
+	step := NewRootStep("Reviewed", time.Minute, func(context.Context) error {
+		called = true
+		return nil
+	})
+	runner, err := NewStepRunner([]*Step{step})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := runner.Snapshot()
+	changed := NewRootStep("Changed", time.Minute, step.Func)
+	if err := runner.ValidateSteps([]*Step{changed}); err == nil {
+		t.Fatal("changed graph passed validation")
+	}
+	if err := runner.Execute(context.Background(), []*Step{changed}); err == nil {
+		t.Fatal("changed graph executed")
+	}
+	if called || !reflect.DeepEqual(before, runner.Snapshot()) {
+		t.Fatal("rejected execution changed the saved view or ran a callback")
+	}
+	if err := runner.ValidateSteps([]*Step{step}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStepRunner_Execute_Cancel(t *testing.T) {

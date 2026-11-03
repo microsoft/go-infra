@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
 
 const processTestCommit = "0123456789abcdef0123456789abcdef01234567"
@@ -20,17 +21,15 @@ type recordingProcessService struct {
 	request *RunRequest
 }
 
-type inspectingProcessService struct {
+type observingProcessService struct {
 	fakeProcessService
-	calls   int
+	fakeService
 	request RunRequest
-	buildID string
 }
 
-func (s *inspectingProcessService) InspectRun(_ context.Context, request RunRequest, buildID string) (*contract.RunInspection, error) {
-	s.calls++
-	s.request, s.buildID = request, buildID
-	return &contract.RunInspection{RunURL: pipelineRunURL(buildID), Status: "canceled"}, nil
+func (s *observingProcessService) NewRunService(request RunRequest) (RunService, error) {
+	s.request = request
+	return &s.fakeService, nil
 }
 
 func (fakeProcessService) Preflight(context.Context) (string, error) {
@@ -49,16 +48,12 @@ func (fakeProcessService) ValidateRollback(context.Context, int) (RollbackSource
 }
 
 func (fakeProcessService) NewRunService(RunRequest) (RunService, error) {
-	return disabledGoImagesService{}, nil
-}
-
-func (fakeProcessService) InspectRun(context.Context, RunRequest, string) (*contract.RunInspection, error) {
-	return nil, errors.New("fake pipeline inspection is not configured")
+	return &fakeService{}, nil
 }
 
 func (service *recordingProcessService) NewRunService(request RunRequest) (RunService, error) {
 	service.request = &request
-	return disabledGoImagesService{}, nil
+	return &fakeService{}, nil
 }
 
 func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {
@@ -94,6 +89,56 @@ func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {
 	}
 }
 
+func TestPrepareAndPlanOnlyInitializeDomainState(t *testing.T) {
+	for _, test := range []struct {
+		mode  Mode
+		index int
+	}{
+		{mode: ModeNormal, index: 0},
+		{mode: ModeTest, index: 2},
+	} {
+		t.Run(string(test.mode), func(t *testing.T) {
+			service := new(recordingProcessService)
+			process := NewProcess(service).Processes()[test.index]
+			snapshot, err := process.Prepare(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, state, err := decodeGoImagesSnapshot(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial, err := NewState(&state.Document.Input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Workflow != *initial {
+				t.Fatalf("preparation changed the initial workflow state: %#v", state.Workflow)
+			}
+			run, err := process.Load(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := run.TakeSnapshot()
+			plan := run.Plan()
+			if plan == nil || plan.Subtitle == "" || service.request != nil {
+				t.Fatalf("planning constructed an execution service or lost its description: %#v", plan)
+			}
+			after := run.TakeSnapshot()
+			if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
+				t.Fatal("planning changed the process checkpoint")
+			}
+			steps, err := run.Build(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if service.request == nil || len(steps) != 3 {
+				t.Fatalf("the graph builder did not construct the expected graph: %d steps", len(steps))
+			}
+		})
+	}
+}
+
 func TestProcessBuildUsesDocumentExecutionIdentity(t *testing.T) {
 	service := new(recordingProcessService)
 	process := NewProcess(service).Processes()[0]
@@ -120,8 +165,8 @@ func TestProcessBuildUsesDocumentExecutionIdentity(t *testing.T) {
 	}
 }
 
-func TestTestReleaseInspectionDoesNotChangeSavedState(t *testing.T) {
-	service := &inspectingProcessService{}
+func TestTestReleaseGraphConstructionDoesNotReadExternalRun(t *testing.T) {
+	service := &observingProcessService{fakeService: fakeService{status: coordinator.StepStatusCanceled}}
 	process := NewProcess(service).Processes()[2]
 	snapshot, err := process.Prepare(context.Background(), nil)
 	if err != nil {
@@ -143,23 +188,18 @@ func TestTestReleaseInspectionDoesNotChangeSavedState(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := run.TakeSnapshot()
-	inspector, ok := run.(contract.RunInspector)
-	if !ok {
-		t.Fatal("test release has no read-only inspector")
-	}
-	inspection, err := inspector.Inspect(context.Background())
+	steps, err := run.Build(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	after := run.TakeSnapshot()
-	if inspection.Status != "canceled" || inspection.RunURL != pipelineRunURL("888") ||
-		service.calls != 1 || service.buildID != "888" || service.request.Mode != ModeTest ||
+	if len(steps) != 3 || service.polls != 0 || service.mirrors != 0 || service.queues != 0 || service.request.Mode != ModeTest ||
 		service.request.SessionID != state.Document.ID || service.request.ExecutionDigest != state.Document.ExecutionDigest {
 
-		t.Fatalf("inspection = %#v, service = %#v", inspection, service)
+		t.Fatalf("graph construction contacted a provider: %#v", service)
 	}
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
-		t.Fatal("read-only inspection changed the saved run state")
+		t.Fatal("read-only graph observation changed the saved run state")
 	}
 }
 

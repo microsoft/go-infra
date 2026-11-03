@@ -27,7 +27,6 @@ type fakeProcess struct {
 	plan       *contract.Plan
 	planForRun func(*contract.StateSnapshot) *contract.Plan
 	view       *contract.RunView
-	inspect    func(context.Context, *contract.StateSnapshot) (*contract.RunInspection, error)
 }
 
 type fakeReleaseRun struct {
@@ -79,13 +78,6 @@ func (r *fakeReleaseRun) TakeView() *contract.RunView {
 	}
 	view := *r.process.view
 	return &view
-}
-
-func (r *fakeReleaseRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
-	if r.process.inspect == nil {
-		return nil, errors.New("fake read-only inspection is not configured")
-	}
-	return r.process.inspect(ctx, r.TakeSnapshot())
 }
 
 func (r *fakeReleaseRun) Plan() *contract.Plan {
@@ -160,7 +152,9 @@ type memoryProcessRunStore struct {
 	mu            sync.Mutex
 	nextID        int
 	records       map[int]*runstore.Record
+	views         map[int]*runstore.View
 	createErr     error
+	getErr        error
 	queryErr      error
 	updateErr     error
 	updateStarted chan struct{}
@@ -168,15 +162,14 @@ type memoryProcessRunStore struct {
 }
 
 func newMemoryProcessRunStore() *memoryProcessRunStore {
-	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*runstore.Record)}
+	return &memoryProcessRunStore{nextID: 1, records: make(map[int]*runstore.Record), views: make(map[int]*runstore.View)}
 }
 
 func (s *memoryProcessRunStore) Create(
 	_ context.Context,
 	name string,
 	run *runstore.State,
-	_ *contract.RunView,
-	_ *contract.Plan,
+	view *runstore.View,
 ) (*runstore.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,6 +183,7 @@ func (s *memoryProcessRunStore) Create(
 		UpdatedAt: run.UpdatedAt, Run: run.Clone(),
 	}
 	s.records[record.ID] = record
+	s.views[record.ID] = view.Clone()
 	s.nextID++
 	return cloneReleaseRunRecord(record), nil
 }
@@ -197,6 +191,9 @@ func (s *memoryProcessRunStore) Create(
 func (s *memoryProcessRunStore) Get(_ context.Context, id int) (*runstore.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	record, ok := s.records[id]
 	if !ok {
 		return nil, errors.New("process run record not found")
@@ -226,12 +223,50 @@ func (s *memoryProcessRunStore) Query(
 	return records, s.queryErr
 }
 
+func (s *memoryProcessRunStore) GetView(_ context.Context, id int) (*runstore.ViewRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record := s.records[id]
+	if record == nil {
+		return nil, errors.New("published record not found")
+	}
+	view := s.views[id]
+	if view == nil {
+		status, err := record.Run.Status()
+		if err != nil {
+			return nil, err
+		}
+		view = &runstore.View{
+			ProcessID: record.Run.ProcessID, Digest: record.Run.Digest, Name: "Examples",
+			Status: status, Executing: record.Run.Executing, UpdatedAt: record.UpdatedAt,
+			Graph: coordinator.Snapshot{Steps: []coordinator.StepSnapshot{{Name: "Run example", Status: coordinator.StepStatusWaiting}}},
+		}
+	}
+	return &runstore.ViewRecord{
+		ID: record.ID, Revision: record.Revision, URL: record.URL, Title: record.Title,
+		Closed: record.Closed, View: view.Clone(),
+	}, nil
+}
+
+func (s *memoryProcessRunStore) QueryViews(ctx context.Context, closed bool, limit int) ([]*runstore.ViewRecord, error) {
+	records, err := s.Query(ctx, closed, limit)
+	views := make([]*runstore.ViewRecord, 0, len(records))
+	for _, record := range records {
+		view, viewErr := s.GetView(ctx, record.ID)
+		if viewErr != nil {
+			err = errors.Join(err, viewErr)
+		} else {
+			views = append(views, view)
+		}
+	}
+	return views, err
+}
+
 func (s *memoryProcessRunStore) Update(
 	_ context.Context,
 	current *runstore.Record,
 	run *runstore.State,
-	_ *contract.RunView,
-	_ *contract.Plan,
+	view *runstore.View,
 ) (*runstore.Record, error) {
 	if s.updateStarted != nil {
 		close(s.updateStarted)
@@ -254,6 +289,7 @@ func (s *memoryProcessRunStore) Update(
 		UpdatedAt: time.Now().UTC(), Run: run.Clone(),
 	}
 	s.records[record.ID] = record
+	s.views[record.ID] = view.Clone()
 	return cloneReleaseRunRecord(record), nil
 }
 

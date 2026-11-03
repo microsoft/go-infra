@@ -411,7 +411,7 @@ func (c *Client) GetWorkflowRun(ctx context.Context, workflow Workflow, id int64
 	return run, nil
 }
 
-// PollWorkflowRun waits until the workflow run completes and reports each observed state.
+// PollWorkflowRun reports validated provider states until the dispatched run finishes.
 func (c *Client) PollWorkflowRun(
 	ctx context.Context,
 	workflow Workflow,

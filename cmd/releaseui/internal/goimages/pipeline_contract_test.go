@@ -8,19 +8,21 @@ import (
 	"testing"
 )
 
+const testPipelineContract = "parameters:\n" +
+	"  - name: _info\n" +
+	"    type: string\n" +
+	"    values:\n" +
+	"      - '🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵'\n" +
+	"    default: '🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵'\n" +
+	"  - name: sourceBuildPipelineRunId\n" +
+	"    type: string\n" +
+	"    default: '$(Build.BuildId)'\n" +
+	"  - name: publishRepoPrefix\n" +
+	"    type: string\n" +
+	"    default: public/\n"
+
 func TestValidatePipelineParameterContract(t *testing.T) {
-	valid := "parameters:\n" +
-		"  - name: _info\n" +
-		"    type: string\n" +
-		"    values:\n" +
-		"      - '🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵'\n" +
-		"    default: '🔵  go-docker-rolling-internal-pipeline.yml  🔵 🔵'\n" +
-		"  - name: sourceBuildPipelineRunId\n" +
-		"    type: string\n" +
-		"    default: '$(Build.BuildId)'\n" +
-		"  - name: publishRepoPrefix\n" +
-		"    type: string\n" +
-		"    default: public/\n"
+	valid := testPipelineContract
 	for _, test := range []struct {
 		name    string
 		yaml    string

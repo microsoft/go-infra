@@ -14,6 +14,7 @@ import (
 
 	azdoworkitem "github.com/microsoft/go-infra/azdo/workitem"
 	"github.com/microsoft/go-infra/releaseui/contract"
+	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -71,9 +72,11 @@ func TestStoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := testReleaseRun()
-	view := &contract.RunView{Test: true, Summary: "Ready", RunURL: "https://example.invalid/runs/888"}
+	view := testPublishedView(run)
+	view.Test, view.RunURL = true, "https://example.invalid/runs/888"
 	plan := &contract.Plan{Subtitle: "Run example", Facts: []contract.PlanFact{{Label: "Value", Value: "fixed"}}}
-	record, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, view, plan)
+	view.Plan = plan
+	record, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, view)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +96,8 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	run.Complete = true
 	run.Result = string(runstore.StatusSucceeded)
-	updated, err := store.Update(context.Background(), record, run, view, plan)
+	view.Status = runstore.StatusSucceeded
+	updated, err := store.Update(context.Background(), record, run, view)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,8 +126,10 @@ func TestStoreCreateUsesProcessName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			view := testPublishedView(testReleaseRun())
+			view.Plan = test.plan
 			if _, err := store.Create(
-				context.Background(), "Examples \u00b7 Example release", testReleaseRun(), nil, test.plan,
+				context.Background(), "Examples \u00b7 Example release", testReleaseRun(), view,
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -141,8 +147,7 @@ func TestStoreRejectsEmptyProcessName(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		plan := &contract.Plan{Subtitle: "Review example with 3 steps"}
-		if _, err := store.Create(context.Background(), name, testReleaseRun(), nil, plan); err == nil {
+		if _, err := store.Create(context.Background(), name, testReleaseRun(), testPublishedView(testReleaseRun())); err == nil {
 			t.Fatal("empty process name was accepted")
 		}
 		if client.created != nil {
@@ -158,7 +163,7 @@ func TestStoreRejectsUnstartedRun(t *testing.T) {
 	}
 	run := testReleaseRun()
 	run.Started = false
-	if _, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, nil, nil); err == nil {
+	if _, err := store.Create(context.Background(), "Examples \u00b7 Example release", run, testPublishedView(run)); err == nil {
 		t.Fatal("unstarted release run was persisted")
 	}
 }
@@ -171,14 +176,14 @@ func TestStoreMapsRevisionConflict(t *testing.T) {
 	}
 	_, err = store.Update(context.Background(), &runstore.Record{
 		ID: 42, Revision: 7,
-	}, testReleaseRun(), nil, nil)
+	}, testReleaseRun(), testPublishedView(testReleaseRun()))
 	if !errors.Is(err, runstore.ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
 	}
 }
 
 func TestStoreQueryRetainsValidRecordsAndReportsInvalidRecords(t *testing.T) {
-	snapshot, err := releaseRunSnapshot(testReleaseRun(), nil, nil)
+	snapshot, err := releaseRunSnapshot(testReleaseRun(), testPublishedView(testReleaseRun()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +193,7 @@ func TestStoreQueryRetainsValidRecordsAndReportsInvalidRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload["schemaVersion"] = json.RawMessage(`1`)
+	payload["view"] = json.RawMessage(`null`)
 	unsupported.Payload, err = json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -204,11 +210,11 @@ func TestStoreQueryRetainsValidRecordsAndReportsInvalidRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := store.Query(context.Background(), false, 50)
+	records, err := store.QueryViews(context.Background(), false, 50)
 	if err == nil {
 		t.Fatal("query did not report invalid release records")
 	}
-	for _, want := range []string{"release record 41", "schemaVersion", "release record 43"} {
+	for _, want := range []string{"release record 41", "format 1", "release record 43"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("query error %q does not contain %q", err, want)
 		}
@@ -244,7 +250,7 @@ func TestStoreQueryExplainsUnsupportedFormatWithoutRestoringIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := store.Query(context.Background(), false, 50)
+	records, err := store.QueryViews(context.Background(), false, 50)
 	var problem *runstore.RecordError
 	if len(records) != 0 || !errors.As(err, &problem) {
 		t.Fatalf("records = %#v, error = %v, want an unreadable record", records, err)
@@ -261,7 +267,7 @@ func TestStoreQueryExplainsUnsupportedFormatWithoutRestoringIt(t *testing.T) {
 }
 
 func TestStoreQueryPreservesStructuredAndUnstructuredClientErrors(t *testing.T) {
-	snapshot, err := releaseRunSnapshot(testReleaseRun(), nil, nil)
+	snapshot, err := releaseRunSnapshot(testReleaseRun(), testPublishedView(testReleaseRun()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +285,7 @@ func TestStoreQueryPreservesStructuredAndUnstructuredClientErrors(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := store.Query(context.Background(), false, 50)
+	records, err := store.QueryViews(context.Background(), false, 50)
 	if len(records) != 1 || records[0].ID != 42 || !errors.Is(err, cause) || !errors.Is(err, transportErr) {
 		t.Fatalf("records = %#v, error = %v, want valid records and both causes", records, err)
 	}
@@ -293,7 +299,7 @@ func TestStoreQueryPreservesStructuredAndUnstructuredClientErrors(t *testing.T) 
 }
 
 func TestStoreQueryKeepsValidRecordsWhenWorkItemQueryFails(t *testing.T) {
-	snapshot, err := releaseRunSnapshot(testReleaseRun(), nil, nil)
+	snapshot, err := releaseRunSnapshot(testReleaseRun(), testPublishedView(testReleaseRun()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +328,7 @@ func TestStoreQueryKeepsValidRecordsWhenWorkItemQueryFails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			records, err := store.Query(context.Background(), false, 50)
+			records, err := store.QueryViews(context.Background(), false, 50)
 			if !errors.Is(err, queryErr) || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("error = %v, want original query error and %q", err, test.wantErr)
 			}
@@ -346,6 +352,51 @@ func TestReleaseRecordTitleRemovesOnlyTheManagedPrefix(t *testing.T) {
 		if got := releaseRecordTitle(test.title); got != test.want {
 			t.Errorf("title %q became %q, want %q", test.title, got, test.want)
 		}
+	}
+}
+
+func testPublishedView(run *runstore.State) *runstore.View {
+	status := runstore.StatusRunning
+	if run.Complete {
+		status = runstore.Status(run.Result)
+	}
+	return &runstore.View{
+		ProcessID: run.ProcessID, Digest: run.Digest, Name: "Example release", Mark: "EX",
+		Status: status, Executing: run.Executing, UpdatedAt: time.Now().UTC(),
+		Graph: coordinator.Snapshot{Steps: []coordinator.StepSnapshot{{Name: "Work", Status: coordinator.StepStatusRunning}}},
+	}
+}
+
+func TestViewReaderIgnoresUnusableExecutionPayload(t *testing.T) {
+	run := testReleaseRun()
+	view := testPublishedView(run)
+	view.ProcessID = "foreign-project"
+	payload, err := json.Marshal(struct {
+		Run  any            `json:"run"`
+		View *runstore.View `json:"view"`
+	}{Run: []string{"unknown", "execution", "format"}, View: view})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeWorkItemClient{created: &azdoworkitem.Snapshot{
+		ProcessID: view.ProcessID, IntentDigest: view.Digest, Status: azdoworkitem.StatusRunning, Payload: payload,
+	}}
+	store, err := newStore(client, "Release Operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.GetView(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.View.Name != view.Name || record.View.Graph.Steps[0].Name != "Work" {
+		t.Fatalf("published view lost data: %#v", record)
+	}
+	if _, err := store.Get(context.Background(), 42); err == nil {
+		t.Fatal("execution reader accepted foreign checkpoint")
+	}
+	if client.updated != nil {
+		t.Fatal("view reader wrote the work item")
 	}
 }
 

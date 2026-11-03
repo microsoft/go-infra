@@ -191,25 +191,42 @@ The current prototype can show older test records as **Cannot open in this sessi
 This is an unreleased prototype. Compatibility with data from earlier prototype builds is not
 guaranteed, and older test records may remain read-only. Supported current-format records can
 still be reopened in another UI session.
-For supported records with a known external run that this UI is no longer monitoring, the dashboard
-automatically checks that run using read-only requests. It shows the verified external status
-separately from the saved checkpoint and keeps the external-run link available, even for closed
-items. Failed lookups are shown as unverified, not running or successful. These checks never
-resume execution, queue a pipeline, dispatch a workflow, or rewrite the work item.
+The runner publishes a self-contained graph view alongside its execution checkpoint. It contains
+step names, dependencies, progress, errors, and external-run links. The shared writer saves each
+checkpoint, publishes progress and a heartbeat every five seconds, and saves the final outcome.
+All writes use the same revision-checked persistence path.
 
-Starting and running work appears under **Ongoing releases**. Open failed, canceled, and uncertain work appears
+Opening a release reads only this published view. It does not load the process checkpoint,
+construct executable steps, or query Azure builds or GitHub workflows. The view can be opened
+even when the matching process is not configured or its checkpoint uses an unsupported format.
+The dashboard uses the same published data.
+
+Release pages refresh the stored view every five seconds and show its last-published timestamp.
+If the runner stops publishing, the page keeps the last saved progress and warns that it may be
+stale. It does not independently monitor or restart the external operation. Use a step's
+**Open external run** link or **Open release run** to inspect the provider directly.
+
+Records whose last publication reports an executing runner appear under **Ongoing releases**.
+Open failed, canceled, uncertain, and interrupted unfinished work appears
 under **Needs attention**. Successful work and manually closed terminal outcomes appear under
 **Recent history** without rewriting the execution result. Closed unfinished records remain read-only.
-Clicking an available card or **Open** selects
-one work item for this server. Its Azure DevOps browser link appears on the dashboard and selected
-release page. **View JSON** exports its snapshot for manual repair and imports edited JSON only when
-the exported Azure DevOps revision is still current. Import validates the process payload and cannot
-change its process ID or immutable intent digest. Restart without a selected release before
-repairing that release's state. Reopening the currently selected work item is idempotent; selecting a
-different work item still requires restarting the server.
+Clicking a card or **Open** opens its published release page. Its Azure DevOps browser link appears
+on the dashboard and release page. **View JSON** explicitly exports the execution checkpoint for
+manual repair and imports edited JSON only when the exported revision is still current. Import
+validates the process payload and executable graph before updating the record. It cannot change
+the process ID, input, or immutable intent digest. Stop the previous runner before
+repairing that release's state. Viewing any number of releases is independent of the configured
+execution sessions. Executing a different release for the same process still requires restarting
+that process session.
 
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
+An open unfinished record offers **Resume release** then **Confirm resume** when its process is
+configured and it is not reserved by a runner. Only that confirmed operation loads the checkpoint.
+It rechecks execution readiness and claims the reviewed record revision before any actions run.
+A durable execution reservation prevents another server from resuming the same record.
+Graceful completion or interruption releases it. If the runner crashes, verify it has stopped,
+then use **View JSON** to clear `executing` before resuming. Do not clear an active runner's reservation.
 Normal and rollback runs can publish production images under `public/`.
 Test runs are fixed to `dev/`.
 Do not confirm a real execution without authorization.
@@ -238,16 +255,19 @@ of reporting success.
 Correlation variables bind an Azure run to the release session ID, release mode, execution digest, source build, source commit, and version metadata.
 If the process restarts in the queue-response crash window, it reconciles recent runs before attempting another POST.
 
-When startup restores an incomplete session that already has a build ID, monitoring resumes automatically and checkpoints the terminal result.
-The restored path wraps the execution service in a queue-denying adapter, so it can read the existing run but cannot queue a new one.
+Neither startup nor opening a saved record resumes execution automatically. Only a confirmed
+resume runs its steps. Process-owned checkpoints and reconciliation still determine whether a
+step can continue without duplicating an external action.
 
 The Go-images document stores only standalone input and state. `Run.Build` reconstructs the
-coordinator graph instead of serializing it. The release UI stores the document inside the
+executable graph without running it. The shared lifecycle writes a separate display snapshot
+alongside the process checkpoint. Execution recovery never uses the display snapshot.
+The release UI stores the document inside the
 process-owned payload and checks the work-item revision on every update. It contains no credentials.
 Go-images and Go-infra payloads and checkpoints each carry process-owned schema version 1.
 
-The current server runs one selected release at a time. Go-images and Go-infra state live only
-in the selected Azure DevOps work item. The server creates the work item before calling the target
+The server keeps one selected release per configured process. Durable release state lives
+in its Azure DevOps work item. The server creates the work item before calling the target
 service, updates it with an Azure DevOps revision check, and resumes monitoring a known external run
 after explicit restore. If a run cannot be correlated, the restored action becomes `uncertain` and
 refuses a replacement.

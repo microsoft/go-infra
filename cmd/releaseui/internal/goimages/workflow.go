@@ -69,20 +69,14 @@ type RunService interface {
 	PollPipeline(context.Context, string) error
 }
 
-// PipelineResultError reports a known terminal pipeline outcome.
+// PipelineResultError preserves a confirmed terminal outcome across checkpoint recovery.
 type PipelineResultError struct {
 	Result string
 	Err    error
 }
 
-func (e *PipelineResultError) Error() string {
-	return e.Err.Error()
-}
-
-func (e *PipelineResultError) Unwrap() error {
-	return e.Err
-}
-
+func (e *PipelineResultError) Error() string { return e.Err.Error() }
+func (e *PipelineResultError) Unwrap() error { return e.Err }
 func (e *PipelineResultError) Is(target error) bool {
 	return target == coordinator.ErrCanceled && e.Result == "canceled"
 }
@@ -221,29 +215,25 @@ func NewGraphWithCheckpoint(
 		officialPipelineTimeout,
 		func(ctx context.Context) error {
 			if state.Complete {
-				return nil
+				if state.Result == "succeeded" {
+					return nil
+				}
+				return &PipelineResultError{Result: state.Result, Err: fmt.Errorf("saved pipeline result: %s", state.Result)}
 			}
-			buildID := state.BuildID
-			if err := service.PollPipeline(ctx, buildID); err != nil {
-				var resultError *PipelineResultError
-				if !errors.As(err, &resultError) {
+			err := service.PollPipeline(ctx, state.BuildID)
+			result := "succeeded"
+			if err != nil {
+				var terminal *PipelineResultError
+				if !errors.As(err, &terminal) {
 					return err
 				}
-				if resultError.Result != "failed" && resultError.Result != "canceled" {
-					return fmt.Errorf("invalid terminal pipeline result %q: %w", resultError.Result, err)
-				}
-				if checkpointErr := access.update(ctx, func() {
-					state.Complete = true
-					state.Result = resultError.Result
-				}); checkpointErr != nil {
-					return errors.Join(err, fmt.Errorf("checkpoint terminal pipeline result: %w", checkpointErr))
-				}
-				return err
+				result = terminal.Result
 			}
-			return access.update(ctx, func() {
+			saveErr := access.update(ctx, func() {
 				state.Complete = true
-				state.Result = "succeeded"
+				state.Result = result
 			})
+			return errors.Join(err, saveErr)
 		},
 	)
 	steps, err := wait.TransitiveDependencies()

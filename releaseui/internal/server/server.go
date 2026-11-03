@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -127,14 +128,18 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+prefix+"/plan", s.getProcessPlan(processID))
 		mux.HandleFunc("POST "+prefix+"/plan", s.prepareProcess(processID))
 		mux.HandleFunc("POST "+prefix+"/start", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request, _ processRequest) {
-			s.handleStartProcessRun(processID, response, request)
+			s.handleStartProcessRun(processID, response, request, false)
+		}))
+		mux.HandleFunc("POST "+prefix+"/resume", s.requireActiveProcess(processID, func(response http.ResponseWriter, request *http.Request, _ processRequest) {
+			s.handleStartProcessRun(processID, response, request, true)
 		}))
 		mux.HandleFunc("GET "+prefix+"/state", s.requireActiveProcess(processID, s.handleState))
 		mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, s.handleEvents))
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
-	mux.HandleFunc("POST /api/releases/{id}/select", s.handleSelectRelease)
+	mux.HandleFunc("GET /releases/{id}", s.handlePage)
+	mux.HandleFunc("GET /api/releases/{id}/view", s.handleReleaseView)
 	mux.HandleFunc("GET /api/releases/{id}/export", s.handleExportRelease)
 	mux.HandleFunc("POST /api/releases/{id}/import", s.handleImportRelease)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
@@ -177,7 +182,12 @@ func (s *Server) captureProcessRequest(processID string) (processRequest, error)
 
 func (s *Server) handlePage(response http.ResponseWriter, request *http.Request) {
 	name := "index.html"
-	if request.URL.Path != "/" {
+	if strings.HasPrefix(request.URL.Path, "/releases/") {
+		if _, ok := releaseRecordID(response, request); !ok {
+			return
+		}
+		name = "process.html"
+	} else if request.URL.Path != "/" {
 		var ok bool
 		name, ok = s.processes.Page(request.URL.Path)
 		if !ok {
@@ -276,6 +286,7 @@ func (s *Server) handleStartProcessRun(
 	processID string,
 	response http.ResponseWriter,
 	request *http.Request,
+	resume bool,
 ) {
 	if !localserver.SameOrigin(request) {
 		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
@@ -286,32 +297,34 @@ func (s *Server) handleStartProcessRun(
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.runs.Start(request.Context(), processID, start); err != nil {
+	execute := s.runs.Start
+	if resume {
+		execute = s.runs.Resume
+	}
+	if err := execute(request.Context(), processID, start); err != nil {
 		writeProcessRunError(response, request, err)
 		return
 	}
-	writeJSON(response, http.StatusAccepted, map[string]string{"status": "external action started"})
+	writeJSON(response, http.StatusAccepted, map[string]string{
+		"status": "external action started", "href": processregistry.Path(processID),
+	})
 }
 
 func (s *Server) handleDashboard(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, s.history.Dashboard(request.Context()))
 }
 
-func (s *Server) handleSelectRelease(response http.ResponseWriter, request *http.Request) {
-	if !localserver.SameOrigin(request) {
-		writeError(response, http.StatusForbidden, "request origin does not match the release UI")
-		return
-	}
+func (s *Server) handleReleaseView(response http.ResponseWriter, request *http.Request) {
 	id, ok := releaseRecordID(response, request)
 	if !ok {
 		return
 	}
-	href, err := s.history.Select(request.Context(), id)
+	view, err := s.history.View(request.Context(), id)
 	if err != nil {
 		writeProcessRunError(response, request, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]string{"href": href})
+	writeJSON(response, http.StatusOK, view)
 }
 
 func (s *Server) handleExportRelease(response http.ResponseWriter, request *http.Request) {

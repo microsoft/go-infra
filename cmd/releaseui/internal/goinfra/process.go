@@ -279,43 +279,6 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 	return view
 }
 
-func (r *goInfraRun) Inspect(ctx context.Context) (*contract.RunInspection, error) {
-	r.mu.RLock()
-	if r.state.WorkflowRun == nil {
-		r.mu.RUnlock()
-		return nil, nil
-	}
-	saved := *r.state.WorkflowRun
-	r.mu.RUnlock()
-	run, err := r.github.GetWorkflowRun(ctx, saved.ID)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateGoInfraWorkflowRun(&run); err != nil {
-		return nil, err
-	}
-	if run.ID != saved.ID || run.HeadSHA != saved.HeadSHA || run.URL != saved.URL {
-		return nil, errors.New("inspected GitHub workflow does not match the saved run")
-	}
-	status := "waiting"
-	switch run.Status {
-	case "in_progress":
-		status = "running"
-	case "completed":
-		switch run.Conclusion {
-		case "success":
-			status = "succeeded"
-		case "cancelled":
-			status = "canceled"
-		case "failure", "timed_out", "action_required", "startup_failure", "stale", "neutral", "skipped":
-			status = "failed"
-		default:
-			return nil, fmt.Errorf("workflow run has unsupported conclusion %q", run.Conclusion)
-		}
-	}
-	return &contract.RunInspection{RunURL: run.URL, Status: status}, nil
-}
-
 func (r *goInfraRun) Plan() *contract.Plan {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -332,6 +295,7 @@ func (r *goInfraRun) Plan() *contract.Plan {
 			{Label: "Action", Value: "Add release-on-merge label"},
 		}
 	case goInfraActionManualDispatch:
+		plan.Subtitle = "GitHub workflow · 2 steps"
 		plan.Facts = []contract.PlanFact{
 			{Label: "Repository", Value: goInfraRepository},
 			{Label: "Workflow", Value: goInfraWorkflowFile},
@@ -355,34 +319,63 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	input := r.input
 	state := r.state
 	r.mu.RUnlock()
-	action := func(ctx context.Context) error {
-		switch input.Action {
-		case goInfraActionReleaseOnMerge:
+	if input.Action == goInfraActionReleaseOnMerge {
+		action := func(ctx context.Context) error {
 			_, err := r.github.AddReleaseOnMergeLabel(ctx, state.PullRequest.Number, state.PullRequest.HeadSHA)
 			return err
-		case goInfraActionManualDispatch:
-			if state.WorkflowRun == nil {
-				run, err := r.github.DispatchPatchRelease(ctx, input.DispatchMode == goInfraDispatchModeDryRun)
-				if err != nil {
-					return err
+		}
+		return []*coordinator.Step{goInfraProcessStep(input, action)}, nil
+	}
+	if input.Action != goInfraActionManualDispatch {
+		return nil, fmt.Errorf("unsupported go-infra action %q", input.Action)
+	}
+	dispatch := goInfraProcessStep(input, func(ctx context.Context) error {
+		r.mu.RLock()
+		known := r.state.WorkflowRun != nil
+		r.mu.RUnlock()
+		if known {
+			return nil
+		}
+		run, err := r.github.DispatchPatchRelease(ctx, input.DispatchMode == goInfraDispatchModeDryRun)
+		if err != nil {
+			return err
+		}
+		return r.checkpoint(ctx, run, checkpoint)
+	})
+	monitor := dispatch.Then(
+		"Monitor patch-release workflow",
+		goInfraWorkflowTimeout,
+		func(ctx context.Context) error {
+			r.mu.RLock()
+			saved := *r.state.WorkflowRun
+			r.mu.RUnlock()
+			if saved.Status == "completed" {
+				if saved.Conclusion == "success" {
+					return nil
 				}
-				if err := r.checkpoint(ctx, run, checkpoint); err != nil {
-					return err
+				err := fmt.Errorf("saved workflow run completed with conclusion %q", saved.Conclusion)
+				if saved.Conclusion == "cancelled" {
+					return errors.Join(coordinator.ErrCanceled, err)
 				}
-				state.WorkflowRun = &run
+				return err
 			}
-			completed, err := r.github.PollWorkflowRun(ctx, state.WorkflowRun.ID, func(run GoInfraWorkflowRun) error {
+			completed, err := r.github.PollWorkflowRun(ctx, saved.ID, func(run GoInfraWorkflowRun) error {
+				if run.ID != saved.ID || run.URL != saved.URL || run.HeadSHA != saved.HeadSHA {
+					return errors.New("workflow read does not match the saved run")
+				}
+				coordinator.ReportProgress(ctx, coordinator.StepProgress{
+					Summary: "GitHub workflow " + run.Status,
+					Detail:  fmt.Sprintf("Run %d: %s", run.ID, run.Conclusion), RunURL: run.URL,
+				})
 				return r.checkpoint(ctx, run, checkpoint)
 			})
 			if err != nil && completed.Status == "completed" && completed.Conclusion == "cancelled" {
 				return errors.Join(coordinator.ErrCanceled, err)
 			}
 			return err
-		default:
-			return fmt.Errorf("unsupported go-infra action %q", input.Action)
-		}
-	}
-	return []*coordinator.Step{goInfraProcessStep(input, action)}, nil
+		},
+	)
+	return monitor.TransitiveDependencies()
 }
 
 func (r *goInfraRun) checkpoint(ctx context.Context, run GoInfraWorkflowRun, checkpoint contract.CheckpointFunc) error {

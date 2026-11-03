@@ -36,8 +36,11 @@ type State struct {
 	Started      bool                    `json:"started"`
 	Checkpointed bool                    `json:"checkpointed,omitempty"`
 	Complete     bool                    `json:"complete"`
-	Result       string                  `json:"result,omitempty"`
-	UpdatedAt    time.Time               `json:"-"`
+	// Executing reserves the record until the runner releases it. Abandoned reservations require
+	// explicit operator repair after confirming that the previous runner has stopped.
+	Executing bool      `json:"executing,omitempty"`
+	Result    string    `json:"result,omitempty"`
+	UpdatedAt time.Time `json:"-"`
 }
 
 // NewState creates a release state with an immutable intent digest.
@@ -81,6 +84,9 @@ func (s *State) Validate() error {
 	}
 	if err := ValidateSnapshot(s.Snapshot); err != nil {
 		return err
+	}
+	if s.Executing && (!s.Started || s.Complete) {
+		return errors.New("only an unfinished started run can have an execution reservation")
 	}
 	if s.Digest == "" {
 		return errors.New("process run digest is empty")

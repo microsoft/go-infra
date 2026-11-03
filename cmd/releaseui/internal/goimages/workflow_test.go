@@ -6,6 +6,7 @@ package goimages
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ var testInput = &Input{
 type fakeService struct {
 	mirrorErr error
 	pollErr   error
+	status    coordinator.StepStatus
 	mirrors   int
 	queues    int
 	polls     int
@@ -48,7 +50,17 @@ func (service *fakeService) PollPipeline(_ context.Context, buildID string) erro
 	if buildID != "888" {
 		return errors.New("unexpected build ID")
 	}
-	return service.pollErr
+	if service.pollErr != nil {
+		return service.pollErr
+	}
+	status := service.status
+	if status == "" {
+		status = coordinator.StepStatusSucceeded
+	}
+	if status == coordinator.StepStatusFailed || status == coordinator.StepStatusCanceled {
+		return &PipelineResultError{Result: string(status), Err: errors.New("pipeline " + string(status))}
+	}
+	return nil
 }
 
 func TestPipelineParameters(t *testing.T) {
@@ -112,8 +124,7 @@ func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 	for _, result := range []string{"failed", "canceled"} {
 		t.Run(result, func(t *testing.T) {
-			terminalErr := errors.New("pipeline " + result)
-			service := &fakeService{pollErr: &PipelineResultError{Result: result, Err: terminalErr}}
+			service := &fakeService{status: coordinator.StepStatus(result)}
 			var checkpoint State
 			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
 				checkpoint = *state
@@ -122,11 +133,40 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 				t.Fatal(err)
 			}
 			var runner coordinator.StepRunner
-			if err := runner.Execute(context.Background(), steps); !errors.Is(err, terminalErr) {
-				t.Fatalf("error = %v, want %v", err, terminalErr)
+			err = runner.Execute(context.Background(), steps)
+			if err == nil || !strings.Contains(err.Error(), result) ||
+				errors.Is(err, coordinator.ErrCanceled) != (result == "canceled") {
+
+				t.Fatalf("terminal error = %v", err)
 			}
 			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
 				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)
+			}
+		})
+	}
+}
+
+func TestGraphRecoveryHonorsSavedTerminalOutcome(t *testing.T) {
+	for _, result := range []string{"succeeded", "failed", "canceled"} {
+		t.Run(result, func(t *testing.T) {
+			state, err := NewState(testInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.VerifiedMirroredCommit = testInput.SourceVersion
+			state.QueueAttempted, state.BuildID = true, "888"
+			state.Complete, state.Result = true, result
+			service := &fakeService{pollErr: errors.New("provider unavailable")}
+			steps, _, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = (&coordinator.StepRunner{}).Execute(context.Background(), steps)
+			if (err == nil) != (result == "succeeded") ||
+				errors.Is(err, coordinator.ErrCanceled) != (result == "canceled") ||
+				service.polls != 0 || service.queues != 0 || service.mirrors != 0 {
+
+				t.Fatalf("saved outcome %s was lost: error=%v, service=%#v", result, err, service)
 			}
 		})
 	}

@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"runtime/debug"
+	"slices"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
@@ -43,12 +45,14 @@ type StepSnapshot struct {
 }
 
 // StepProgress is optional live detail reported by a running step. Completed and Total can render
-// a determinate progress indicator when Total is positive.
+// a determinate progress indicator when Total is positive. RunURL identifies this step's external
+// operation in both live and published progress.
 type StepProgress struct {
 	Summary   string `json:"summary,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	Completed int    `json:"completed,omitempty"`
 	Total     int    `json:"total,omitempty"`
+	RunURL    string `json:"runUrl,omitempty"`
 }
 
 type progressReporterKey struct{}
@@ -88,6 +92,39 @@ type StepRunner struct {
 	subscribers      map[uint64]chan Snapshot
 }
 
+// NewStepRunner initializes the graph's waiting state before execution.
+func NewStepRunner(steps []*Step) (*StepRunner, error) {
+	initial := Snapshot{Steps: make([]StepSnapshot, len(steps))}
+	for index, step := range steps {
+		if step == nil {
+			return nil, errors.New("graph contains a nil step")
+		}
+		initial.Steps[index] = StepSnapshot{Name: step.Name, Status: StepStatusWaiting}
+		for _, dependency := range step.DependsOn {
+			if dependency == nil {
+				return nil, errors.New("graph contains a nil dependency")
+			}
+			initial.Steps[index].DependsOn = append(initial.Steps[index].DependsOn, dependency.Name)
+		}
+	}
+	if err := initial.Validate(); err != nil {
+		return nil, err
+	}
+	runner := &StepRunner{}
+	runner.initializeLocked(steps)
+	return runner, nil
+}
+
+// ValidateSteps checks that execution uses the graph already prepared or opened by this runner.
+func (r *StepRunner) ValidateSteps(steps []*Step) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.active {
+		return errAlreadyActive
+	}
+	return validateStepsMatch(steps, r.snapshotLocked().Steps)
+}
+
 // Execute runs a group of steps, blocking until all are complete.
 //
 // If any step fails, Execute returns the first error that occurred and cooperatively cancels other
@@ -105,19 +142,15 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 		r.mu.Unlock()
 		return errAlreadyActive
 	}
-	r.states = make(map[*Step]*stepState, len(steps))
-	r.ordered = make([]*stepState, 0, len(steps))
+	if len(r.ordered) != 0 {
+		if err := validateStepsMatch(steps, r.snapshotLocked().Steps); err != nil {
+			r.mu.Unlock()
+			return err
+		}
+	}
+	r.initializeLocked(steps)
 	r.active = true
 	r.runError = ""
-	for _, step := range steps {
-		state := &stepState{
-			step:     step,
-			status:   StepStatusWaiting,
-			complete: make(chan struct{}),
-		}
-		r.states[step] = state
-		r.ordered = append(r.ordered, state)
-	}
 	r.publishLocked()
 	r.mu.Unlock()
 
@@ -212,6 +245,18 @@ func (r *StepRunner) snapshotLocked() Snapshot {
 	return snapshot
 }
 
+func (r *StepRunner) initializeLocked(steps []*Step) {
+	r.states = make(map[*Step]*stepState, len(steps))
+	r.ordered = make([]*stepState, 0, len(steps))
+	for _, step := range steps {
+		state := &stepState{
+			step: step, status: StepStatusWaiting, complete: make(chan struct{}),
+		}
+		r.states[step] = state
+		r.ordered = append(r.ordered, state)
+	}
+}
+
 func (r *StepRunner) transition(state *stepState, status StepStatus, err error) {
 	r.mu.Lock()
 	state.status = status
@@ -243,9 +288,69 @@ func (r *StepRunner) publishLocked() {
 	}
 }
 
+// Clone returns an independent snapshot.
+func (s Snapshot) Clone() Snapshot {
+	clone := s
+	clone.Steps = make([]StepSnapshot, len(s.Steps))
+	for index, step := range s.Steps {
+		clone.Steps[index] = step
+		clone.Steps[index].DependsOn = slices.Clone(step.DependsOn)
+		if step.Progress != nil {
+			progress := *step.Progress
+			clone.Steps[index].Progress = &progress
+		}
+	}
+	return clone
+}
+
+// Validate checks the statuses and dependency order of a saved graph.
+func (s Snapshot) Validate() error {
+	seen := make(map[string]bool, len(s.Steps))
+	for _, step := range s.Steps {
+		if step.Name == "" || seen[step.Name] {
+			return fmt.Errorf("saved graph has an empty or duplicate step name %q", step.Name)
+		}
+		for _, dependency := range step.DependsOn {
+			if !seen[dependency] {
+				return fmt.Errorf("saved graph step %q has an unordered or missing dependency %q", step.Name, dependency)
+			}
+		}
+		switch step.Status {
+		case StepStatusWaiting, StepStatusRunning, StepStatusSucceeded, StepStatusFailed, StepStatusBlocked, StepStatusCanceled:
+		default:
+			return fmt.Errorf("saved graph step %q has invalid status %q", step.Name, step.Status)
+		}
+		if step.Progress != nil {
+			if err := validateRunURL(step.Progress.RunURL); err != nil {
+				return fmt.Errorf("saved graph step %q progress: %w", step.Name, err)
+			}
+		}
+		seen[step.Name] = true
+	}
+	return nil
+}
+
+func validateStepsMatch(steps []*Step, saved []StepSnapshot) error {
+	if len(steps) != len(saved) {
+		return errors.New("execution graph does not match the saved graph")
+	}
+	for index, step := range steps {
+		prior := saved[index]
+		if step == nil || step.Name != prior.Name || len(step.DependsOn) != len(prior.DependsOn) {
+			return errors.New("execution graph does not match the saved graph")
+		}
+		for dependencyIndex, dependency := range step.DependsOn {
+			if dependency == nil || dependency.Name != prior.DependsOn[dependencyIndex] {
+				return errors.New("execution graph does not match the saved graph")
+			}
+		}
+	}
+	return nil
+}
+
 func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 	if current == nil || current.Summary != next.Summary || current.Detail != next.Detail ||
-		current.Completed != next.Completed || current.Total != next.Total {
+		current.Completed != next.Completed || current.Total != next.Total || current.RunURL != next.RunURL {
 
 		return false
 	}
@@ -340,4 +445,15 @@ func (e *errDependencyFailed) Error() string {
 
 func (e *errDependencyFailed) Unwrap() error {
 	return e.err
+}
+
+func validateRunURL(runURL string) error {
+	if runURL == "" {
+		return nil
+	}
+	link, err := url.Parse(runURL)
+	if err != nil || link.Scheme != "https" || link.Host == "" || link.User != nil {
+		return errors.New("external operation has an invalid HTTPS link")
+	}
+	return nil
 }

@@ -55,6 +55,9 @@ type ReleaseRecordReference struct {
 
 	// URL links to the record in its backing service.
 	URL string `json:"url,omitempty"`
+
+	// Revision identifies the record state reviewed before resuming.
+	Revision int `json:"revision"`
 }
 
 // ExecutionResponse contains the state needed to confirm or monitor a release.
@@ -70,6 +73,9 @@ type ExecutionResponse struct {
 
 	// Record identifies the durable release record after the release is confirmed.
 	Record *ReleaseRecordReference `json:"record,omitempty"`
+
+	// CanResume permits an explicit confirmed resume of the selected saved checkpoint.
+	CanResume bool `json:"canResume"`
 }
 
 // DashboardResponse contains the release and process cards shown on the dashboard.
@@ -106,9 +112,6 @@ type ReleaseSummary struct {
 
 	// SavedStatus is the last persisted status, separate from an external observation.
 	SavedStatus string `json:"savedStatus,omitempty"`
-
-	// ExternalStatus is the status verified by a read-only lookup of the known external run.
-	ExternalStatus string `json:"externalStatus,omitempty"`
 
 	// RunURL links to the process-owned pipeline or workflow.
 	RunURL string `json:"runUrl,omitempty"`
@@ -291,6 +294,16 @@ type ReleaseStartRequest struct {
 
 	// Confirmed records the operator's approval of external actions.
 	Confirmed bool `json:"confirmed"`
+
+	// Revision is required when resuming an existing record.
+	Revision int `json:"revision,omitempty"`
+	RecordID int `json:"recordId,omitempty"`
+}
+
+// ReleaseViewResponse contains only published display data and an optional execution endpoint.
+type ReleaseViewResponse[T any] struct {
+	Record    T      `json:"record"`
+	ResumeURL string `json:"resumeUrl,omitempty"`
 }
 
 // ReleaseRecordExport is the portable representation of a durable release record.
