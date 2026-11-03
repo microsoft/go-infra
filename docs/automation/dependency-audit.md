@@ -6,7 +6,8 @@ Use the shared workflow to review landed Go dependency updates and find changes 
 
 Your repository needs GitHub Actions and Copilot access.
 Save this caller as `.github/workflows/dependency-audit.yml` on the repository's default branch.
-Replace `FULL_GO_INFRA_COMMIT_SHA` with a reviewed go-infra commit.
+Replace `FULL_GO_INFRA_COMMIT_SHA` with the full commit SHA of a [tagged go-infra release](https://github.com/microsoft/go-infra/tags) that includes this workflow.
+If the workflow has not been released yet, use the commit SHA from its merged PR.
 
 ```yaml
 name: Dependency history audit
@@ -41,10 +42,9 @@ Keep the permissions block, since the [reusable workflow](../../.github/workflow
 
 ## Run the first audit
 
-If an audit checkpoint already exists, [run without `initial_sha`](#run-later-audits) instead.
-
 Choose a commit on the default branch immediately before the dependency updates you want reviewed.
-The audit excludes that starting commit and ends at a captured default-branch revision.
+The audit excludes that starting commit.
+The ending commit is the latest commit on the default branch when the audit starts.
 Replace `OWNER/REPOSITORY` with your repository.
 Use the commit's full, lowercase, 40-character SHA for `FULL_STARTING_COMMIT_SHA`.
 
@@ -55,39 +55,39 @@ gh workflow run dependency-audit.yml --repo OWNER/REPOSITORY \
 
 ## Run later audits
 
-Leave `initial_sha` empty to resume from the saved checkpoint:
+Leave `initial_sha` empty for later audits:
 
 ```bash
 gh workflow run dependency-audit.yml --repo OWNER/REPOSITORY
 ```
 
-The weekly schedule resumes from the same checkpoint.
+Manual and scheduled audits both resume from the latest saved progress.
+A successful run with a clean threat-detection verdict saves new progress, even when it reports no findings.
 Supplying `initial_sha` while a checkpoint exists fails rather than resetting progress.
 
-## Act on the result
+## Act on findings
 
-Open the completed run to see the result.
-If no actionable or unresolved findings remain, read the run summary.
-With no findings left, the workflow closes the previous tracker without creating a new issue.
+Use tracker issues to follow up on audit findings.
+You do not need to inspect every successful run.
+If a run lists no actionable or unresolved findings, its report is available in the run summary instead of a new issue.
+A run with no findings also closes the previous tracker.
 
-Read the report's Notes for unverified behavior or inaccessible documentation.
-The audit does not run repository code or tests.
+When you act on a tracker, read its findings and the Notes section.
+Notes identify gaps in the audit, such as unavailable upstream documentation or dependency behavior the audit could not verify.
+The audit does not run your repository's code or tests.
 
-If the run links a tracker issue with findings, use it to plan the changes:
+Assign the tracker to Copilot, or follow its implementation and validation instructions yourself.
+You can address the whole tracker in one PR if the changes belong together.
+Open a draft PR that references the tracker and the findings it addresses.
 
-1. Select an area from the tracker.
-   Check the current default branch and existing PRs before making changes.
-2. Assign the tracker to Copilot, or follow the issue's implementation and validation instructions yourself.
-3. Open a draft PR that references the tracker and identifies the finding it addresses.
-   Do not use closing keywords such as `Fixes` or `Closes` so GitHub does not automatically close the tracker.
-
-After the PR merges, the next audit rechecks the finding and reports whether it is resolved.
+Closing a tracker does not mark its findings as resolved for the audit.
+The next audit rechecks the findings and reopens the tracker or creates a new one if it still finds work.
 
 ## Recover a missing checkpoint
 
 Keep Actions artifact retention longer than the interval between audits.
 Successful runs with a clean threat-detection verdict save a `dependency-audit-checkpoint` artifact for the next run.
-If the artifact is unavailable, the workflow can resume from a tracker issue, including a closed issue.
+If the artifact is unavailable, the workflow automatically resumes from its latest audit tracker issue, including a closed issue.
 
-If no usable checkpoint remains, choose a commit before the dependency updates you need to recheck.
-Rerun the first-audit command with that SHA as `initial_sha`.
+Check the failed step's log for `no checkpoint exists` or `previous audit checkpoint is no longer available`.
+For either error, [repeat the first-audit steps](#run-the-first-audit) with an explicit starting SHA.

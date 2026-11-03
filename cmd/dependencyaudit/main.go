@@ -31,13 +31,15 @@ const (
 	applyHeading      = "## Apply this audit"
 	applyInstructions = `## Apply this audit
 
-To apply a finding, assign this issue to Copilot or implement a selected open area yourself.
+Choose one or more related findings to address.
+Assign this issue to Copilot, or implement the changes yourself.
 
-1. Choose an open area and check for an existing PR before making changes.
-2. Start from the current default branch. Recheck the affected callers and cited upstream sources because dependencies or code may have changed since this audit.
-3. Keep the change focused on that area. Preserve behavior unless the documented migration requires a change, and add regression tests.
-4. Run the area's validation commands and the repository's documented formatting, lint, test, and build checks for each affected module. Report any checks you cannot run.
-5. Open a draft PR that references this tracker and the area slug without closing keywords such as "Fixes" or "Closes". Do not automatically approve or merge the PR. Leave the area open until a later audit verifies the merged code.
+1. Recheck the findings against the current default branch and cited upstream sources.
+2. Follow the migration instructions and add regression tests. Preserve behavior unless the documented migration requires a change.
+3. Run the findings' validation commands and the repository's documented checks for each affected module. Report any checks you cannot run.
+4. Open a draft PR that references this tracker and the findings it addresses. Do not automatically approve or merge the PR.
+
+After the PR merges, the next audit rechecks the findings even if the PR closed this tracker.
 `
 )
 
@@ -439,14 +441,16 @@ func stamp(ctx context.Context, client *github.Client, c config, p prepared, out
 		if err != nil {
 			return err
 		}
-		body := marker + string(encoded) + "\n```\n\n" + strings.TrimSpace(item.Body) + "\n\n" + applyInstructions
+		header := fmt.Sprintf("Audited commit: [%s](https://github.com/%s/commit/%s)\n\nAudit time: %s\n\n",
+			p.State.HeadSHA[:12], c.Repository, p.State.HeadSHA, p.State.AuditedAt.Format(time.RFC3339))
+		body := header + marker + string(encoded) + "\n```\n\n" + strings.TrimSpace(item.Body) + "\n\n" + applyInstructions
 		if len(body) > 60000 {
 			return errors.New("report exceeds the 60000-byte limit")
 		}
 		items = []nativeRequest{{Type: "create_issue", Title: "Code modernization tracker " + p.State.HeadSHA[:12], Body: body}}
 		if updating {
 			items[0] = nativeRequest{Type: "update_issue", Operation: "replace", IssueNumber: issue.GetNumber(), Body: body}
-			if issue.GetState() == "closed" && len(state.Areas) == 0 {
+			if issue.GetState() == "closed" {
 				items[0].Status = "open"
 			}
 		}

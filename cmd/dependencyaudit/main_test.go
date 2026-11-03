@@ -1012,6 +1012,95 @@ func TestCleanRetryClosesAnInterruptedPublicationsPredecessor(t *testing.T) {
 	}
 }
 
+func TestClosedTrackerReopensOnlyWhenFindingsAreUnresolved(t *testing.T) {
+	for _, resolved := range []bool{false, true} {
+		t.Run(fmt.Sprintf("resolved=%t", resolved), func(t *testing.T) {
+			c := testConfig(t)
+			state := testState()
+			state.Areas = []string{"dep-api"}
+			issue := tracker(t, 7, state)
+			issue.State = new("closed")
+			client := testAPI(t, &fixture{Issues: []*github.Issue{issue}})
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := report("dep-api")
+			if resolved {
+				body = report() + "## Resolved areas\n- `dep-api`: the merged code uses the replacement API.\n"
+			}
+			name := nativeOutput(t, map[string]any{"type": "create_issue", "body": body})
+			if err := stamp(t.Context(), client, c, p, name); err != nil {
+				t.Fatal(err)
+			}
+			items := outputItems(t, name)
+			if resolved {
+				if len(items) != 1 || items[0]["type"] != "noop" {
+					t.Fatalf("resolved findings reopened a closed tracker: %v", items)
+				}
+				return
+			}
+			if len(items) != 1 || items[0]["type"] != "update_issue" ||
+				items[0]["operation"] != "replace" || items[0]["issue_number"] != float64(7) ||
+				items[0]["status"] != "open" {
+
+				t.Fatalf("unresolved findings left the tracker closed: %v", items)
+			}
+		})
+	}
+}
+
+func TestPublishedAuditDetailsMatchTheCheckpoint(t *testing.T) {
+	for _, updating := range []bool{false, true} {
+		t.Run(fmt.Sprintf("updating=%t", updating), func(t *testing.T) {
+			c := testConfig(t)
+			c.Initial = baseSHA
+			f := &fixture{}
+			if updating {
+				c.Initial = ""
+				state := testState()
+				state.Areas = []string{"dep-api"}
+				f.Issues = []*github.Issue{tracker(t, 7, state)}
+			}
+			client := testAPI(t, f)
+			p, err := prepare(t.Context(), client, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := nativeOutput(t, map[string]any{"type": "create_issue", "body": report("dep-api")})
+			if err := stamp(t.Context(), client, c, p, name); err != nil {
+				t.Fatal(err)
+			}
+			body := outputItems(t, name)[0]["body"].(string)
+			issue := tracker(t, 8, testState())
+			issue.Body = new(body)
+			state, err := readCheckpoint(issue)
+			if err != nil || state == nil {
+				t.Fatalf("readable audit details broke checkpoint discovery: %+v, %v", state, err)
+			}
+			header := fmt.Sprintf("Audited commit: [%s](https://github.com/%s/commit/%s)\n\nAudit time: %s\n\n",
+				state.HeadSHA[:12], state.Repository, state.HeadSHA, state.AuditedAt.Format(time.RFC3339))
+			if !strings.HasPrefix(body, header) || strings.Count(body, "Audited commit:") != 1 {
+				t.Fatalf("visible audit details do not match the checkpoint: %q", body)
+			}
+			if !strings.Contains(body, applyInstructions) {
+				t.Fatal("tracker is missing the implementation instructions")
+			}
+		})
+	}
+}
+
+func TestApplyInstructionsAllowRelatedFindingsAndNormalIssueReferences(t *testing.T) {
+	if !strings.Contains(applyInstructions, "one or more related findings") {
+		t.Fatal("instructions do not allow related findings to share a PR")
+	}
+	for _, restriction := range []string{"closing keywords", "Fixes", "Closes", "area slug"} {
+		if strings.Contains(applyInstructions, restriction) {
+			t.Fatalf("instructions still require manual issue-closure protection: %q", restriction)
+		}
+	}
+}
+
 func TestCleanRetryValidatesItsPredecessorBeforeClosingIt(t *testing.T) {
 	for _, invalid := range []string{"owner", "repository", "branch", "history"} {
 		t.Run(invalid, func(t *testing.T) {
