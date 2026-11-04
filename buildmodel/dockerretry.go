@@ -6,16 +6,13 @@ package buildmodel
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"go/version"
-	"path/filepath"
 	"strconv"
 
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
 	"github.com/microsoft/go-infra/buildmodel/dockerversions"
 	"github.com/microsoft/go-infra/goversion"
-	"github.com/microsoft/go-infra/stringutil"
 )
 
 // dockerUpdateState belongs to one SubmitUpdatePR call, not one retry attempt.
@@ -25,14 +22,14 @@ type dockerUpdateState struct {
 	before, after []byte
 }
 
-// Check must run immediately before UpdateGoImagesRepo on each attempt.
-func (s *dockerUpdateState) Check(gitDir string, assets *buildassets.BuildAssets) error {
+// prepare updates the in-memory versions once, validating retry state before the
+// caller writes any files. A nil state is an ordinary, unguarded local update.
+func (s *dockerUpdateState) prepare(versions dockerversions.Versions, assets *buildassets.BuildAssets) error {
 	if assets == nil {
 		return nil
 	}
-	var versions dockerversions.Versions
-	if err := stringutil.ReadJSONFile(filepath.Join(gitDir, "src", "microsoft", "versions.json"), &versions); err != nil {
-		return err
+	if s == nil {
+		return UpdateVersions(assets, versions)
 	}
 	key := assets.GetDockerRepoVersionsKey()
 	before, err := dockerUpdateSnapshot(versions[key])
@@ -43,17 +40,15 @@ func (s *dockerUpdateState) Check(gitDir string, assets *buildassets.BuildAssets
 		if key != s.key || (!bytes.Equal(before, s.before) && !bytes.Equal(before, s.after)) {
 			return fmt.Errorf("stale Docker update: concurrent update changed versions.json slot %q", key)
 		}
-		return nil
 	}
 
-	// UpdateVersions modifies asset architectures as well as versions. Preview it
-	// with independent assets so the guard cannot change the actual update input.
+	// UpdateVersions normalizes asset architectures. Keep the retry input unchanged.
 	data, err := json.Marshal(assets)
 	if err != nil {
 		return err
 	}
-	var preview buildassets.BuildAssets
-	if err := json.Unmarshal(data, &preview); err != nil {
+	var update buildassets.BuildAssets
+	if err := json.Unmarshal(data, &update); err != nil {
 		return err
 	}
 	previous := versions[key]
@@ -61,11 +56,7 @@ func (s *dockerUpdateState) Check(gitDir string, assets *buildassets.BuildAssets
 	if previous != nil {
 		previousVersion, previousRevision = previous.Version, previous.Revision
 	}
-	if err := UpdateVersions(&preview, versions); err != nil {
-		if errors.Is(err, ErrNoMajorMinorUpgradeMatch) {
-			// Leave unmatched-slot handling to UpdateGoImagesRepo and its caller.
-			return nil
-		}
+	if err := UpdateVersions(&update, versions); err != nil {
 		return err
 	}
 	intended := versions[key]
@@ -77,7 +68,9 @@ func (s *dockerUpdateState) Check(gitDir string, assets *buildassets.BuildAssets
 	if err != nil {
 		return err
 	}
-	s.key, s.before, s.after = key, before, after
+	if s.key == "" {
+		s.key, s.before, s.after = key, before, after
+	}
 	return nil
 }
 

@@ -327,10 +327,7 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	}
 
 	// Make changes to the files in the temp repo.
-	if err := updateState.Check(gitDir, assets); err != nil {
-		return err
-	}
-	if err := UpdateGoImagesRepo(gitDir, assets); err != nil {
+	if err := updateGoImagesRepo(gitDir, assets, updateState); err != nil {
 		if errors.Is(err, ErrNoMajorMinorUpgradeMatch) {
 			fmt.Printf("---- No Docker image version to update. Skipping: %v\n", err)
 			f.SetAzDOVariables("nil", "nil")
@@ -375,27 +372,14 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 			return err
 		}
 		commit = strings.TrimSpace(commit)
-		var prNumber string
-		if existingPR == nil {
-			// We checked the origin branch, and it didn't need any updates. Output "nil" so future
-			// pipeline steps can tell that there's no need to wait for any PRs to get merged.
-			prNumber = "nil"
-		} else {
-			// We fetched an existing PR and found that the PR didn't need any changes. Future
-			// pipeline steps in the release process need to monitor the updated-but-not-merged-yet
-			// PR for completion, so this command must output the existing PR's number.
-			fmt.Printf("---- PR %v doesn't need any changes to be up to date.\n", existingPR.Number)
-			prNumber = strconv.Itoa(existingPR.Number)
-		}
-
-		// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
-		fmt.Printf("---- No updates to %v. Skipping.\n", b.Name)
 		if existingPR != nil {
 			// A previous attempt may have pushed successfully but failed to approve
 			// the PR or enable auto-merge. Finish those steps even without a new diff.
+			fmt.Printf("---- PR %v doesn't need any changes to be up to date.\n", existingPR.Number)
 			return finishUpdatePR(f, b, parsedOrigin, request, existingPR, commit)
 		}
-		f.SetAzDOVariables(prNumber, commit)
+		fmt.Printf("---- No updates to %v. Skipping.\n", b.Name)
+		f.SetAzDOVariables("nil", commit)
 		return nil
 	}
 
@@ -444,6 +428,17 @@ func reconcileDockerBranch(gitDir string) error {
 	if err != nil {
 		return err
 	}
+	type baseCommit struct {
+		commit, tree string
+	}
+	var baseCommits []baseCommit
+	for line := range strings.SplitSeq(strings.TrimSpace(baseHistory), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		baseCommits = append(baseCommits, baseCommit{fields[0], fields[1]})
+	}
 	headHistory, err := output("log", "--first-parent", "--format=%H", common+"..HEAD")
 	if err != nil {
 		return err
@@ -456,12 +451,8 @@ func reconcileDockerBranch(gitDir string) error {
 		if paths == "" {
 			continue
 		}
-		for line := range strings.SplitSeq(strings.TrimSpace(baseHistory), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
-				continue
-			}
-			args := []string{"--literal-pathspecs", "diff", "--quiet", head, fields[0], "--"}
+		for _, base := range baseCommits {
+			args := []string{"--literal-pathspecs", "diff", "--quiet", head, base.commit, "--"}
 			args = append(args, strings.Split(strings.TrimSuffix(paths, "\x00"), "\x00")...)
 			if err := gitcmd.Run(gitDir, args...); err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -471,8 +462,8 @@ func reconcileDockerBranch(gitDir string) error {
 			}
 			// The base contains every changed path, but may also have unrelated
 			// changes. Use its tree so those changes survive the bridge merge.
-			bridge, err := output("commit-tree", fields[1],
-				"-p", head, "-p", fields[0], "-m", "Record squash-merged Docker update")
+			bridge, err := output("commit-tree", base.tree,
+				"-p", head, "-p", base.commit, "-m", "Record squash-merged Docker update")
 			if err != nil {
 				return err
 			}
@@ -638,6 +629,10 @@ func RunUpdate(repoRoot string, f *UpdateFlags) error {
 // the 'versions.json' and 'manifest.json' files and updates them based on the given build assets
 // struct. If the struct pointer is nil, only updates the 'manifest.json'.
 func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
+	return updateGoImagesRepo(repoRoot, b, nil)
+}
+
+func updateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets, state *dockerUpdateState) error {
 	versionsJSONPath := filepath.Join(repoRoot, "src", "microsoft", "versions.json")
 	manifestJSONPath := filepath.Join(repoRoot, "manifest.json")
 
@@ -652,7 +647,7 @@ func UpdateGoImagesRepo(repoRoot string, b *buildassets.BuildAssets) error {
 	}
 
 	if b != nil {
-		if err := UpdateVersions(b, versions); err != nil {
+		if err := state.prepare(versions, b); err != nil {
 			return err
 		}
 		if err := stringutil.WriteJSONFile(versionsJSONPath, &versions); err != nil {
