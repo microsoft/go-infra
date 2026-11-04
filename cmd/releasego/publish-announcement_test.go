@@ -5,11 +5,22 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 	var (
@@ -37,6 +48,47 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 			}
 			goldentest.Check(t, tt.name+".golden.md", b.String())
 		})
+	}
+}
+
+func TestFindGoAnnouncementThread(t *testing.T) {
+	releaseInfo := NewReleaseInfo(
+		time.Date(2024, 6, 4, 0, 0, 0, 0, time.UTC),
+		[]string{"1.22.4-1", "1.21.11-1"},
+		"test",
+		true,
+	)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		query := req.URL.Query().Get("q")
+		wantQuery := `subject:"[security] Go 1.22.4 and Go 1.21.11 are released"`
+		if query != wantQuery {
+			return nil, fmt.Errorf("search query = %q, want %q", query, wantQuery)
+		}
+		body := `<html><head><base href="https://groups.google.com/"></head><body>` +
+			`<a href="/g/golang-announce/c/thread-id">[security] Go 1.22.4 and Go 1.21.11 are released</a>` +
+			`</body></html>`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+
+	got, err := findGoAnnouncementThread(context.Background(), releaseInfo, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "https://groups.google.com/g/golang-announce/c/thread-id"; got != want {
+		t.Fatalf("findGoAnnouncementThread() = %q, want %q", got, want)
+	}
+
+	releaseInfo.GoAnnouncementLink = got
+	var announcement bytes.Buffer
+	if err := releaseInfo.WriteAnnouncement(&announcement); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(announcement.String(), "[Go release announcement]("+got+")") {
+		t.Errorf("announcement does not contain the Go release announcement link:\n%s", announcement.String())
 	}
 }
 

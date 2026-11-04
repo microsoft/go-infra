@@ -11,6 +11,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -24,6 +27,7 @@ import (
 	"github.com/microsoft/go-infra/goversion"
 	"github.com/microsoft/go-infra/internal/infrasort"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/net/html"
 )
 
 func init() {
@@ -47,14 +51,15 @@ var githubToWordpressUsernames = map[string]string{
 }
 
 type ReleaseInfo struct {
-	Title           string
-	Author          string
-	Slug            string
-	Categories      []string
-	Tags            []string
-	FeaturedImage   string // Add this field for featured_image
-	Versions        []GoVersionData
-	SecurityRelease bool
+	Title              string
+	Author             string
+	Slug               string
+	Categories         []string
+	Tags               []string
+	FeaturedImage      string // Add this field for featured_image
+	Versions           []GoVersionData
+	SecurityRelease    bool
+	GoAnnouncementLink string
 }
 
 // take all this methods and make it one constructor function for ReleaseInfo
@@ -188,6 +193,10 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
+	releaseInfo.GoAnnouncementLink, err = findGoAnnouncementThread(ctx, releaseInfo, &http.Client{Timeout: 30 * time.Second})
+	if err != nil {
+		return fmt.Errorf("error finding upstream release announcement: %w", err)
+	}
 
 	if dryRun {
 		fmt.Printf("Would have submitted at path '%s'\n", generateBlogFilePath(releaseDate, releaseInfo.Slug))
@@ -253,6 +262,135 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	}
 
 	return nil
+}
+
+type httpDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+func findGoAnnouncementThread(ctx context.Context, releaseInfo *ReleaseInfo, client httpDoer) (string, error) {
+	var versions []string
+	seen := make(map[string]bool)
+	for _, version := range releaseInfo.Versions {
+		upstreamVersion := strings.TrimPrefix(version.GoVersion, "go")
+		if !seen[upstreamVersion] {
+			versions = append(versions, upstreamVersion)
+			seen[upstreamVersion] = true
+		}
+	}
+	if len(versions) == 0 {
+		return "", errors.New("no upstream Go versions found")
+	}
+	// Upstream release announcements cover at most two versions.
+	if len(versions) > 2 {
+		versions = versions[:2]
+	}
+
+	subject := "Go " + versions[0]
+	if len(versions) == 1 {
+		subject += " is released"
+	} else {
+		subject += " and Go " + versions[1] + " are released"
+	}
+	if releaseInfo.SecurityRelease {
+		subject = "[security] " + subject
+	}
+
+	searchURL := "https://groups.google.com/g/golang-announce/search?" + url.Values{"q": {fmt.Sprintf(`subject:"%s"`, subject)}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return "", fmt.Errorf("Google Groups search returned %s: %q", resp.Status, body)
+	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return "", fmt.Errorf("invalid Google Groups search Content-Type %q: %w", contentType, err)
+		}
+		if mediaType != "text/html" {
+			return "", fmt.Errorf("Google Groups search returned media type %q, want text/html", mediaType)
+		}
+	}
+
+	doc, err := html.Parse(io.LimitReader(resp.Body, 5<<20))
+	if err != nil {
+		return "", fmt.Errorf("parsing Google Groups search results: %w", err)
+	}
+	baseHref := ""
+	var findBase func(*html.Node)
+	findBase = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "base" {
+			baseHref = htmlNodeHref(node)
+			return
+		}
+		for child := node.FirstChild; child != nil && baseHref == ""; child = child.NextSibling {
+			findBase(child)
+		}
+	}
+	findBase(doc)
+	if baseHref == "" {
+		baseHref = "https://groups.google.com/"
+	}
+
+	var threadHref string
+	var findThread func(*html.Node)
+	findThread = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "a" && strings.Contains(htmlNodeText(node), subject) {
+			threadHref = htmlNodeHref(node)
+			if threadHref != "" {
+				return
+			}
+		}
+		for child := node.FirstChild; child != nil && threadHref == ""; child = child.NextSibling {
+			findThread(child)
+		}
+	}
+	findThread(doc)
+	if threadHref == "" {
+		return "", fmt.Errorf("no Google Groups thread found for subject %q", subject)
+	}
+	base, err := url.Parse(baseHref)
+	if err != nil {
+		return "", fmt.Errorf("parsing Google Groups base URL %q: %w", baseHref, err)
+	}
+	link, err := url.Parse(threadHref)
+	if err != nil {
+		return "", fmt.Errorf("parsing Google Groups thread URL %q: %w", threadHref, err)
+	}
+	threadURL := base.ResolveReference(link).String()
+	const announcementPrefix = "https://groups.google.com/g/golang-announce/c/"
+	if !strings.HasPrefix(threadURL, announcementPrefix) {
+		return "", fmt.Errorf("found URL %q, but it does not have the expected prefix %q", threadURL, announcementPrefix)
+	}
+	return threadURL, nil
+}
+
+func htmlNodeHref(node *html.Node) string {
+	for _, attr := range node.Attr {
+		if attr.Key == "href" {
+			return attr.Val
+		}
+	}
+	return ""
+}
+
+func htmlNodeText(node *html.Node) string {
+	if node.Type == html.TextNode {
+		return node.Data
+	}
+	var text strings.Builder
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		text.WriteString(htmlNodeText(child))
+	}
+	return text.String()
 }
 
 func generateBlogPostTitle(versions []string) string {
