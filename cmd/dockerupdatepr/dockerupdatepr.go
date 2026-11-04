@@ -26,6 +26,10 @@ Use -set-azdo-build-number to emit an Azure Pipelines logging command that chang
 displayed in the run list to include the run ID, source branch, and version.
 If the target repository has no matching version slot, the command skips the update successfully.
 
+Failed updates are retried up to five times using fresh PR and branch state. Existing update
+branches are preserved even when no PR exists yet, to avoid losing concurrent updates.
+To discard an abandoned update, delete its branch as well as closing its PR.
+
 To run this command locally, it may be useful to specify Git addresses like
 'git@github.com:microsoft/go' to use SSH authentication.
 `

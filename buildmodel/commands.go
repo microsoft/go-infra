@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/buildmodel/buildassets"
@@ -188,6 +189,14 @@ func SubmitUpdatePR(f *PRFlags) error {
 		}
 	}
 
+	// Retry the whole operation, not just the push: another update may have changed
+	// the PR or branch, so each attempt must fetch and regenerate from fresh state.
+	return githubutil.Retry(func() error {
+		return submitUpdatePR(f, assets, targetBranch)
+	})
+}
+
+func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch string) error {
 	gitDir, err := executil.MakeWorkDir(*f.tempGitDir)
 	if err != nil {
 		return err
@@ -225,7 +234,8 @@ func SubmitUpdatePR(f *PRFlags) error {
 	// The auther to use for Git operations. For convenience, set to a no-op auther rather than nil.
 	var gitAuther gitcmd.URLAuther
 
-	if auther, err := f.Auth.NewAuther(); err != nil {
+	auther, err := f.Auth.NewAuther()
+	if err != nil {
 		if !errors.Is(err, githubutil.ErrNoAuthProvided) {
 			return err
 		}
@@ -233,6 +243,15 @@ func SubmitUpdatePR(f *PRFlags) error {
 		gitAuther = new(gitcmd.NoAuther)
 	} else {
 		gitAuther = auther
+	}
+
+	// Observe the branch before checking for a PR. If a concurrent updater pushes
+	// while we decide whether to reuse the branch, the lease must reject our push.
+	expectedHead, err := dockerPRBranchHead(gitDir, gitAuther.InsertAuth(*f.to), b.PRBranch())
+	if err != nil {
+		return err
+	}
+	if auther != nil {
 		var githubUser string
 		githubUser, err := auther.GetIdentity()
 		if err != nil {
@@ -262,7 +281,9 @@ func SubmitUpdatePR(f *PRFlags) error {
 	}
 
 	// We're updating the target repo inside a clone of the go-infra repo, so we want a fresh clone.
-	runOrPanic(exec.Command("git", "init", gitDir))
+	if err := run(exec.Command("git", "init", gitDir)); err != nil {
+		return err
+	}
 
 	// newGitCmd creates a "git {args}" command that runs in the temp git dir.
 	newGitCmd := func(args ...string) *exec.Cmd {
@@ -271,14 +292,38 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return c
 	}
 
-	if existingPR != nil {
-		// Fetch the existing PR head branch to add onto.
-		runOrPanic(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec()))
+	needsPR := false
+	if existingPR != nil || expectedHead != "" {
+		// A branch without an open PR may be an update that was pushed just before
+		// PR creation. Preserve it rather than treating it as an abandoned branch.
+		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec())); err != nil {
+			return err
+		}
 	} else {
 		// Fetch the base branch to start the PR head branch.
-		runOrPanic(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.BaseBranchFetchRefspec()))
+		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.BaseBranchFetchRefspec())); err != nil {
+			return err
+		}
 	}
-	runOrPanic(newGitCmd("checkout", b.PRBranch()))
+	if err := run(newGitCmd("checkout", b.PRBranch())); err != nil {
+		return err
+	}
+	if existingPR == nil && expectedHead != "" {
+		// Bring a retained branch up to date, including when its previous PR was
+		// merged. Never discard unpublished commits merely because no PR exists.
+		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.Name)); err != nil {
+			return err
+		}
+		if err := run(newGitCmd("merge", "--no-edit", "FETCH_HEAD")); err != nil {
+			return err
+		}
+		if err := run(newGitCmd("diff", "--quiet", "FETCH_HEAD", "HEAD")); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+				return err
+			}
+			needsPR = true
+		}
+	}
 
 	// Make changes to the files in the temp repo.
 	if err := UpdateGoImagesRepo(gitDir, assets); err != nil {
@@ -304,14 +349,16 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	// Check if there are any files in the stage. If not, we don't need to process this branch
 	// anymore, because the merge + autoresolve didn't change anything.
+	needsCommit := false
 	if err := run(newGitCmd("diff", "--cached", "--quiet")); err != nil {
-		if _, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			fmt.Printf("---- Detected changes in Git stage. Continuing to commit and submit PR.\n")
+			needsCommit = true
 		} else {
 			// Make sure we don't ignore more than we intended.
-			log.Panic(err)
+			return err
 		}
-	} else {
+	} else if !needsPR {
 		// This commit is already up to date. Find the full commit hash to set the AzDO var.
 		commit, err := gitcmd.RevParse(gitDir, "HEAD")
 		if err != nil {
@@ -334,6 +381,11 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 		// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
 		fmt.Printf("---- No updates to %v. Skipping.\n", b.Name)
+		if existingPR != nil {
+			// A previous attempt may have pushed successfully but failed to approve
+			// the PR or enable auto-merge. Finish those steps even without a new diff.
+			return finishUpdatePR(f, b, parsedOrigin, request, existingPR, commit)
+		}
 		return nil
 	}
 
@@ -342,22 +394,43 @@ func SubmitUpdatePR(f *PRFlags) error {
 		commitMessage += " to " + assets.Version
 	}
 
-	runOrPanic(newGitCmd("commit", "-m", commitMessage))
+	if needsCommit {
+		if err := run(newGitCmd("commit", "-m", commitMessage)); err != nil {
+			return err
+		}
+	}
 
 	// Push the commit.
-	args := []string{"push", gitAuther.InsertAuth(*f.origin), b.PRBranchRefspec()}
+	args := []string{"push", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec(),
+		"--force-with-lease=refs/heads/" + b.PRBranch() + ":" + expectedHead}
 	if *f.dryRun {
 		// Show what would be pushed, but don't actually push it.
 		args = append(args, "-n")
 	}
-	// If we didn't find an existing PR, the branch might still exist but contain some bad changes.
-	// We need to force push to overwrite it with the new, fresh branch. This situation would happen
-	// if someone manually closes a PR.
-	if existingPR == nil {
-		args = append(args, "-f")
+	if err := run(newGitCmd(args...)); err != nil {
+		return err
 	}
-	runOrPanic(newGitCmd(args...))
 
+	return finishUpdatePR(f, b, parsedOrigin, request, existingPR, "nil")
+}
+
+func dockerPRBranchHead(gitDir, remote, branch string) (string, error) {
+	ref := "refs/heads/" + branch
+	out, err := executil.Output(executil.Dir(gitDir, "git", "ls-remote", "--refs", remote, ref))
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	if len(fields) != 2 || fields[1] != ref {
+		return "", fmt.Errorf("unexpected ls-remote output for %q: %q", ref, out)
+	}
+	return fields[0], nil
+}
+
+func finishUpdatePR(f *PRFlags, b gitpr.PRRefSet, parsedOrigin *gitpr.Remote, request *gitpr.GitHubRequest, existingPR *gitpr.ExistingPR, upToDateCommit string) error {
 	// Find reasons to skip all the PR submission code. The caller might intentionally be in one of
 	// these cases, so it's not necessarily an error. For example, they can take the commit we
 	// generated and submit their own PR later.
@@ -390,8 +463,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 	fmt.Printf("---- PR for %v: Submitting...\n", b.Name)
 
 	if existingPR == nil {
-		// POST the PR. The call returns success if the PR is created or if we receive a specific error
-		// message back from GitHub saying the PR is already created.
+		// If another updater creates the PR first, retry from fresh PR and branch state.
 		p, err := gitpr.PostGitHub(
 			parsedOrigin.GetOwnerSlashRepo(),
 			request,
@@ -426,7 +498,7 @@ func SubmitUpdatePR(f *PRFlags) error {
 		return err
 	}
 
-	f.SetAzDOVariables(strconv.Itoa(existingPR.Number), "nil")
+	f.SetAzDOVariables(strconv.Itoa(existingPR.Number), upToDateCommit)
 
 	fmt.Printf("---- PR for %v: Done.\n", b.Name)
 
