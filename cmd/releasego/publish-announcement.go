@@ -300,15 +300,15 @@ func findGoAnnouncementThread(ctx context.Context, releaseInfo *ReleaseInfo, cli
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("google Groups search returned %s: %q", resp.Status, body)
+		return "", fmt.Errorf("search returned %s: %q", resp.Status, body)
 	}
 	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 		mediaType, _, err := mime.ParseMediaType(contentType)
 		if err != nil {
-			return "", fmt.Errorf("invalid google Groups search Content-Type %q: %w", contentType, err)
+			return "", fmt.Errorf("invalid search Content-Type %q: %w", contentType, err)
 		}
 		if mediaType != "text/html" {
-			return "", fmt.Errorf("google Groups search returned media type %q, want text/html", mediaType)
+			return "", fmt.Errorf("search returned media type %q, want text/html", mediaType)
 		}
 	}
 
