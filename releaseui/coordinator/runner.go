@@ -55,21 +55,6 @@ type StepProgress struct {
 	RunURL    string `json:"runUrl,omitempty"`
 }
 
-type progressReporterKey struct{}
-
-// ReportProgress publishes live detail for the step currently executing with ctx. It is a no-op
-// when ctx did not come from a StepRunner, allowing services to report progress without coupling
-// their behavior to whether a UI is attached.
-func ReportProgress(ctx context.Context, progress StepProgress) {
-	if ctx == nil {
-		return
-	}
-	reporter, ok := ctx.Value(progressReporterKey{}).(func(StepProgress))
-	if ok {
-		reporter(progress)
-	}
-}
-
 // Snapshot is an immutable view of an entire execution. Sequence increases on every change.
 type Snapshot struct {
 	Sequence uint64         `json:"sequence"`
@@ -265,16 +250,6 @@ func (r *StepRunner) transition(state *stepState, status StepStatus, err error) 
 	r.mu.Unlock()
 }
 
-func (r *StepRunner) reportProgress(state *stepState, progress StepProgress) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if state.status != StepStatusRunning || stepProgressEqual(state.progress, progress) {
-		return
-	}
-	state.progress = &progress
-	r.publishLocked()
-}
-
 func (r *StepRunner) publishLocked() {
 	r.sequence++
 	snapshot := r.snapshotLocked()
@@ -357,6 +332,22 @@ func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 	return true
 }
 
+type stepControl struct {
+	runner *StepRunner
+	state  *stepState
+}
+
+func (control stepControl) ReportProgress(progress StepProgress) {
+	runner, state := control.runner, control.state
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if state.status != StepStatusRunning || stepProgressEqual(state.progress, progress) {
+		return
+	}
+	state.progress = &progress
+	runner.publishLocked()
+}
+
 type stepState struct {
 	step *Step
 
@@ -397,16 +388,14 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 		return err
 	}
 	runner.transition(s, StepStatusRunning, nil)
-	ctx = context.WithValue(ctx, progressReporterKey{}, func(progress StepProgress) {
-		runner.reportProgress(s, progress)
-	})
+	control := stepControl{runner: runner, state: s}
 
 	if s.step.Timeout == NoTimeout {
-		return s.step.Func(ctx)
+		return s.step.Func(ctx, control)
 	}
 	deadlineCtx, cancel := context.WithTimeout(ctx, s.step.Timeout)
 	defer cancel()
-	return s.step.Func(deadlineCtx)
+	return s.step.Func(deadlineCtx, control)
 }
 
 // waitForDependencies waits for all dependencies of the step to complete, or for any dependency

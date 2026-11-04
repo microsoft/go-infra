@@ -299,9 +299,9 @@ func publishedTestManager(
 		view: &contract.RunView{Test: true, RunURL: "https://example.invalid/runs/888"},
 	}
 	run.build = func(context.Context, contract.CheckpointFunc) ([]*coordinator.Step, error) {
-		return []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context) error {
+		return []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, control coordinator.StepControl) error {
 			executions.Add(1)
-			coordinator.ReportProgress(ctx, coordinator.StepProgress{Completed: 6, Total: 30, RunURL: "https://example.invalid/runs/888"})
+			control.ReportProgress(coordinator.StepProgress{Completed: 6, Total: 30, RunURL: "https://example.invalid/runs/888"})
 			if release != nil {
 				select {
 				case <-release:

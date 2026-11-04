@@ -29,7 +29,7 @@ type fakeService struct {
 	polls     int
 }
 
-func (service *fakeService) PollMirror(_ context.Context, commit string) error {
+func (service *fakeService) PollMirror(_ context.Context, _ coordinator.StepControl, commit string) error {
 	service.mirrors++
 	if commit != workflowTestCommit {
 		return errors.New("unexpected mirror commit")
@@ -45,7 +45,7 @@ func (service *fakeService) QueuePipeline(_ context.Context, parameters map[stri
 	return "888", nil
 }
 
-func (service *fakeService) PollPipeline(_ context.Context, buildID string) error {
+func (service *fakeService) PollPipeline(_ context.Context, _ coordinator.StepControl, buildID string) error {
 	service.polls++
 	if buildID != "888" {
 		return errors.New("unexpected build ID")

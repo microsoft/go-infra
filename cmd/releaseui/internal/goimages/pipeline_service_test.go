@@ -72,6 +72,14 @@ type fakeQueueClient struct {
 	calls   int
 }
 
+type recordingStepControl struct {
+	progress []coordinator.StepProgress
+}
+
+func (control *recordingStepControl) ReportProgress(progress coordinator.StepProgress) {
+	control.progress = append(control.progress, progress)
+}
+
 func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) (int, error) {
 	q.calls++
 	q.request = request
@@ -174,17 +182,24 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PollMirror(context.Background(), serviceTestCommit); err != nil {
+	control := new(recordingStepControl)
+	if err := service.PollMirror(context.Background(), control, serviceTestCommit); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 3 || sleeps != 2 {
 		t.Fatalf("checks = %d, sleeps = %d; want 3 and 2", checks, sleeps)
 	}
+	if len(control.progress) != 3 || control.progress[0].Summary != "Waiting for source commit in the internal mirror" ||
+		control.progress[2].Summary != "Source commit is available in the internal mirror" ||
+		control.progress[2].Detail != serviceTestCommit {
+
+		t.Fatalf("mirror progress = %#v", control.progress)
+	}
 }
 
 func TestPollMirrorRejectsUnplannedCommit(t *testing.T) {
 	service := newTestService(t, &fakeReader{}, &fakeQueueClient{}, PipelineRunConfig{Mode: ModeNormal})
-	if err := service.PollMirror(context.Background(), "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"); err == nil {
+	if err := service.PollMirror(context.Background(), new(recordingStepControl), "2ef65db89e42942c24e3d8f0b8a8eb52bc86857a"); err == nil {
 		t.Fatal("service accepted a different mirror commit")
 	}
 }
@@ -306,6 +321,64 @@ func TestPipelineStatusReadsOnceWithoutPolling(t *testing.T) {
 			t.Fatalf("observation=%#v, err=%v, gets=%d, failure gets=%d, sleeps=%d",
 				observation, err, reader.gets, reader.failureGets, sleeps)
 		}
+	}
+}
+
+func TestPollPipelineReportsProgressThroughExplicitControl(t *testing.T) {
+	reader := &fakeReader{builds: []*azdopipeline.Build{
+		testPipelineBuild(t, ModeTest, "notStarted", ""),
+		testPipelineBuild(t, ModeTest, "inProgress", ""),
+		testPipelineBuild(t, ModeTest, "completed", "succeeded"),
+	}}
+	queue := new(fakeQueueClient)
+	sleeps := 0
+	service, err := NewPipelineRunService(reader, queue, completeConfig(PipelineRunConfig{Mode: ModeTest}),
+		func(_ context.Context, duration time.Duration) error {
+			if duration != 5*time.Second {
+				t.Errorf("poll interval = %s", duration)
+			}
+			sleeps++
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := new(recordingStepControl)
+	if err := service.PollPipeline(context.Background(), control, "888"); err != nil {
+		t.Fatal(err)
+	}
+	if len(control.progress) != 3 || sleeps != 2 || reader.gets != 3 || queue.calls != 0 {
+		t.Fatalf("progress=%#v, sleeps=%d, gets=%d, queues=%d", control.progress, sleeps, reader.gets, queue.calls)
+	}
+	for index, status := range []string{"waiting", "running", "succeeded"} {
+		progress := control.progress[index]
+		if progress.Summary != "Azure pipeline "+status || progress.RunURL != pipelineRunURL("888") {
+			t.Fatalf("pipeline progress %d = %#v", index, progress)
+		}
+	}
+	if progress := control.progress[2]; progress.Completed != 1 || progress.Total != 1 {
+		t.Fatalf("completion progress = %#v", progress)
+	}
+}
+
+func TestPollPipelineCancellationPreservesReportedProgress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &fakeReader{builds: []*azdopipeline.Build{testPipelineBuild(t, ModeTest, "inProgress", "")}}
+	service, err := NewPipelineRunService(reader, new(fakeQueueClient), completeConfig(PipelineRunConfig{Mode: ModeTest}),
+		func(ctx context.Context, _ time.Duration) error {
+			cancel()
+			return ctx.Err()
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	control := new(recordingStepControl)
+	err = service.PollPipeline(ctx, control, "888")
+	if !errors.Is(err, context.Canceled) || errors.Is(err, coordinator.ErrCanceled) ||
+		len(control.progress) != 1 || control.progress[0].Summary != "Azure pipeline running" {
+
+		t.Fatalf("cancellation error=%v, progress=%#v", err, control.progress)
 	}
 }
 

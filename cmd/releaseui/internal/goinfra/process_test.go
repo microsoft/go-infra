@@ -366,9 +366,14 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		runner := new(coordinator.StepRunner)
+		var progress []coordinator.StepProgress
 		checkpoints := 0
 		steps, err := run.Build(context.Background(), func() {
 			checkpoints++
+			if graph := runner.Snapshot(); len(graph.Steps) == 2 && graph.Steps[1].Progress != nil {
+				progress = append(progress, *graph.Steps[1].Progress)
+			}
 			if _, err := process.Load(run.TakeSnapshot()); err != nil {
 				t.Errorf("load checkpoint: %v", err)
 			}
@@ -376,11 +381,17 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := (&coordinator.StepRunner{}).Execute(context.Background(), steps); err != nil {
+		if err := runner.Execute(context.Background(), steps); err != nil {
 			t.Fatal(err)
 		}
 		if checkpoints != 3 {
 			t.Fatalf("checkpoint count = %d, want 3", checkpoints)
+		}
+		if len(progress) != 2 || progress[0].Summary != "GitHub workflow in_progress" ||
+			progress[1].Summary != "GitHub workflow completed" ||
+			progress[1].RunURL != "https://github.com/microsoft/go-infra/actions/runs/123" {
+
+			t.Fatalf("workflow progress = %#v", progress)
 		}
 		view := run.TakeView()
 		if !view.Test || view.Summary != "GitHub workflow completed" ||

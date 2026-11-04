@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -24,7 +25,7 @@ func execute(t *testing.T, step *Step) error {
 
 func TestNewStepRunnerInitializesGraphWithoutExecuting(t *testing.T) {
 	executions := 0
-	action := func(context.Context) error {
+	action := func(context.Context, StepControl) error {
 		executions++
 		return nil
 	}
@@ -75,7 +76,7 @@ func TestSnapshotRejectsInvalidGraph(t *testing.T) {
 
 func TestStepRunnerRejectsChangedExecutionGraphWithoutChangingSavedView(t *testing.T) {
 	called := false
-	step := NewRootStep("Reviewed", time.Minute, func(context.Context) error {
+	step := NewRootStep("Reviewed", time.Minute, func(context.Context, StepControl) error {
 		called = true
 		return nil
 	})
@@ -103,12 +104,12 @@ func TestStepRunner_Execute_Cancel(t *testing.T) {
 	// Test that when a step fails, steps that depend on it don't enter their impls.
 	a := NewRootStep(
 		"Failure", NoTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, _ StepControl) error {
 			return fmt.Errorf("intentional failure")
 		},
 	).Then(
 		"Dependent", NoTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, _ StepControl) error {
 			t.Fatal("dependent step ran")
 			return nil
 		})
@@ -121,7 +122,7 @@ func TestStepRunner_Execute_PanicToError(t *testing.T) {
 	// Test that when a step panics, it is treated as an error.
 	a := NewRootStep(
 		"Panic", NoTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, _ StepControl) error {
 			panic("intentional panic")
 		},
 	)
@@ -137,7 +138,7 @@ func TestStepRunner_Execute_PanicToError(t *testing.T) {
 func TestStepRunnerFinalizesBeforeReportingCompletion(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	finalErr := errors.New("outcome could not be saved")
-	step := NewRootStep("finish", NoTimeout, func(context.Context) error { return nil })
+	step := NewRootStep("finish", NoTimeout, func(context.Context, StepControl) error { return nil })
 	var runner StepRunner
 	done := make(chan error, 1)
 	go func() {
@@ -167,7 +168,7 @@ func TestStepRunnerFinalizesBeforeReportingCompletion(t *testing.T) {
 
 func TestStepRunnerSnapshots(t *testing.T) {
 	releaseStep := make(chan struct{})
-	step := NewRootStep("Controlled step", NoTimeout, func(ctx context.Context) error {
+	step := NewRootStep("Controlled step", NoTimeout, func(ctx context.Context, _ StepControl) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -209,8 +210,8 @@ func TestStepRunnerSnapshots(t *testing.T) {
 func TestStepRunnerProgressSnapshots(t *testing.T) {
 	reported := make(chan struct{})
 	releaseStep := make(chan struct{})
-	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context) error {
-		ReportProgress(ctx, StepProgress{
+	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context, control StepControl) error {
+		control.ReportProgress(StepProgress{
 			Summary:   "Running one pipeline task",
 			Detail:    "1/3 stages complete",
 			Completed: 1,
@@ -263,6 +264,101 @@ func TestStepRunnerProgressSnapshots(t *testing.T) {
 	close(releaseStep)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStepControlsReportParallelProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		release := make(chan struct{})
+		expected := []StepProgress{
+			{Summary: "First operation", Completed: 1, Total: 3, RunURL: "https://example.invalid/runs/1"},
+			{Summary: "Second operation", Completed: 2, Total: 5, RunURL: "https://example.invalid/runs/2"},
+		}
+		var firstControl StepControl
+		steps := make([]*Step, len(expected))
+		for index, progress := range expected {
+			steps[index] = NewRootStep(progress.Summary, NoTimeout, func(ctx context.Context, control StepControl) error {
+				if control == nil {
+					return errors.New("runner did not supply step control")
+				}
+				if index == 0 {
+					firstControl = control
+				}
+				control.ReportProgress(progress)
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+		}
+		var runner StepRunner
+		done := make(chan error, 1)
+		go func() { done <- runner.Execute(ctx, steps) }()
+		synctest.Wait()
+		snapshot := runner.Snapshot()
+		for index, step := range snapshot.Steps {
+			if step.Status != StepStatusRunning || step.Progress == nil || *step.Progress != expected[index] {
+				t.Fatalf("progress was lost or assigned to the wrong step: %#v", snapshot)
+			}
+		}
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		final := runner.Snapshot()
+		firstControl.ReportProgress(StepProgress{Summary: "Late report"})
+		if !reflect.DeepEqual(final, runner.Snapshot()) {
+			t.Fatal("late reporting changed a completed graph")
+		}
+	})
+}
+
+func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
+	for _, timeout := range []time.Duration{NoTimeout, time.Minute} {
+		t.Run(timeout.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				started := time.Now()
+				step := NewRootStep("Controlled wait", timeout, func(ctx context.Context, control StepControl) error {
+					deadline, hasDeadline := ctx.Deadline()
+					if hasDeadline != (timeout != NoTimeout) || hasDeadline && !deadline.Equal(started.Add(timeout)) {
+						return fmt.Errorf("unexpected deadline %s, present=%v", deadline, hasDeadline)
+					}
+					if control == nil {
+						return errors.New("runner did not supply step control")
+					}
+					control.ReportProgress(StepProgress{Summary: "Waiting for cancellation"})
+					<-ctx.Done()
+					return ctx.Err()
+				})
+				var runner StepRunner
+				done := make(chan error, 1)
+				go func() { done <- runner.Execute(ctx, []*Step{step}) }()
+				synctest.Wait()
+				progress := runner.Snapshot().Steps[0].Progress
+				if progress == nil || progress.Summary != "Waiting for cancellation" {
+					t.Fatal("step control did not publish progress")
+				}
+				want := context.Canceled
+				if timeout == NoTimeout {
+					cancel()
+				} else {
+					want = context.DeadlineExceeded
+					time.Sleep(timeout)
+				}
+				if err := <-done; !errors.Is(err, want) {
+					t.Fatalf("execution error = %v, want %v", err, want)
+				}
+				if runner.Snapshot().Active {
+					t.Fatal("canceled or timed-out step left the runner active")
+				}
+			})
+		})
 	}
 }
 
