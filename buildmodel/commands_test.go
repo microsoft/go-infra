@@ -31,7 +31,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 	for _, scenario := range []string{
 		"branch created", "branch advanced", "branch deleted", "PR created",
 		"approval failed", "auto-merge failed", "retry exhausted", "merged branch", "dry run",
-		"unpublished branch", "unpublished update", "creation failed",
+		"unpublished branch", "unpublished update", "creation failed", "squash-merged update",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GIT_AUTHOR_NAME", "Test")
@@ -74,7 +74,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(origin, "concurrent-update"), []byte("keep me"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "unpublished update" {
+			if scenario == "unpublished update" || scenario == "squash-merged update" {
 				if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.1"}); err != nil {
 					t.Fatal(err)
 				}
@@ -82,6 +82,10 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			git(origin, "add", ".")
 			git(origin, "commit", "-m", "Concurrent update")
 			concurrentCommit := git(origin, "rev-parse", "HEAD")
+			if scenario == "squash-merged update" {
+				baseCommit = git(origin, "commit-tree", concurrentCommit+"^{tree}", "-p", baseCommit, "-m", "Squash merge")
+				git(origin, "update-ref", "refs/heads/main", baseCommit)
+			}
 			git(dir, "init", "--bare", head)
 			git(head, "fetch", origin, "main:main", "concurrent:concurrent")
 			branch := "refs/heads/dev/auto-update/main"
@@ -89,7 +93,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if prExists || scenario == "merged branch" {
 				git(head, "update-ref", branch, baseCommit)
 			}
-			if strings.HasPrefix(scenario, "unpublished") {
+			if strings.HasPrefix(scenario, "unpublished") || scenario == "squash-merged update" {
 				git(head, "update-ref", branch, concurrentCommit)
 			}
 
@@ -198,6 +202,32 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 				}, nil
 			})
 
+			if scenario == "squash-merged update" {
+				*f.SetVariableUpToDateCommit = "Commit"
+				output, err := os.Create(filepath.Join(dir, "stdout"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer output.Close()
+				oldStdout := os.Stdout
+				os.Stdout = output
+				defer func() { os.Stdout = oldStdout }()
+				if err := SubmitUpdatePR(f); err != nil {
+					t.Fatal(err)
+				}
+				os.Stdout = oldStdout
+				data, err := os.ReadFile(output.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(data), "##vso[task.setvariable variable=Commit]"+baseCommit+"\n") {
+					t.Fatalf("did not report remote base commit: %s", data)
+				}
+				if checks != 1 || posts != 0 || git(head, "rev-parse", branch) != concurrentCommit {
+					t.Fatal("already merged update should not create a PR or push")
+				}
+				return
+			}
 			err = SubmitUpdatePR(f)
 			if scenario == "retry exhausted" {
 				if err == nil || checks != 5 || posts != 0 {

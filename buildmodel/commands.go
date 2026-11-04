@@ -360,7 +360,13 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 		}
 	} else if !needsPR {
 		// This commit is already up to date. Find the full commit hash to set the AzDO var.
-		commit, err := gitcmd.RevParse(gitDir, "HEAD")
+		upToDateRef := "HEAD"
+		if existingPR == nil && expectedHead != "" {
+			// Merging a retained branch may have created a local-only merge commit.
+			// Its tree matches the fetched base, whose commit is available remotely.
+			upToDateRef = "FETCH_HEAD"
+		}
+		commit, err := gitcmd.RevParse(gitDir, upToDateRef)
 		if err != nil {
 			return err
 		}
