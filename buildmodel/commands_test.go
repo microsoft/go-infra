@@ -32,6 +32,9 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 		"branch created", "branch advanced", "branch deleted", "PR created",
 		"approval failed", "auto-merge failed", "retry exhausted", "merged branch", "dry run",
 		"unpublished branch", "unpublished update", "creation failed", "squash-merged update",
+		"squash-merged advanced base", "squash-merged unpublished commit",
+		"squash-merged unpublished merge",
+		"unpublished conflict",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GIT_AUTHOR_NAME", "Test")
@@ -74,7 +77,13 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(origin, "concurrent-update"), []byte("keep me"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "unpublished update" || scenario == "squash-merged update" {
+			squashMerged := strings.HasPrefix(scenario, "squash-merged")
+			version := "1.42.1"
+			if squashMerged {
+				git(origin, "add", ".")
+				git(origin, "commit", "-m", "First change in squash-merged PR")
+			}
+			if scenario == "unpublished update" || scenario == "unpublished conflict" || squashMerged {
 				if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.1"}); err != nil {
 					t.Fatal(err)
 				}
@@ -82,9 +91,48 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			git(origin, "add", ".")
 			git(origin, "commit", "-m", "Concurrent update")
 			concurrentCommit := git(origin, "rev-parse", "HEAD")
-			if scenario == "squash-merged update" {
+			if squashMerged {
 				baseCommit = git(origin, "commit-tree", concurrentCommit+"^{tree}", "-p", baseCommit, "-m", "Squash merge")
 				git(origin, "update-ref", "refs/heads/main", baseCommit)
+				if scenario != "squash-merged update" {
+					git(origin, "checkout", "main")
+					if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.2"}); err != nil {
+						t.Fatal(err)
+					}
+					git(origin, "add", ".")
+					git(origin, "commit", "-m", "Advance base version")
+					baseCommit = git(origin, "rev-parse", "HEAD")
+					version = "1.42.3"
+					git(origin, "checkout", "concurrent")
+				}
+				if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" {
+					if err := os.WriteFile(filepath.Join(origin, "unpublished"), []byte("preserve this update"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					git(origin, "add", ".")
+					git(origin, "commit", "-m", "Unpublished update after squash merge")
+					if scenario == "squash-merged unpublished merge" {
+						git(origin, "checkout", "-b", "side", concurrentCommit)
+						git(origin, "commit", "--allow-empty", "-m", "Side commit")
+						git(origin, "checkout", "concurrent")
+						git(origin, "merge", "--no-ff", "--no-edit", "side")
+						if err := os.WriteFile(filepath.Join(origin, "merge-amendment"), []byte("preserve merge contents"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+						git(origin, "add", ".")
+						git(origin, "commit", "--amend", "--no-edit")
+					}
+					concurrentCommit = git(origin, "rev-parse", "HEAD")
+				}
+			}
+			if scenario == "unpublished conflict" {
+				git(origin, "checkout", "main")
+				if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.2"}); err != nil {
+					t.Fatal(err)
+				}
+				git(origin, "add", ".")
+				git(origin, "commit", "-m", "Conflicting base update")
+				baseCommit = git(origin, "rev-parse", "HEAD")
 			}
 			git(dir, "init", "--bare", head)
 			git(head, "fetch", origin, "main:main", "concurrent:concurrent")
@@ -93,7 +141,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if prExists || scenario == "merged branch" {
 				git(head, "update-ref", branch, baseCommit)
 			}
-			if strings.HasPrefix(scenario, "unpublished") || scenario == "squash-merged update" {
+			if strings.HasPrefix(scenario, "unpublished") || squashMerged {
 				git(head, "update-ref", branch, concurrentCommit)
 			}
 
@@ -117,7 +165,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			*f.ReviewerAuth.GitHubPat = "test-reviewer-token"
 			*f.buildAssetJSON = filepath.Join(dir, "assets.json")
 			if err := stringutil.WriteJSONFile(*f.buildAssetJSON, &buildassets.BuildAssets{
-				Branch: "release-branch.go1.42", Version: "1.42.1",
+				Branch: "release-branch.go1.42", Version: version,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -229,7 +277,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 				return
 			}
 			err = SubmitUpdatePR(f)
-			if scenario == "retry exhausted" {
+			if scenario == "retry exhausted" || scenario == "unpublished conflict" {
 				if err == nil || checks != 5 || posts != 0 {
 					t.Fatalf("exhausted retries: error %v, checks %d, posts %d", err, checks, posts)
 				}
@@ -242,7 +290,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantChecks := 2
-			if scenario == "dry run" || scenario == "merged branch" || strings.HasPrefix(scenario, "unpublished") {
+			if scenario == "dry run" || scenario == "merged branch" || strings.HasPrefix(scenario, "unpublished") || squashMerged {
 				wantChecks = 1
 			}
 			if checks != wantChecks {
@@ -260,8 +308,19 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if scenario == "approval failed" && approvals != 2 || scenario == "auto-merge failed" && merges != 2 {
 				t.Fatalf("failed finalization not retried: approvals %d, auto-merges %d", approvals, merges)
 			}
-			if got := git(head, "show", branch+":src/microsoft/versions.json"); !strings.Contains(got, "1.42.1") {
+			if got := git(head, "show", branch+":src/microsoft/versions.json"); !strings.Contains(got, version) {
 				t.Fatalf("version was not updated: %s", got)
+			}
+			if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" {
+				if got := git(head, "show", branch+":unpublished"); got != "preserve this update" {
+					t.Fatalf("unpublished update lost: %s", got)
+				}
+				git(head, "merge-base", "--is-ancestor", concurrentCommit, branch)
+			}
+			if scenario == "squash-merged unpublished merge" {
+				if got := git(head, "show", branch+":merge-amendment"); got != "preserve merge contents" {
+					t.Fatalf("unpublished merge amendment lost: %s", got)
+				}
 			}
 			if scenario == "branch created" || scenario == "branch advanced" || strings.HasPrefix(scenario, "unpublished") {
 				if got := git(head, "show", branch+":concurrent-update"); got != "keep me" {

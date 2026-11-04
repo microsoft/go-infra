@@ -314,7 +314,7 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.Name)); err != nil {
 			return err
 		}
-		if err := run(newGitCmd("merge", "--no-edit", "FETCH_HEAD")); err != nil {
+		if err := reconcileDockerBranch(gitDir); err != nil {
 			return err
 		}
 		if err := run(newGitCmd("diff", "--quiet", "FETCH_HEAD", "HEAD")); err != nil {
@@ -418,6 +418,51 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	}
 
 	return finishUpdatePR(f, b, parsedOrigin, request, existingPR, "nil")
+}
+
+// reconcileDockerBranch integrates FETCH_HEAD into a retained update branch.
+// Squash merges do not record the original commits as ancestors. If a retained
+// commit's entire tree appears in the base history, link those equivalent commits
+// before merging the current base. This preserves unpublished descendants without
+// merging already-integrated changes again.
+func reconcileDockerBranch(gitDir string) error {
+	common, err := gitcmd.CombinedOutput(gitDir, "merge-base", "HEAD", "FETCH_HEAD")
+	if err != nil {
+		return err
+	}
+	common = strings.TrimSpace(common)
+	baseHistory, err := gitcmd.CombinedOutput(gitDir, "log", "--first-parent", "--format=%H %T", common+"..FETCH_HEAD")
+	if err != nil {
+		return err
+	}
+	baseTrees := make(map[string]string)
+	for line := range strings.SplitSeq(strings.TrimSpace(baseHistory), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && baseTrees[fields[1]] == "" {
+			baseTrees[fields[1]] = fields[0]
+		}
+	}
+	headHistory, err := gitcmd.CombinedOutput(gitDir, "log", "--first-parent", "--format=%H %T", common+"..HEAD")
+	if err != nil {
+		return err
+	}
+	for line := range strings.SplitSeq(strings.TrimSpace(headHistory), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && baseTrees[fields[1]] != "" {
+			// Both parents have exactly this tree. Record their equivalence without
+			// rewriting unpublished commits (especially amended merge commits).
+			bridge, err := gitcmd.CombinedOutput(gitDir, "commit-tree", fields[1],
+				"-p", fields[0], "-p", baseTrees[fields[1]], "-m", "Record squash-merged Docker update")
+			if err != nil {
+				return err
+			}
+			if err := gitcmd.Run(gitDir, "merge", "--no-edit", strings.TrimSpace(bridge)); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return gitcmd.Run(gitDir, "merge", "--no-edit", "FETCH_HEAD")
 }
 
 func dockerPRBranchHead(gitDir, remote, branch string) (string, error) {
