@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,14 +55,19 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 		v := goversion.New(version)
 		tag := marRepo + ":" + v.MajorMinor()
 
-		expect := "go" + v.MajorMinorPatchPrerelease() + " "
+		expect, checkRevision := expectedMarGoVersion(v)
 
 		checkers = append(checkers, func() (bool, error) {
 			pullCmd := exec.Command("docker", "pull", tag)
 			if err := executil.Run(pullCmd); err != nil {
 				return false, err
 			}
-			versionCmd := exec.Command("docker", "run", "--rm", tag, "go", "version")
+			args := []string{"run", "--rm"}
+			if checkRevision {
+				args = append(args, "--env", "GODEBUG=ms_version=1")
+			}
+			args = append(args, tag, "go", "version")
+			versionCmd := exec.Command("docker", args...)
 			out, err := executil.SpaceTrimmedCombinedOutput(versionCmd)
 			if err != nil {
 				return false, err
@@ -103,4 +109,15 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 		time.Sleep(*pollDelay)
 	}
 	return fmt.Errorf("exceeded timeout (%v) waiting for versions", *timeout)
+}
+
+func expectedMarGoVersion(v *goversion.GoVersion) (string, bool) {
+	major, majorErr := strconv.Atoi(v.Major)
+	minor, minorErr := strconv.Atoi(v.Minor)
+	patch, patchErr := strconv.Atoi(v.Patch)
+	if majorErr == nil && minorErr == nil && patchErr == nil &&
+		(major > 1 || major == 1 && (minor > 26 || minor == 26 && patch >= 1)) {
+		return "go" + v.MajorMinorPatchPrereleaseRevision() + "-microsoft ", true
+	}
+	return "go" + v.MajorMinorPatchPrerelease() + " ", false
 }
