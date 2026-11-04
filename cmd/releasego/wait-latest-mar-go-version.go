@@ -117,6 +117,7 @@ func expectedMarGoVersion(v *goversion.GoVersion) (string, bool) {
 	patch, patchErr := strconv.Atoi(v.Patch)
 	if majorErr == nil && minorErr == nil && patchErr == nil &&
 		(major > 1 || major == 1 && (minor > 26 || minor == 26 && patch >= 1)) {
+
 		return "go" + v.MajorMinorPatchPrereleaseRevision() + "-microsoft ", true
 	}
 	return "go" + v.MajorMinorPatchPrerelease() + " ", false
