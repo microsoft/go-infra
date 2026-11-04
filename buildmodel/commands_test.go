@@ -27,6 +27,67 @@ func (f dockerRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) 
 	return f(r)
 }
 
+func TestDockerRemoteGitHelper(t *testing.T) {
+	if secret := os.Getenv("DOCKER_GIT_TEST_SECRET"); secret != "" {
+		fmt.Fprintln(os.Stdout, secret)
+		fmt.Fprintln(os.Stderr, secret)
+		if os.Getenv("DOCKER_GIT_TEST_FAIL") == "1" {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+}
+
+func TestDockerRemoteGitCredentials(t *testing.T) {
+	const secret = "dummy-credential-for-log-test"
+	dir := t.TempDir()
+	output, err := os.Create(filepath.Join(dir, "output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = output, output
+	defer func() { os.Stdout, os.Stderr = oldStdout, oldStderr }()
+	for _, fail := range []string{"0", "1"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestDockerRemoteGitHelper$")
+		cmd.Env = append(os.Environ(), "DOCKER_GIT_TEST_SECRET="+secret, "DOCKER_GIT_TEST_FAIL="+fail)
+		err := runDockerRemoteGit(cmd)
+		if (err != nil) != (fail == "1") {
+			t.Fatalf("remote Git error = %v, fail = %s", err, fail)
+		}
+		if err != nil && strings.Contains(err.Error(), secret) {
+			t.Fatal("remote Git error leaked credentials")
+		}
+	}
+	// Rewrite a credential-bearing URL to a local repository, avoiding network
+	// access while exercising successful and failing ls-remote commands.
+	cmd := exec.Command("git", "init", dir)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	remote := "https://user:" + secret + "@example.invalid/repo"
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+filepath.ToSlash(dir)+"/.insteadOf")
+	t.Setenv("GIT_CONFIG_VALUE_0", remote)
+	if _, err := dockerPRBranchHead(dir, remote, "main"); err != nil {
+		t.Fatal(err)
+	}
+	// Force Git to print a diagnostic containing the authenticated remote.
+	t.Setenv("GIT_CONFIG_KEY_0", "url."+filepath.ToSlash(filepath.Join(dir, "missing"))+"/.insteadOf")
+	if _, err := dockerPRBranchHead(dir, remote, "main"); err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("unsafe or missing lookup error: %v", err)
+	}
+	os.Stdout, os.Stderr = oldStdout, oldStderr
+	data, err := os.ReadFile(output.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("credentials leaked in logs: %s", data)
+	}
+}
+
 func TestSubmitUpdatePRRetries(t *testing.T) {
 	for _, scenario := range []string{
 		"branch created", "branch advanced", "branch deleted", "PR created",
@@ -35,6 +96,8 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 		"squash-merged advanced base", "squash-merged unpublished commit",
 		"squash-merged unpublished merge",
 		"unpublished conflict",
+		"squash-merged unrelated base", "squash-merged Git warnings", "squash-merged tag collision",
+		"approval exhausted", "auto-merge exhausted", "same-slot race",
 	} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GIT_AUTHOR_NAME", "Test")
@@ -92,8 +155,23 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			git(origin, "commit", "-m", "Concurrent update")
 			concurrentCommit := git(origin, "rev-parse", "HEAD")
 			if squashMerged {
-				baseCommit = git(origin, "commit-tree", concurrentCommit+"^{tree}", "-p", baseCommit, "-m", "Squash merge")
-				git(origin, "update-ref", "refs/heads/main", baseCommit)
+				if scenario == "squash-merged unrelated base" {
+					git(origin, "checkout", "main")
+					if err := os.WriteFile(filepath.Join(origin, "README"), []byte("base-only change"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					git(origin, "add", ".")
+					git(origin, "commit", "-m", "Unrelated base change")
+					git(origin, "merge", "--squash", "concurrent")
+					git(origin, "commit", "-m", "Squash merge")
+					baseCommit = git(origin, "rev-parse", "HEAD")
+				} else {
+					baseCommit = git(origin, "commit-tree", concurrentCommit+"^{tree}", "-p", baseCommit, "-m", "Squash merge")
+					git(origin, "update-ref", "refs/heads/main", baseCommit)
+				}
+				if scenario == "squash-merged tag collision" {
+					git(origin, "tag", "main", baseCommit)
+				}
 				if scenario != "squash-merged update" {
 					git(origin, "checkout", "main")
 					if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.2"}); err != nil {
@@ -105,7 +183,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 					version = "1.42.3"
 					git(origin, "checkout", "concurrent")
 				}
-				if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" {
+				if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" || scenario == "squash-merged unrelated base" {
 					if err := os.WriteFile(filepath.Join(origin, "unpublished"), []byte("preserve this update"), 0o600); err != nil {
 						t.Fatal(err)
 					}
@@ -134,8 +212,21 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 				git(origin, "commit", "-m", "Conflicting base update")
 				baseCommit = git(origin, "rev-parse", "HEAD")
 			}
+			if scenario == "same-slot race" {
+				if err := UpdateGoImagesRepo(origin, &buildassets.BuildAssets{Version: "1.42.2"}); err != nil {
+					t.Fatal(err)
+				}
+				git(origin, "add", ".")
+				git(origin, "commit", "-m", "Newer concurrent version")
+				concurrentCommit = git(origin, "rev-parse", "HEAD")
+			}
 			git(dir, "init", "--bare", head)
-			git(head, "fetch", origin, "main:main", "concurrent:concurrent")
+			git(head, "fetch", origin, "refs/heads/main:refs/heads/main", "refs/heads/concurrent:refs/heads/concurrent")
+			if scenario == "squash-merged Git warnings" {
+				t.Setenv("GIT_CONFIG_COUNT", "1")
+				t.Setenv("GIT_CONFIG_KEY_0", "core.fsyncObjectFiles")
+				t.Setenv("GIT_CONFIG_VALUE_0", "false")
+			}
 			branch := "refs/heads/dev/auto-update/main"
 			prExists := scenario == "branch advanced" || scenario == "branch deleted"
 			if prExists || scenario == "merged branch" {
@@ -205,7 +296,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 						found := prExists
 						if checks == 1 {
 							switch scenario {
-							case "branch created", "branch advanced":
+							case "branch created", "branch advanced", "same-slot race":
 								git(head, "update-ref", branch, concurrentCommit)
 								prExists = true
 							case "branch deleted":
@@ -228,12 +319,12 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 						body = `{"data":{"repository":{"pullRequests":{"nodes":` + nodes + `}}}}`
 					case strings.Contains(request.Query, "addPullRequestReview"):
 						approvals++
-						if scenario == "approval failed" && approvals == 1 {
+						if scenario == "approval failed" && approvals == 1 || scenario == "approval exhausted" {
 							body = `{"errors":[{"message":"temporary review failure"}]}`
 						}
 					case strings.Contains(request.Query, "enablePullRequestAutoMerge"):
 						merges++
-						if scenario == "auto-merge failed" && merges == 1 {
+						if scenario == "auto-merge failed" && merges == 1 || scenario == "auto-merge exhausted" {
 							body = `{"errors":[{"message":"temporary auto-merge failure"}]}`
 						}
 					default:
@@ -276,8 +367,35 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 				}
 				return
 			}
+			*f.SetVariablePRNumber = "PRNumber"
+			*f.SetVariableUpToDateCommit = "Commit"
+			output, err := os.Create(filepath.Join(dir, "run-stdout"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer output.Close()
+			oldStdout := os.Stdout
+			os.Stdout = output
+			defer func() { os.Stdout = oldStdout }()
 			err = SubmitUpdatePR(f)
-			if scenario == "retry exhausted" || scenario == "unpublished conflict" {
+			os.Stdout = oldStdout
+			if scenario == "squash-merged Git warnings" {
+				t.Setenv("GIT_CONFIG_COUNT", "0")
+			}
+			data, readErr := os.ReadFile(output.Name())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if err != nil && strings.Contains(string(data), "##vso[task.setvariable") {
+				t.Fatalf("failed run published pipeline variables:\n%s", data)
+			}
+			if scenario == "approval exhausted" || scenario == "auto-merge exhausted" {
+				if err == nil || checks != 5 || posts != 1 {
+					t.Fatalf("finalization retries: error %v, checks %d, posts %d", err, checks, posts)
+				}
+				return
+			}
+			if scenario == "retry exhausted" || scenario == "unpublished conflict" || scenario == "same-slot race" {
 				if err == nil || checks != 5 || posts != 0 {
 					t.Fatalf("exhausted retries: error %v, checks %d, posts %d", err, checks, posts)
 				}
@@ -311,9 +429,17 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 			if got := git(head, "show", branch+":src/microsoft/versions.json"); !strings.Contains(got, version) {
 				t.Fatalf("version was not updated: %s", got)
 			}
-			if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" {
+			if squashMerged {
+				git(head, "merge-base", "--is-ancestor", baseCommit, branch)
+			}
+			if scenario == "squash-merged unpublished commit" || scenario == "squash-merged unpublished merge" || scenario == "squash-merged unrelated base" {
 				if got := git(head, "show", branch+":unpublished"); got != "preserve this update" {
 					t.Fatalf("unpublished update lost: %s", got)
+				}
+				if scenario == "squash-merged unrelated base" {
+					if got := git(head, "show", branch+":README"); got != "base-only change" {
+						t.Fatalf("unrelated base change lost: %s", got)
+					}
 				}
 				git(head, "merge-base", "--is-ancestor", concurrentCommit, branch)
 			}
@@ -327,7 +453,7 @@ func TestSubmitUpdatePRRetries(t *testing.T) {
 					t.Fatalf("concurrent update lost: %s", got)
 				}
 			}
-			if got := git(origin, "rev-parse", "main"); got != baseCommit {
+			if got := git(origin, "rev-parse", "refs/heads/main"); got != baseCommit {
 				t.Fatalf("modified base branch: %s", got)
 			}
 			if got := git(origin, "for-each-ref", "--format=%(refname)", branch); got != "" {

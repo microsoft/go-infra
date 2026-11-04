@@ -191,12 +191,13 @@ func SubmitUpdatePR(f *PRFlags) error {
 
 	// Retry the whole operation, not just the push: another update may have changed
 	// the PR or branch, so each attempt must fetch and regenerate from fresh state.
+	var updateState dockerUpdateState
 	return githubutil.Retry(func() error {
-		return submitUpdatePR(f, assets, targetBranch)
+		return submitUpdatePR(f, assets, targetBranch, &updateState)
 	})
 }
 
-func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch string) error {
+func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch string, updateState *dockerUpdateState) error {
 	gitDir, err := executil.MakeWorkDir(*f.tempGitDir)
 	if err != nil {
 		return err
@@ -296,12 +297,12 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	if existingPR != nil || expectedHead != "" {
 		// A branch without an open PR may be an update that was pushed just before
 		// PR creation. Preserve it rather than treating it as an abandoned branch.
-		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec())); err != nil {
+		if err := runDockerRemoteGit(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec())); err != nil {
 			return err
 		}
 	} else {
 		// Fetch the base branch to start the PR head branch.
-		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.BaseBranchFetchRefspec())); err != nil {
+		if err := runDockerRemoteGit(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.BaseBranchFetchRefspec())); err != nil {
 			return err
 		}
 	}
@@ -311,7 +312,7 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	if existingPR == nil && expectedHead != "" {
 		// Bring a retained branch up to date, including when its previous PR was
 		// merged. Never discard unpublished commits merely because no PR exists.
-		if err := run(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), b.Name)); err != nil {
+		if err := runDockerRemoteGit(newGitCmd("fetch", "--no-tags", gitAuther.InsertAuth(*f.origin), "refs/heads/"+b.Name)); err != nil {
 			return err
 		}
 		if err := reconcileDockerBranch(gitDir); err != nil {
@@ -326,6 +327,9 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	}
 
 	// Make changes to the files in the temp repo.
+	if err := updateState.Check(gitDir, assets); err != nil {
+		return err
+	}
 	if err := UpdateGoImagesRepo(gitDir, assets); err != nil {
 		if errors.Is(err, ErrNoMajorMinorUpgradeMatch) {
 			fmt.Printf("---- No Docker image version to update. Skipping: %v\n", err)
@@ -366,10 +370,11 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 			// Its tree matches the fetched base, whose commit is available remotely.
 			upToDateRef = "FETCH_HEAD"
 		}
-		commit, err := gitcmd.RevParse(gitDir, upToDateRef)
+		commit, err := executil.Output(newGitCmd("rev-parse", upToDateRef))
 		if err != nil {
 			return err
 		}
+		commit = strings.TrimSpace(commit)
 		var prNumber string
 		if existingPR == nil {
 			// We checked the origin branch, and it didn't need any updates. Output "nil" so future
@@ -383,8 +388,6 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 			prNumber = strconv.Itoa(existingPR.Number)
 		}
 
-		f.SetAzDOVariables(prNumber, commit)
-
 		// If the diff had 0 exit code, there are no changes. Skip this branch's next steps.
 		fmt.Printf("---- No updates to %v. Skipping.\n", b.Name)
 		if existingPR != nil {
@@ -392,6 +395,7 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 			// the PR or enable auto-merge. Finish those steps even without a new diff.
 			return finishUpdatePR(f, b, parsedOrigin, request, existingPR, commit)
 		}
+		f.SetAzDOVariables(prNumber, commit)
 		return nil
 	}
 
@@ -407,13 +411,15 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 	}
 
 	// Push the commit.
-	args := []string{"push", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec(),
-		"--force-with-lease=refs/heads/" + b.PRBranch() + ":" + expectedHead}
+	args := []string{
+		"push", gitAuther.InsertAuth(*f.to), b.PRBranchRefspec(),
+		"--force-with-lease=refs/heads/" + b.PRBranch() + ":" + expectedHead,
+	}
 	if *f.dryRun {
 		// Show what would be pushed, but don't actually push it.
 		args = append(args, "-n")
 	}
-	if err := run(newGitCmd(args...)); err != nil {
+	if err := runDockerRemoteGit(newGitCmd(args...)); err != nil {
 		return err
 	}
 
@@ -422,44 +428,58 @@ func submitUpdatePR(f *PRFlags, assets *buildassets.BuildAssets, targetBranch st
 
 // reconcileDockerBranch integrates FETCH_HEAD into a retained update branch.
 // Squash merges do not record the original commits as ancestors. If a retained
-// commit's entire tree appears in the base history, link those equivalent commits
-// before merging the current base. This preserves unpublished descendants without
-// merging already-integrated changes again.
+// commit's changed paths appear in the base history, link those integrated commits
+// before merging the current base. Unrelated base changes do not prevent a match.
+// This preserves unpublished descendants without merging integrated changes again.
 func reconcileDockerBranch(gitDir string) error {
-	common, err := gitcmd.CombinedOutput(gitDir, "merge-base", "HEAD", "FETCH_HEAD")
+	output := func(args ...string) (string, error) {
+		return executil.Output(executil.Dir(gitDir, "git", args...))
+	}
+	common, err := output("merge-base", "HEAD", "FETCH_HEAD")
 	if err != nil {
 		return err
 	}
 	common = strings.TrimSpace(common)
-	baseHistory, err := gitcmd.CombinedOutput(gitDir, "log", "--first-parent", "--format=%H %T", common+"..FETCH_HEAD")
+	baseHistory, err := output("log", "--first-parent", "--format=%H %T", common+"..FETCH_HEAD")
 	if err != nil {
 		return err
 	}
-	baseTrees := make(map[string]string)
-	for line := range strings.SplitSeq(strings.TrimSpace(baseHistory), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && baseTrees[fields[1]] == "" {
-			baseTrees[fields[1]] = fields[0]
+	headHistory, err := output("log", "--first-parent", "--format=%H", common+"..HEAD")
+	if err != nil {
+		return err
+	}
+	for head := range strings.FieldsSeq(headHistory) {
+		paths, err := output("diff", "--no-renames", "--name-only", "-z", common, head)
+		if err != nil {
+			return err
 		}
-	}
-	headHistory, err := gitcmd.CombinedOutput(gitDir, "log", "--first-parent", "--format=%H %T", common+"..HEAD")
-	if err != nil {
-		return err
-	}
-	for line := range strings.SplitSeq(strings.TrimSpace(headHistory), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && baseTrees[fields[1]] != "" {
-			// Both parents have exactly this tree. Record their equivalence without
-			// rewriting unpublished commits (especially amended merge commits).
-			bridge, err := gitcmd.CombinedOutput(gitDir, "commit-tree", fields[1],
-				"-p", fields[0], "-p", baseTrees[fields[1]], "-m", "Record squash-merged Docker update")
+		if paths == "" {
+			continue
+		}
+		for line := range strings.SplitSeq(strings.TrimSpace(baseHistory), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				continue
+			}
+			args := []string{"--literal-pathspecs", "diff", "--quiet", head, fields[0], "--"}
+			args = append(args, strings.Split(strings.TrimSuffix(paths, "\x00"), "\x00")...)
+			if err := gitcmd.Run(gitDir, args...); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+					continue
+				}
+				return err
+			}
+			// The base contains every changed path, but may also have unrelated
+			// changes. Use its tree so those changes survive the bridge merge.
+			bridge, err := output("commit-tree", fields[1],
+				"-p", head, "-p", fields[0], "-m", "Record squash-merged Docker update")
 			if err != nil {
 				return err
 			}
 			if err := gitcmd.Run(gitDir, "merge", "--no-edit", strings.TrimSpace(bridge)); err != nil {
 				return err
 			}
-			break
+			return gitcmd.Run(gitDir, "merge", "--no-edit", "FETCH_HEAD")
 		}
 	}
 	return gitcmd.Run(gitDir, "merge", "--no-edit", "FETCH_HEAD")
@@ -467,18 +487,29 @@ func reconcileDockerBranch(gitDir string) error {
 
 func dockerPRBranchHead(gitDir, remote, branch string) (string, error) {
 	ref := "refs/heads/" + branch
-	out, err := executil.Output(executil.Dir(gitDir, "git", "ls-remote", "--refs", remote, ref))
+	cmd := executil.Dir(gitDir, "git", "ls-remote", "--refs", remote, ref)
+	// Authenticated URLs can appear in arguments and Git's diagnostics. Do not
+	// send either through logging wrappers or include them in returned errors.
+	cmd.Stderr = io.Discard
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-	fields := strings.Fields(out)
+	fields := strings.Fields(string(out))
 	if len(fields) == 0 {
 		return "", nil
 	}
 	if len(fields) != 2 || fields[1] != ref {
-		return "", fmt.Errorf("unexpected ls-remote output for %q: %q", ref, out)
+		return "", fmt.Errorf("unexpected ls-remote output for %q", ref)
 	}
 	return fields[0], nil
+}
+
+func runDockerRemoteGit(cmd *exec.Cmd) error {
+	fmt.Println("---- Running authenticated Git operation (output suppressed)")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
 }
 
 func finishUpdatePR(f *PRFlags, b gitpr.PRRefSet, parsedOrigin *gitpr.Remote, request *gitpr.GitHubRequest, existingPR *gitpr.ExistingPR, upToDateCommit string) error {
@@ -732,13 +763,6 @@ func getwd() string {
 		log.Panic(err)
 	}
 	return wd
-}
-
-// runOrPanic uses 'run', then panics on error (such as nonzero exit code).
-func runOrPanic(c *exec.Cmd) {
-	if err := run(c); err != nil {
-		log.Panic(err)
-	}
 }
 
 // run sets up the command so it logs directly to our stdout/stderr streams, then runs it.
