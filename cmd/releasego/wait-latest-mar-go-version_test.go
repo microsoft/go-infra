@@ -17,6 +17,11 @@ func TestExpectedMarGoVersion(t *testing.T) {
 		checkRevision bool
 	}{
 		{
+			name:    "older Go versions keep the upstream check",
+			version: "1.25.8-2",
+			want:    "go1.25.8 ",
+		},
+		{
 			name:    "before revision reporting is reliable",
 			version: "1.26.0-2",
 			want:    "go1.26.0 ",
@@ -28,9 +33,27 @@ func TestExpectedMarGoVersion(t *testing.T) {
 			checkRevision: true,
 		},
 		{
+			name:          "omitted revision defaults to one",
+			version:       "1.26.1",
+			want:          "go1.26.1-1-microsoft ",
+			checkRevision: true,
+		},
+		{
 			name:          "later Go versions use revision reporting",
 			version:       "1.27.0-2",
 			want:          "go1.27.0-2-microsoft ",
+			checkRevision: true,
+		},
+		{
+			name:          "partial version keeps normalized defaults",
+			version:       "1.27",
+			want:          "go1.27.0-1-microsoft ",
+			checkRevision: true,
+		},
+		{
+			name:          "later semantic major versions use revision reporting",
+			version:       "2.0.0-2",
+			want:          "go2.0.0-2-microsoft ",
 			checkRevision: true,
 		},
 	}

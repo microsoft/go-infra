@@ -7,9 +7,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/version"
 	"log"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +29,7 @@ func init() {
 Given a list of Go versions, constructs tag names for each one's major version (1.20.3-1 -> 1.20)
 and repeatedly tries to "docker pull" that tag and then probe the image using
 "docker run ... go version" to see if it contains the expected major+minor+patch Go version.
+For Go 1.26.1 and later, also checks the Microsoft revision using GODEBUG=ms_version=1.
 `,
 		Handle: waitMarGoVersion,
 	})
@@ -111,13 +112,9 @@ func waitMarGoVersion(p subcmd.ParseFunc) error {
 	return fmt.Errorf("exceeded timeout (%v) waiting for versions", *timeout)
 }
 
-func expectedMarGoVersion(v *goversion.GoVersion) (string, bool) {
-	major, majorErr := strconv.Atoi(v.Major)
-	minor, minorErr := strconv.Atoi(v.Minor)
-	patch, patchErr := strconv.Atoi(v.Patch)
-	if majorErr == nil && minorErr == nil && patchErr == nil &&
-		(major > 1 || major == 1 && (minor > 26 || minor == 26 && patch >= 1)) {
-
+func expectedMarGoVersion(v *goversion.GoVersion) (expected string, checkRevision bool) {
+	// Go 1.26.0-1 does not reliably include the Microsoft revision in its version string.
+	if version.Compare("go"+v.MajorMinorPatch(), "go1.26.1") >= 0 {
 		return "go" + v.MajorMinorPatchPrereleaseRevision() + "-microsoft ", true
 	}
 	return "go" + v.MajorMinorPatchPrerelease() + " ", false
