@@ -6,8 +6,8 @@ Use the shared workflow to review landed Go dependency updates and find changes 
 
 Your repository needs GitHub Actions and Copilot access.
 Save this caller as `.github/workflows/dependency-audit.yml` on the repository's default branch.
-Replace `FULL_GO_INFRA_COMMIT_SHA` with the full commit SHA of a [tagged go-infra release](https://github.com/microsoft/go-infra/tags) that includes this workflow.
-If the workflow has not been released yet, use the commit SHA from its merged PR.
+This workflow is not included in a [tagged go-infra release](https://github.com/microsoft/go-infra/tags) yet.
+Replace `FULL_GO_INFRA_COMMIT_SHA` with the full SHA of a merged go-infra commit that includes this workflow.
 
 ```yaml
 name: Dependency history audit

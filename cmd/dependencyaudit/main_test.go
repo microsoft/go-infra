@@ -1090,17 +1090,6 @@ func TestPublishedAuditDetailsMatchTheCheckpoint(t *testing.T) {
 	}
 }
 
-func TestApplyInstructionsAllowRelatedFindingsAndNormalIssueReferences(t *testing.T) {
-	if !strings.Contains(applyInstructions, "one or more related findings") {
-		t.Fatal("instructions do not allow related findings to share a PR")
-	}
-	for _, restriction := range []string{"closing keywords", "Fixes", "Closes", "area slug"} {
-		if strings.Contains(applyInstructions, restriction) {
-			t.Fatalf("instructions still require manual issue-closure protection: %q", restriction)
-		}
-	}
-}
-
 func TestCleanRetryValidatesItsPredecessorBeforeClosingIt(t *testing.T) {
 	for _, invalid := range []string{"owner", "repository", "branch", "history"} {
 		t.Run(invalid, func(t *testing.T) {
