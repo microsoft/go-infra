@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,21 +52,92 @@ func Test_ReleaseInfo_WriteAnnouncement(t *testing.T) {
 	}
 }
 
-func TestFindGoAnnouncementThread(t *testing.T) {
+func TestFindGoAnnouncements(t *testing.T) {
+	const prefix = "https://groups.google.com/g/golang-announce/c/"
+	paired := GoAnnouncement{
+		Subject: "[security] Go 1.22.4 and Go 1.21.11 are released",
+		URL:     prefix + "paired",
+	}
+	newer := GoAnnouncement{Subject: "Go 1.23.1 is released", URL: prefix + "newer"}
+	older := GoAnnouncement{Subject: "Go 1.21.11 is released", URL: prefix + "older"}
 	tests := []struct {
 		name     string
 		versions []string
-		wantText string
+		security bool
+		pages    map[string]GoAnnouncement
+		queries  []string
+		want     []GoAnnouncement
+		wantErr  bool
 	}{
 		{
 			name:     "paired security release",
 			versions: []string{"1.22.4-1", "1.21.11-1"},
-			wantText: "[security] Go 1.22.4 and Go 1.21.11 are released",
+			security: true,
+			pages:    map[string]GoAnnouncement{"1.22.4": paired, "1.21.11": paired},
+			queries:  []string{"1.22.4", "1.21.11"},
+			want:     []GoAnnouncement{paired},
 		},
 		{
 			name:     "single security release with paired announcement",
 			versions: []string{"1.22.4-1"},
-			wantText: "[security] Go 1.22.4 and Go 1.21.11 are released",
+			security: true,
+			pages:    map[string]GoAnnouncement{"1.22.4": paired},
+			queries:  []string{"1.22.4"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "previous version with paired announcement",
+			versions: []string{"1.21.11-1"},
+			pages:    map[string]GoAnnouncement{"1.21.11": paired},
+			queries:  []string{"1.21.11"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "three versions and two distinct announcements",
+			versions: []string{"1.23.1-1", "1.22.4-1", "1.21.11-1"},
+			pages:    map[string]GoAnnouncement{"1.23.1": newer, "1.22.4": paired, "1.21.11": paired},
+			queries:  []string{"1.23.1", "1.22.4", "1.21.11"},
+			want:     []GoAnnouncement{newer, paired},
+		},
+		{
+			name:     "only the third version has an announcement",
+			versions: []string{"1.23.1-1", "1.22.4-1", "1.21.11-1"},
+			pages:    map[string]GoAnnouncement{"1.21.11": older},
+			queries:  []string{"1.23.1", "1.22.4", "1.21.11"},
+			want:     []GoAnnouncement{older},
+			wantErr:  true,
+		},
+		{
+			name:     "revision two without a published revision one",
+			versions: []string{"1.22.4-2"},
+			pages:    map[string]GoAnnouncement{"1.22.4": paired},
+			queries:  []string{"1.22.4"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "Microsoft security fix for a regular upstream release",
+			versions: []string{"1.23.1-2"},
+			security: true,
+			pages:    map[string]GoAnnouncement{"1.23.1": newer},
+			queries:  []string{"1.23.1"},
+			want:     []GoAnnouncement{newer},
+		},
+		{
+			name:     "revisions and variants share one lookup",
+			versions: []string{"1.22.4-2", "1.22.4-1", "1.22.4-1-fips"},
+			pages:    map[string]GoAnnouncement{"1.22.4": paired},
+			queries:  []string{"1.22.4"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "no matching announcement",
+			versions: []string{"1.22.4-1"},
+			queries:  []string{"1.22.4"},
+			wantErr:  true,
+		},
+		{
+			name:    "no upstream versions",
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -74,16 +146,26 @@ func TestFindGoAnnouncementThread(t *testing.T) {
 				time.Date(2024, 6, 4, 0, 0, 0, 0, time.UTC),
 				tt.versions,
 				"test",
-				true,
+				tt.security,
 			)
+			var queries []string
 			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				query := req.URL.Query().Get("q")
-				if wantQuery := `subject:"Go 1.22.4"`; query != wantQuery {
-					return nil, fmt.Errorf("search query = %q, want %q", query, wantQuery)
+				version, ok := strings.CutPrefix(query, `subject:"Go `)
+				if !ok {
+					return nil, fmt.Errorf("unexpected search query %q", query)
 				}
-				body := `<html><head><base href="https://groups.google.com/"></head><body>` +
-					`<a href="/g/golang-announce/c/thread-id">` + tt.wantText + `</a>` +
-					`</body></html>`
+				version, ok = strings.CutSuffix(version, `"`)
+				if !ok {
+					return nil, fmt.Errorf("unexpected search query %q", query)
+				}
+				queries = append(queries, version)
+				announcement, found := tt.pages[version]
+				body := "<html><body></body></html>"
+				if found {
+					body = fmt.Sprintf(`<html><head><base href="https://groups.google.com/"></head><body><a href=%q>%s</a></body></html>`,
+						announcement.URL, announcement.Subject)
+				}
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Header:     http.Header{"Content-Type": []string{"text/html; charset=utf-8"}},
@@ -91,21 +173,61 @@ func TestFindGoAnnouncementThread(t *testing.T) {
 				}, nil
 			})}
 
-			got, err := findGoAnnouncementThread(context.Background(), releaseInfo, client)
-			if err != nil {
-				t.Fatal(err)
+			got, err := findGoAnnouncements(context.Background(), releaseInfo.Versions, client)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("findGoAnnouncements() error = %v, want error %v", err, tt.wantErr)
 			}
-			if want := "https://groups.google.com/g/golang-announce/c/thread-id"; got != want {
-				t.Fatalf("findGoAnnouncementThread() = %q, want %q", got, want)
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("findGoAnnouncements() = %+v, want %+v", got, tt.want)
+			}
+			if !slices.Equal(queries, tt.queries) {
+				t.Errorf("queried versions = %v, want %v", queries, tt.queries)
 			}
 
-			releaseInfo.GoAnnouncementLink = got
+			releaseInfo.GoAnnouncements = got
 			var announcement bytes.Buffer
 			if err := releaseInfo.WriteAnnouncement(&announcement); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(announcement.String(), "[Go release announcement]("+got+")") {
-				t.Errorf("announcement does not contain the Go release announcement link:\n%s", announcement.String())
+			for _, want := range tt.want {
+				label := want.Subject
+				if len(tt.want) == 1 {
+					label = "Go release announcement"
+				}
+				if link := "[" + label + "](" + want.URL + ")"; !strings.Contains(announcement.String(), link) {
+					t.Errorf("announcement is missing %q:\n%s", link, announcement.String())
+				}
+				if count := strings.Count(announcement.String(), want.URL); count != 1 {
+					t.Errorf("announcement contains URL %q %d times, want once", want.URL, count)
+				}
+			}
+			if len(tt.want) == 0 && strings.Contains(announcement.String(), "groups.google.com") {
+				t.Errorf("announcement contains an unexpected Google Groups link:\n%s", announcement.String())
+			}
+		})
+	}
+}
+
+func TestMatchesGoAnnouncementSubject(t *testing.T) {
+	tests := []struct {
+		subject string
+		version string
+		want    bool
+	}{
+		{"Go 1.22.4 is released", "1.22.4", true},
+		{"[security] Go 1.22.4 is released", "1.22.4", true},
+		{"Go 1.22.4 and Go 1.21.11 are released", "1.21.11", true},
+		{"[security] Go 1.22.4 and Go 1.21.11 are released", "1.22.4", true},
+		{"Go 1.22.40 is released", "1.22.4", false},
+		{"Go 1.22.4 is released", "", false},
+		{"Go 1.22.4 are released", "1.22.4", false},
+		{"Go 1.22.4 and Go 1.21.11 is released", "1.22.4", false},
+		{"Re: Go 1.22.4 is released", "1.22.4", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.subject+"/"+tt.version, func(t *testing.T) {
+			if got := matchesGoAnnouncementSubject(tt.subject, tt.version); got != tt.want {
+				t.Errorf("matchesGoAnnouncementSubject(%q, %q) = %v, want %v", tt.subject, tt.version, got, tt.want)
 			}
 		})
 	}

@@ -51,15 +51,20 @@ var githubToWordpressUsernames = map[string]string{
 }
 
 type ReleaseInfo struct {
-	Title              string
-	Author             string
-	Slug               string
-	Categories         []string
-	Tags               []string
-	FeaturedImage      string // Add this field for featured_image
-	Versions           []GoVersionData
-	SecurityRelease    bool
-	GoAnnouncementLink string
+	Title           string
+	Author          string
+	Slug            string
+	Categories      []string
+	Tags            []string
+	FeaturedImage   string // Add this field for featured_image
+	Versions        []GoVersionData
+	SecurityRelease bool
+	GoAnnouncements []GoAnnouncement
+}
+
+type GoAnnouncement struct {
+	Subject string
+	URL     string
 }
 
 // take all this methods and make it one constructor function for ReleaseInfo
@@ -193,10 +198,9 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
-	releaseInfo.GoAnnouncementLink, err = findGoAnnouncementThread(ctx, releaseInfo, &http.Client{Timeout: 30 * time.Second})
+	releaseInfo.GoAnnouncements, err = findGoAnnouncements(ctx, releaseInfo.Versions, &http.Client{Timeout: 30 * time.Second})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: error finding upstream release announcement: %v\n", err)
-		releaseInfo.GoAnnouncementLink = ""
+		fmt.Fprintf(os.Stderr, "warning: error finding upstream release announcements: %v\n", err)
 	}
 
 	if dryRun {
@@ -269,52 +273,74 @@ type httpDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-func findGoAnnouncementThread(ctx context.Context, releaseInfo *ReleaseInfo, client httpDoer) (string, error) {
-	var versions []string
-	seen := make(map[string]bool)
-	for _, version := range releaseInfo.Versions {
-		upstreamVersion := strings.TrimPrefix(version.GoVersion, "go")
-		if !seen[upstreamVersion] {
-			versions = append(versions, upstreamVersion)
-			seen[upstreamVersion] = true
-		}
-	}
+const (
+	// Failed response bodies appear in warnings, so keep their previews short.
+	maxGoAnnouncementErrorPreviewBytes = 4 << 10
+	// Prevent reading an unexpectedly large HTML search response.
+	maxGoAnnouncementHTMLBytes = 5 << 20
+)
+
+func findGoAnnouncements(ctx context.Context, versions []GoVersionData, client httpDoer) ([]GoAnnouncement, error) {
 	if len(versions) == 0 {
-		return "", errors.New("no upstream Go versions found")
-	}
-	// Upstream release announcements cover at most two versions.
-	if len(versions) > 2 {
-		versions = versions[:2]
+		return nil, errors.New("no upstream Go versions found")
 	}
 
-	searchSubject := "Go " + versions[0]
+	var announcements []GoAnnouncement
+	var lookupErrors []error
+	seenVersions := make(map[string]struct{})
+	seenURLs := make(map[string]struct{})
+	for _, version := range versions {
+		// Microsoft revisions share an upstream announcement, even if -1 was never published.
+		upstreamVersion := strings.TrimPrefix(version.GoVersion, "go")
+		if _, ok := seenVersions[upstreamVersion]; ok {
+			continue
+		}
+		seenVersions[upstreamVersion] = struct{}{}
+
+		announcement, err := findGoAnnouncementThread(ctx, upstreamVersion, client)
+		if err != nil {
+			lookupErrors = append(lookupErrors, fmt.Errorf("finding announcement for Go %s: %w", upstreamVersion, err))
+			continue
+		}
+		if _, ok := seenURLs[announcement.URL]; ok {
+			continue
+		}
+		seenURLs[announcement.URL] = struct{}{}
+		announcements = append(announcements, announcement)
+	}
+
+	return announcements, errors.Join(lookupErrors...)
+}
+
+func findGoAnnouncementThread(ctx context.Context, upstreamVersion string, client httpDoer) (GoAnnouncement, error) {
+	searchSubject := "Go " + upstreamVersion
 	searchURL := "https://groups.google.com/g/golang-announce/search?" + url.Values{"q": {fmt.Sprintf(`subject:"%s"`, searchSubject)}}.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
-		return "", err
+		return GoAnnouncement{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return GoAnnouncement{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("search returned %s: %q", resp.Status, body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxGoAnnouncementErrorPreviewBytes))
+		return GoAnnouncement{}, fmt.Errorf("search returned %s: %q", resp.Status, body)
 	}
 	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 		mediaType, _, err := mime.ParseMediaType(contentType)
 		if err != nil {
-			return "", fmt.Errorf("invalid search Content-Type %q: %w", contentType, err)
+			return GoAnnouncement{}, fmt.Errorf("invalid search Content-Type %q: %w", contentType, err)
 		}
 		if mediaType != "text/html" {
-			return "", fmt.Errorf("search returned media type %q, want text/html", mediaType)
+			return GoAnnouncement{}, fmt.Errorf("search returned media type %q, want text/html", mediaType)
 		}
 	}
 
-	doc, err := html.Parse(io.LimitReader(resp.Body, 5<<20))
+	doc, err := html.Parse(io.LimitReader(resp.Body, maxGoAnnouncementHTMLBytes))
 	if err != nil {
-		return "", fmt.Errorf("parsing Google Groups search results: %w", err)
+		return GoAnnouncement{}, fmt.Errorf("parsing Google Groups search results: %w", err)
 	}
 	baseHref := ""
 	var findBase func(*html.Node)
@@ -332,14 +358,15 @@ func findGoAnnouncementThread(ctx context.Context, releaseInfo *ReleaseInfo, cli
 		baseHref = "https://groups.google.com/"
 	}
 
-	var threadHref string
+	var threadHref, threadSubject string
 	var findThread func(*html.Node)
 	findThread = func(node *html.Node) {
 		if node.Type == html.ElementNode && node.Data == "a" {
 			subject := strings.Join(strings.Fields(htmlNodeText(node)), " ")
-			if matchesGoAnnouncementSubject(subject, versions, releaseInfo.SecurityRelease) {
+			if matchesGoAnnouncementSubject(subject, upstreamVersion) {
 				threadHref = htmlNodeHref(node)
 				if threadHref != "" {
+					threadSubject = subject
 					return
 				}
 			}
@@ -350,43 +377,42 @@ func findGoAnnouncementThread(ctx context.Context, releaseInfo *ReleaseInfo, cli
 	}
 	findThread(doc)
 	if threadHref == "" {
-		return "", fmt.Errorf("no Google Groups thread found for Go %s", strings.Join(versions, " and Go "))
+		return GoAnnouncement{}, fmt.Errorf("no Google Groups thread found for Go %s", upstreamVersion)
 	}
 	base, err := url.Parse(baseHref)
 	if err != nil {
-		return "", fmt.Errorf("parsing Google Groups base URL %q: %w", baseHref, err)
+		return GoAnnouncement{}, fmt.Errorf("parsing Google Groups base URL %q: %w", baseHref, err)
 	}
 	link, err := url.Parse(threadHref)
 	if err != nil {
-		return "", fmt.Errorf("parsing Google Groups thread URL %q: %w", threadHref, err)
+		return GoAnnouncement{}, fmt.Errorf("parsing Google Groups thread URL %q: %w", threadHref, err)
 	}
 	threadURL := base.ResolveReference(link).String()
 	const announcementPrefix = "https://groups.google.com/g/golang-announce/c/"
 	if !strings.HasPrefix(threadURL, announcementPrefix) {
-		return "", fmt.Errorf("found URL %q, but it does not have the expected prefix %q", threadURL, announcementPrefix)
+		return GoAnnouncement{}, fmt.Errorf("found URL %q, but it does not have the expected prefix %q", threadURL, announcementPrefix)
 	}
-	return threadURL, nil
+	return GoAnnouncement{Subject: threadSubject, URL: threadURL}, nil
 }
 
 var goAnnouncementSubjectPattern = regexp.MustCompile(`^Go ([0-9]+(?:\.[0-9]+){1,2})(?: and Go ([0-9]+(?:\.[0-9]+){1,2}))? (is|are) released$`)
 
-func matchesGoAnnouncementSubject(subject string, versions []string, security bool) bool {
-	hasSecurityPrefix := strings.HasPrefix(subject, "[security] ")
-	if security != hasSecurityPrefix {
-		return false
-	}
+func matchesGoAnnouncementSubject(subject, upstreamVersion string) bool {
 	subject = strings.TrimPrefix(subject, "[security] ")
 	match := goAnnouncementSubjectPattern.FindStringSubmatch(subject)
-	if match == nil || (match[2] == "" && match[3] != "is") || (match[2] != "" && match[3] != "are") {
+	if match == nil {
 		return false
 	}
-
-	for _, version := range versions {
-		if version != match[1] && version != match[2] {
+	if match[2] == "" {
+		if match[3] != "is" {
 			return false
 		}
+		return upstreamVersion == match[1]
 	}
-	return true
+	if match[3] != "are" {
+		return false
+	}
+	return upstreamVersion == match[1] || upstreamVersion == match[2]
 }
 
 func htmlNodeHref(node *html.Node) string {
