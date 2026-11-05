@@ -47,7 +47,7 @@ func validateCurrentSource(source Source) error {
 
 func normalizeResolvedVersions(versions []string) ([]string, error) {
 	if len(versions) == 0 {
-		return nil, errors.New("resolved go-images source contains no Microsoft Build of Go versions")
+		return nil, errors.New("resolved go-images source contains no Microsoft build of Go versions")
 	}
 	seen := make(map[string]struct{}, len(versions))
 	normalized := make([]string, 0, len(versions))

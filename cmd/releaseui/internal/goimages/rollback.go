@@ -20,7 +20,7 @@ type PipelineClient interface {
 	Get(context.Context, int) (*azdopipeline.Build, error)
 }
 
-// VersionResolver returns the canonical Microsoft Build of Go versions present in go-images at a commit.
+// VersionResolver returns the canonical Microsoft build of Go versions present in go-images at a commit.
 type VersionResolver interface {
 	VersionsAtCommit(context.Context, string) ([]string, error)
 }

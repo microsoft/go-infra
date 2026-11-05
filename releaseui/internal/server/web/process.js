@@ -14,7 +14,7 @@
       if (location.pathname.startsWith("/releases/")) return null;
       const processID = location.pathname.split("/").filter(Boolean).at(-1);
       const process = await requestJSON(`/api/processes/${encodeURIComponent(processID)}`);
-      document.title = `${process.name} Release · Microsoft Build of Go Release UI`;
+      document.title = `${process.name} Release · Microsoft build of Go Release UI`;
       processMark.textContent = process.mark;
       processName.textContent = `Release ${process.name}.`;
       processDescription.textContent = process.description;
