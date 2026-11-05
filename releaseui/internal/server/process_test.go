@@ -43,12 +43,12 @@ func exampleProcess() *fakeProcess {
 		_ *fakeReleaseRun,
 		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
-		return exampleProcessSteps(func(context.Context) error { return nil }), nil
+		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error { return nil }), nil
 	}
 	return process
 }
 
-func exampleProcessSteps(action func(context.Context) error) []*coordinator.Step {
+func exampleProcessSteps(action coordinator.StepFunc) []*coordinator.Step {
 	return []*coordinator.Step{coordinator.NewRootStep("Run example", time.Minute, action)}
 }
 
@@ -184,7 +184,7 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 		checkpoint contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		builds.Add(1)
-		return exampleProcessSteps(func(context.Context) error {
+		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
 			run.setState(json.RawMessage(`{"value":"executed"}`))
 			checkpoint()
@@ -253,7 +253,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 		_ *fakeReleaseRun,
 		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
-		return exampleProcessSteps(func(context.Context) error {
+		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
 			return nil
 		}), nil
@@ -282,7 +282,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 		_ *fakeReleaseRun,
 		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
-		return exampleProcessSteps(func(context.Context) error {
+		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
 			return nil
 		}), nil
@@ -497,7 +497,7 @@ func TestConfiguredProcessesCanRunConcurrently(t *testing.T) {
 			_ *fakeReleaseRun,
 			_ contract.CheckpointFunc,
 		) ([]*coordinator.Step, error) {
-			return exampleProcessSteps(func(context.Context) error {
+			return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 				close(entered[processID])
 				<-release[processID]
 				return nil

@@ -320,7 +320,7 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	state := r.state
 	r.mu.RUnlock()
 	if input.Action == goInfraActionReleaseOnMerge {
-		action := func(ctx context.Context) error {
+		action := func(ctx context.Context, _ coordinator.StepControl) error {
 			_, err := r.github.AddReleaseOnMergeLabel(ctx, state.PullRequest.Number, state.PullRequest.HeadSHA)
 			return err
 		}
@@ -329,7 +329,7 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	if input.Action != goInfraActionManualDispatch {
 		return nil, fmt.Errorf("unsupported go-infra action %q", input.Action)
 	}
-	dispatch := goInfraProcessStep(input, func(ctx context.Context) error {
+	dispatch := goInfraProcessStep(input, func(ctx context.Context, _ coordinator.StepControl) error {
 		r.mu.RLock()
 		known := r.state.WorkflowRun != nil
 		r.mu.RUnlock()
@@ -345,7 +345,7 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	monitor := dispatch.Then(
 		"Monitor patch-release workflow",
 		goInfraWorkflowTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, control coordinator.StepControl) error {
 			r.mu.RLock()
 			saved := *r.state.WorkflowRun
 			r.mu.RUnlock()
@@ -363,7 +363,7 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 				if run.ID != saved.ID || run.URL != saved.URL || run.HeadSHA != saved.HeadSHA {
 					return errors.New("workflow read does not match the saved run")
 				}
-				coordinator.ReportProgress(ctx, coordinator.StepProgress{
+				control.ReportProgress(coordinator.StepProgress{
 					Summary: "GitHub workflow " + run.Status,
 					Detail:  fmt.Sprintf("Run %d: %s", run.ID, run.Conclusion), RunURL: run.URL,
 				})
@@ -474,7 +474,7 @@ func goInfraProcessName(input goInfraPlanInput) string {
 	return "Publish patch release"
 }
 
-func goInfraProcessStep(input goInfraPlanInput, action func(context.Context) error) *coordinator.Step {
+func goInfraProcessStep(input goInfraPlanInput, action coordinator.StepFunc) *coordinator.Step {
 	name := "Apply release-on-merge label"
 	timeout := goInfraLabelTimeout
 	if input.Action == goInfraActionManualDispatch {

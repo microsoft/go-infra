@@ -64,9 +64,9 @@ type State struct {
 
 // RunService is the complete external surface available to the standalone go-images workflow.
 type RunService interface {
-	PollMirror(context.Context, string) error
+	PollMirror(context.Context, coordinator.StepControl, string) error
 	QueuePipeline(context.Context, map[string]string) (string, error)
-	PollPipeline(context.Context, string) error
+	PollPipeline(context.Context, coordinator.StepControl, string) error
 }
 
 // PipelineResultError preserves a confirmed terminal outcome across checkpoint recovery.
@@ -177,11 +177,11 @@ func NewGraphWithCheckpoint(
 	verifyMirror := coordinator.NewRootStep(
 		"Verify go-images commit is mirrored internally",
 		internalMirrorTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, control coordinator.StepControl) error {
 			if state.VerifiedMirroredCommit == input.SourceVersion {
 				return nil
 			}
-			if err := service.PollMirror(ctx, input.SourceVersion); err != nil {
+			if err := service.PollMirror(ctx, control, input.SourceVersion); err != nil {
 				return err
 			}
 			return access.update(ctx, func() {
@@ -192,7 +192,7 @@ func NewGraphWithCheckpoint(
 	queue := verifyMirror.Then(
 		"🚀 Queue go-images release",
 		shortTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, _ coordinator.StepControl) error {
 			if state.BuildID != "" {
 				return nil
 			}
@@ -213,14 +213,14 @@ func NewGraphWithCheckpoint(
 	wait := queue.Then(
 		"⌚ Wait for go-images release",
 		officialPipelineTimeout,
-		func(ctx context.Context) error {
+		func(ctx context.Context, control coordinator.StepControl) error {
 			if state.Complete {
 				if state.Result == "succeeded" {
 					return nil
 				}
 				return &PipelineResultError{Result: state.Result, Err: fmt.Errorf("saved pipeline result: %s", state.Result)}
 			}
-			err := service.PollPipeline(ctx, state.BuildID)
+			err := service.PollPipeline(ctx, control, state.BuildID)
 			result := "succeeded"
 			if err != nil {
 				var terminal *PipelineResultError

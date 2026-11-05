@@ -335,8 +335,8 @@ func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) 
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	t.Cleanup(func() { unblock(); <-done })
-	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context) error {
-		coordinator.ReportProgress(ctx, coordinator.StepProgress{Completed: 5, Total: 30})
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, control coordinator.StepControl) error {
+		control.ReportProgress(coordinator.StepProgress{Completed: 5, Total: 30})
 		checkpointer.Checkpoint()
 		close(checkpointed)
 		<-release
@@ -376,8 +376,8 @@ func TestFinalViewValidationFailureIsVisible(t *testing.T) {
 	defer cancel()
 	session.runner = &coordinator.StepRunner{}
 	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
-	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context) error {
-		coordinator.ReportProgress(ctx, coordinator.StepProgress{RunURL: "javascript:alert(1)"})
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, control coordinator.StepControl) error {
+		control.ReportProgress(coordinator.StepProgress{RunURL: "javascript:alert(1)"})
 		return nil
 	})}
 	manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
@@ -433,7 +433,7 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 				}
 				steps := []*coordinator.Step{
 					coordinator.NewRootStep(
-						"complete", time.Minute, func(context.Context) error { return nil },
+						"complete", time.Minute, func(context.Context, coordinator.StepControl) error { return nil },
 					),
 				}
 				manager.executeProcessRun(
@@ -465,7 +465,7 @@ func TestFinalPersistenceFailureIsVisible(t *testing.T) {
 	store.updateErr = errors.New("revision changed during final persistence")
 	checkpointer := manager.newProcessCheckpointer(session, session.state.Digest, run, cancel)
 	steps := []*coordinator.Step{
-		coordinator.NewRootStep("finish", time.Minute, func(context.Context) error { return nil }),
+		coordinator.NewRootStep("finish", time.Minute, func(context.Context, coordinator.StepControl) error { return nil }),
 	}
 	manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
 	snapshot := session.runner.Snapshot()
@@ -601,7 +601,7 @@ func checkpointTestRun(
 		t.Fatal(err)
 	}
 	manager.processes = registry
-	runner, err := coordinator.NewStepRunner([]*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(context.Context) error { return nil })})
+	runner, err := coordinator.NewStepRunner([]*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(context.Context, coordinator.StepControl) error { return nil })})
 	if err != nil {
 		t.Fatal(err)
 	}

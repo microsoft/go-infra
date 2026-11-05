@@ -85,6 +85,10 @@ The shared host names new tracking items from the registered process-group and p
 Process implementations do not supply tracking titles. Pipeline identifiers and step counts
 remain in plan facts and review-page subtitles. Updates do not rename existing tracking items.
 Only execution of the returned steps may mutate external state.
+Each step function receives a context for cancellation and deadlines and an explicit
+`coordinator.StepControl` for progress reporting. Call `control.ReportProgress` to publish step
+progress, and pass the control explicitly to polling helpers that report progress. The runner
+provides a control bound to each executing step; progress reporting does not use context values.
 Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
 The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 

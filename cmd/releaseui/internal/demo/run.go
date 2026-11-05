@@ -77,16 +77,16 @@ func (r *run) Plan() *contract.Plan {
 }
 
 func (r *run) Build(_ context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
-	initialize := coordinator.NewRootStep("Initialize demo", stepTimeout, func(ctx context.Context) error {
+	initialize := coordinator.NewRootStep("Initialize demo", stepTimeout, func(ctx context.Context, _ coordinator.StepControl) error {
 		return r.initialize(ctx, checkpoint)
 	})
-	workA := initialize.Then("Fake work A", stepTimeout, func(ctx context.Context) error {
-		return r.work(ctx, 0, checkpoint)
+	workA := initialize.Then("Fake work A", stepTimeout, func(ctx context.Context, control coordinator.StepControl) error {
+		return r.work(ctx, control, 0, checkpoint)
 	})
-	workB := initialize.Then("Fake work B", stepTimeout, func(ctx context.Context) error {
-		return r.work(ctx, 1, checkpoint)
+	workB := initialize.Then("Fake work B", stepTimeout, func(ctx context.Context, control coordinator.StepControl) error {
+		return r.work(ctx, control, 1, checkpoint)
 	})
-	finish := workA.Then("Finish demo", stepTimeout, func(ctx context.Context) error {
+	finish := workA.Then("Finish demo", stepTimeout, func(ctx context.Context, _ coordinator.StepControl) error {
 		return r.finish(ctx, checkpoint)
 	}, workB)
 	return finish.TransitiveDependencies()
@@ -99,10 +99,10 @@ func (r *run) initialize(ctx context.Context, checkpoint contract.CheckpointFunc
 	return r.update(ctx, checkpoint, func(state *state) { state.Initialized = true })
 }
 
-func (r *run) work(ctx context.Context, branch int, checkpoint contract.CheckpointFunc) error {
+func (r *run) work(ctx context.Context, control coordinator.StepControl, branch int, checkpoint contract.CheckpointFunc) error {
 	current := r.readState().WorkCompleted[branch]
 	for {
-		coordinator.ReportProgress(ctx, coordinator.StepProgress{
+		control.ReportProgress(coordinator.StepProgress{
 			Summary: "Simulated work", Detail: fmt.Sprintf("%d of %d units complete", current, workUnits),
 			Completed: current, Total: workUnits,
 		})

@@ -13,7 +13,13 @@ import (
 
 const NoTimeout = time.Duration(0)
 
-type StepFunc func(ctx context.Context) error
+// StepControl publishes progress for the step it belongs to. StepRunner supplies a non-nil
+// control to every step function.
+type StepControl interface {
+	ReportProgress(StepProgress)
+}
+
+type StepFunc func(ctx context.Context, control StepControl) error
 
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
