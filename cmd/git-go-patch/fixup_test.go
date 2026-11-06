@@ -6,7 +6,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -149,6 +151,111 @@ func TestFixupPatchEmptyCommit(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(config.RootDir, "patches", "0011-Third-patch.patch")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFixupPatchEmptyCommitBeforeTarget(t *testing.T) {
+	config, git := newFixupTestRepo(t, "First patch")
+	_, goDir := config.FullProjectRoots()
+	git("commit", "--allow-empty", "-m", "Empty")
+	writeFixupTestFile(t, goDir, "file2.txt", "original\n")
+	git("add", "--all")
+	git("commit", "-m", "Last patch")
+	target := git("rev-parse", "HEAD")
+	base, err := readStatusFile(config.FullPrePatchStatusFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	patchDir := t.TempDir()
+	if _, err := patch.FormatPatch(goDir, "-o", patchDir, base); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(patchDir, "*-Last-patch.patch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d patches for Last patch, want 1", len(files))
+	}
+
+	prefix, _, _ := strings.Cut(filepath.Base(files[0]), "-")
+	number, err := strconv.Atoi(prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("format-patch assigns number %d to the nonempty commit after the empty commit", number)
+	if got, err := findPatchCommit(goDir, base, number); err != nil || got != target {
+		t.Fatalf("findPatchCommit(%d) = %q, %v; want %q, nil", number, got, err, target)
+	}
+
+	writeFixupTestFile(t, goDir, "file2.txt", "updated\n")
+	git("add", "--all")
+	if err := fixupPatch(config, number); err != nil {
+		t.Fatal(err)
+	}
+	if got := git("show", "HEAD:file2.txt"); got != "updated" {
+		t.Errorf("target patch content = %q, want updated", got)
+	}
+	if got := git("show", "--format=", "HEAD^"); got != "" {
+		t.Errorf("fixup modified the empty commit:\n%s", got)
+	}
+}
+
+func TestFixupPatchSignedCommit(t *testing.T) {
+	keygen, err := exec.LookPath("ssh-keygen")
+	if err != nil {
+		t.Skip("ssh-keygen is not available")
+	}
+
+	config, git := newFixupTestRepo(t)
+	_, goDir := config.FullProjectRoots()
+	keyDir := t.TempDir()
+	key := filepath.Join(keyDir, "key")
+	if out, err := exec.Command(keygen, "-q", "-t", "ed25519", "-N", "", "-C", "test@example.com", "-f", key).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen failed: %v\n%s", err, out)
+	}
+
+	publicKey, err := os.ReadFile(key + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	signers := filepath.Join(keyDir, "allowed-signers")
+	if err := os.WriteFile(signers, append([]byte("test@example.com "), publicKey...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	git("config", "gpg.format", "ssh")
+	git("config", "gpg.ssh.program", keygen)
+	git("config", "gpg.ssh.allowedSignersFile", signers)
+	git("config", "user.signingkey", key)
+	writeFixupTestFile(t, goDir, "signed.txt", "original\n")
+	git("add", "--all")
+	git("commit", "-S", "-m", "Signed patch")
+	git("verify-commit", "HEAD")
+	git("config", "log.showSignature", "true")
+	target := git("rev-parse", "HEAD")
+	base, err := readStatusFile(config.FullPrePatchStatusFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := findPatchCommit(goDir, base, 3); err != nil || got != target {
+		t.Fatalf("findPatchCommit(3) = %q, %v; want %q, nil", got, err, target)
+	}
+
+	writeFixupTestFile(t, goDir, "signed.txt", "updated\n")
+	git("add", "--all")
+	if err := fixupPatch(config, 3); err != nil {
+		t.Fatal(err)
+	}
+	if got := git("rev-list", "--count", base+"..HEAD"); got != "3" {
+		t.Errorf("fixup left %s patch commits, want 3", got)
+	}
+	if got := git("show", "--no-show-signature", "HEAD:signed.txt"); got != "updated" {
+		t.Errorf("target patch content = %q, want updated", got)
 	}
 }
 

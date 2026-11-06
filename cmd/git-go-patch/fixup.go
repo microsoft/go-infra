@@ -131,7 +131,7 @@ func fixupPatch(config *patch.FoundConfig, number int) error {
 }
 
 func findPatchCommit(goDir, since string, number int) (string, error) {
-	out, err := executil.Output(executil.Dir(goDir, "git", "log", "--reverse", "--format=%H%x00%P%x00%s%x00%b%x00", since+"..HEAD"))
+	out, err := executil.Output(executil.Dir(goDir, "git", "log", "--no-show-signature", "--reverse", "--format=%H%x00%P%x00%s%x00%b%x00", since+"..HEAD"))
 	if err != nil {
 		return "", fmt.Errorf("unable to read the patch commits: %w", err)
 	}
