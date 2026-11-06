@@ -89,7 +89,7 @@ func (s *AzureService) ResolveCurrentSource(ctx context.Context) (Source, error)
 	return Source{Branch: tip.Name, Commit: tip.ObjectID, Versions: versions}, nil
 }
 
-// VersionsAtCommit returns the Microsoft Build of Go versions declared at commit.
+// VersionsAtCommit returns the Microsoft build of Go versions declared at commit.
 func (s *AzureService) VersionsAtCommit(ctx context.Context, commit string) ([]string, error) {
 	var model dockerversions.Versions
 	if err := s.repository.GetJSONFileAtCommit(ctx, versionsJSON, commit, &model); err != nil {
