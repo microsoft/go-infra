@@ -10,6 +10,43 @@ import (
 	"testing"
 )
 
+func TestFetchRefCommitIgnoresStderr(t *testing.T) {
+	t.Parallel()
+
+	remoteDir := t.TempDir()
+	mustRun(t, remoteDir, "git", "init", "--initial-branch=main")
+	mustRun(t, remoteDir, "git", "config", "user.email", "test@test.com")
+	mustRun(t, remoteDir, "git", "config", "user.name", "Test")
+	mustRun(t, remoteDir, "git", "commit", "--allow-empty", "-m", "initial")
+	want, err := RevParse(remoteDir, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		uploadPack string
+	}{
+		{"plain", "git upload-pack"},
+		{"stderr-warning", "echo 'warning: fetch diagnostic' >&2; git upload-pack"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			mustRun(t, repoDir, "git", "init")
+			mustRun(t, repoDir, "git", "config", "remote.origin.url", remoteDir)
+			mustRun(t, repoDir, "git", "config", "remote.origin.uploadpack", tt.uploadPack)
+			got, err := FetchRefCommit(repoDir, "origin", "refs/heads/main")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Errorf("FetchRefCommit = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // TestAmIgnoresThreeWayConfig verifies that Am applies patches without three-way merge, even when
 // the user has am.threeWay=true configured. This prevents a mismatch between local behavior and CI,
 // where am.threeWay is not set. See https://github.com/microsoft/go/issues/1233.
