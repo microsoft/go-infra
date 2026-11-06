@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/goldentest"
 )
 
@@ -64,6 +65,9 @@ func TestFindGoAnnouncements(t *testing.T) {
 		name     string
 		versions []string
 		security bool
+		releases map[string]string
+		tags     []string
+		fail     bool
 		pages    map[string]GoAnnouncement
 		queries  []string
 		want     []GoAnnouncement
@@ -110,14 +114,62 @@ func TestFindGoAnnouncements(t *testing.T) {
 		{
 			name:     "revision two without a published revision one",
 			versions: []string{"1.22.4-2"},
+			tags:     []string{"v1.22.4-1"},
 			pages:    map[string]GoAnnouncement{"1.22.4": paired},
 			queries:  []string{"1.22.4"},
 			want:     []GoAnnouncement{paired},
 		},
 		{
+			name:     "draft revision one does not suppress the announcement",
+			versions: []string{"1.22.4-2"},
+			releases: map[string]string{"v1.22.4-1": `{"draft":true}`},
+			tags:     []string{"v1.22.4-1"},
+			pages:    map[string]GoAnnouncement{"1.22.4": paired},
+			queries:  []string{"1.22.4"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "revision two after a published revision one",
+			versions: []string{"1.22.4-2"},
+			releases: map[string]string{"v1.22.4-1": `{}`},
+			tags:     []string{"v1.22.4-1"},
+		},
+		{
+			name:     "skip abandoned revisions and stop at a published release",
+			versions: []string{"1.22.4-3", "1.21.11-3"},
+			releases: map[string]string{"v1.22.4-1": `{}`, "v1.21.11-2": `{}`},
+			tags:     []string{"v1.22.4-2", "v1.22.4-1", "v1.21.11-2"},
+		},
+		{
+			name:     "earlier release of the same variant",
+			versions: []string{"1.22.4-2-fips"},
+			releases: map[string]string{"v1.22.4-1-fips": `{}`},
+			tags:     []string{"v1.22.4-1-fips"},
+		},
+		{
+			name:     "a different variant does not suppress the announcement",
+			versions: []string{"1.22.4-2-fips"},
+			releases: map[string]string{"v1.22.4-1": `{}`},
+			tags:     []string{"v1.22.4-1-fips"},
+			pages:    map[string]GoAnnouncement{"1.22.4": paired},
+			queries:  []string{"1.22.4"},
+			want:     []GoAnnouncement{paired},
+		},
+		{
+			name:     "earlier release lookup fails but retains other announcements",
+			versions: []string{"1.23.1-1", "1.22.4-2"},
+			tags:     []string{"v1.22.4-1"},
+			fail:     true,
+			pages:    map[string]GoAnnouncement{"1.23.1": newer},
+			queries:  []string{"1.23.1"},
+			want:     []GoAnnouncement{newer},
+			wantErr:  true,
+		},
+		{
 			name:     "Microsoft security fix for a regular upstream release",
 			versions: []string{"1.23.1-2"},
 			security: true,
+			tags:     []string{"v1.23.1-1"},
 			pages:    map[string]GoAnnouncement{"1.23.1": newer},
 			queries:  []string{"1.23.1"},
 			want:     []GoAnnouncement{newer},
@@ -125,6 +177,7 @@ func TestFindGoAnnouncements(t *testing.T) {
 		{
 			name:     "revisions and variants share one lookup",
 			versions: []string{"1.22.4-2", "1.22.4-1", "1.22.4-1-fips"},
+			tags:     []string{"v1.22.4-1"},
 			pages:    map[string]GoAnnouncement{"1.22.4": paired},
 			queries:  []string{"1.22.4"},
 			want:     []GoAnnouncement{paired},
@@ -149,7 +202,32 @@ func TestFindGoAnnouncements(t *testing.T) {
 				tt.security,
 			)
 			var queries []string
+			var releaseQueries []string
 			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Host == "api.github.com" {
+					tag, ok := strings.CutPrefix(req.URL.Path, "/repos/microsoft/go/releases/tags/")
+					if !ok {
+						return nil, fmt.Errorf("unexpected release request: %s", req.URL)
+					}
+					releaseQueries = append(releaseQueries, tag)
+					status := http.StatusOK
+					body, found := tt.releases[tag]
+					if tt.fail {
+						status = http.StatusInternalServerError
+						body = `{"message":"release lookup failed"}`
+					} else if !found {
+						status = http.StatusNotFound
+						body = `{"message":"Not Found"}`
+					}
+					return &http.Response{
+						StatusCode: status,
+						Header:     http.Header{"Content-Type": []string{"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(body)),
+					}, nil
+				}
+				if req.URL.Host != "groups.google.com" {
+					return nil, fmt.Errorf("unexpected announcement request: %s", req.URL)
+				}
 				query := req.URL.Query().Get("q")
 				version, ok := strings.CutPrefix(query, `subject:"Go `)
 				if !ok {
@@ -173,7 +251,11 @@ func TestFindGoAnnouncements(t *testing.T) {
 				}, nil
 			})}
 
-			got, err := findGoAnnouncements(context.Background(), releaseInfo.Versions, client)
+			githubClient, err := github.NewClient(github.WithHTTPClient(client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := findGoAnnouncements(context.Background(), releaseInfo.Versions, githubClient, client)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("findGoAnnouncements() error = %v, want error %v", err, tt.wantErr)
 			}
@@ -182,6 +264,9 @@ func TestFindGoAnnouncements(t *testing.T) {
 			}
 			if !slices.Equal(queries, tt.queries) {
 				t.Errorf("queried versions = %v, want %v", queries, tt.queries)
+			}
+			if !slices.Equal(releaseQueries, tt.tags) {
+				t.Errorf("queried releases = %v, want %v", releaseQueries, tt.tags)
 			}
 
 			releaseInfo.GoAnnouncements = got

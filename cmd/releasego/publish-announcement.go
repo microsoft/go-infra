@@ -17,11 +17,13 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
 	"unicode"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
 	"github.com/microsoft/go-infra/goversion"
@@ -39,6 +41,9 @@ The publish-announcement command automates the creation of Markdown-formatted bl
 posts for Microsoft's Go releases. It generates a post containing release details, 
 relevant links, and metadata, then commits it to the go-devblog repository for 
 subsequent drafting as a WordPress article.
+
+Upstream release announcements are omitted when an earlier Microsoft revision
+of the same build variant has already been published.
 `,
 		Handle: publishAnnouncement,
 	})
@@ -198,7 +203,7 @@ func publishAnnouncement(p subcmd.ParseFunc) (err error) {
 	versionsList := strings.Split(releaseVersions, ",")
 
 	releaseInfo := NewReleaseInfo(releaseDate, versionsList, author, security)
-	releaseInfo.GoAnnouncements, err = findGoAnnouncements(ctx, releaseInfo.Versions, &http.Client{Timeout: 30 * time.Second})
+	releaseInfo.GoAnnouncements, err = findGoAnnouncements(ctx, releaseInfo.Versions, client, &http.Client{Timeout: 30 * time.Second})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: error finding upstream release announcements: %v\n", err)
 	}
@@ -280,7 +285,29 @@ const (
 	maxGoAnnouncementHTMLBytes = 5 << 20
 )
 
-func findGoAnnouncements(ctx context.Context, versions []GoVersionData, client httpDoer) ([]GoAnnouncement, error) {
+func hasEarlierMSGoRelease(ctx context.Context, client *github.Client, version string) (bool, error) {
+	v := goversion.New(strings.TrimPrefix(version, "v"))
+	revision, err := strconv.Atoi(v.Revision)
+	if err != nil {
+		return false, fmt.Errorf("invalid revision in %q: %w", version, err)
+	}
+	for i := revision - 1; i >= 1; i-- {
+		v.Revision = strconv.Itoa(i)
+		release, response, err := client.Repositories.GetReleaseByTag(ctx, "microsoft", "go", "v"+v.Full())
+		if response != nil && response.StatusCode == http.StatusNotFound {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if !release.GetDraft() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func findGoAnnouncements(ctx context.Context, versions []GoVersionData, githubClient *github.Client, client httpDoer) ([]GoAnnouncement, error) {
 	if len(versions) == 0 {
 		return nil, errors.New("no upstream Go versions found")
 	}
@@ -290,9 +317,16 @@ func findGoAnnouncements(ctx context.Context, versions []GoVersionData, client h
 	seenVersions := make(map[string]struct{})
 	seenURLs := make(map[string]struct{})
 	for _, version := range versions {
-		// Microsoft revisions share an upstream announcement, even if -1 was never published.
 		upstreamVersion := strings.TrimPrefix(version.GoVersion, "go")
 		if _, ok := seenVersions[upstreamVersion]; ok {
+			continue
+		}
+		earlier, err := hasEarlierMSGoRelease(ctx, githubClient, version.MSGoVersion)
+		if err != nil {
+			lookupErrors = append(lookupErrors, fmt.Errorf("checking earlier releases for %s: %w", version.MSGoVersion, err))
+			continue
+		}
+		if earlier {
 			continue
 		}
 		seenVersions[upstreamVersion] = struct{}{}
