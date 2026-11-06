@@ -269,7 +269,7 @@ func TestTrackingErrorGroupingUsesNeutralClosedFlag(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var dashboard webview.DashboardResponse
 			problem := &runstore.RecordError{
-				ID: 42, Closed: test.closed, RecordState: test.recordState,
+				ID: 42, Closed: test.closed, RecordState: test.recordState, SavedStatus: resultFailed,
 				Message: "Unreadable saved release.", Guidance: "Open the tracking item.",
 				Err: errors.New("unreadable metadata"),
 			}
@@ -277,15 +277,15 @@ func TestTrackingErrorGroupingUsesNeutralClosedFlag(t *testing.T) {
 			addTrackingError(&dashboard, problem)
 			var summary webview.ReleaseSummary
 			if test.closed {
-				if len(dashboard.Recent) != 1 || len(dashboard.NeedsAttention) != 0 {
+				if len(dashboard.Recent) != 1 || len(dashboard.Ongoing) != 0 {
 					t.Fatalf("closed grouping = %#v", dashboard)
 				}
 				summary = dashboard.Recent[0]
 			} else {
-				if len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 0 {
+				if len(dashboard.Ongoing) != 1 || len(dashboard.Recent) != 0 {
 					t.Fatalf("open grouping = %#v", dashboard)
 				}
-				summary = dashboard.NeedsAttention[0]
+				summary = dashboard.Ongoing[0]
 			}
 			if summary.Closed != test.closed || summary.Issue.RecordState != test.recordState {
 				t.Fatalf("provider-neutral metadata = %#v", summary)

@@ -80,13 +80,10 @@ type ExecutionResponse struct {
 
 // DashboardResponse contains the release and process cards shown on the dashboard.
 type DashboardResponse struct {
-	// Ongoing contains releases that have not reached a terminal state.
+	// Ongoing contains releases until both the run has finished and the tracking item is closed.
 	Ongoing []ReleaseSummary `json:"ongoing"`
 
-	// NeedsAttention contains releases whose result requires operator review.
-	NeedsAttention []ReleaseSummary `json:"needsAttention"`
-
-	// Recent contains completed or closed releases kept for quick access.
+	// Recent contains finished releases with closed tracking items.
 	Recent []ReleaseSummary `json:"recent"`
 
 	// Processes contains the configured release process choices.
@@ -110,13 +107,13 @@ type ReleaseSummary struct {
 	// Status describes the release's current or final state.
 	Status string `json:"status"`
 
-	// SavedStatus is the last persisted status, separate from an external observation.
+	// SavedStatus preserves the last published outcome when the full view is unreadable.
 	SavedStatus string `json:"savedStatus,omitempty"`
 
 	// RunURL links to the process-owned pipeline or workflow.
 	RunURL string `json:"runUrl,omitempty"`
 
-	// Closed reports that the tracking record is history rather than an open action item.
+	// Closed reports the tracking item's state independently of the run outcome.
 	Closed bool `json:"closed,omitempty"`
 
 	// UpdatedAt is the last known change to the release.
