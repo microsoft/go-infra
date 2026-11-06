@@ -166,31 +166,9 @@ func extractPatches(config *patch.FoundConfig, since string, verbatim, keepTemp 
 			p.SetAuthor(config.ExtractAsAuthor)
 		}
 
-		subjectReader := strings.NewReader(p.Subject)
-		cmds, err := readPatchCommands(subjectReader)
+		n, err = patchNumber(n, p.Subject, path)
 		if err != nil {
 			return err
-		}
-		for _, cmd := range cmds {
-			// Git has extracted the commits and given them sequential numbers in their filenames.
-			// Here, renumber the patch files with our own rules.
-			if after, found := stringutil.CutPrefix(cmd, patchNumberCommand); found {
-				num, err := strconv.Atoi(after)
-				if err != nil {
-					return fmt.Errorf("malformed patch number command arg %q in %#q: %w", after, path, err)
-				}
-				if num >= n {
-					n = num
-				} else {
-					return fmt.Errorf("patch number command arg %v too small, expected at least %v in %#q", num, n, path)
-				}
-			} else {
-				return fmt.Errorf("command %#q is not recognized in patch %#q", cmd, path)
-			}
-		}
-
-		if n > 9999 {
-			return fmt.Errorf("rearranged patch number %v exceeds max 4-digit int used by patch naming convention: %#q", n, path)
 		}
 
 		// Replace patch number (0001) from patch filename (0001-Add-good-code.patch) with n.
@@ -319,15 +297,41 @@ func submoduleHasPatchCommits(goDir, since string) (bool, error) {
 	return out != "0", nil
 }
 
+func patchNumber(n int, subject, source string) (int, error) {
+	cmds, err := readPatchCommands(strings.NewReader(subject))
+	if err != nil {
+		return 0, err
+	}
+
+	for _, cmd := range cmds {
+		after, found := stringutil.CutPrefix(cmd, patchNumberCommand)
+		if !found {
+			return 0, fmt.Errorf("command %#q is not recognized in patch %#q", cmd, source)
+		}
+
+		num, err := strconv.Atoi(after)
+		if err != nil {
+			return 0, fmt.Errorf("malformed patch number command arg %q in %#q: %w", after, source, err)
+		}
+		if num < n {
+			return 0, fmt.Errorf("patch number command arg %v too small, expected at least %v in %#q", num, n, source)
+		}
+
+		n = num
+	}
+	if n > 9999 {
+		return 0, fmt.Errorf("rearranged patch number %v exceeds max 4-digit int used by patch naming convention: %#q", n, source)
+	}
+
+	return n, nil
+}
+
 // readPatchCommands reads the given patch file's header and returns all potential commands, with
 // commandPrefix trimmed off.
 func readPatchCommands(r io.Reader) ([]string, error) {
 	var cmds []string
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, err
-		}
 		t := scanner.Text()
 		if t == "---" {
 			// Patch is done: stop reading. Technically, "---" could occur inside the commit
@@ -340,7 +344,7 @@ func readPatchCommands(r io.Reader) ([]string, error) {
 			cmds = append(cmds, after)
 		}
 	}
-	return cmds, nil
+	return cmds, scanner.Err()
 }
 
 func copyFile(dst, src string) error {
