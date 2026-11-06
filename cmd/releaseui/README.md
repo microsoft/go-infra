@@ -182,8 +182,9 @@ rather than editing Description.
 
 The dashboard queries active tagged work items and the ten most recently closed items.
 If an individual work item fails validation or its stored record cannot be decoded, it appears as a
-read-only card. Open work items appear under **Needs attention**; closed items appear under
-**Recent history**. The card links to its tracking record, shows its saved release status when
+read-only card. It appears under **Recent history** only when its saved outcome is terminal and
+the tracking item is closed; otherwise it stays under **Ongoing releases**.
+The card links to its tracking record, shows its saved release status when
 readable separately from its work-item state, and gives safe next steps.
 Saved release titles and update times identify these entries even when the full run cannot be
 loaded. Tracking item numbers remain in the secondary link rather than serving as release names.
@@ -210,10 +211,14 @@ If the runner stops publishing, the page keeps the last saved progress and warns
 stale. It does not independently monitor or restart the external operation. Use a step's
 **Open external run** link or **Open release run** to inspect the provider directly.
 
-Records whose last publication reports an executing runner appear under **Ongoing releases**.
-Open failed, canceled, uncertain, and interrupted unfinished work appears
-under **Needs attention**. Successful work and manually closed terminal outcomes appear under
-**Recent history** without rewriting the execution result. Closed unfinished records remain read-only.
+The dashboard has two release lists. A run stays under **Ongoing releases** until both its saved
+outcome is terminal and its tracking item is closed. Successful, failed, canceled, and uncertain
+runs with open items remain here with their actual outcome badge and a **Tracking item still open**
+notice. Closing an item while its run is unfinished also leaves the run in Ongoing.
+**Recent history** contains only finished runs whose items are closed. Both lists are sorted
+newest-first by the displayed update time, including read-only entries; undated entries appear last.
+Unreadable records with no known terminal outcome stay in Ongoing with their warning.
+This grouping does not change run outcomes or close tracking items.
 Clicking a card or **Open** opens its published release page. Its Azure DevOps browser link appears
 on the dashboard and release page. **View JSON** explicitly exports the execution checkpoint for
 manual repair and imports edited JSON only when the exported revision is still current. Import
