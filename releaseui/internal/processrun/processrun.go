@@ -66,6 +66,7 @@ type processCheckpointer struct {
 	persisted atomic.Bool
 	requests  chan checkpointRequest
 	view      *contract.RunView
+	pending   *checkpointRequest
 	stop      chan struct{}
 	done      chan struct{}
 	stopOnce  sync.Once
@@ -251,8 +252,11 @@ func (s *Manager) Prepare(
 	}
 	run, err := loadReleaseRun(registered.Implementation, snapshot)
 	if err != nil {
+		if errors.Is(err, contract.ErrInvalidInput) {
+			return webview.ProcessRunResponse[*contract.Plan]{}, newError(ErrorInvalid, err)
+		}
 		return webview.ProcessRunResponse[*contract.Plan]{},
-			errorf(ErrorInternal, "load prepared release run: %v", err)
+			errorf(ErrorInternal, "load prepared release run: %w", err)
 	}
 	preparedSnapshot := runstore.CloneSnapshot(snapshot)
 	plan := run.Plan()
@@ -483,6 +487,7 @@ func (s *Manager) finishProcessRun(
 	state.Executing = false
 	graph := update.runner.Snapshot()
 	graph.Active = false
+	graph.CheckpointError = ""
 	if failure := errors.Join(executionErr, snapshotErr, checkpointer.failureError()); failure != nil {
 		graph.Error = failure.Error()
 	}
@@ -497,6 +502,7 @@ func (s *Manager) finishProcessRun(
 	if saveErr != nil {
 		saveErr = fmt.Errorf("persist release outcome: %w", saveErr)
 	}
+	update.runner.SetCheckpointError(saveErr)
 	publishErr := session.publishOutcome(update, record, saveErr)
 	if publishErr != nil {
 		publishErr = fmt.Errorf("publish release outcome: %w", publishErr)
@@ -759,7 +765,7 @@ func (c *processCheckpointer) runLoop() {
 		case request := <-c.requests:
 			err := c.persist(&request)
 			request.done <- err
-			if err != nil {
+			if c.failed.Load() {
 				return
 			}
 		case <-c.stop:
@@ -774,7 +780,8 @@ func (c *processCheckpointer) runLoop() {
 			active := c.session.checkpointer == c
 			c.session.mu.Unlock()
 			if active {
-				if err := c.persist(nil); err != nil {
+				c.persist(nil)
+				if c.failed.Load() {
 					return
 				}
 			}
@@ -789,20 +796,27 @@ func (c *processCheckpointer) persist(checkpoint *checkpointRequest) error {
 		return err
 	}
 	state := update.state
+	if checkpoint == nil {
+		checkpoint = c.pending
+	}
 	if checkpoint != nil {
+		c.pending = checkpoint
 		state.Snapshot = checkpoint.snapshot
 		state.Checkpointed = true
 		c.view = checkpoint.view
 	}
 	view := c.view
-	published, err := c.manager.publishedView(state, view, update.plan, update.runner.Snapshot())
+	graph := update.runner.Snapshot()
+	graph.CheckpointError = ""
+	published, err := c.manager.publishedView(state, view, update.plan, graph)
 	if err != nil {
 		c.fail(err)
 		return err
 	}
 	record, err := c.manager.store.Update(c.manager.ctx, update.expectedRecord, state, published)
 	if err != nil {
-		c.fail(err)
+		log.Printf("Release checkpoint not saved; will retry: %v", err)
+		update.runner.SetCheckpointError(err)
 		return err
 	}
 	if err := c.session.publishCheckpoint(update, record); err != nil {
@@ -812,6 +826,8 @@ func (c *processCheckpointer) persist(checkpoint *checkpointRequest) error {
 	if checkpoint != nil {
 		c.persisted.Store(true)
 	}
+	c.pending = nil
+	update.runner.SetCheckpointError(nil)
 	return nil
 }
 

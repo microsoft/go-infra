@@ -209,7 +209,7 @@ func TestReleaseOnMergeProcess(t *testing.T) {
 	process := NewProcess(github.integration()).Processes()[0]
 	inputs := &releaseinput.Set{}
 	form := process.InputForm(inputs).(*releaseOnMergeInput)
-	if err := inputs.Parse(json.RawMessage(`{"pullRequest":"42"}`)); err != nil {
+	if err := inputs.Parse(json.RawMessage(`{"input1":"42"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if form.PullRequest != 42 {

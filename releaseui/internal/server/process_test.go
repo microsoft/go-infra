@@ -182,9 +182,10 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 		builds.Add(1)
 		return exampleProcessSteps(func(_ context.Context, ctl coordinator.StepControl) error {
 			executed.Store(true)
-			return ctl.Update(func() {
+			ctl.Update(func() {
 				run.setState(json.RawMessage(`{"value":"executed"}`))
 			})
+			return nil
 		}), nil
 	}
 	server, err := New(
@@ -212,6 +213,64 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 		string(persisted.Snapshot.State) != `{"value":"executed"}` {
 
 		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestPreparationDistinguishesInputErrors(t *testing.T) {
+	inputFailure := errors.Join(errors.New("choose at most 50 dimensions"), contract.ErrInvalidInput)
+	for _, test := range []struct {
+		name   string
+		source string
+		err    error
+		status int
+		kind   string
+	}{
+		{name: "Prepare input error", source: "prepare", err: inputFailure, status: http.StatusBadRequest, kind: "input"},
+		{name: "Validate input error", source: "validate", err: inputFailure, status: http.StatusBadRequest, kind: "input"},
+		{name: "Parse input error", source: "parse", status: http.StatusBadRequest, kind: "input"},
+		{name: "Prepare service error", source: "prepare", err: errors.New("service unavailable"), status: http.StatusConflict},
+		{name: "Validate state error", source: "validate", err: errors.New("inconsistent state"), status: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryProcessRunStore()
+			process := exampleProcess()
+			if test.source == "prepare" {
+				process.prepare = func(context.Context, any) (*contract.StateSnapshot, error) { return nil, test.err }
+			}
+			if test.source == "validate" {
+				process.validate = func(*contract.StateSnapshot) error { return test.err }
+			}
+			built := false
+			process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
+				built = true
+				return exampleProcessSteps(func(context.Context, coordinator.StepControl) error { return nil }), nil
+			}
+			server, err := New(context.Background(), WithProcesses(newFakeProcessGroup(process)), WithReleaseRunStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := `{}`
+			if test.source == "parse" {
+				body = `{"unexpected":"1"}`
+			}
+			request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(body))
+			request.Header.Set("Origin", "http://localhost")
+			response := httptest.NewRecorder()
+			server.handlePrepareProcessRun("example", response, request)
+			var result struct {
+				Error string `json:"error"`
+				Kind  string `json:"kind"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != test.status || result.Kind != test.kind || result.Error == "" || built || store.count() != 0 {
+				t.Fatalf("status=%d, response=%#v, built=%v, records=%d", response.Code, result, built, store.count())
+			}
+			if test.err != nil && !strings.Contains(result.Error, test.err.Error()) {
+				t.Fatalf("error cause was lost: %q", result.Error)
+			}
+		})
 	}
 }
 

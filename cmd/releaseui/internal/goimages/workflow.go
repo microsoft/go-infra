@@ -93,8 +93,8 @@ type stateAccess struct {
 	checkpoint CheckpointFunc
 }
 
-func (access *stateAccess) update(ctl coordinator.StepControl, update func()) error {
-	return ctl.Update(func() {
+func (access *stateAccess) update(ctl coordinator.StepControl, update func()) {
+	ctl.Update(func() {
 		func() {
 			access.snapshotMu.RLock()
 			defer access.snapshotMu.RUnlock()
@@ -184,9 +184,10 @@ func NewGraphWithCheckpoint(
 			if err := service.PollMirror(ctx, ctl, input.SourceVersion); err != nil {
 				return err
 			}
-			return access.update(ctl, func() {
+			access.update(ctl, func() {
 				state.VerifiedMirroredCommit = input.SourceVersion
 			})
+			return ctx.Err()
 		},
 	)
 	queue := verifyMirror.Then(
@@ -197,17 +198,19 @@ func NewGraphWithCheckpoint(
 				return nil
 			}
 			if !state.QueueAttempted {
-				if err := access.update(ctl, func() { state.QueueAttempted = true }); err != nil {
-					return err
-				}
+				access.update(ctl, func() { state.QueueAttempted = true })
+			}
+			if err := ctl.EnsurePersisted(); err != nil {
+				return err
 			}
 			buildID, err := service.QueuePipeline(ctx, parameters)
 			if err != nil {
 				return err
 			}
-			return access.update(ctl, func() {
+			access.update(ctl, func() {
 				state.BuildID = buildID
 			})
+			return ctx.Err()
 		},
 	)
 	wait := queue.Then(
@@ -229,11 +232,11 @@ func NewGraphWithCheckpoint(
 				}
 				result = terminal.Result
 			}
-			saveErr := access.update(ctl, func() {
+			access.update(ctl, func() {
 				state.Complete = true
 				state.Result = result
 			})
-			return errors.Join(err, saveErr)
+			return errors.Join(err, ctx.Err())
 		},
 	)
 	steps, err := wait.TransitiveDependencies()

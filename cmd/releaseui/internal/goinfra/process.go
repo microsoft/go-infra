@@ -139,7 +139,7 @@ func (p *releaseOnMergeProcess) Preflight(ctx context.Context) (warning error, b
 
 func (p *releaseOnMergeProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(releaseOnMergeInput)
-	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseinput.FieldOptions{
+	inputs.PositiveIntVar(&result.PullRequest, releaseinput.FieldOptions{
 		Label: "Pull request number", Placeholder: "123",
 		Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
 	})
@@ -354,7 +354,7 @@ func (r *goInfraRun) Build() ([]*coordinator.Step, error) {
 		if err != nil {
 			return err
 		}
-		return r.checkpoint(ctl, run)
+		return errors.Join(r.checkpoint(ctl, run), ctx.Err())
 	})
 	monitor := dispatch.Then(
 		"Monitor patch-release workflow",
@@ -381,7 +381,7 @@ func (r *goInfraRun) Build() ([]*coordinator.Step, error) {
 					Summary: "GitHub workflow " + run.Status,
 					Detail:  fmt.Sprintf("Run %d: %s", run.ID, run.Conclusion), RunURL: run.URL,
 				})
-				return r.checkpoint(ctl, run)
+				return errors.Join(r.checkpoint(ctl, run), ctx.Err())
 			})
 			if err != nil && completed.Status == "completed" && completed.Conclusion == "cancelled" {
 				return errors.Join(coordinator.ErrCanceled, err)
@@ -396,12 +396,13 @@ func (r *goInfraRun) checkpoint(ctl coordinator.StepControl, run GoInfraWorkflow
 	if err := validateGoInfraWorkflowRun(&run); err != nil {
 		return err
 	}
-	return ctl.Update(func() {
+	ctl.Update(func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.state.WorkflowRun = &run
 		r.state.UpdatedAt = time.Now().UTC()
 	})
+	return nil
 }
 
 func encodeGoInfraSnapshot(input goInfraPlanInput, state goInfraSnapshotState) (*contract.StateSnapshot, error) {

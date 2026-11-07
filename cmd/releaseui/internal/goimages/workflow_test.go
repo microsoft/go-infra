@@ -146,6 +146,32 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 	}
 }
 
+func TestQueueRequiresPersistedIntent(t *testing.T) {
+	service := &fakeService{}
+	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("cannot save queue intent")
+	attempts := 0
+	var runner coordinator.StepRunner
+	err = runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			queueAttempted := state.QueueAttempted
+			return func() error {
+				if queueAttempted {
+					attempts++
+					return failure
+				}
+				return nil
+			}, nil
+		},
+	})
+	if !errors.Is(err, failure) || service.queues != 0 || attempts != 2 {
+		t.Fatalf("error=%v, queues=%d, intent save attempts=%d", err, service.queues, attempts)
+	}
+}
+
 func TestGraphRecoveryHonorsSavedTerminalOutcome(t *testing.T) {
 	for _, result := range []string{"succeeded", "failed", "canceled"} {
 		t.Run(result, func(t *testing.T) {
@@ -289,7 +315,8 @@ func TestStateAccessReportsChangeAndObservesCancellation(t *testing.T) {
 		},
 	}
 	step := coordinator.NewRootStep("Update", coordinator.NoTimeout, func(_ context.Context, ctl coordinator.StepControl) error {
-		return access.update(ctl, func() { state.QueueAttempted = true })
+		access.update(ctl, func() { state.QueueAttempted = true })
+		return nil
 	})
 	if err := (&coordinator.StepRunner{}).Execute(ctx, []*coordinator.Step{step}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("update error = %v, want cancellation", err)
@@ -306,11 +333,12 @@ func TestStateAccessSnapshotWaitsForUpdate(t *testing.T) {
 	finishUpdate := make(chan struct{})
 	updateDone := make(chan error, 1)
 	go func() {
-		updateDone <- access.update(new(recordingStepControl), func() {
+		access.update(new(recordingStepControl), func() {
 			close(updateStarted)
 			<-finishUpdate
 			state.QueueAttempted = true
 		})
+		updateDone <- nil
 	}()
 	<-updateStarted
 

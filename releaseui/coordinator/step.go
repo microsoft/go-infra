@@ -22,18 +22,58 @@ type StepControl interface {
 	// live progress and persist a progress view to the tracking workitem backend.
 	ReportProgress(StepProgress)
 
-	// Update calls fn synchronously while holding a lock shared by all steps in this run.
-	// releaseui snapshots and persists the resulting state before Update returns. If persistence
-	// fails, Update returns the error and cancels execution. Return this error before performing
-	// any external action that depends on the update.
+	// Read calls fn while holding the read lock of a RWMutex shared by all steps in this run. fn
+	// must not call other StepControl methods, wait for another step, or wait for a long time.
 	//
-	// If a step reads another step's completed result, synchronize the read through a direct or
-	// transitive dependency on the producing step. Use [Step.DependsOn] or [Step.Then]. Using
-	// dependencies rather than read locks lets the race detector expose missing synchronization.
+	// Read calls fn even if the step ctx has been canceled, so reads still initialize their
+	// results.
 	//
-	// The host uses the same lock when reading snapshots and views. The callback must not call
-	// Update recursively or wait for another step.
-	Update(fn func()) error
+	// Steps must not depend on Read for synchronization. If step A reads step B's output,
+	// synchronize the read by making step A have a direct or transitive dependency on B in the step
+	// graph. For example, use [Step.DependsOn] or [Step.Then].
+	//
+	// When the Go race detector is enabled, Read doesn't acquire the read lock and instead runs fn
+	// immediately. This allows the race detector to enforce the rule that steps don't use Read for
+	// synchronization.
+	//
+	// The reasons for this nuance are:
+	//
+	//   - The dependency graph must accurately represent to the user which steps depend on which.
+	//   - Complex synchronization logic between steps can lead to subtle bugs and logic-level race
+	//     conditions that can't be found by the race detector.
+	//
+	// In theory, Read isn't necessary at all. We use it for an extra layer of safety at runtime, to
+	// ensure that a logic bug doesn't lead to an unnecessary crash.
+	Read(fn func())
+
+	// Update calls fn synchronously while holding the write lock of a RWMutex shared by all steps
+	// in this run. fn must not call other StepControl methods, wait for another step, or wait for a
+	// long time.
+	//
+	// After calling fn, releaseui takes a snapshot of the resulting state and attempts to save it
+	// before returning from Update. Snapshot capture or validation failure cancels the step
+	// execution context. After such a failure, later Update calls (by other steps) still call fn,
+	// but skip capture and persistence.
+	//
+	// Storage failures during Update don't cancel execution and don't panic. See [EnsurePersisted]
+	// if you need to ensure that updates are persisted.
+	//
+	// Update calls fn even if the step ctx has been canceled to avoid introducing subtle logic bugs
+	// in step code.
+	Update(fn func())
+
+	// EnsurePersisted waits for all pending checkpoints to complete persistence. releaseui may
+	// perform automatic retries. A nil error means all updates preceding this call have been saved.
+	//
+	// Returns capture, storage, or context errors. If capture has failed or the step ctx has been
+	// canceled, it returns without attempting persistence.
+	//
+	// Storage failures do not cancel execution automatically. So, use EnsurePersisted when it's
+	// important to ensure the state is saved before performing the next action. For example, call
+	// EnsurePersisted when the step just called Update to persist some state that's critical to be
+	// able to retry the step later if the machine running the process crashes. If EnsurePersisted
+	// returns an error, return it rather than continuing.
+	EnsurePersisted() error
 }
 
 // StepFunc defines the signature of a function that implements a release step. It receives a

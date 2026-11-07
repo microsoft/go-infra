@@ -516,7 +516,10 @@ func writeProcessRunError(response http.ResponseWriter, request *http.Request, e
 	status := http.StatusInternalServerError
 	switch runErr.Kind {
 	case processrun.ErrorInvalid:
-		status = http.StatusBadRequest
+		writeJSON(response, http.StatusBadRequest, map[string]string{
+			"error": err.Error(), "kind": "input",
+		})
+		return
 	case processrun.ErrorConflict:
 		status = http.StatusConflict
 	case processrun.ErrorPrecondition:
