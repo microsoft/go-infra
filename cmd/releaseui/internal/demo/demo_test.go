@@ -9,10 +9,10 @@ import (
 	"reflect"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
+	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
 
 func TestProcessGroup(t *testing.T) {
@@ -24,7 +24,7 @@ func TestProcessGroup(t *testing.T) {
 	if len(processes) != 2 {
 		t.Fatalf("process count = %d, want 2", len(processes))
 	}
-	for index, id := range []string{"demo-a", "demo-b"} {
+	for index, id := range []string{"demo-a-v3", "demo-b-v3"} {
 		process := processes[index]
 		definition := process.Definition()
 		if definition.ID != id || definition.Notice == nil || definition.Notice.Title == "" {
@@ -44,12 +44,12 @@ func TestProcessGroup(t *testing.T) {
 			t.Fatal("demo accepted an undeclared input")
 		}
 		run := prepareTestRun(t, process)
-		before := run.TakeSnapshot()
+		before := testSnapshot(t, run)
 		if string(before.Input) != `{}` {
 			t.Fatalf("demo input = %s, want an empty input object", before.Input)
 		}
 		plan := run.Plan()
-		steps, err := run.Build(context.Background(), nil)
+		steps, err := run.Build()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func TestProcessGroup(t *testing.T) {
 
 			t.Fatalf("plan = %#v", plan)
 		}
-		if !reflect.DeepEqual(before, run.TakeSnapshot()) {
+		if !reflect.DeepEqual(before, testSnapshot(t, run)) {
 			t.Fatal("Plan or Build changed the prepared snapshot")
 		}
 		dependencies := make(map[string][]string)
@@ -74,10 +74,9 @@ func TestProcessGroup(t *testing.T) {
 			dependencies[step.Name] = names
 		}
 		want := map[string][]string{
-			"Initialize demo": nil,
-			"Fake work A":     {"Initialize demo"},
-			"Fake work B":     {"Initialize demo"},
-			"Finish demo":     {"Fake work A", "Fake work B"},
+			"Fake work A": nil,
+			"Fake work B": nil,
+			"Finish demo": {"Fake work A", "Fake work B"},
 		}
 		if len(steps) != len(want) || !reflect.DeepEqual(dependencies, want) {
 			t.Fatalf("dependencies = %#v, want %#v", dependencies, want)
@@ -102,17 +101,17 @@ func TestSnapshotIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := second.TakeSnapshot()
+	want := testSnapshot(t, second)
 	snapshot.Input[0] = '!'
 	snapshot.State[0] = '!'
-	snapshotCopy := first.TakeSnapshot()
+	snapshotCopy := testSnapshot(t, first)
 	snapshotCopy.Input[0] = '!'
 	snapshotCopy.State[0] = '!'
 	view := first.TakeView()
 	view.Summary = "changed"
 	plan := first.Plan()
 	plan.Facts[0].Value = "changed"
-	if !reflect.DeepEqual(first.TakeSnapshot(), want) || !reflect.DeepEqual(second.TakeSnapshot(), want) {
+	if !reflect.DeepEqual(testSnapshot(t, first), want) || !reflect.DeepEqual(testSnapshot(t, second), want) {
 		t.Fatal("a snapshot mutation changed a loaded run")
 	}
 	if first.TakeView().Summary != "Ready" || first.Plan().Facts[0].Value == "changed" {
@@ -120,31 +119,27 @@ func TestSnapshotIsolation(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsInvalidState(t *testing.T) {
+func TestValidateRejectsInvalidState(t *testing.T) {
 	process := NewProcess().Processes()[0]
 	tests := []struct {
 		name   string
 		change func(*state)
 	}{
-		{"schema", func(s *state) { s.SchemaVersion++ }},
-		{"missing time", func(s *state) { s.UpdatedAt = time.Time{} }},
 		{"negative work A", func(s *state) { s.WorkCompleted[0] = -1 }},
-		{"excess work A", func(s *state) { s.Initialized = true; s.WorkCompleted[0] = workUnits + 1 }},
+		{"excess work A", func(s *state) { s.WorkCompleted[0] = workUnits + 1 }},
 		{"negative work B", func(s *state) { s.WorkCompleted[1] = -1 }},
-		{"excess work B", func(s *state) { s.Initialized = true; s.WorkCompleted[1] = workUnits + 1 }},
-		{"work before initialization", func(s *state) { s.WorkCompleted[0] = 1 }},
-		{"finish before work", func(s *state) { s.Initialized = true; s.Finished = true }},
+		{"excess work B", func(s *state) { s.WorkCompleted[1] = workUnits + 1 }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			state := state{SchemaVersion: stateSchema, UpdatedAt: time.Now().UTC()}
+			state := state{}
 			test.change(&state)
-			snapshot, err := encodeSnapshot(state)
+			snapshot, err := snapshot.Encode(struct{}{}, state)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := process.Load(snapshot); err == nil {
-				t.Fatal("invalid state was accepted")
+			if err := process.Validate(snapshot); err == nil {
+				t.Fatal("invalid state was accepted for persistence")
 			}
 		})
 	}
@@ -152,7 +147,7 @@ func TestLoadRejectsInvalidState(t *testing.T) {
 
 func TestLoadRejectsInvalidSnapshot(t *testing.T) {
 	processes := NewProcess().Processes()
-	valid := prepareTestRun(t, processes[0]).TakeSnapshot()
+	valid := testSnapshot(t, prepareTestRun(t, processes[0]))
 	if _, err := processes[0].Load(nil); err == nil {
 		t.Fatal("nil snapshot was accepted")
 	}
@@ -183,7 +178,7 @@ func TestLoadRejectsInvalidSnapshot(t *testing.T) {
 
 func TestLoadUsesConfiguredDemoName(t *testing.T) {
 	processes := NewProcess().Processes()
-	snapshot := prepareTestRun(t, processes[0]).TakeSnapshot()
+	snapshot := testSnapshot(t, prepareTestRun(t, processes[0]))
 	for _, process := range processes {
 		run, err := process.Load(snapshot)
 		if err != nil {
@@ -212,9 +207,18 @@ func prepareTestRun(t *testing.T, process contract.Process) *run {
 	return run
 }
 
+func testSnapshot(t *testing.T, run contract.Run) *contract.StateSnapshot {
+	t.Helper()
+	snapshot, err := run.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func testState(t *testing.T, run contract.Run) state {
 	t.Helper()
-	state, err := decodeStrictJSON[state](run.TakeSnapshot().State)
+	_, state, err := snapshot.Decode[struct{}, state](testSnapshot(t, run))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,19 +7,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
 
 const NoTimeout = time.Duration(0)
 
-// StepControl publishes progress for the step it belongs to. StepRunner supplies a non-nil
-// control to every step function.
+// StepControl is a set of utilities that a step implementation can use to interact with the runner.
+// StepRunner supplies a non-nil StepControl to every step function.
 type StepControl interface {
+	// ReportProgress publishes the current progress of the step. It may be called multiple times
+	// during the step's execution. The runner propagates this information so releaseui can display
+	// live progress and persist a progress view to the tracking workitem backend.
 	ReportProgress(StepProgress)
+
+	// Update calls fn synchronously while holding a lock shared by all steps in this run.
+	// releaseui snapshots and persists the resulting state before Update returns. If persistence
+	// fails, Update returns the error and cancels execution. Return this error before performing
+	// any external action that depends on the update.
+	//
+	// If a step reads another step's completed result, synchronize the read through a direct or
+	// transitive dependency on the producing step. Use [Step.DependsOn] or [Step.Then]. Using
+	// dependencies rather than read locks lets the race detector expose missing synchronization.
+	//
+	// The host uses the same lock when reading snapshots and views. The callback must not call
+	// Update recursively or wait for another step.
+	Update(fn func()) error
 }
 
-type StepFunc func(ctx context.Context, control StepControl) error
+// StepFunc defines the signature of a function that implements a release step. It receives a
+// context for cancellation and a StepControl for reporting progress and other step utilities. It
+// should return an error if the step fails.
+type StepFunc func(ctx context.Context, ctl StepControl) error
 
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
@@ -148,4 +168,26 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 		return nil, err
 	}
 	return sortedSteps, nil
+}
+
+// StepSet lists dependencies for a new step. Order does not constrain execution, but it does affect
+// the traversal order returned by [Step.TransitiveDependencies].
+type StepSet []*Step
+
+// All returns the given steps as a dependency set. Use All(a, b).Then(...) to create a step that
+// depends on both a and b. This is intended to be useful to help with readability alongside chains
+// created using c.Then(...).
+func All(steps ...*Step) StepSet {
+	return steps
+}
+
+// Then creates a new step that depends on all steps in s. It copies the dependency list so
+// subsequent changes to s do not change the new step's dependencies.
+func (s StepSet) Then(name string, timeout time.Duration, f StepFunc) *Step {
+	return &Step{
+		Name:      name,
+		Timeout:   timeout,
+		Func:      f,
+		DependsOn: slices.Clone(s),
+	}
 }

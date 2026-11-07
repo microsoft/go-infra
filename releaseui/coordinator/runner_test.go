@@ -142,10 +142,12 @@ func TestStepRunnerFinalizesBeforeReportingCompletion(t *testing.T) {
 	var runner StepRunner
 	done := make(chan error, 1)
 	go func() {
-		done <- runner.ExecuteWithFinalizer(context.Background(), []*Step{step}, func(error) error {
-			close(entered)
-			<-release
-			return finalErr
+		done <- runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+			Finalize: func(error) error {
+				close(entered)
+				<-release
+				return finalErr
+			},
 		})
 	}()
 	select {
@@ -210,8 +212,8 @@ func TestStepRunnerSnapshots(t *testing.T) {
 func TestStepRunnerProgressSnapshots(t *testing.T) {
 	reported := make(chan struct{})
 	releaseStep := make(chan struct{})
-	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context, control StepControl) error {
-		control.ReportProgress(StepProgress{
+	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context, ctl StepControl) error {
+		ctl.ReportProgress(StepProgress{
 			Summary:   "Running one pipeline task",
 			Detail:    "1/3 stages complete",
 			Completed: 1,
@@ -267,6 +269,92 @@ func TestStepRunnerProgressSnapshots(t *testing.T) {
 	}
 }
 
+func TestStepControlsShareRunLock(t *testing.T) {
+	var runner StepRunner
+	count := 0
+	work := func(_ context.Context, ctl StepControl) error {
+		for range 10 {
+			if err := ctl.Update(func() {
+				current := count
+				time.Sleep(time.Millisecond)
+				count = current + 1
+				ctl.ReportProgress(StepProgress{Completed: count, Total: 20})
+				runner.Snapshot()
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	a := NewRootStep("A", NoTimeout, work)
+	b := NewRootStep("B", NoTimeout, work)
+	join := All(a, b).Then("Join", NoTimeout, func(context.Context, StepControl) error {
+		if count != 20 {
+			return fmt.Errorf("count = %d, want 20", count)
+		}
+		return nil
+	})
+	steps, err := join.TransitiveDependencies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStepControlRunLocksAreIndependent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		locked := make(chan struct{})
+		release := make(chan struct{})
+		first := NewRootStep("First", NoTimeout, func(_ context.Context, ctl StepControl) error {
+			return ctl.Update(func() {
+				close(locked)
+				<-release
+			})
+		})
+		var firstRunner, secondRunner StepRunner
+		done := make(chan error, 1)
+		go func() { done <- firstRunner.Execute(context.Background(), []*Step{first}) }()
+		<-locked
+
+		called := false
+		second := NewRootStep("Second", NoTimeout, func(_ context.Context, ctl StepControl) error {
+			return ctl.Update(func() { called = true })
+		})
+		err := secondRunner.Execute(context.Background(), []*Step{second})
+		close(release)
+		if firstErr := <-done; firstErr != nil {
+			t.Fatal(firstErr)
+		}
+		if err != nil || !called {
+			t.Fatalf("second run error = %v, callback called = %v", err, called)
+		}
+	})
+}
+
+func TestStepControlRunLockReleasedAfterPanic(t *testing.T) {
+	var runner StepRunner
+	ctl := stepControl{runner: &runner, ctx: context.Background()}
+	sentinel := errors.New("callback panic")
+	func() {
+		defer func() {
+			if got := recover(); got != sentinel {
+				t.Errorf("panic = %v, want %v", got, sentinel)
+			}
+		}()
+		_ = ctl.Update(func() { panic(sentinel) })
+	}()
+	if !runner.runMu.TryLock() {
+		t.Fatal("callback panic left the run lock held")
+	}
+	runner.runMu.Unlock()
+	if !runner.updateMu.TryLock() {
+		t.Fatal("callback panic left the update lock held")
+	}
+	runner.updateMu.Unlock()
+}
+
 func TestStepControlsReportParallelProgress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -279,14 +367,14 @@ func TestStepControlsReportParallelProgress(t *testing.T) {
 		var firstControl StepControl
 		steps := make([]*Step, len(expected))
 		for index, progress := range expected {
-			steps[index] = NewRootStep(progress.Summary, NoTimeout, func(ctx context.Context, control StepControl) error {
-				if control == nil {
+			steps[index] = NewRootStep(progress.Summary, NoTimeout, func(ctx context.Context, ctl StepControl) error {
+				if ctl == nil {
 					return errors.New("runner did not supply step control")
 				}
 				if index == 0 {
-					firstControl = control
+					firstControl = ctl
 				}
-				control.ReportProgress(progress)
+				ctl.ReportProgress(progress)
 				select {
 				case <-release:
 					return nil
@@ -324,17 +412,17 @@ func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				started := time.Now()
-				step := NewRootStep("Controlled wait", timeout, func(ctx context.Context, control StepControl) error {
+				step := NewRootStep("Controlled wait", timeout, func(ctx context.Context, ctl StepControl) error {
 					deadline, hasDeadline := ctx.Deadline()
 					if hasDeadline != (timeout != NoTimeout) || hasDeadline && !deadline.Equal(started.Add(timeout)) {
 						return fmt.Errorf("unexpected deadline %s, present=%v", deadline, hasDeadline)
 					}
-					if control == nil {
+					if ctl == nil {
 						return errors.New("runner did not supply step control")
 					}
-					control.ReportProgress(StepProgress{Summary: "Waiting for cancellation"})
+					ctl.ReportProgress(StepProgress{Summary: "Waiting for cancellation"})
 					<-ctx.Done()
-					return ctx.Err()
+					return ctl.Update(func() { t.Error("canceled step mutated state") })
 				})
 				var runner StepRunner
 				done := make(chan error, 1)

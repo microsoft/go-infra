@@ -23,7 +23,8 @@ type fakeProcess struct {
 	definition contract.ProcessDefinition
 	preflight  func(context.Context) (error, error)
 	prepare    func(context.Context, any) (*contract.StateSnapshot, error)
-	build      func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error)
+	validate   func(*contract.StateSnapshot) error
+	build      func(*fakeReleaseRun) ([]*coordinator.Step, error)
 	plan       *contract.Plan
 	planForRun func(*contract.StateSnapshot) *contract.Plan
 	view       *contract.RunView
@@ -57,17 +58,21 @@ func (p *fakeProcess) Prepare(ctx context.Context, input any) (*contract.StateSn
 	return p.prepare(ctx, input)
 }
 
-func (p *fakeProcess) Load(state *contract.StateSnapshot) (contract.Run, error) {
-	if err := runstore.ValidateSnapshot(state); err != nil {
-		return nil, err
+func (p *fakeProcess) Validate(state *contract.StateSnapshot) error {
+	if p.validate != nil {
+		return p.validate(state)
 	}
+	return runstore.ValidateSnapshot(state)
+}
+
+func (p *fakeProcess) Load(state *contract.StateSnapshot) (contract.Run, error) {
 	return &fakeReleaseRun{process: p, state: runstore.CloneSnapshot(state)}, nil
 }
 
-func (r *fakeReleaseRun) TakeSnapshot() *contract.StateSnapshot {
+func (r *fakeReleaseRun) TakeSnapshot() (*contract.StateSnapshot, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return runstore.CloneSnapshot(r.state)
+	return runstore.CloneSnapshot(r.state), nil
 }
 
 func (r *fakeReleaseRun) TakeView() *contract.RunView {
@@ -82,7 +87,10 @@ func (r *fakeReleaseRun) TakeView() *contract.RunView {
 
 func (r *fakeReleaseRun) Plan() *contract.Plan {
 	if r.process.planForRun != nil {
-		return r.process.planForRun(r.TakeSnapshot())
+		r.mu.RLock()
+		state := runstore.CloneSnapshot(r.state)
+		r.mu.RUnlock()
+		return r.process.planForRun(state)
 	}
 	if r.process.plan == nil {
 		return nil
@@ -92,14 +100,11 @@ func (r *fakeReleaseRun) Plan() *contract.Plan {
 	return &plan
 }
 
-func (r *fakeReleaseRun) Build(
-	ctx context.Context,
-	checkpoint contract.CheckpointFunc,
-) ([]*coordinator.Step, error) {
+func (r *fakeReleaseRun) Build() ([]*coordinator.Step, error) {
 	if r.process.build == nil {
 		return nil, errors.New("fake process graph is not configured")
 	}
-	return r.process.build(ctx, r, checkpoint)
+	return r.process.build(r)
 }
 
 func (r *fakeReleaseRun) setState(state json.RawMessage) {

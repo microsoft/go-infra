@@ -12,6 +12,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
@@ -225,7 +226,7 @@ func TestReleaseOnMergeProcess(t *testing.T) {
 	if plan := run.Plan(); plan == nil || plan.ExecutionButtonLabel != "Apply release-on-merge" {
 		t.Fatalf("plan = %#v", plan)
 	}
-	steps, err := run.Build(context.Background(), func() {})
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,21 +259,30 @@ func TestDryRunGraphConstructionDoesNotContactGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := run.TakeSnapshot()
-	steps, err := run.Build(context.Background(), nil)
+	before := testSnapshot(t, run)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(steps) != 2 {
 		t.Fatalf("steps = %d", len(steps))
 	}
-	after := run.TakeSnapshot()
+	after := testSnapshot(t, run)
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 		t.Fatal("workflow observation changed the saved snapshot")
 	}
 	if stats := github.stats(); stats.labelCalls != 0 || len(stats.dispatches) != 0 || stats.runReads != 0 {
 		t.Fatalf("workflow observation executed actions: %#v", stats)
 	}
+}
+
+func testSnapshot(t *testing.T, run contract.Run) *contract.StateSnapshot {
+	t.Helper()
+	snapshot, err := run.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestKnownWorkflowMonitorPreservesTerminalProviderConclusions(t *testing.T) {
@@ -302,17 +312,22 @@ func TestKnownWorkflowMonitorPreservesTerminalProviderConclusions(t *testing.T) 
 				t.Fatal(err)
 			}
 			checkpoints := 0
-			steps, err := run.Build(context.Background(), func() { checkpoints++ })
+			steps, err := run.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = (&coordinator.StepRunner{}).Execute(context.Background(), steps)
+			err = (&coordinator.StepRunner{}).ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
+				Update: func() (func() error, error) {
+					checkpoints++
+					return nil, nil
+				},
+			})
 			if (err == nil) != (conclusion == "success") ||
 				errors.Is(err, coordinator.ErrCanceled) != (conclusion == "cancelled") {
 
 				t.Fatalf("conclusion %q was misclassified: %v", conclusion, err)
 			}
-			_, stored, err := decodeGoInfraSnapshot(run.TakeSnapshot())
+			_, stored, err := decodeGoInfraSnapshot(testSnapshot(t, run))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -337,7 +352,7 @@ func TestPreparedGraphDoesNotDiscoverOrStartAWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps, err := run.Build(context.Background(), nil)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,19 +384,25 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		runner := new(coordinator.StepRunner)
 		var progress []coordinator.StepProgress
 		checkpoints := 0
-		steps, err := run.Build(context.Background(), func() {
+		checkpoint := func() (func() error, error) {
 			checkpoints++
 			if graph := runner.Snapshot(); len(graph.Steps) == 2 && graph.Steps[1].Progress != nil {
 				progress = append(progress, *graph.Steps[1].Progress)
 			}
-			if _, err := process.Load(run.TakeSnapshot()); err != nil {
+			saved, err := run.TakeSnapshot()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := process.Load(saved); err != nil {
 				t.Errorf("load checkpoint: %v", err)
 			}
-		})
+			return nil, nil
+		}
+		steps, err := run.Build()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runner.Execute(context.Background(), steps); err != nil {
+		if err := runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{Update: checkpoint}); err != nil {
 			t.Fatal(err)
 		}
 		if checkpoints != 3 {
