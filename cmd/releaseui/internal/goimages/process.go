@@ -176,7 +176,7 @@ func (p *testProcess) InputForm(*releaseinput.Set) any   { return nil }
 
 func (p *rollbackProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(rollbackInput)
-	inputs.PositiveIntVar(&result.SourceBuildID, "sourceBuildId", releaseinput.FieldOptions{
+	inputs.PositiveIntVar(&result.SourceBuildID, releaseinput.FieldOptions{
 		Label: "Source build ID", Placeholder: "3034159",
 		Description: "The server verifies that this is a successful pipeline 1023 run which produced its own artifacts.",
 	})

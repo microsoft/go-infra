@@ -5,6 +5,7 @@ package processregistry
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -13,6 +14,7 @@ import (
 
 type testProcess struct {
 	definition contract.ProcessDefinition
+	inputForm  func(*releaseinput.Set) any
 }
 
 func (p *testProcess) Definition() contract.ProcessDefinition {
@@ -23,7 +25,10 @@ func (*testProcess) Preflight(context.Context) (error, error) {
 	return nil, nil
 }
 
-func (*testProcess) InputForm(*releaseinput.Set) any {
+func (p *testProcess) InputForm(inputs *releaseinput.Set) any {
+	if p.inputForm != nil {
+		return p.inputForm(inputs)
+	}
 	return nil
 }
 
@@ -109,6 +114,45 @@ func TestRegistryRejectsInvalidDefinitions(t *testing.T) {
 			if _, err := New(test.groups...); err == nil {
 				t.Fatal("invalid process registry was accepted")
 			}
+
+		})
+	}
+}
+
+func TestRegistryExplainsInvalidInputs(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		label     string
+		nilTarget bool
+		cause     string
+	}{
+		{
+			name: "nil target", label: "Dimensional order", nilTarget: true,
+			cause: `input "Dimensional order" has a nil target`,
+		},
+		{
+			name: "empty label", label: " ",
+			cause: `input 1 has an empty label`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			process := newTestProcess("example")
+			process.inputForm = func(inputs *releaseinput.Set) any {
+				value := new(int)
+				if test.nilTarget {
+					value = nil
+				}
+				inputs.PositiveIntVar(value, releaseinput.FieldOptions{Label: test.label})
+				return value
+			}
+			defer func() {
+				message, ok := recover().(string)
+				if !ok || !strings.Contains(message, `release process "example"`) ||
+					!strings.Contains(message, test.cause) {
+					t.Fatalf("declaration panic = %q, want process and cause %q", message, test.cause)
+				}
+			}()
+			_, _ = New(newTestGroup(process))
 		})
 	}
 }

@@ -14,6 +14,8 @@
   const variantNoticeTitle = document.querySelector("#variant-notice-title");
   const variantNoticeCopy = document.querySelector("#variant-notice-copy");
   const processInputs = document.querySelector("#process-inputs");
+  const inputError = document.querySelector("#input-error");
+  const inputErrorMessage = document.querySelector("#input-error-message");
   const planButton = document.querySelector("#plan-button");
   const emptyState = document.querySelector("#empty-state");
   const planContent = document.querySelector("#plan-content");
@@ -81,6 +83,7 @@
     }));
     processVariant.value = processDefinition.id;
     form.addEventListener("submit", prepareRelease);
+    form.addEventListener("input", clearInputError);
     processVariant.addEventListener("change", selectVariant);
     executionButton.addEventListener("click", handleExecutionAction);
     executionCancel.addEventListener("click", cancelRunConfirmation);
@@ -98,6 +101,7 @@
   }
 
   function renderVariant() {
+    clearInputError();
     const variant = selectedVariant();
     workflowHeading.textContent = variant.preamble || workflow.heading || "Configure release";
     planButton.querySelector("span:first-child").textContent =
@@ -230,6 +234,7 @@
     event.preventDefault();
     if (planButton.disabled) return;
     const session = selectedSession;
+    clearInputError();
     submitting = "prepare";
     updateActionButtons();
     try {
@@ -242,13 +247,26 @@
       await refreshState(session);
       if (selectedSession === session) connectEvents(session);
     } catch (error) {
-      if (selectedSession === session) showError(error.message);
+      if (selectedSession === session) {
+        if (error.kind === "input") {
+          inputErrorMessage.textContent = error.message;
+          inputError.hidden = false;
+          inputError.focus();
+        } else {
+          showError(error.message);
+        }
+      }
     } finally {
       if (selectedSession === session) {
         submitting = "";
         updateActionButtons();
       }
     }
+  }
+
+  function clearInputError() {
+    inputError.hidden = true;
+    inputErrorMessage.textContent = "";
   }
 
   async function startRelease() {
@@ -523,6 +541,11 @@
   }
 
   function updateSteps(snapshot) {
+    const warning = document.querySelector("#checkpoint-warning");
+    warning.hidden = !snapshot.checkpointError;
+    warning.textContent = snapshot.checkpointError
+      ? `Checkpoint not saved. Release progress continues, but recovery may use an older checkpoint. ${snapshot.checkpointError}`
+      : "";
     for (const step of snapshot.steps || []) {
       const card = findStepCard(step.name);
       if (!card) continue;
@@ -845,7 +868,11 @@
     });
     if (response.status === 204) return null;
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const error = new Error(data.error || `${response.status} ${response.statusText}`);
+      error.kind = data.kind;
+      throw error;
+    }
     return data;
   }
 
