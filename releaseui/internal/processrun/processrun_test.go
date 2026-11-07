@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -150,15 +151,19 @@ func (s *testStore) QueryViews(ctx context.Context, closed bool, _ int) ([]*runs
 	return []*runstore.ViewRecord{record}, err
 }
 
-func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
+func TestEnsurePersistedFailurePreventsExternalAction(t *testing.T) {
 	manager, session, run, store, cancel := checkpointTestRun(t)
 	defer cancel()
 	store.updateErr = errors.New("checkpoint failed")
 	checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 	var updateErr error
 	acted := false
-	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
-		updateErr = ctl.Update(func() {})
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, ctl coordinator.StepControl) error {
+		ctl.Update(func() {})
+		if ctx.Err() != nil {
+			t.Error("storage failure canceled execution")
+		}
+		updateErr = ctl.EnsurePersisted()
 		if updateErr != nil {
 			return updateErr
 		}
@@ -169,11 +174,54 @@ func TestCheckpointFailureCancelsExecutionContext(t *testing.T) {
 	if !errors.Is(updateErr, store.updateErr) || acted {
 		t.Fatalf("update error = %v, external action performed = %v", updateErr, acted)
 	}
-	if !errors.Is(manager.ctx.Err(), context.Canceled) {
-		t.Fatalf("context error = %v, want cancellation", manager.ctx.Err())
+	if checkpointer.failed.Load() {
+		t.Fatal("storage failure was classified as a fatal capture error")
 	}
-	if !checkpointer.failed.Load() {
-		t.Fatal("checkpoint failure was not recorded")
+}
+
+func TestPendingCheckpointRecovers(t *testing.T) {
+	for _, heartbeat := range []bool{false, true} {
+		t.Run(map[bool]string{false: "finalization", true: "heartbeat"}[heartbeat], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager, session, run, store, cancel := checkpointTestRun(t)
+				defer cancel()
+				store.updateErr = errors.New("temporary storage outage")
+				release := make(chan struct{})
+				steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
+					ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":1}`) })
+					<-release
+					return nil
+				})}
+				checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
+				session.checkpointer = checkpointer
+				go manager.executeProcessRun(session, session.state.Digest, manager.ctx, session.runner, steps, run, checkpointer)
+				synctest.Wait()
+				store.mu.Lock()
+				if string(store.record.Run.Snapshot.State) != "{}" {
+					t.Error("failed save changed the durable snapshot")
+				}
+				store.updateErr = nil
+				store.mu.Unlock()
+				if heartbeat {
+					time.Sleep(5 * time.Second)
+					synctest.Wait()
+					store.mu.Lock()
+					if string(store.record.Run.Snapshot.State) != `{"value":1}` || store.view.Graph.CheckpointError != "" {
+						t.Error("heartbeat did not save the pending snapshot and clear its warning")
+					}
+					store.mu.Unlock()
+				}
+				close(release)
+				synctest.Wait()
+				store.mu.Lock()
+				defer store.mu.Unlock()
+				if store.record.Run.Result != resultSucceeded ||
+					string(store.record.Run.Snapshot.State) != `{"value":1}` ||
+					session.runner.Snapshot().CheckpointError != "" {
+					t.Fatalf("recovered release = %#v", store.record.Run)
+				}
+			})
+		})
 	}
 }
 
@@ -354,9 +402,7 @@ func TestCheckpointSavesGraphProgressWithoutClaimingLiveExecution(t *testing.T) 
 	t.Cleanup(func() { unblock(); <-done })
 	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, ctl coordinator.StepControl) error {
 		ctl.ReportProgress(coordinator.StepProgress{Completed: 5, Total: 30})
-		if err := ctl.Update(func() {}); err != nil {
-			return err
-		}
+		ctl.Update(func() {})
 		close(checkpointed)
 		<-release
 		return nil
@@ -417,10 +463,10 @@ func TestCheckpointWaitsForPersistence(t *testing.T) {
 	checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 	returned := make(chan struct{})
 	done := make(chan struct{})
-	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
-		err := ctl.Update(func() {})
+	steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, ctl coordinator.StepControl) error {
+		ctl.Update(func() {})
 		close(returned)
-		return err
+		return ctx.Err()
 	})}
 	go func() {
 		defer close(done)
@@ -456,7 +502,7 @@ func TestPersistenceDoesNotBlockReads(t *testing.T) {
 					coordinator.NewRootStep(
 						"Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
 							if phase == "checkpoint" {
-								return ctl.Update(func() {})
+								ctl.Update(func() {})
 							}
 							return nil
 						},
@@ -601,12 +647,14 @@ func TestUpdatesCaptureAndPersistInMutationOrder(t *testing.T) {
 	checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 	secondAttempted := make(chan struct{})
 	first := coordinator.NewRootStep("First", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
-		return ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":1}`) })
+		ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":1}`) })
+		return nil
 	})
 	second := coordinator.NewRootStep("Second", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
 		<-store.updateStarted
 		close(secondAttempted)
-		return ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":2}`) })
+		ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":2}`) })
+		return nil
 	})
 	done := make(chan struct{})
 	var once sync.Once
@@ -674,13 +722,11 @@ func TestSnapshotFailureNeverReplacesLastValidCheckpoint(t *testing.T) {
 			checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 			acted := false
 			var updateErr error
-			steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
-				if err := ctl.Update(func() {
+			steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, ctl coordinator.StepControl) error {
+				ctl.Update(func() {
 					run.snapshot.State = json.RawMessage(`{"value":1}`)
 					run.view.Detail = "Valid state"
-				}); err != nil {
-					return err
-				}
+				})
 				mutate := func() {
 					run.snapshot.State = json.RawMessage(`{"value":-1}`)
 					run.view.Detail = "Invalid state"
@@ -689,7 +735,8 @@ func TestSnapshotFailureNeverReplacesLastValidCheckpoint(t *testing.T) {
 					}
 				}
 				if test.update {
-					updateErr = ctl.Update(mutate)
+					ctl.Update(mutate)
+					updateErr = ctl.EnsurePersisted()
 					if updateErr != nil {
 						return updateErr
 					}

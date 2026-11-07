@@ -6,43 +6,38 @@ package demo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"reflect"
-	"sync/atomic"
+	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
 
 func TestRunParallelProgress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		run := prepareTestRun(t, NewProcess().Processes()[0])
 		before := testSnapshot(t, run)
-		view := run.TakeView()
-		plan := run.Plan()
-		var checkpoints atomic.Int32
-		checkpoint := func() error {
-			if _, err := run.TakeSnapshot(); err != nil {
-				return err
-			}
-			run.TakeView()
-			checkpoints.Add(1)
-			return nil
-		}
+		view, plan := run.TakeView(), run.Plan()
+		checkpoints := 0
 		start := time.Now()
-		runner, done := startTestRun(t, context.Background(), run, checkpoint)
+		runner, done := startTestRun(t, context.Background(), run, func() error {
+			checkpoints++
+			return nil
+		})
 		synctest.Wait()
 		assertParallelProgress(t, runner.Snapshot(), 0, 0)
-		time.Sleep(checkpointUnits * workDelay)
+		time.Sleep(5 * workDelay)
 		synctest.Wait()
-		assertParallelProgress(t, runner.Snapshot(), checkpointUnits, checkpointUnits)
+		assertParallelProgress(t, runner.Snapshot(), 5, 5)
 		runner.ReadState(func() {
-			if state := testState(t, run); state.WorkCompleted != [2]int{checkpointUnits, checkpointUnits} {
-
-				t.Fatalf("in-progress state = %#v", state)
+			if !reflect.DeepEqual(before, testSnapshot(t, run)) || checkpoints != 0 {
+				t.Fatal("transient progress changed durable state")
 			}
 		})
 		if err := <-done; err != nil {
@@ -51,103 +46,105 @@ func TestRunParallelProgress(t *testing.T) {
 		if elapsed := time.Since(start); elapsed != workUnits*workDelay {
 			t.Fatalf("elapsed = %v, want parallel duration %v", elapsed, workUnits*workDelay)
 		}
-		if state := testState(t, run); state.WorkCompleted != [2]int{workUnits, workUnits} {
-
-			t.Fatalf("completed state = %#v", state)
+		if state := testState(t, run); !slices.Equal(state.Determinants, []float64{2, 2.25}) || state.Number != 2.5 || checkpoints != 3 {
+			t.Fatalf("completed state = %#v, checkpoints = %d", state, checkpoints)
 		}
 		for _, step := range runner.Snapshot().Steps {
-			if step.Status != coordinator.StepStatusSucceeded {
+			if step.Status != coordinator.StepStatusSucceeded || step.Progress != nil && step.Progress.Completed != workUnits {
 				t.Fatalf("step = %#v", step)
 			}
 		}
-		if got, want := checkpoints.Load(), int32(2*workUnits/checkpointUnits); got != want {
-			t.Fatalf("checkpoints = %d, want %d", got, want)
+		if view.Summary != "Ready" || !reflect.DeepEqual(plan, run.Plan()) {
+			t.Fatal("execution changed an earlier view or plan")
 		}
-		if view.Summary != "Ready" || string(before.State) == string(testSnapshot(t, run).State) ||
-			!reflect.DeepEqual(plan, run.Plan()) {
-
-			t.Fatal("execution changed an earlier view or plan, or did not update state")
-		}
-		if view := run.TakeView(); !view.Test || view.RunURL != "" || view.Summary != "Simulated work completed" {
+		if view := run.TakeView(); !view.Test || view.RunURL != "" || view.Summary != "The number is 2.500000, an estimate of e" {
 			t.Fatalf("completed view = %#v", view)
 		}
 	})
 }
 
-func TestRunResumesCheckpoint(t *testing.T) {
+func TestRunResumesCompletedDimensions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		process := NewProcess().Processes()[0]
 		run := prepareTestRun(t, process)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var saved *contract.StateSnapshot
-		checkpoint := func() error {
-			savedSnapshot, err := run.TakeSnapshot()
-			if err != nil {
-				return err
-			}
-			_, state, err := snapshot.Decode[struct{}, state](savedSnapshot)
-			if err != nil {
-				t.Error(err)
-				cancel()
-				return err
-			}
-			if saved == nil && state.WorkCompleted[0] >= checkpointUnits && state.WorkCompleted[1] >= checkpointUnits {
-				saved = savedSnapshot
-				cancel()
-			}
-			return nil
-		}
-		_, interrupted := startTestRun(t, ctx, run, checkpoint)
-		if err := <-interrupted; !errors.Is(err, context.Canceled) {
-			t.Fatalf("interruption error = %v", err)
-		}
-		if saved == nil {
-			t.Fatal("no checkpoint was saved")
+		run.state.Determinants[0] = 2
+		saved := testSnapshot(t, run)
+		if err := process.Validate(saved); err != nil {
+			t.Fatal(err)
 		}
 		restored, err := process.Load(saved)
 		if err != nil {
 			t.Fatal(err)
 		}
-		before := testState(t, restored)
-		if before.WorkCompleted == [2]int{workUnits, workUnits} {
-			t.Fatal("interrupted run was already finished")
-		}
 		start := time.Now()
+		checkpoints := 0
 		runner, done := startTestRun(t, context.Background(), restored, func() error {
-			if _, err := restored.TakeSnapshot(); err != nil {
-				return err
-			}
-			restored.TakeView()
+			checkpoints++
 			return nil
 		})
 		synctest.Wait()
-		assertParallelProgress(t, runner.Snapshot(), before.WorkCompleted[0], before.WorkCompleted[1])
+		graph := runner.Snapshot()
+		if graph.Steps[0].Status != coordinator.StepStatusSucceeded ||
+			graph.Steps[0].Progress.Completed != workUnits || graph.Steps[1].Progress.Completed != 0 {
+			t.Fatalf("restored progress = %#v", graph)
+		}
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		remaining := max(workUnits-before.WorkCompleted[0], workUnits-before.WorkCompleted[1])
-		if elapsed := time.Since(start); elapsed != time.Duration(remaining)*workDelay {
-			t.Fatalf("resume duration = %v, want %v", elapsed, time.Duration(remaining)*workDelay)
-		}
-		if state := testState(t, restored); state.WorkCompleted != [2]int{workUnits, workUnits} {
-			t.Fatalf("resumed state = %#v", state)
+		if time.Since(start) != workUnits*workDelay || checkpoints != 2 ||
+			!slices.Equal(testState(t, restored).Determinants, []float64{2, 2.25}) {
+			t.Fatalf("resume duration=%v, checkpoints=%d, state=%#v", time.Since(start), checkpoints, testState(t, restored))
 		}
 		completed, err := process.Load(testSnapshot(t, restored))
 		if err != nil {
 			t.Fatal(err)
 		}
 		start = time.Now()
-		var repeatedCheckpoints atomic.Int32
 		_, repeated := startTestRun(t, context.Background(), completed, func() error {
-			repeatedCheckpoints.Add(1)
+			t.Error("completed work checkpointed again")
 			return nil
 		})
 		if err := <-repeated; err != nil {
 			t.Fatal(err)
 		}
-		if elapsed := time.Since(start); elapsed != 0 || repeatedCheckpoints.Load() != 0 {
-			t.Fatalf("completed work repeated: elapsed = %v, checkpoints = %d", elapsed, repeatedCheckpoints.Load())
+		if time.Since(start) != 0 {
+			t.Fatal("completed dimensions repeated their simulated work")
+		}
+	})
+}
+
+func TestCancellationDiscardsTransientProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		process := NewProcess().Processes()[0]
+		run := prepareTestRun(t, process)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		runner, done := startTestRun(t, ctx, run, func() error {
+			t.Error("unfinished dimension was checkpointed")
+			return nil
+		})
+		synctest.Wait()
+		time.Sleep(5 * workDelay)
+		synctest.Wait()
+		assertParallelProgress(t, runner.Snapshot(), 5, 5)
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("execution error = %v", err)
+		}
+		if state := testState(t, run); !slices.Equal(state.Determinants, []float64{0, 0}) {
+			t.Fatalf("state after cancellation = %#v", state)
+		}
+		restored, err := process.Load(testSnapshot(t, run))
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		_, resumed := startTestRun(t, context.Background(), restored, func() error { return nil })
+		if err := <-resumed; err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) != workUnits*workDelay {
+			t.Fatal("unfinished dimensions did not restart from zero")
 		}
 	})
 }
@@ -155,21 +152,11 @@ func TestRunResumesCheckpoint(t *testing.T) {
 func TestRunsExecuteIndependently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		processes := NewProcess().Processes()
-		first := prepareTestRun(t, processes[0])
-		second := prepareTestRun(t, processes[1])
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		firstRunner, firstDone := startTestRun(t, ctx, first, func() error { _, err := first.TakeSnapshot(); return err })
-		secondRunner, secondDone := startTestRun(t, context.Background(), second, func() error { _, err := second.TakeSnapshot(); return err })
-		synctest.Wait()
-		assertParallelProgress(t, firstRunner.Snapshot(), 0, 0)
-		assertParallelProgress(t, secondRunner.Snapshot(), 0, 0)
-		time.Sleep(checkpointUnits * workDelay)
-		synctest.Wait()
-		assertParallelProgress(t, firstRunner.Snapshot(), checkpointUnits, checkpointUnits)
-		assertParallelProgress(t, secondRunner.Snapshot(), checkpointUnits, checkpointUnits)
-		cancel()
-		if err := <-firstDone; !errors.Is(err, context.Canceled) {
+		first := prepareTestRun(t, processes[1])
+		second := prepareTestRun(t, processes[0])
+		_, firstDone := startTestRun(t, context.Background(), first, func() error { return nil })
+		_, secondDone := startTestRun(t, context.Background(), second, func() error { return nil })
+		if err := <-firstDone; err == nil || !strings.Contains(err.Error(), "sabotaged dimension 1") {
 			t.Fatalf("first run error = %v", err)
 		}
 		interrupted := testSnapshot(t, first)
@@ -177,67 +164,14 @@ func TestRunsExecuteIndependently(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(interrupted, testSnapshot(t, first)) ||
-			testState(t, first).WorkCompleted == [2]int{workUnits, workUnits} ||
-			testState(t, second).WorkCompleted != [2]int{workUnits, workUnits} {
-
-			t.Fatal("finishing the second run changed the interrupted first run")
-		}
-		if reflect.DeepEqual(first.Plan(), second.Plan()) {
-			t.Fatal("demo identities were mixed")
+			!slices.Equal(testState(t, first).Determinants, []float64{0, 0}) ||
+			!slices.Equal(testState(t, second).Determinants, []float64{2, 2.25}) {
+			t.Fatal("one run affected the other's results")
 		}
 	})
 }
 
-func TestCheckpointCancellationStopsExecution(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		run := prepareTestRun(t, NewProcess().Processes()[0])
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var checkpoints atomic.Int32
-		_, done := startTestRun(t, ctx, run, func() error {
-			if _, err := run.TakeSnapshot(); err != nil {
-				return err
-			}
-			run.TakeView()
-			checkpoints.Add(1)
-			cancel()
-			return nil
-		})
-		if err := <-done; !errors.Is(err, context.Canceled) {
-			t.Fatalf("execution error = %v", err)
-		}
-		state := testState(t, run)
-		completed := state.WorkCompleted[0] + state.WorkCompleted[1]
-		if completed != checkpointUnits || checkpoints.Load() != 1 {
-
-			t.Fatalf("state after checkpoint cancellation = %#v, checkpoints = %d", state, checkpoints.Load())
-		}
-	})
-}
-
-func TestCancellationDuringWorkWait(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		run := prepareTestRun(t, NewProcess().Processes()[0])
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var checkpoints atomic.Int32
-		runner, done := startTestRun(t, ctx, run, func() error { checkpoints.Add(1); return nil })
-		synctest.Wait()
-		assertParallelProgress(t, runner.Snapshot(), 0, 0)
-		time.Sleep(workDelay / 2)
-		cancel()
-		if err := <-done; !errors.Is(err, context.Canceled) {
-			t.Fatalf("execution error = %v", err)
-		}
-		if state := testState(t, run); state.WorkCompleted != [2]int{} ||
-			checkpoints.Load() != 0 {
-
-			t.Fatalf("state after cancellation = %#v, checkpoints = %d", state, checkpoints.Load())
-		}
-	})
-}
-
-func TestUpdateFailureStopsDemo(t *testing.T) {
+func TestStorageFailureDoesNotStopDemo(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		run := prepareTestRun(t, NewProcess().Processes()[0])
 		failure := errors.New("persistence failed")
@@ -245,9 +179,125 @@ func TestUpdateFailureStopsDemo(t *testing.T) {
 		if err := <-done; !errors.Is(err, failure) {
 			t.Fatalf("execution error = %v, want persistence failure", err)
 		}
-		state := testState(t, run)
-		if completed := state.WorkCompleted[0] + state.WorkCompleted[1]; completed != checkpointUnits {
-			t.Fatalf("demo continued after persistence failed: %#v", state)
+		if state := testState(t, run); !slices.Equal(state.Determinants, []float64{2, 2.25}) || state.Number != 2.5 {
+			t.Fatalf("storage failure stopped the demo: %#v", state)
+		}
+	})
+}
+
+func TestRunDimensionCountControlsGraph(t *testing.T) {
+	for _, test := range []struct {
+		dimensions int
+		result     float64
+		estimate   float64
+	}{
+		{1, 2, 2},
+		{3, 64.0 / 27, 2.5555555555555556},
+		{5, 2.48832, 2.6148824999999993},
+		{50, 2.691588029073608, 2.713023058030004},
+	} {
+		t.Run(fmt.Sprint(test.dimensions), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				process := NewProcess().Processes()[0]
+				saved, err := process.Prepare(context.Background(), &input{Dimensions: test.dimensions})
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err := process.Load(saved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				checkpoints := 0
+				runner, done := startTestRun(t, context.Background(), run, func() error {
+					checkpoints++
+					return process.Validate(testSnapshot(t, run))
+				})
+				synctest.Wait()
+				assertParallelProgress(t, runner.Snapshot(), make([]int, test.dimensions)...)
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+				state := testState(t, run)
+				if len(state.Determinants) != test.dimensions || checkpoints != test.dimensions+1 ||
+					math.Abs(state.Determinants[test.dimensions-1]-test.result) > 1e-12 {
+					t.Fatalf("determinants=%v, checkpoints=%d", state.Determinants, checkpoints)
+				}
+				for dimension, result := range state.Determinants {
+					if result >= math.E || dimension > 0 && result <= state.Determinants[dimension-1] {
+						t.Fatalf("determinants do not approach e from below: %v", state.Determinants)
+					}
+				}
+				if math.Abs(state.Number-test.estimate) > 1e-12 ||
+					test.dimensions > 1 && math.Abs(state.Number-math.E) >= math.Abs(test.result-math.E) {
+					t.Fatalf("estimate = %v, want %v and closer to e than %v", state.Number, test.estimate, test.result)
+				}
+				if view := run.TakeView(); view.Summary != fmt.Sprintf("The number is %.6f, an estimate of e", test.estimate) {
+					t.Fatalf("calculated result = %#v", view)
+				}
+			})
+		})
+	}
+}
+
+func TestEstimateNumberUsesAllDimensions(t *testing.T) {
+	results := []float64{4, 3.5, 10.0 / 3, 3.25}
+	if got := estimateNumber(results); math.Abs(got-3) > 1e-12 {
+		t.Fatalf("fitted slope = %v, want 3", got)
+	}
+	for dimension := range results {
+		changed := slices.Clone(results)
+		changed[dimension]++
+		if estimateNumber(changed) == estimateNumber(results) {
+			t.Fatalf("dimension %d did not affect the fitted slope", dimension+1)
+		}
+	}
+}
+
+func TestRunCalculatesNumberFromSavedDeterminants(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		process := NewProcess().Processes()[0]
+		run := prepareTestRun(t, process)
+		run.state.Determinants = []float64{2, 2.25}
+		restored, err := process.Load(testSnapshot(t, run))
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		checkpoints := 0
+		_, done := startTestRun(t, context.Background(), restored, func() error {
+			checkpoints++
+			return process.Validate(testSnapshot(t, restored))
+		})
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if time.Since(start) != 0 || checkpoints != 1 || testState(t, restored).Number != 2.5 {
+			t.Fatalf("duration=%v, checkpoints=%d, state=%#v", time.Since(start), checkpoints, testState(t, restored))
+		}
+	})
+}
+
+func TestRebelliousRunRepeatsUnfinishedAnalysisWhenResumed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		process := NewProcess().Processes()[1]
+		demoRun := prepareTestRun(t, process)
+		for attempt := range 2 {
+			start := time.Now()
+			_, done := startTestRun(t, context.Background(), demoRun, func() error {
+				t.Error("sabotaged analysis saved a result")
+				return nil
+			})
+			if err := <-done; err == nil || !strings.Contains(err.Error(), "sabotaged dimension 1") {
+				t.Fatalf("attempt %d error = %v", attempt, err)
+			}
+			if time.Since(start) != workUnits/2*workDelay || !slices.Equal(demoRun.state.Determinants, []float64{0, 0}) {
+				t.Fatalf("attempt %d duration=%v, state=%#v", attempt, time.Since(start), demoRun.state)
+			}
+			restored, err := process.Load(testSnapshot(t, demoRun))
+			if err != nil {
+				t.Fatal(err)
+			}
+			demoRun = restored.(*run)
 		}
 	})
 }
@@ -267,35 +317,28 @@ func startTestRun(
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
-			Update: func() (func() error, error) { return nil, checkpoint() },
+			Update: func() (func() error, error) { return checkpoint, nil },
 		})
 	}()
 	return runner, done
 }
 
-func assertParallelProgress(t *testing.T, snapshot coordinator.Snapshot, completedA, completedB int) {
+func assertParallelProgress(t *testing.T, snapshot coordinator.Snapshot, completed ...int) {
 	t.Helper()
-	if !snapshot.Active || len(snapshot.Steps) != 3 {
+	if !snapshot.Active || len(snapshot.Steps) != len(completed)+1 {
 		t.Fatalf("execution snapshot = %#v", snapshot)
 	}
-	for _, step := range snapshot.Steps {
-		switch step.Name {
-		case "Fake work A", "Fake work B":
-			completed := completedA
-			if step.Name == "Fake work B" {
-				completed = completedB
-			}
-			if step.Status != coordinator.StepStatusRunning || step.Progress == nil ||
-				step.Progress.Completed != completed || step.Progress.Total != workUnits {
-
-				t.Fatalf("parallel work = %#v, want %d completed units", step, completed)
-			}
-		case "Finish demo":
-			if step.Status != coordinator.StepStatusWaiting {
-				t.Fatalf("finish ran before its dependencies = %#v", step)
-			}
-		default:
-			t.Fatalf("unexpected step = %#v", step)
+	for dimension, count := range completed {
+		step := snapshot.Steps[dimension]
+		if step.Name != fmt.Sprintf("Analyze dimension %d", dimension+1) ||
+			len(step.DependsOn) != 0 || step.Status != coordinator.StepStatusRunning ||
+			step.Progress == nil || step.Progress.Completed != count || step.Progress.Total != workUnits {
+			t.Fatalf("parallel analysis = %#v, want %d seconds elapsed", step, count)
 		}
+	}
+	finish := snapshot.Steps[len(completed)]
+	if finish.Name != "Calculate the number" || finish.Status != coordinator.StepStatusWaiting ||
+		len(finish.DependsOn) != len(completed) {
+		t.Fatalf("final calculation = %#v", finish)
 	}
 }

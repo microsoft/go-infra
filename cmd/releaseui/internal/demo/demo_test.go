@@ -24,37 +24,42 @@ func TestProcessGroup(t *testing.T) {
 	if len(processes) != 2 {
 		t.Fatalf("process count = %d, want 2", len(processes))
 	}
-	for index, id := range []string{"demo-a-v3", "demo-b-v3"} {
+	for index, id := range []string{"demo-science-" + stateSchema, "demo-bad-science-" + stateSchema} {
 		process := processes[index]
 		definition := process.Definition()
-		if definition.ID != id || definition.Notice == nil || definition.Notice.Title == "" {
+		if definition.ID != id || definition.Name == "" {
 			t.Fatalf("definition = %#v", definition)
 		}
-		if warning, blocking := process.Preflight(context.Background()); warning != nil || blocking != nil {
+		if warning, blocking := process.Preflight(context.Background()); (warning != nil) != (index == 1) || blocking != nil {
 			t.Fatalf("preflight = %v, %v", warning, blocking)
 		}
 		inputs := new(releaseinput.Set)
-		if result := process.InputForm(inputs); result != nil {
+		result, ok := process.InputForm(inputs).(*input)
+		if !ok || result == nil {
 			t.Fatalf("input form = %#v", result)
 		}
-		if err := inputs.Parse(json.RawMessage(`{}`)); err != nil {
+		if err := inputs.Parse(json.RawMessage(`{"input1":"3"}`)); err != nil {
 			t.Fatal(err)
 		}
-		if err := inputs.Parse(json.RawMessage(`{"unexpected":"1"}`)); err == nil {
+		if result.Dimensions != 3 {
+			t.Fatalf("dimensional order = %d", result.Dimensions)
+		}
+		if err := inputs.Parse(json.RawMessage(`{"input1":"3","unexpected":"1"}`)); err == nil {
 			t.Fatal("demo accepted an undeclared input")
 		}
 		run := prepareTestRun(t, process)
 		before := testSnapshot(t, run)
-		if string(before.Input) != `{}` {
-			t.Fatalf("demo input = %s, want an empty input object", before.Input)
+		savedInput, savedState, err := snapshot.Decode[input, state](before)
+		if err != nil || savedInput.Dimensions != 2 || len(savedState.Determinants) != 2 {
+			t.Fatalf("demo snapshot input=%#v, state=%#v, error=%v", savedInput, savedState, err)
 		}
 		plan := run.Plan()
 		steps, err := run.Build()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if plan == nil || plan.Subtitle != definition.Name+" simulated release" ||
-			plan.ExecutionButtonLabel != "Run demo" || len(plan.Facts) == 0 {
+		if plan == nil || plan.Subtitle != definition.Name ||
+			plan.ExecutionButtonLabel != "Calculate the number" || len(plan.Facts) == 0 {
 
 			t.Fatalf("plan = %#v", plan)
 		}
@@ -74,9 +79,9 @@ func TestProcessGroup(t *testing.T) {
 			dependencies[step.Name] = names
 		}
 		want := map[string][]string{
-			"Fake work A": nil,
-			"Fake work B": nil,
-			"Finish demo": {"Fake work A", "Fake work B"},
+			"Analyze dimension 1":  nil,
+			"Analyze dimension 2":  nil,
+			"Calculate the number": {"Analyze dimension 1", "Analyze dimension 2"},
 		}
 		if len(steps) != len(want) || !reflect.DeepEqual(dependencies, want) {
 			t.Fatalf("dependencies = %#v, want %#v", dependencies, want)
@@ -89,7 +94,7 @@ func TestProcessGroup(t *testing.T) {
 
 func TestSnapshotIsolation(t *testing.T) {
 	process := NewProcess().Processes()[0]
-	snapshot, err := process.Prepare(context.Background(), nil)
+	snapshot, err := process.Prepare(context.Background(), &input{Dimensions: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +122,10 @@ func TestSnapshotIsolation(t *testing.T) {
 	if first.TakeView().Summary != "Ready" || first.Plan().Facts[0].Value == "changed" {
 		t.Fatal("a returned view or plan aliases run state")
 	}
+	first.(*run).state.Determinants[0] = 2
+	if second.(*run).state.Determinants[0] != 0 {
+		t.Fatal("loaded runs share determinant results")
+	}
 }
 
 func TestValidateRejectsInvalidState(t *testing.T) {
@@ -125,21 +134,51 @@ func TestValidateRejectsInvalidState(t *testing.T) {
 		name   string
 		change func(*state)
 	}{
-		{"negative work A", func(s *state) { s.WorkCompleted[0] = -1 }},
-		{"excess work A", func(s *state) { s.WorkCompleted[0] = workUnits + 1 }},
-		{"negative work B", func(s *state) { s.WorkCompleted[1] = -1 }},
-		{"excess work B", func(s *state) { s.WorkCompleted[1] = workUnits + 1 }},
+		{"negative determinant", func(s *state) { s.Determinants[0] = -1 }},
+		{"incorrect determinant", func(s *state) { s.Determinants[0] = 4 }},
+		{"wrong dimension", func(s *state) { s.Determinants[1] = 2 }},
+		{"premature estimate", func(s *state) { s.Number = 2.5 }},
+		{"incorrect estimate", func(s *state) {
+			s.Determinants = []float64{2, 2.25}
+			s.Number = 2.25
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			state := state{}
+			state := state{Determinants: make([]float64, 2)}
 			test.change(&state)
-			snapshot, err := snapshot.Encode(struct{}{}, state)
+			snapshot, err := snapshot.Encode(input{Dimensions: 2}, state)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := process.Validate(snapshot); err == nil {
 				t.Fatal("invalid state was accepted for persistence")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidDimensions(t *testing.T) {
+	process := NewProcess().Processes()[0]
+	for _, test := range []struct {
+		name       string
+		dimensions int
+		results    []float64
+	}{
+		{name: "zero dimensions"},
+		{name: "negative dimensions", dimensions: -1},
+		{name: "too many dimensions", dimensions: 51, results: make([]float64, 51)},
+		{name: "missing determinants", dimensions: 2},
+		{name: "too few determinants", dimensions: 2, results: []float64{0}},
+		{name: "too many determinants", dimensions: 2, results: []float64{0, 0, 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			saved, err := snapshot.Encode(input{Dimensions: test.dimensions}, state{Determinants: test.results})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := process.Validate(saved); err == nil {
+				t.Fatal("invalid dimensional state was accepted")
 			}
 		})
 	}
@@ -184,7 +223,7 @@ func TestLoadUsesConfiguredDemoName(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if run.Plan().Subtitle != process.Definition().Name+" simulated release" {
+		if run.Plan().Subtitle != process.Definition().Name {
 			t.Fatalf("plan = %#v, want configured demo identity", run.Plan())
 		}
 	}
@@ -192,8 +231,11 @@ func TestLoadUsesConfiguredDemoName(t *testing.T) {
 
 func prepareTestRun(t *testing.T, process contract.Process) *run {
 	t.Helper()
-	snapshot, err := process.Prepare(context.Background(), nil)
+	snapshot, err := process.Prepare(context.Background(), &input{Dimensions: 2})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Validate(snapshot); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := process.Load(snapshot)
@@ -218,7 +260,7 @@ func testSnapshot(t *testing.T, run contract.Run) *contract.StateSnapshot {
 
 func testState(t *testing.T, run contract.Run) state {
 	t.Helper()
-	_, state, err := snapshot.Decode[struct{}, state](testSnapshot(t, run))
+	_, state, err := snapshot.Decode[input, state](testSnapshot(t, run))
 	if err != nil {
 		t.Fatal(err)
 	}

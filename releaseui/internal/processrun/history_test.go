@@ -267,7 +267,7 @@ func TestRunnerPublishesProgressAndHeartbeatThroughCheckpointWriter(t *testing.T
 	})
 }
 
-func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
+func TestDisplayFailureKeepsExecutionRunningAndRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		manager, store, _, _, cancel := publishedTestManager(t, release)
@@ -283,8 +283,12 @@ func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
 		store.mu.Unlock()
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
-		if manager.Running("example") {
-			t.Fatal("execution continued after its writer failed")
+		if !manager.Running("example") {
+			t.Fatal("storage failure stopped execution")
+		}
+		session, _ := manager.processSession("example")
+		if session.runner.Snapshot().CheckpointError == "" {
+			t.Fatal("storage failure was not visible")
 		}
 		record, err := store.Get(context.Background(), 1)
 		if err != nil {
@@ -292,6 +296,21 @@ func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
 		}
 		if !record.Run.Executing {
 			t.Fatal("failed persistence silently released durable ownership")
+		}
+		store.mu.Lock()
+		store.updateErr = nil
+		store.mu.Unlock()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if session.runner.Snapshot().CheckpointError != "" {
+			t.Fatal("successful retry did not clear the warning")
+		}
+		close(release)
+		synctest.Wait()
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.record.Run.Result != resultSucceeded {
+			t.Fatalf("recovered release outcome = %s", store.record.Run.Result)
 		}
 	})
 }

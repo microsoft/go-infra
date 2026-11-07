@@ -13,11 +13,16 @@ import (
 	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
 
-type state struct {
-	WorkCompleted [2]int `json:"workCompleted"`
+type input struct {
+	Dimensions int
 }
 
-const stateSchema = "2026-11-6"
+type state struct {
+	Determinants []float64 `json:"determinants"`
+	Number       float64   `json:"number"`
+}
+
+const stateSchema = "2026-11-9-estimate"
 
 type processGroup struct{}
 
@@ -30,71 +35,98 @@ func NewProcess() contract.ProcessGroup {
 func (g *processGroup) Identity() *contract.Identity {
 	return &contract.Identity{
 		Name: "Demo", Mark: "DM",
-		Description: "Run simulated work using real Azure DevOps test records.",
+		Description: "Run a demonstration that uses proper work tracking but performs no external work.",
 	}
 }
 
 func (g *processGroup) Processes() []contract.Process {
 	return []contract.Process{
-		&process{id: "demo-a-" + stateSchema, name: "Demo A"},
-		&process{id: "demo-b-" + stateSchema, name: "Demo B"},
+		&process{id: "demo-science-" + stateSchema},
+		&process{id: "demo-bad-science-" + stateSchema, rebel: true},
 	}
 }
 
 type process struct {
-	id   string
-	name string
+	id    string
+	rebel bool
 }
 
 func (p *process) Definition() contract.ProcessDefinition {
+	name := "Demo: "
+	if p.rebel {
+		name += "rebellious"
+	} else {
+		name += "diligent"
+	}
+	name += " scientist agents calculate the number"
 	return contract.ProcessDefinition{
 		Identity: contract.Identity{
-			Name: p.name, Description: "Simulate two parallel branches of work without running a release.",
+			Name:        name,
+			Description: "Approximate Euler's number using determinants of scaled identity matrices.",
 		},
-		ID: p.id, InputSubmitLabel: "Review demo",
-		InputPreamble: "The workload and timing are fixed. Run both demos to observe independent releases.",
-		Notice: &contract.Notice{
-			Title:   "Fake work, real tracking items",
-			Message: "Confirmation creates a real Azure DevOps test work item. No builds, workflows, or artifacts are published.",
-		},
+		ID:            p.id,
+		InputPreamble: "Choose the conditions for the calculation. This changes the number of steps involved.",
 	}
 }
 
 func (p *process) Preflight(ctx context.Context) (warning error, blocking error) {
+	if p.rebel {
+		return errors.New("potential for sabotage"), nil
+	}
 	return nil, ctx.Err()
 }
 
-func (p *process) InputForm(*releaseinput.Set) any {
-	return nil
+func (p *process) InputForm(s *releaseinput.Set) any {
+	var i input
+	s.PositiveIntVar(&i.Dimensions, releaseinput.FieldOptions{Label: "Number of dimensions"})
+	return &i
 }
 
 func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.StateSnapshot, error) {
-	if inputFormResult != nil {
-		panic("demo process received an input value")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return snapshot.Encode(struct{}{}, state{})
+	i := inputFormResult.(*input)
+	s := state{Determinants: make([]float64, i.Dimensions)}
+	return snapshot.Encode(i, s)
 }
 
 func (p *process) Validate(saved *contract.StateSnapshot) error {
-	_, state, err := snapshot.Decode[struct{}, state](saved)
+	input, state, err := snapshot.Decode[input, state](saved)
 	if err != nil {
 		return err
 	}
-	for _, completed := range state.WorkCompleted {
-		if completed < 0 || completed > workUnits {
-			return errors.New("demo work count is out of range")
+
+	if input.Dimensions <= 0 {
+		return errors.Join(errors.New("dimensional order must be positive"), contract.ErrInvalidInput)
+	}
+	if input.Dimensions > 50 {
+		return errors.Join(errors.New("dimensional order must not exceed 50 to prevent multiverse excess"), contract.ErrInvalidInput)
+	}
+
+	if len(state.Determinants) != input.Dimensions {
+		return errors.New("demo determinant results must match the dimensional order")
+	}
+	for dimension, result := range state.Determinants {
+		if result != 0 && result != determinant(dimension+1) {
+			return errors.New("demo result must be zero or the determinant of the dimension's scaled identity matrix")
 		}
+		if state.Number != 0 && result == 0 {
+			return errors.New("demo number requires all determinant results")
+		}
+	}
+	if state.Number != 0 && state.Number != estimateNumber(state.Determinants) {
+		return errors.New("demo number must match the estimate from all determinant results")
 	}
 	return nil
 }
 
 func (p *process) Load(saved *contract.StateSnapshot) (contract.Run, error) {
-	_, state, err := snapshot.Decode[struct{}, state](saved)
+	input, state, err := snapshot.Decode[input, state](saved)
 	if err != nil {
 		return nil, err
 	}
-	return &run{name: p.name, state: state}, nil
+	return &run{
+		name:  p.Definition().Identity.Name,
+		rebel: p.rebel,
+		input: input,
+		state: state,
+	}, nil
 }

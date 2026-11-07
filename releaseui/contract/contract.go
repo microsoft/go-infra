@@ -14,8 +14,8 @@ import (
 )
 
 // ErrInvalidInput marks an error caused by operator-controlled process input. When
-// [Process.Prepare] returns an error of this type, it is shown as an input validation error. Other
-// preparation errors are shown differently.
+// [Process.Prepare] or [Process.Validate] returns an error of this type during preparation, it is
+// shown beside the input form. Other preparation errors are shown differently.
 var ErrInvalidInput = errors.New("invalid release input")
 
 // ProcessGroup represents a collection of closely related release processes. For example, go-images
@@ -54,6 +54,9 @@ type Process interface {
 	// the input struct. The fn is called multiple times, and each call must produce unrelated
 	// instances.
 	//
+	// InputForm must register the same fields in the same order each time. releaseui assigns field
+	// IDs by registration order.
+	//
 	// The output of this function may be passed back into [Process.Prepare].
 	InputForm(*releaseinput.Set) any
 
@@ -76,6 +79,9 @@ type Process interface {
 	// It's acceptable for Validate to call [snapshot.Decode] and simply return Decode's error value
 	// without any further inspection of the decoded data if there are no states that would cause a
 	// catastrophic problem.
+	//
+	// During preparation, Validate may return [ErrInvalidInput] to indicate that operator input
+	// is not valid. Releaseui shows this error beside the input form rather than as a general error.
 	//
 	// Validate must be deterministic and must not modify the snapshot or use an external service.
 	Validate(*StateSnapshot) error

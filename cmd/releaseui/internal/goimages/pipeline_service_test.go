@@ -82,11 +82,18 @@ func (ctl *recordingStepControl) ReportProgress(progress coordinator.StepProgres
 	ctl.progress = append(ctl.progress, progress)
 }
 
-func (ctl *recordingStepControl) Update(fn func()) error {
+func (ctl *recordingStepControl) Update(fn func()) {
 	ctl.mu.Lock()
 	defer ctl.mu.Unlock()
 	fn()
-	return nil
+}
+
+func (ctl *recordingStepControl) EnsurePersisted() error { return nil }
+
+func (ctl *recordingStepControl) Read(fn func()) {
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	fn()
 }
 
 func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) (int, error) {
