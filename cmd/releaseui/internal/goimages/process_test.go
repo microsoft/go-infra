@@ -71,13 +71,13 @@ func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := run.TakeSnapshot()
+	before := testSnapshot(t, run)
 	plan := run.Plan()
-	steps, err := run.Build(context.Background(), nil)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := run.TakeSnapshot()
+	after := testSnapshot(t, run)
 	if plan == nil || plan.ExecutionButtonLabel != "Run production release" || len(steps) == 0 {
 		t.Fatalf("plan = %#v, steps = %d", plan, len(steps))
 	}
@@ -119,16 +119,16 @@ func TestPrepareAndPlanOnlyInitializeDomainState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			before := run.TakeSnapshot()
+			before := testSnapshot(t, run)
 			plan := run.Plan()
 			if plan == nil || plan.Subtitle == "" || service.request != nil {
 				t.Fatalf("planning constructed an execution service or lost its description: %#v", plan)
 			}
-			after := run.TakeSnapshot()
+			after := testSnapshot(t, run)
 			if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 				t.Fatal("planning changed the process checkpoint")
 			}
-			steps, err := run.Build(context.Background(), nil)
+			steps, err := run.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -154,7 +154,7 @@ func TestProcessBuildUsesDocumentExecutionIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := run.Build(context.Background(), func() {}); err != nil {
+	if _, err := run.Build(); err != nil {
 		t.Fatal(err)
 	}
 	if service.request == nil || service.request.SessionID != state.Document.ID ||
@@ -187,12 +187,12 @@ func TestTestReleaseGraphConstructionDoesNotReadExternalRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := run.TakeSnapshot()
-	steps, err := run.Build(context.Background(), nil)
+	before := testSnapshot(t, run)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := run.TakeSnapshot()
+	after := testSnapshot(t, run)
 	if len(steps) != 3 || service.polls != 0 || service.mirrors != 0 || service.queues != 0 || service.request.Mode != ModeTest ||
 		service.request.SessionID != state.Document.ID || service.request.ExecutionDigest != state.Document.ExecutionDigest {
 
@@ -201,6 +201,15 @@ func TestTestReleaseGraphConstructionDoesNotReadExternalRun(t *testing.T) {
 	if string(before.Input) != string(after.Input) || string(before.State) != string(after.State) {
 		t.Fatal("read-only graph observation changed the saved run state")
 	}
+}
+
+func testSnapshot(t *testing.T, run contract.Run) *contract.StateSnapshot {
+	t.Helper()
+	snapshot, err := run.TakeSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func TestTestReleaseViewLinksToItsPipelineRun(t *testing.T) {

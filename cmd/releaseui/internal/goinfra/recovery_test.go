@@ -36,7 +36,7 @@ func TestLoadResumesKnownWorkflowRunWithoutDispatchingAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steps, err := run.Build(context.Background(), func() {})
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}

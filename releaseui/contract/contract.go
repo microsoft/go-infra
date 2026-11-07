@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
@@ -69,33 +68,44 @@ type Process interface {
 	// type.
 	Prepare(ctx context.Context, inputFormResult any) (*StateSnapshot, error)
 
-	// Load examines state from a snapshot and constructs its [Run] without starting it.
+	// Validate is called by releaseui to check the snapshot's input and state before releaseui
+	// accepts prepared state, loads a run, or saves a captured snapshot.
+	//
+	// Be careful. If Validate fails, it interrupts the whole process. Validate must accept all
+	// valid intermediate states that could occur during a run. It's generally better to be lenient.
+	// It's acceptable for Validate to call [snapshot.Decode] and simply return Decode's error value
+	// without any further inspection of the decoded data if there are no states that would cause a
+	// catastrophic problem.
+	//
+	// Validate must be deterministic and must not modify the snapshot or use an external service.
+	Validate(*StateSnapshot) error
+
+	// Load decodes a snapshot and constructs its [Run] without starting it.
 	//
 	// Load may return an error instead of a Run to indicate it wasn't able to load the snapshot.
-	// Consider making [Load] more lenient than [Prepare], because the user can't necessarily
-	// correct errors in a persisted snapshot.
+	// Releaseui calls [Validate] before calling this method, so [Load] should not call [Validate].
 	Load(*StateSnapshot) (Run, error)
 }
 
 // Run represents one release throughout its entire lifecycle. It carries the run's current state,
 // which is expected to change over time.
 type Run interface {
-	// TakeSnapshot returns a snapshot of the run's state at this point in time. The returned
-	// snapshot must not be modified after being returned.
+	// TakeSnapshot returns a snapshot of the run's state at this point in time, or an error if
+	// capture or encoding fails. The returned snapshot must not be modified after being returned.
 	//
-	// TakeSnapshot may be called concurrently with step execution or another TakeSnapshot call.
-	// The Run implementation must synchronize access to its state.
+	// The host serializes TakeSnapshot and TakeView with state changes made through
+	// [coordinator.StepControl.Update]. The Run doesn't need its own state lock.
 	//
 	// Run state is expected to be stored in the Run itself. It's initialized when the Run is
 	// created. When the steps run, they mutate the state. [TakeSnapshot] is expected to be a copy
 	// of that mutated state.
-	TakeSnapshot() *StateSnapshot
+	TakeSnapshot() (*StateSnapshot, error)
 
 	// TakeView returns a read-only view of the run's current state. The returned view must not be
 	// modified after being returned. Views are not persisted.
 	//
-	// TakeView may be called concurrently with step execution or another Run method. The Run
-	// implementation must synchronize access to its state.
+	// The host serializes TakeView with state changes made through
+	// [coordinator.StepControl.Update]. The Run doesn't need its own state lock.
 	//
 	// This view contains extra details that are useful for displaying on the UI.
 	TakeView() *RunView
@@ -109,24 +119,13 @@ type Run interface {
 	// Build sets up the executable graph for the run.
 	//
 	// Build does not change the Run state or mutate an external service. Only execution of the
-	// returned steps may do so.
+	// returned steps may do so. Steps must change run state through
+	// [coordinator.StepControl.Update], which persists the state before returning.
 	//
 	// This method is called at most once per instance of [Run]. It always constructs executable
 	// steps. Observers use the runner's published display data and never call Build.
-	Build(context.Context, CheckpointFunc) ([]*coordinator.Step, error)
+	Build() ([]*coordinator.Step, error)
 }
-
-// CheckpointFunc must be called by a Run's steps after changing state. This allows releaseui to
-// persist the state and, when useful, refresh the view.
-//
-// The CheckpointFunc schedules [Run.TakeSnapshot] and [Run.TakeView] to be called from another
-// goroutine and waits for persistence to complete. This lets a step durably record mutation intent
-// before it calls an external service.
-//
-// Multiple steps may call the CheckpointFunc concurrently; releaseui serializes their persistence.
-// If checkpointing or persistence fails, releaseui cancels the context passed to [Run.Build]. The
-// step should cooperate with cancellation by checking the context after the func returns.
-type CheckpointFunc func()
 
 // Identity contains the basic identity metadata for a release process or group.
 type Identity struct {
@@ -202,17 +201,12 @@ type RunView struct {
 	// RunURL links to the external pipeline or workflow run. Empty until a run is known.
 	RunURL string
 
-	// UpdatedAt is the time of the last update that is considered relevant by the [Run]. Some steps
-	// may make progress or poll a resource without committing state updates, and this field
-	// provides the [Run] with a way to positively indicate to the user that the process is still
-	// working.
-	UpdatedAt time.Time
-
 	// Some status indicators are derived from the steps or other server state by releaseui, and are
 	// not included here:
 	//
 	//   - Started: this indicates that this instance is actually running the steps.
 	//   - Complete: this indicates that the run has reached a terminal result.
+	//   - UpdatedAt: the host records when it last published the view, including heartbeats.
 }
 
 // Plan contains review content for the user, to help them notice if they don't really want to

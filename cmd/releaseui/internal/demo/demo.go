@@ -5,17 +5,19 @@
 package demo
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
+	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
+
+type state struct {
+	WorkCompleted [2]int `json:"workCompleted"`
+}
+
+const stateSchema = "2026-11-6"
 
 type processGroup struct{}
 
@@ -34,8 +36,8 @@ func (g *processGroup) Identity() *contract.Identity {
 
 func (g *processGroup) Processes() []contract.Process {
 	return []contract.Process{
-		&process{id: "demo-a", name: "Demo A"},
-		&process{id: "demo-b", name: "Demo B"},
+		&process{id: "demo-a-" + stateSchema, name: "Demo A"},
+		&process{id: "demo-b-" + stateSchema, name: "Demo B"},
 	}
 }
 
@@ -73,70 +75,26 @@ func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.S
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return encodeSnapshot(state{
-		SchemaVersion: stateSchema, UpdatedAt: time.Now().UTC(),
-	})
+	return snapshot.Encode(struct{}{}, state{})
 }
 
-func (p *process) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	if snapshot == nil {
-		return nil, errors.New("demo snapshot is nil")
-	}
-	input, err := decodeStrictJSON[*struct{}](snapshot.Input)
+func (p *process) Validate(saved *contract.StateSnapshot) error {
+	_, state, err := snapshot.Decode[struct{}, state](saved)
 	if err != nil {
-		return nil, fmt.Errorf("decode demo input: %w", err)
-	}
-	if input == nil {
-		return nil, errors.New("demo input must be an object")
-	}
-	state, err := decodeStrictJSON[state](snapshot.State)
-	if err != nil {
-		return nil, fmt.Errorf("decode demo state: %w", err)
-	}
-	if err := validateState(state); err != nil {
-		return nil, err
-	}
-	return newRun(p.name, state), nil
-}
-
-func encodeSnapshot(state state) (*contract.StateSnapshot, error) {
-	stateJSON, err := json.Marshal(state)
-	if err != nil {
-		return nil, fmt.Errorf("encode demo state: %w", err)
-	}
-	return &contract.StateSnapshot{Input: json.RawMessage(`{}`), State: stateJSON}, nil
-}
-
-func validateState(state state) error {
-	if state.SchemaVersion != stateSchema {
-		return fmt.Errorf("unsupported demo state schema %d", state.SchemaVersion)
-	}
-	if state.UpdatedAt.IsZero() {
-		return errors.New("demo update time is zero")
+		return err
 	}
 	for _, completed := range state.WorkCompleted {
 		if completed < 0 || completed > workUnits {
 			return errors.New("demo work count is out of range")
 		}
-		if !state.Initialized && (completed != 0 || state.Finished) {
-			return errors.New("demo work started before initialization")
-		}
-		if state.Finished && completed != workUnits {
-			return errors.New("demo finished before both branches completed")
-		}
 	}
 	return nil
 }
 
-func decodeStrictJSON[T any](data json.RawMessage) (T, error) {
-	var value T
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return value, err
+func (p *process) Load(saved *contract.StateSnapshot) (contract.Run, error) {
+	_, state, err := snapshot.Decode[struct{}, state](saved)
+	if err != nil {
+		return nil, err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return value, errors.New("expected exactly one JSON value")
-	}
-	return value, nil
+	return &run{name: p.name, state: state}, nil
 }

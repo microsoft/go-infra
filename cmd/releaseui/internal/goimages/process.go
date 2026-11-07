@@ -273,42 +273,56 @@ func prepareGoImages(
 
 func loadGoImagesRun(
 	service ProcessService,
-	mode Mode,
 	snapshot *contract.StateSnapshot,
 ) (contract.Run, error) {
 	input, state, err := decodeGoImagesSnapshot(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	if input.Mode != mode {
-		return nil, errors.New("go-images snapshot belongs to a different process")
-	}
-	if err := validateGoImagesState(input, state); err != nil {
-		return nil, err
-	}
 	return &goImagesRun{service: service, input: input, state: state}, nil
 }
 
+func validateGoImagesSnapshot(
+	mode Mode, snapshot *contract.StateSnapshot,
+) error {
+	input, state, err := decodeGoImagesSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	if input.Mode != mode {
+		return errors.New("go-images snapshot belongs to a different process")
+	}
+	return validateGoImagesState(input, state)
+}
+
+func (p *normalProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoImagesSnapshot(ModeNormal, snapshot)
+}
+
 func (p *normalProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoImagesRun(p.service, ModeNormal, snapshot)
+	return loadGoImagesRun(p.service, snapshot)
 }
 
 func (p *rollbackProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoImagesRun(p.service, ModeRollback, snapshot)
+	return loadGoImagesRun(p.service, snapshot)
+}
+
+func (p *rollbackProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoImagesSnapshot(ModeRollback, snapshot)
+}
+
+func (p *testProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoImagesSnapshot(ModeTest, snapshot)
 }
 
 func (p *testProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoImagesRun(p.service, ModeTest, snapshot)
+	return loadGoImagesRun(p.service, snapshot)
 }
 
-func (r *goImagesRun) TakeSnapshot() *contract.StateSnapshot {
+func (r *goImagesRun) TakeSnapshot() (*contract.StateSnapshot, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	snapshot, err := encodeGoImagesSnapshot(r.input, r.state)
-	if err != nil {
-		panic(fmt.Sprintf("encode go-images snapshot: %v", err))
-	}
-	return snapshot
+	return encodeGoImagesSnapshot(r.input, r.state)
 }
 
 func (r *goImagesRun) TakeView() *contract.RunView {
@@ -316,7 +330,7 @@ func (r *goImagesRun) TakeView() *contract.RunView {
 	defer r.mu.RUnlock()
 	view := &contract.RunView{
 		Test: r.input.Mode == ModeTest, Summary: "Ready",
-		Detail: modeName(r.input.Mode), UpdatedAt: r.state.UpdatedAt,
+		Detail: modeName(r.input.Mode),
 	}
 	if r.state.Workflow.BuildID != "" {
 		view.Summary = "Azure DevOps pipeline is running"
@@ -340,7 +354,7 @@ func (r *goImagesRun) Plan() *contract.Plan {
 	return goImagesPlan(r.input, r.state.Source, r.state.RollbackSource, parameters)
 }
 
-func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
+func (r *goImagesRun) Build() ([]*coordinator.Step, error) {
 	if err := validateGoImagesConfiguration(r.service); err != nil {
 		return nil, err
 	}
@@ -359,9 +373,6 @@ func (r *goImagesRun) Build(ctx context.Context, checkpoint contract.CheckpointF
 		r.state.Workflow = *state
 		r.state.UpdatedAt = time.Now().UTC()
 		r.mu.Unlock()
-		if checkpoint != nil {
-			checkpoint()
-		}
 	}
 	steps, _, err := NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
 	return steps, err

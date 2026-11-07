@@ -35,6 +35,8 @@ func (*testProcess) Load(*contract.StateSnapshot) (contract.Run, error) {
 	return nil, nil
 }
 
+func (*testProcess) Validate(*contract.StateSnapshot) error { return nil }
+
 type testGroup struct {
 	identity  *contract.Identity
 	processes []contract.Process
