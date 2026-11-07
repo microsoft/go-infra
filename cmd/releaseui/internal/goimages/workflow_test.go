@@ -288,9 +288,10 @@ func TestStateAccessReportsChangeAndObservesCancellation(t *testing.T) {
 			cancel()
 		},
 	}
-	if err := access.update(ctx, func() {
-		state.QueueAttempted = true
-	}); !errors.Is(err, context.Canceled) {
+	step := coordinator.NewRootStep("Update", coordinator.NoTimeout, func(_ context.Context, ctl coordinator.StepControl) error {
+		return access.update(ctl, func() { state.QueueAttempted = true })
+	})
+	if err := (&coordinator.StepRunner{}).Execute(ctx, []*coordinator.Step{step}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("update error = %v, want cancellation", err)
 	}
 	if checkpointCalls != 1 || !state.QueueAttempted {
@@ -305,7 +306,7 @@ func TestStateAccessSnapshotWaitsForUpdate(t *testing.T) {
 	finishUpdate := make(chan struct{})
 	updateDone := make(chan error, 1)
 	go func() {
-		updateDone <- access.update(context.Background(), func() {
+		updateDone <- access.update(new(recordingStepControl), func() {
 			close(updateStarted)
 			<-finishUpdate
 			state.QueueAttempted = true

@@ -82,7 +82,7 @@ func TestPublishedViewRoutesDoNotLoadProcessOrCheckpoint(t *testing.T) {
 			store.getErr = errors.New("checkpoint cannot be decoded by this version")
 			process := exampleProcess()
 			process.preflight = func(context.Context) (error, error) { t.Error("viewer called preflight"); return nil, nil }
-			process.build = func(context.Context, *fakeReleaseRun, contract.CheckpointFunc) ([]*coordinator.Step, error) {
+			process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
 				t.Error("viewer built an executable graph")
 				return nil, errors.New("forbidden")
 			}

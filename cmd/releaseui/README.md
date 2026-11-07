@@ -27,6 +27,7 @@ Keep process policy separate from reusable mechanics:
 ```text
 releaseui/                           Local HTTP lifecycle, UI, execution, and built-in storage
 releaseui/contract/                  Process and durable-state contracts
+releaseui/snapshot/                  Typed JSON encoding and strict snapshot decoding
 releaseui/releaseinput/              Process input definitions, parsing, and Go field bindings
 releaseui/internal/azdorunstore/     Azure Boards release storage
 releaseui/internal/runstore/         Private durable-state and storage contracts
@@ -79,16 +80,29 @@ func (p *exampleProcess) InputForm(inputs *releaseinput.Set) any {
 ```
 
 `Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
-`Process.Load` validates a snapshot and constructs a `Run`.
-`Run.TakeSnapshot` returns an independent durable state copy, `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
+`Process.Validate` checks snapshot input and state before the host accepts prepared state, loads a run, imports a checkpoint, or saves captured state.
+It must accept valid intermediate states without changing the snapshot or performing external I/O.
+`Process.Load` decodes the validated snapshot and constructs a `Run`; it does not need to repeat validation.
+`Run.TakeSnapshot` returns an independent durable state copy and an error if capture or encoding fails.
+`Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
 The shared host names new tracking items from the registered process-group and process names.
 Process implementations do not supply tracking titles. Pipeline identifiers and step counts
 remain in plan facts and review-page subtitles. Updates do not rename existing tracking items.
 Only execution of the returned steps may mutate external state.
 Each step function receives a context for cancellation and deadlines and an explicit
-`coordinator.StepControl` for progress reporting. Call `control.ReportProgress` to publish step
+`coordinator.StepControl` for progress reporting. Call `ctl.ReportProgress` to publish step
 progress, and pass the control explicitly to polling helpers that report progress. The runner
 provides a control bound to each executing step; progress reporting does not use context values.
+Change run state through `ctl.Update`, which captures the resulting snapshot and view under the run's shared state lock.
+The host releases that lock before storage I/O and saves updates in mutation order.
+`Update` waits for persistence and returns any error, so a step can save intent before calling an external service.
+Return the error before taking that action.
+If captured state is invalid, `Update` returns the validation error without saving it.
+Finalization records the failure while preserving the last valid checkpoint.
+`Run.Build` takes no arguments.
+Execution contexts are supplied to step functions when they run.
+Process implementations do not need their own locks for state changed through `Update`.
+Use step dependencies to order reads of completed results.
 Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
 The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
@@ -99,6 +113,18 @@ A blocking error prevents preparation and starting, but does not prevent restori
 Before preparation, the shared lifecycle creates a fresh input value with `InputForm`.
 `releaseinput.Set.Parse` rejects missing or unknown fields and binds valid positive integers directly to typed Go fields.
 Each process then applies its semantic and fixed-target validation.
+
+## Demo processes
+
+To include two independent simulated releases, start the UI with the demo flag:
+
+```console
+go run ./cmd/releaseui serve -demo
+```
+
+Confirmation creates real Azure DevOps test work items, so authenticate `az` before running a demo.
+No builds, workflows, or artifacts are published.
+See the [demo implementation and API simplification plans](internal/demo/README.md) for the example's structure and proposed API changes.
 
 ## Go-images release modes
 
@@ -206,6 +232,8 @@ even when the matching process is not configured or its checkpoint uses an unsup
 The dashboard uses the same published data.
 
 Release pages refresh the stored view every five seconds and show its last-published timestamp.
+The host assigns this timestamp when publishing checkpoints, progress, heartbeats, and the final outcome.
+Processes report live step progress through `ctl.ReportProgress`; `RunView` does not carry a timestamp.
 If the runner stops publishing, the page keeps the last saved progress and warns that it may be
 stale. It does not independently monitor or restart the external operation. Use a step's
 **Open external run** link or **Open release run** to inspect the provider directly.

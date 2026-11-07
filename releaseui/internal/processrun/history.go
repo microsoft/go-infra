@@ -146,7 +146,7 @@ func (h *History) Import(
 	if err != nil {
 		return webview.ReleaseRecordExport[*runstore.State]{}, newError(ErrorInvalid, err)
 	}
-	view, err := h.manager.publishedView(imported.Run, run, run.Plan(), runner.Snapshot())
+	view, err := h.manager.publishedView(imported.Run, run.TakeView(), run.Plan(), runner.Snapshot())
 	if err != nil {
 		return webview.ReleaseRecordExport[*runstore.State]{}, newError(ErrorInvalid, err)
 	}
@@ -179,14 +179,14 @@ func (h *History) validateImport(
 	if !reflect.DeepEqual(previous.Plan(), run.Plan()) {
 		return nil, nil, errors.New("import cannot change the reviewed plan")
 	}
-	steps, err := run.Build(ctx, nil)
+	steps, err := run.Build()
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := validateProcessRunGraph(steps); err != nil {
 		return nil, nil, err
 	}
-	snapshot, err := snapshotReleaseRun(run)
+	snapshot, err := h.manager.snapshotReleaseRun(candidate.ProcessID, run)
 	if err != nil {
 		return nil, nil, err
 	}

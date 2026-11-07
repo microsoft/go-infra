@@ -39,9 +39,7 @@ func exampleProcess() *fakeProcess {
 		}, nil
 	}
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error { return nil }), nil
 	}
@@ -179,16 +177,14 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 	var builds atomic.Int32
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		run *fakeReleaseRun,
-		checkpoint contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		builds.Add(1)
-		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
+		return exampleProcessSteps(func(_ context.Context, ctl coordinator.StepControl) error {
 			executed.Store(true)
-			run.setState(json.RawMessage(`{"value":"executed"}`))
-			checkpoint()
-			return nil
+			return ctl.Update(func() {
+				run.setState(json.RawMessage(`{"value":"executed"}`))
+			})
 		}), nil
 	}
 	server, err := New(
@@ -249,9 +245,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 	process := exampleProcess()
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
@@ -278,9 +272,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 	process := exampleProcess()
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
@@ -493,9 +485,7 @@ func TestConfiguredProcessesCanRunConcurrently(t *testing.T) {
 		process := exampleProcess()
 		process.definition = testProcessDefinition(processID)
 		process.build = func(
-			_ context.Context,
 			_ *fakeReleaseRun,
-			_ contract.CheckpointFunc,
 		) ([]*coordinator.Step, error) {
 			return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 				close(entered[processID])
