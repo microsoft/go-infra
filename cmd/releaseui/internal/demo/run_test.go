@@ -86,6 +86,7 @@ func TestRunResumesCompletedDimensions(t *testing.T) {
 		graph := runner.Snapshot()
 		if graph.Steps[0].Status != coordinator.StepStatusSucceeded ||
 			graph.Steps[0].Progress.Completed != workUnits || graph.Steps[1].Progress.Completed != 0 {
+
 			t.Fatalf("restored progress = %#v", graph)
 		}
 		if err := <-done; err != nil {
@@ -93,6 +94,7 @@ func TestRunResumesCompletedDimensions(t *testing.T) {
 		}
 		if time.Since(start) != workUnits*workDelay || checkpoints != 2 ||
 			!slices.Equal(testState(t, restored).Determinants, []float64{2, 2.25}) {
+
 			t.Fatalf("resume duration=%v, checkpoints=%d, state=%#v", time.Since(start), checkpoints, testState(t, restored))
 		}
 		completed, err := process.Load(testSnapshot(t, restored))
@@ -166,6 +168,7 @@ func TestRunsExecuteIndependently(t *testing.T) {
 		if !reflect.DeepEqual(interrupted, testSnapshot(t, first)) ||
 			!slices.Equal(testState(t, first).Determinants, []float64{0, 0}) ||
 			!slices.Equal(testState(t, second).Determinants, []float64{2, 2.25}) {
+
 			t.Fatal("one run affected the other's results")
 		}
 	})
@@ -220,6 +223,7 @@ func TestRunDimensionCountControlsGraph(t *testing.T) {
 				state := testState(t, run)
 				if len(state.Determinants) != test.dimensions || checkpoints != test.dimensions+1 ||
 					math.Abs(state.Determinants[test.dimensions-1]-test.result) > 1e-12 {
+
 					t.Fatalf("determinants=%v, checkpoints=%d", state.Determinants, checkpoints)
 				}
 				for dimension, result := range state.Determinants {
@@ -229,6 +233,7 @@ func TestRunDimensionCountControlsGraph(t *testing.T) {
 				}
 				if math.Abs(state.Number-test.estimate) > 1e-12 ||
 					test.dimensions > 1 && math.Abs(state.Number-math.E) >= math.Abs(test.result-math.E) {
+
 					t.Fatalf("estimate = %v, want %v and closer to e than %v", state.Number, test.estimate, test.result)
 				}
 				if view := run.TakeView(); view.Summary != fmt.Sprintf("The number is %.6f, an estimate of e", test.estimate) {
@@ -333,12 +338,14 @@ func assertParallelProgress(t *testing.T, snapshot coordinator.Snapshot, complet
 		if step.Name != fmt.Sprintf("Analyze dimension %d", dimension+1) ||
 			len(step.DependsOn) != 0 || step.Status != coordinator.StepStatusRunning ||
 			step.Progress == nil || step.Progress.Completed != count || step.Progress.Total != workUnits {
+
 			t.Fatalf("parallel analysis = %#v, want %d seconds elapsed", step, count)
 		}
 	}
 	finish := snapshot.Steps[len(completed)]
 	if finish.Name != "Calculate the number" || finish.Status != coordinator.StepStatusWaiting ||
 		len(finish.DependsOn) != len(completed) {
+
 		t.Fatalf("final calculation = %#v", finish)
 	}
 }

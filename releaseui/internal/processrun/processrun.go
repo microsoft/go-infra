@@ -780,7 +780,8 @@ func (c *processCheckpointer) runLoop() {
 			active := c.session.checkpointer == c
 			c.session.mu.Unlock()
 			if active {
-				c.persist(nil)
+				// persist reports failures and retains pending state for the next retry.
+				_ = c.persist(nil)
 				if c.failed.Load() {
 					return
 				}
