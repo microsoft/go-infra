@@ -124,7 +124,7 @@ func (p *process) Load(saved *contract.StateSnapshot) (contract.Run, error) {
 		return nil, err
 	}
 	return &run{
-		name:  p.Definition().Identity.Name,
+		name:  p.Definition().Name,
 		rebel: p.rebel,
 		input: input,
 		state: state,

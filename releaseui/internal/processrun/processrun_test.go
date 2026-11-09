@@ -218,6 +218,7 @@ func TestPendingCheckpointRecovers(t *testing.T) {
 				if store.record.Run.Result != resultSucceeded ||
 					string(store.record.Run.Snapshot.State) != `{"value":1}` ||
 					session.runner.Snapshot().CheckpointError != "" {
+
 					t.Fatalf("recovered release = %#v", store.record.Run)
 				}
 			})
@@ -566,7 +567,9 @@ func TestCheckpointDoesNotOverwriteChangedRun(t *testing.T) {
 			checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 			done := make(chan struct{})
 			go func() {
-				saveTestCheckpoint(checkpointer)
+				if err := saveTestCheckpoint(checkpointer); err == nil {
+					t.Error("stale checkpoint unexpectedly succeeded")
+				}
 				close(done)
 			}()
 			waitForTestSignal(t, store.updateStarted)
@@ -614,13 +617,17 @@ func TestConcurrentCheckpointsStaySerialized(t *testing.T) {
 	checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 	firstDone := make(chan struct{})
 	go func() {
-		saveTestCheckpoint(checkpointer)
+		if err := saveTestCheckpoint(checkpointer); err != nil {
+			t.Errorf("first checkpoint: %v", err)
+		}
 		close(firstDone)
 	}()
 	waitForTestSignal(t, store.updateStarted)
 	secondDone := make(chan struct{})
 	go func() {
-		saveTestCheckpoint(checkpointer)
+		if err := saveTestCheckpoint(checkpointer); err != nil {
+			t.Errorf("second checkpoint: %v", err)
+		}
 		close(secondDone)
 	}()
 	select {
@@ -758,6 +765,7 @@ func TestSnapshotFailureNeverReplacesLastValidCheckpoint(t *testing.T) {
 			want := []string{`{"value":1}`, `{"value":1}`}
 			if !slices.Equal(store.savedStates, want) || store.record.Run.Result != resultUncertain ||
 				store.view.Detail != "Valid state" {
+
 				t.Fatalf("saved states = %v, outcome = %s, detail = %q", store.savedStates, store.record.Run.Result, store.view.Detail)
 			}
 		})

@@ -451,7 +451,8 @@ func (ctl stepControl) Update(fn func()) {
 		return
 	}
 	ctl.runner.pending = persist
-	ctl.runner.persistPending()
+	// persistPending records and publishes failures; Update remains best-effort.
+	_ = ctl.runner.persistPending()
 }
 
 func (ctl stepControl) EnsurePersisted() error {
