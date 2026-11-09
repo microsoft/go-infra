@@ -114,7 +114,6 @@ func TestRegistryRejectsInvalidDefinitions(t *testing.T) {
 			if _, err := New(test.groups...); err == nil {
 				t.Fatal("invalid process registry was accepted")
 			}
-
 		})
 	}
 }
@@ -149,6 +148,7 @@ func TestRegistryExplainsInvalidInputs(t *testing.T) {
 				message, ok := recover().(string)
 				if !ok || !strings.Contains(message, `release process "example"`) ||
 					!strings.Contains(message, test.cause) {
+
 					t.Fatalf("declaration panic = %q, want process and cause %q", message, test.cause)
 				}
 			}()
