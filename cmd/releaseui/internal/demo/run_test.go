@@ -43,14 +43,17 @@ func TestRunParallelProgress(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if elapsed := time.Since(start); elapsed != workUnits*workDelay {
-			t.Fatalf("elapsed = %v, want parallel duration %v", elapsed, workUnits*workDelay)
+		wantDuration := time.Duration(dimensionWorkTotal(2)) * workDelay
+		if elapsed := time.Since(start); elapsed != wantDuration {
+			t.Fatalf("elapsed = %v, want parallel duration %v", elapsed, wantDuration)
 		}
 		if state := testState(t, run); !slices.Equal(state.Determinants, []float64{2, 2.25}) || state.Number != 2.5 || checkpoints != 3 {
 			t.Fatalf("completed state = %#v, checkpoints = %d", state, checkpoints)
 		}
 		for _, step := range runner.Snapshot().Steps {
-			if step.Status != coordinator.StepStatusSucceeded || step.Progress != nil && step.Progress.Completed != workUnits {
+			if step.Status != coordinator.StepStatusSucceeded ||
+				step.Progress != nil && step.Progress.Summary != "Complete" &&
+					step.Progress.Summary != "Calculated the number" {
 				t.Fatalf("step = %#v", step)
 			}
 		}
@@ -84,15 +87,16 @@ func TestRunResumesCompletedDimensions(t *testing.T) {
 		})
 		synctest.Wait()
 		graph := runner.Snapshot()
-		if graph.Steps[0].Status != coordinator.StepStatusSucceeded ||
-			graph.Steps[0].Progress.Completed != workUnits || graph.Steps[1].Progress.Completed != 0 {
+		if graph.Steps[0].Status != coordinator.StepStatusSucceeded || graph.Steps[0].Progress != nil ||
+			graph.Steps[1].Status != coordinator.StepStatusRunning || graph.Steps[1].Progress == nil ||
+			graph.Steps[1].Progress.Completed != 0 || graph.Steps[1].Progress.Total != dimensionWorkTotal(2) {
 
 			t.Fatalf("restored progress = %#v", graph)
 		}
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		if time.Since(start) != workUnits*workDelay || checkpoints != 2 ||
+		if time.Since(start) != time.Duration(dimensionWorkTotal(2))*workDelay || checkpoints != 2 ||
 			!slices.Equal(testState(t, restored).Determinants, []float64{2, 2.25}) {
 
 			t.Fatalf("resume duration=%v, checkpoints=%d, state=%#v", time.Since(start), checkpoints, testState(t, restored))
@@ -145,7 +149,7 @@ func TestCancellationDiscardsTransientProgress(t *testing.T) {
 		if err := <-resumed; err != nil {
 			t.Fatal(err)
 		}
-		if time.Since(start) != workUnits*workDelay {
+		if time.Since(start) != time.Duration(dimensionWorkTotal(2))*workDelay {
 			t.Fatal("unfinished dimensions did not restart from zero")
 		}
 	})
@@ -154,11 +158,11 @@ func TestCancellationDiscardsTransientProgress(t *testing.T) {
 func TestRunsExecuteIndependently(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		processes := NewProcess().Processes()
-		first := prepareTestRun(t, processes[1])
+		first := prepareTestRunWithDimensions(t, processes[1], 3)
 		second := prepareTestRun(t, processes[0])
 		_, firstDone := startTestRun(t, context.Background(), first, func() error { return nil })
 		_, secondDone := startTestRun(t, context.Background(), second, func() error { return nil })
-		if err := <-firstDone; err == nil || !strings.Contains(err.Error(), "sabotaged dimension 1") {
+		if err := <-firstDone; err == nil || !strings.Contains(err.Error(), "sabotaged the third dimension") {
 			t.Fatalf("first run error = %v", err)
 		}
 		interrupted := testSnapshot(t, first)
@@ -166,7 +170,7 @@ func TestRunsExecuteIndependently(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(interrupted, testSnapshot(t, first)) ||
-			!slices.Equal(testState(t, first).Determinants, []float64{0, 0}) ||
+			!slices.Equal(testState(t, first).Determinants, []float64{0, 0, 0}) ||
 			!slices.Equal(testState(t, second).Determinants, []float64{2, 2.25}) {
 
 			t.Fatal("one run affected the other's results")
@@ -285,17 +289,18 @@ func TestRunCalculatesNumberFromSavedDeterminants(t *testing.T) {
 func TestRebelliousRunRepeatsUnfinishedAnalysisWhenResumed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		process := NewProcess().Processes()[1]
-		demoRun := prepareTestRun(t, process)
+		demoRun := prepareTestRunWithDimensions(t, process, 3)
 		for attempt := range 2 {
 			start := time.Now()
 			_, done := startTestRun(t, context.Background(), demoRun, func() error {
 				t.Error("sabotaged analysis saved a result")
 				return nil
 			})
-			if err := <-done; err == nil || !strings.Contains(err.Error(), "sabotaged dimension 1") {
+			if err := <-done; err == nil || !strings.Contains(err.Error(), "sabotaged the third dimension") {
 				t.Fatalf("attempt %d error = %v", attempt, err)
 			}
-			if time.Since(start) != workUnits/2*workDelay || !slices.Equal(demoRun.state.Determinants, []float64{0, 0}) {
+			if time.Since(start) != time.Duration(dimensionWorkTotal(3)/2)*workDelay ||
+				!slices.Equal(demoRun.state.Determinants, []float64{0, 0, 0}) {
 				t.Fatalf("attempt %d duration=%v, state=%#v", attempt, time.Since(start), demoRun.state)
 			}
 			restored, err := process.Load(testSnapshot(t, demoRun))
@@ -337,7 +342,8 @@ func assertParallelProgress(t *testing.T, snapshot coordinator.Snapshot, complet
 		step := snapshot.Steps[dimension]
 		if step.Name != fmt.Sprintf("Analyze dimension %d", dimension+1) ||
 			len(step.DependsOn) != 0 || step.Status != coordinator.StepStatusRunning ||
-			step.Progress == nil || step.Progress.Completed != count || step.Progress.Total != workUnits {
+			step.Progress == nil || step.Progress.Completed != count ||
+			step.Progress.Total != dimensionWorkTotal(dimension+1) {
 
 			t.Fatalf("parallel analysis = %#v, want %d seconds elapsed", step, count)
 		}

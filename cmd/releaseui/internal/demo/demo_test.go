@@ -231,7 +231,12 @@ func TestLoadUsesConfiguredDemoName(t *testing.T) {
 
 func prepareTestRun(t *testing.T, process contract.Process) *run {
 	t.Helper()
-	snapshot, err := process.Prepare(context.Background(), &input{Dimensions: 2})
+	return prepareTestRunWithDimensions(t, process, 2)
+}
+
+func prepareTestRunWithDimensions(t *testing.T, process contract.Process, dimensions int) *run {
+	t.Helper()
+	snapshot, err := process.Prepare(context.Background(), &input{Dimensions: dimensions})
 	if err != nil {
 		t.Fatal(err)
 	}

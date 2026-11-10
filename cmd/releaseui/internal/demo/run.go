@@ -87,7 +87,7 @@ func (r *run) Build() ([]*coordinator.Step, error) {
 					return nil
 				}
 				// Simulate increasing workload per dimension.
-				workTotal := int(math.Ceil(float64(workUnits) * (1 - math.Pow(0.5, float64(dimension+1)))))
+				workTotal := dimensionWorkTotal(dimension + 1)
 				ticker := time.NewTicker(workDelay)
 				for work := range workTotal {
 					if err := ctx.Err(); err != nil {
@@ -98,7 +98,7 @@ func (r *run) Build() ([]*coordinator.Step, error) {
 						Completed: work,
 						Total:     workTotal,
 					})
-					if r.rebel && dimension == 2 && work >= workUnits/2 {
+					if r.rebel && dimension == 2 && work >= workTotal/2 {
 						return errors.New("rebellious scientist agent sabotaged the third dimension")
 					}
 					select {
@@ -157,6 +157,10 @@ func (r *run) Build() ([]*coordinator.Step, error) {
 func determinant(dimension int) float64 {
 	n := float64(dimension)
 	return math.Pow(1+1/n, n)
+}
+
+func dimensionWorkTotal(dimension int) int {
+	return int(math.Ceil(float64(workUnits) * (1 - math.Pow(0.5, float64(dimension)))))
 }
 
 func estimateNumber(determinants []float64) float64 {
