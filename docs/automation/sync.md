@@ -23,6 +23,11 @@ It creates missing repository labels.
 When a sync entry updates a submodule managed by a `.git-go-patch` file at the target repository root, sync checks each patch against the new upstream commit.
 It first applies each patch normally and retries a failed patch with `git am --3way`.
 
+If that merge conflicts in `go.mod`, `go.sum`, or `vendor/modules.txt`, sync also handles the narrow case where a patch only inserts lines and upstream only updates existing dependency versions (and their checksums).
+It keeps the patch's additions and upstream's versions without running Go commands or downloading modules.
+The base lines must align unambiguously, and upstream must not add or remove lines in the conflicted file.
+Edits to the same dependency by both sides, other upstream changes, and conflicts in other files still require manual resolution.
+
 If the three-way merge succeeds, sync regenerates and stages only that patch.
 Patches that apply normally remain byte-for-byte unchanged to keep the sync PR diff focused.
 Regenerated patches are buffered until the entire patch set succeeds, so an unresolved conflict leaves all patch files unchanged and the sync PR can proceed for manual repair.

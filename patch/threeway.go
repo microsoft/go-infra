@@ -25,7 +25,8 @@ import (
 // If a clean apply fails, TryThreeWayRebase retries with "git am --3way". When that succeeds, it
 // regenerates only that patch, leaving clean patches untouched to avoid noisy diffs. If index
 // preservation is enabled, it restores index lines before applying and updates index.json for
-// regenerated patches. If a three-way merge conflicts, patch files are left unchanged. The
+// regenerated patches. Dependency additions adjacent to upstream module version updates are
+// resolved conservatively. If a conflict remains, patch files are left unchanged. The
 // returned paths are relative to rootDir. If rootDir has no matching patch configuration, the
 // function does nothing.
 func TryThreeWayRebase(rootDir, submoduleDir, baseCommit string) ([]string, error) {
@@ -185,10 +186,20 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 		}
 
 		if err := gitcmd.Run(workDir, "am", "--3way", "--whitespace=nowarn", "--quiet", applyPatchPath); err != nil {
-			log.Printf("Three-way patch merge did not resolve %q; leaving patch files unchanged: %v\n", filepath.Base(patchPath), err)
-			// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
-			_ = gitcmd.Run(workDir, "am", "--abort")
-			return nil, nil
+			resolved, resolveErr := resolveModuleConflicts(workDir)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("failed to resolve module conflicts in %q: %w", filepath.Base(patchPath), resolveErr)
+			}
+			if !resolved {
+				log.Printf("Three-way patch merge did not resolve %q; leaving patch files unchanged: %v\n", filepath.Base(patchPath), err)
+				// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
+				_ = gitcmd.Run(workDir, "am", "--abort")
+				return nil, nil
+			}
+			log.Printf("Resolved dependency additions adjacent to upstream version updates in %q", filepath.Base(patchPath))
+			if err := gitcmd.Run(workDir, "am", "--continue", "--quiet"); err != nil {
+				return nil, fmt.Errorf("failed to commit resolved module patch %q: %w", filepath.Base(patchPath), err)
+			}
 		}
 
 		obsolete, err := recordObsoletePatch(workDir, patchPath, baseTree, &obsoletePatches, index, &indexChanged)
