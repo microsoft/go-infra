@@ -179,9 +179,17 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 }
 
 func isGoModBlockDelimiter(line string) bool {
-	fields := strings.Fields(line)
-	return len(fields) == 1 && (fields[0] == "(" || fields[0] == ")") ||
-		len(fields) >= 2 && slices.Contains([]string{"require", "replace", "exclude", "retract", "tool"}, fields[0]) && fields[1] == "("
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "(") || strings.HasPrefix(line, ")") {
+		return true
+	}
+	for _, directive := range []string{"require", "replace", "exclude", "retract", "tool"} {
+		suffix, ok := strings.CutPrefix(line, directive)
+		if ok && strings.HasPrefix(strings.TrimSpace(suffix), "(") {
+			return true
+		}
+	}
+	return false
 }
 
 // moduleLinePaths returns module paths directly named by a line and whether it could parse them.
