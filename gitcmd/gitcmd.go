@@ -142,7 +142,7 @@ func GetGlobalAuthor() (string, error) {
 
 // FetchRefCommit effectively runs "git fetch <remote> <ref>" and returns the commit hash.
 func FetchRefCommit(dir, remote, ref string) (string, error) {
-	output, err := executil.CombinedOutput(executil.Dir(dir, "git", "fetch", remote, "--porcelain", ref))
+	output, err := executil.Output(executil.Dir(dir, "git", "fetch", remote, "--porcelain", ref))
 	if err != nil {
 		return "", err
 	}
