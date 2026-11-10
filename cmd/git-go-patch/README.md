@@ -194,6 +194,7 @@ Just like a `rebase` or `merge`, this can generate conflicts when the patches no
 
 The Microsoft build of Go and related repositories use an [automated sync process](/docs/automation/sync.md).
 It uses a 3-way merge to automatically fix simple conflicts.
+It also resolves dependency additions adjacent to upstream version updates in `go.mod`, `go.sum`, and `vendor/modules.txt` when the changes can be combined unambiguously.
 Some conflicts can't be fixed automatically, and a dev has to investigate and manually fix them.
 
 A patch conflict error may look like this:
