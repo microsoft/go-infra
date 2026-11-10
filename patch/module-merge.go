@@ -47,7 +47,7 @@ func resolveModuleConflicts(dir string) (bool, error) {
 	resolved := make(map[string]string)
 	for name, stages := range files {
 		kind := path.Base(name)
-		if kind != "go.mod" && kind != "go.sum" && !(kind == "modules.txt" && path.Base(path.Dir(name)) == "vendor") {
+		if kind != "go.mod" && kind != "go.sum" && (kind != "modules.txt" || path.Base(path.Dir(name)) != "vendor") {
 			return false, nil
 		}
 		var contents [3]string
@@ -130,7 +130,9 @@ func moduleVersionUpdate(kind, base, upstream string) bool {
 		if len(before) > 0 && before[0] == "require" {
 			version = 2
 		}
-		if len(before) != version+1 && !(len(before) == version+3 && before[version+1] == "//" && before[version+2] == "indirect") {
+		if len(before) != version+1 &&
+			(len(before) != version+3 || before[version+1] != "//" || before[version+2] != "indirect") {
+
 			return false
 		}
 	case "go.sum":
@@ -149,6 +151,7 @@ func moduleVersionUpdate(kind, base, upstream string) bool {
 	if kind == "go.sum" {
 		if strings.HasSuffix(oldVersion, "/go.mod") != strings.HasSuffix(newVersion, "/go.mod") ||
 			!strings.HasPrefix(before[2], "h1:") || !strings.HasPrefix(after[2], "h1:") {
+
 			return false
 		}
 		oldVersion = strings.TrimSuffix(oldVersion, "/go.mod")
