@@ -389,23 +389,23 @@ func TestStepReadLocking(t *testing.T) {
 	var runner StepRunner
 	ctl := stepControl{runner: &runner, ctx: context.Background()}
 	ctl.Read(func() {
-		locked := runner.runMu.TryLock()
+		locked := runner.process.mu.TryLock()
 		if locked {
-			runner.runMu.Unlock()
+			runner.process.mu.Unlock()
 		}
 		if locked != raceEnabled {
 			t.Errorf("read permits a writer=%v, race build=%v", locked, raceEnabled)
 		}
 	})
 	runner.ReadState(func() {
-		if runner.runMu.TryLock() {
-			runner.runMu.Unlock()
+		if runner.process.mu.TryLock() {
+			runner.process.mu.Unlock()
 			t.Error("host read did not exclude writers")
 		}
-		if !runner.runMu.TryRLock() {
+		if !runner.process.mu.TryRLock() {
 			t.Error("host read excluded another reader")
 		} else {
-			runner.runMu.RUnlock()
+			runner.process.mu.RUnlock()
 		}
 	})
 }
@@ -487,6 +487,32 @@ func TestLaterUpdateCanRecoverStorageFailure(t *testing.T) {
 	}
 }
 
+func TestStepRunnerReplacesCheckpointStateBetweenRuns(t *testing.T) {
+	var runner StepRunner
+	step := NewRootStep("Work", NoTimeout, func(_ context.Context, ctl StepControl) error {
+		ctl.Update(func() {})
+		return nil
+	})
+	failure := errors.New("storage unavailable")
+	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			return func() error { return failure }, nil
+		},
+	})
+	if !errors.Is(err, failure) || runner.Snapshot().CheckpointError != failure.Error() {
+		t.Fatalf("first run error=%v, snapshot=%#v", err, runner.Snapshot())
+	}
+
+	if err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) { return nil, nil },
+	}); err != nil {
+		t.Fatalf("second run error=%v", err)
+	}
+	if snapshot := runner.Snapshot(); snapshot.CheckpointError != "" || snapshot.Error != "" {
+		t.Fatalf("second run retained checkpoint state: %#v", snapshot)
+	}
+}
+
 func TestEnsurePersistedWaitsForEarlierUpdate(t *testing.T) {
 	var runner StepRunner
 	saving := make(chan struct{})
@@ -551,10 +577,10 @@ func TestStepReadCancellation(t *testing.T) {
 			if !called {
 				t.Fatal("canceled read did not call its callback")
 			}
-			if !runner.runMu.TryLock() {
+			if !runner.process.mu.TryLock() {
 				t.Fatal("read left the lock held")
 			}
-			runner.runMu.Unlock()
+			runner.process.mu.Unlock()
 		})
 	}
 }
@@ -571,14 +597,15 @@ func TestStepReadLockReleasedAfterPanic(t *testing.T) {
 		}()
 		ctl.Read(func() { panic(sentinel) })
 	}()
-	if !runner.runMu.TryLock() {
+	if !runner.process.mu.TryLock() {
 		t.Fatal("read callback panic left the run lock held")
 	}
-	runner.runMu.Unlock()
+	runner.process.mu.Unlock()
 }
 
 func TestStepControlRunLockReleasedAfterPanic(t *testing.T) {
 	var runner StepRunner
+	runner.process.beginExecution(nil, nil)
 	ctl := stepControl{runner: &runner, ctx: context.Background()}
 	sentinel := errors.New("callback panic")
 	func() {
@@ -589,14 +616,14 @@ func TestStepControlRunLockReleasedAfterPanic(t *testing.T) {
 		}()
 		ctl.Update(func() { panic(sentinel) })
 	}()
-	if !runner.runMu.TryLock() {
+	if !runner.process.mu.TryLock() {
 		t.Fatal("callback panic left the run lock held")
 	}
-	runner.runMu.Unlock()
-	if !runner.updateMu.TryLock() {
+	runner.process.mu.Unlock()
+	if !runner.process.updateMu.TryLock() {
 		t.Fatal("callback panic left the update lock held")
 	}
-	runner.updateMu.Unlock()
+	runner.process.updateMu.Unlock()
 }
 
 func TestStepControlsReportParallelProgress(t *testing.T) {
@@ -670,8 +697,8 @@ func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
 					<-ctx.Done()
 					ctl.Update(func() {
 						mutated = true
-						if locked := runner.runMu.TryLock(); locked {
-							runner.runMu.Unlock()
+						if locked := runner.process.mu.TryLock(); locked {
+							runner.process.mu.Unlock()
 							t.Error("canceled Update did not hold the state lock")
 						}
 					})
