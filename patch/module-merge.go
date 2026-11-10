@@ -87,10 +87,15 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 	if len(baseLines) != len(upstreamLines) || len(patchLines) <= len(baseLines) {
 		return "", false
 	}
+	updatedModules := make(map[string]bool)
 	for i, line := range baseLines {
-		if line != upstreamLines[i] && !moduleVersionUpdate(kind, line, upstreamLines[i]) {
+		if line == upstreamLines[i] {
+			continue
+		}
+		if !moduleVersionUpdate(kind, line, upstreamLines[i]) {
 			return "", false
 		}
+		updatedModules[moduleLinePath(kind, line)] = true
 	}
 
 	// Locate every base line in the insertion-only patch. Forward and backward matching must
@@ -113,10 +118,70 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 			return "", false
 		}
 	}
+	// An insertion that mentions a module upstream updated (for example, the patch also bumps or
+	// replaces it) overlaps semantically even when the lines don't, so leave it for manual repair.
+	inserted := make([]bool, len(patchLines))
+	for i := range inserted {
+		inserted[i] = true
+	}
+	for _, position := range positions {
+		inserted[position] = false
+	}
+	for i, line := range patchLines {
+		if inserted[i] && updatedModules[moduleLinePath(kind, line)] {
+			return "", false
+		}
+	}
 	for i, position := range positions {
 		patchLines[position] = upstreamLines[i]
 	}
+	if kind == "go.sum" && !consistentChecksums(patchLines) {
+		return "", false
+	}
 	return strings.Join(patchLines, ""), true
+}
+
+// moduleLinePath returns the module path a line refers to, or "" if it isn't a module entry.
+func moduleLinePath(kind, line string) string {
+	fields := strings.Fields(line)
+	switch kind {
+	case "go.mod":
+		if len(fields) > 0 && slices.Contains([]string{"require", "replace", "exclude", "retract", "tool"}, fields[0]) {
+			fields = fields[1:]
+		}
+		if len(fields) >= 2 && fields[0] != "(" && fields[0] != ")" && fields[0] != "//" {
+			return fields[0]
+		}
+	case "go.sum":
+		if len(fields) == 3 {
+			return fields[0]
+		}
+	case "modules.txt":
+		if len(fields) >= 3 && fields[0] == "#" {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// consistentChecksums reports whether every go.sum module version has at most one checksum.
+func consistentChecksums(lines []string) bool {
+	checksums := make(map[string]string)
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) != 3 {
+			return false
+		}
+		key := fields[0] + " " + fields[1]
+		if checksum, ok := checksums[key]; ok && checksum != fields[2] {
+			return false
+		}
+		checksums[key] = fields[2]
+	}
+	return true
 }
 
 func moduleVersionUpdate(kind, base, upstream string) bool {

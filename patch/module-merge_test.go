@@ -80,6 +80,30 @@ func TestMergeModuleInsertions(t *testing.T) {
 			upstream: "# example.com/z v1.1.0\n## explicit; go 1.27\n",
 			patched:  "# example.com/a v1.0.0\n# example.com/z v1.0.0\n## explicit; go 1.26\n",
 		},
+		{
+			name: "checksum for updated module added", kind: "go.sum",
+			base:     "example.com/z v1.0.0 h1:old\n",
+			upstream: "example.com/z v1.1.0 h1:A\n",
+			patched:  "example.com/z v1.0.0 h1:old\nexample.com/z v1.1.0 h1:B\n",
+		},
+		{
+			name: "conflicting checksum for unchanged module", kind: "go.sum",
+			base:     "example.com/a v1.0.0 h1:x\nexample.com/z v1.0.0 h1:old\n",
+			upstream: "example.com/a v1.0.0 h1:x\nexample.com/z v1.1.0 h1:new\n",
+			patched:  "example.com/a v1.0.0 h1:x\nexample.com/a v1.0.0 h1:y\nexample.com/z v1.0.0 h1:old\n",
+		},
+		{
+			name: "replace for updated module added", kind: "go.mod",
+			base:     "require example.com/z v1.0.0\n",
+			upstream: "require example.com/z v1.1.0\n",
+			patched:  "require example.com/z v1.0.0\nreplace example.com/z => ./z\n",
+		},
+		{
+			name: "vendor header for updated module added", kind: "modules.txt",
+			base:     "# example.com/z v1.0.0\n",
+			upstream: "# example.com/z v1.1.0\n",
+			patched:  "# example.com/z v1.0.0\n# example.com/z v1.2.0\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -111,6 +135,25 @@ func TestModuleVersionUpdate(t *testing.T) {
 				t.Fatalf("moduleVersionUpdate = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModuleLinePath(t *testing.T) {
+	tests := []struct{ kind, line, want string }{
+		{"go.mod", "require example.com/z v1.0.0\n", "example.com/z"},
+		{"go.mod", "\texample.com/z v1.0.0 // indirect\n", "example.com/z"},
+		{"go.mod", "replace example.com/z => ./z\n", "example.com/z"},
+		{"go.mod", "require (\n", ""},
+		{"go.mod", ")\n", ""},
+		{"go.sum", "example.com/z v1.0.0/go.mod h1:x\n", "example.com/z"},
+		{"modules.txt", "# example.com/z v1.0.0\n", "example.com/z"},
+		{"modules.txt", "## explicit; go 1.26\n", ""},
+		{"modules.txt", "example.com/z\n", ""},
+	}
+	for _, tt := range tests {
+		if got := moduleLinePath(tt.kind, tt.line); got != tt.want {
+			t.Errorf("moduleLinePath(%q, %q) = %q, want %q", tt.kind, tt.line, got, tt.want)
+		}
 	}
 }
 
