@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/microsoft/go-infra/gitcmd"
@@ -95,7 +96,13 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 		if !moduleVersionUpdate(kind, line, upstreamLines[i]) {
 			return "", false
 		}
-		updatedModules[moduleLinePath(kind, line)] = true
+		modulePaths, ok := moduleLinePaths(kind, line)
+		if !ok || len(modulePaths) == 0 {
+			return "", false
+		}
+		for _, modulePath := range modulePaths {
+			updatedModules[modulePath] = true
+		}
 	}
 
 	// Locate every base line in the insertion-only patch. Forward and backward matching must
@@ -127,8 +134,38 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 	for _, position := range positions {
 		inserted[position] = false
 	}
+	var vendorModule string
 	for i, line := range patchLines {
-		if inserted[i] && updatedModules[moduleLinePath(kind, line)] {
+		if kind == "modules.txt" {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "# ") {
+				modulePaths, ok := moduleLinePaths(kind, line)
+				if !ok || len(modulePaths) == 0 {
+					return "", false
+				}
+				vendorModule = modulePaths[0]
+			} else if trimmed == "#" {
+				vendorModule = ""
+			}
+		}
+		if !inserted[i] {
+			continue
+		}
+		if kind == "go.mod" {
+			if isGoModBlockDelimiter(line) {
+				return "", false
+			}
+		}
+		modulePaths, ok := moduleLinePaths(kind, line)
+		if !ok {
+			return "", false
+		}
+		for _, modulePath := range modulePaths {
+			if updatedModules[modulePath] {
+				return "", false
+			}
+		}
+		if kind == "modules.txt" && vendorModule != "" && updatedModules[vendorModule] {
 			return "", false
 		}
 	}
@@ -141,27 +178,76 @@ func mergeModuleInsertions(kind, base, upstream, patched string) (string, bool) 
 	return strings.Join(patchLines, ""), true
 }
 
-// moduleLinePath returns the module path a line refers to, or "" if it isn't a module entry.
-func moduleLinePath(kind, line string) string {
+func isGoModBlockDelimiter(line string) bool {
 	fields := strings.Fields(line)
+	return len(fields) == 1 && (fields[0] == "(" || fields[0] == ")") ||
+		len(fields) >= 2 && slices.Contains([]string{"require", "replace", "exclude", "retract", "tool"}, fields[0]) && fields[1] == "("
+}
+
+// moduleLinePaths returns module paths directly named by a line and whether it could parse them.
+func moduleLinePaths(kind, line string) ([]string, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
 	switch kind {
 	case "go.mod":
-		if len(fields) > 0 && slices.Contains([]string{"require", "replace", "exclude", "retract", "tool"}, fields[0]) {
-			fields = fields[1:]
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "//") {
+			return nil, true
 		}
-		if len(fields) >= 2 && fields[0] != "(" && fields[0] != ")" && fields[0] != "//" {
-			return fields[0]
+		switch fields[0] {
+		case "require", "exclude", "retract", "tool":
+			if len(fields) < 2 || fields[1] == "(" {
+				return nil, true
+			}
+			modulePath, ok := unquoteModulePath(fields[1])
+			return []string{modulePath}, ok
+		case "replace":
+			if len(fields) < 4 {
+				return nil, false
+			}
+			arrow := slices.Index(fields, "=>")
+			if arrow < 2 || arrow+1 >= len(fields) {
+				return nil, false
+			}
+			oldPath, oldOK := unquoteModulePath(fields[1])
+			newPath, newOK := unquoteModulePath(fields[arrow+1])
+			return []string{oldPath, newPath}, oldOK && newOK
+		case "module":
+			if len(fields) < 2 {
+				return nil, false
+			}
+			modulePath, ok := unquoteModulePath(fields[1])
+			return []string{modulePath}, ok
+		case "go", "toolchain", "godebug":
+			return nil, true
+		case "(", ")":
+			return nil, true
+		default:
+			modulePath, ok := unquoteModulePath(fields[0])
+			return []string{modulePath}, ok
 		}
 	case "go.sum":
 		if len(fields) == 3 {
-			return fields[0]
+			return []string{fields[0]}, true
 		}
+		return nil, len(fields) == 0
 	case "modules.txt":
 		if len(fields) >= 3 && fields[0] == "#" {
-			return fields[1]
+			modulePath, ok := unquoteModulePath(fields[1])
+			return []string{modulePath}, ok
 		}
+		return nil, true
 	}
-	return ""
+	return nil, false
+}
+
+func unquoteModulePath(modulePath string) (string, bool) {
+	if strings.HasPrefix(modulePath, `"`) {
+		unquoted, err := strconv.Unquote(modulePath)
+		if err != nil {
+			return "", false
+		}
+		return unquoted, true
+	}
+	return modulePath, true
 }
 
 // consistentChecksums reports whether every go.sum module version has at most one checksum.

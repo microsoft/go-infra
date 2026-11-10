@@ -104,6 +104,30 @@ func TestMergeModuleInsertions(t *testing.T) {
 			upstream: "# example.com/z v1.1.0\n",
 			patched:  "# example.com/z v1.0.0\n# example.com/z v1.2.0\n",
 		},
+		{
+			name: "go.mod require moved to exclude", kind: "go.mod",
+			base:     "require (\n\texample.com/z v1.0.0\n)\n",
+			upstream: "require (\n\texample.com/z v1.1.0\n)\n",
+			patched:  "require (\n)\nexclude (\n\texample.com/z v1.0.0\n)\n",
+		},
+		{
+			name: "vendor package added for updated module", kind: "modules.txt",
+			base:     "# example.com/z v1.0.0\n## explicit; go 1.26\nexample.com/z\n",
+			upstream: "# example.com/z v1.1.0\n## explicit; go 1.26\nexample.com/z\n",
+			patched:  "# example.com/z v1.0.0\nexample.com/z/newpkg\n## explicit; go 1.26\nexample.com/z\n",
+		},
+		{
+			name: "quoted updated path with unquoted replace", kind: "go.mod",
+			base:     "require \"example.com/z\" v1.0.0\n",
+			upstream: "require \"example.com/z\" v1.1.0\n",
+			patched:  "require \"example.com/z\" v1.0.0\nreplace example.com/z => ./z\n",
+		},
+		{
+			name: "unquoted updated path with quoted replace", kind: "go.mod",
+			base:     "require example.com/z v1.0.0\n",
+			upstream: "require example.com/z v1.1.0\n",
+			patched:  "require example.com/z v1.0.0\nreplace \"example.com/z\" => ./z\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,20 +163,37 @@ func TestModuleVersionUpdate(t *testing.T) {
 }
 
 func TestModuleLinePath(t *testing.T) {
-	tests := []struct{ kind, line, want string }{
-		{"go.mod", "require example.com/z v1.0.0\n", "example.com/z"},
-		{"go.mod", "\texample.com/z v1.0.0 // indirect\n", "example.com/z"},
-		{"go.mod", "replace example.com/z => ./z\n", "example.com/z"},
-		{"go.mod", "require (\n", ""},
-		{"go.mod", ")\n", ""},
-		{"go.sum", "example.com/z v1.0.0/go.mod h1:x\n", "example.com/z"},
-		{"modules.txt", "# example.com/z v1.0.0\n", "example.com/z"},
-		{"modules.txt", "## explicit; go 1.26\n", ""},
-		{"modules.txt", "example.com/z\n", ""},
+	tests := []struct {
+		kind, line string
+		want       []string
+		wantOK     bool
+	}{
+		{"go.mod", "require example.com/z v1.0.0\n", []string{"example.com/z"}, true},
+		{"go.mod", "\texample.com/z v1.0.0 // indirect\n", []string{"example.com/z"}, true},
+		{"go.mod", "replace example.com/z => ./z\n", []string{"example.com/z", "./z"}, true},
+		{"go.mod", "require (\n", nil, true},
+		{"go.mod", ")\n", nil, true},
+		{"go.mod", "require \"example.com/z\" v1.0.0\n", []string{"example.com/z"}, true},
+		{"go.mod", "replace \"example.com/z\" => ./z\n", []string{"example.com/z", "./z"}, true},
+		{"go.sum", "example.com/z v1.0.0/go.mod h1:x\n", []string{"example.com/z"}, true},
+		{"modules.txt", "# example.com/z v1.0.0\n", []string{"example.com/z"}, true},
+		{"modules.txt", "## explicit; go 1.26\n", nil, true},
+		{"modules.txt", "example.com/z\n", nil, true},
 	}
 	for _, tt := range tests {
-		if got := moduleLinePath(tt.kind, tt.line); got != tt.want {
-			t.Errorf("moduleLinePath(%q, %q) = %q, want %q", tt.kind, tt.line, got, tt.want)
+		got, ok := moduleLinePaths(tt.kind, tt.line)
+		if !slices.Equal(got, tt.want) || ok != tt.wantOK {
+			t.Errorf("moduleLinePaths(%q, %q) = %v, %v; want %v, %v", tt.kind, tt.line, got, ok, tt.want, tt.wantOK)
+		}
+	}
+	for _, line := range []string{"(", ")", "require (", "replace (", "exclude (", "retract (", "tool ("} {
+		if !isGoModBlockDelimiter(line) {
+			t.Errorf("isGoModBlockDelimiter(%q) = false", line)
+		}
+	}
+	for _, line := range []string{"require example.com/z v1.0.0", "go 1.26"} {
+		if isGoModBlockDelimiter(line) {
+			t.Errorf("isGoModBlockDelimiter(%q) = true", line)
 		}
 	}
 }
