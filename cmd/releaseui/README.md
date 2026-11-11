@@ -81,6 +81,7 @@ func (p *exampleProcess) InputForm(inputs *releaseinput.Set) any {
 
 Releaseui assigns field IDs in registration order, so `InputForm` must register the same fields in the same order each time.
 These IDs connect browser fields to Go bindings; they do not change the process's persisted input schema.
+Preparing a plan leaves the browser's input controls and their values intact, whether preparation succeeds or fails.
 `Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
 `Process.Validate` checks snapshot input and state before the host accepts prepared state, loads a run, imports a checkpoint, or saves captured state.
 It must accept valid intermediate states without changing the snapshot or performing external I/O.

@@ -5,7 +5,6 @@
 package webview
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -269,13 +268,10 @@ type PreflightReport struct {
 	Checks []PreflightCheck `json:"checks"`
 }
 
-// ProcessRunResponse contains the selected inputs, plan, and execution state for one release.
+// ProcessRunResponse contains the plan and execution state for one release.
 type ProcessRunResponse[P any] struct {
 	// VariantID identifies the process variant that owns the release.
 	VariantID string `json:"variantId"`
-
-	// Input is the JSON object used to prepare the release.
-	Input json.RawMessage `json:"input"`
 
 	// Steps describes the planned execution graph.
 	Steps []PlanStep `json:"steps"`
