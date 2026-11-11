@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -53,6 +54,156 @@ func (p viewingTestProcess) Load(snapshot *contract.StateSnapshot) (contract.Run
 	return &run, nil
 }
 
+type dashboardTestReader struct {
+	active    []*runstore.ViewRecord
+	recent    []*runstore.ViewRecord
+	activeErr error
+	queryErr  error
+}
+
+func (*dashboardTestReader) GetView(context.Context, int) (*runstore.ViewRecord, error) {
+	return nil, errors.New("unexpected individual view lookup")
+}
+
+func (r *dashboardTestReader) QueryViews(_ context.Context, closed bool, _ int) ([]*runstore.ViewRecord, error) {
+	if closed {
+		return r.recent, r.queryErr
+	}
+	return r.active, r.activeErr
+}
+
+func TestDashboardGroupsByRunAndTrackingState(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		status    runstore.Status
+		executing bool
+		finished  bool
+	}{
+		{name: "running", status: runstore.StatusRunning, executing: true},
+		{name: "interrupted", status: runstore.StatusRunning},
+		{name: "succeeded", status: runstore.StatusSucceeded, finished: true},
+		{name: "failed", status: runstore.StatusFailed, finished: true},
+		{name: "canceled", status: runstore.StatusCanceled, finished: true},
+		{name: "uncertain", status: runstore.StatusUncertain, finished: true},
+		{name: "unknown"},
+	} {
+		for _, closed := range []bool{false, true} {
+			for _, unreadable := range []bool{false, true} {
+				if test.status == "" && !unreadable {
+					continue
+				}
+				t.Run(fmt.Sprintf("%s/closed=%t/unreadable=%t", test.name, closed, unreadable), func(t *testing.T) {
+					manager, store, _, _, cancel := publishedTestManager(t, nil)
+					defer cancel()
+					reader := new(dashboardTestReader)
+					if unreadable {
+						err := &runstore.RecordError{
+							ID: 1, Closed: closed, SavedStatus: string(test.status),
+							Err: errors.New("unreadable published view"),
+						}
+						if closed {
+							reader.queryErr = err
+						} else {
+							reader.activeErr = err
+						}
+					} else {
+						view := store.view.Clone()
+						view.Status, view.Executing = test.status, test.executing
+						record := &runstore.ViewRecord{ID: 1, Revision: 3, Closed: closed, View: view}
+						if closed {
+							reader.recent = []*runstore.ViewRecord{record}
+						} else {
+							reader.active = []*runstore.ViewRecord{record}
+						}
+					}
+					history := manager.History()
+					history.reader = reader
+					dashboard := history.Dashboard(context.Background())
+					entries, other := dashboard.Ongoing, dashboard.Recent
+					if closed && test.finished {
+						entries, other = dashboard.Recent, dashboard.Ongoing
+					}
+					if len(entries) != 1 || len(other) != 0 || dashboard.TrackingError != "" {
+						t.Fatalf("run and tracking state produced the wrong group: %#v", dashboard)
+					}
+					wantStatus := string(test.status)
+					if !unreadable && test.status == runstore.StatusRunning && !test.executing {
+						wantStatus = "saved"
+					}
+					entry := entries[0]
+					if entry.Status != wantStatus || entry.Closed != closed || (entry.Issue != nil) != unreadable {
+						t.Fatalf("grouping lost the outcome, tracking state or warning: %#v", entry)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestDashboardListsNewestFirst(t *testing.T) {
+	manager, store, _, _, cancel := publishedTestManager(t, nil)
+	defer cancel()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	completed := func(id int, updatedAt time.Time, closed bool) *runstore.ViewRecord {
+		view := store.view.Clone()
+		view.Status = runstore.StatusSucceeded
+		view.UpdatedAt = updatedAt
+		for index := range view.Graph.Steps {
+			view.Graph.Steps[index].Status = coordinator.StepStatusSucceeded
+		}
+		return &runstore.ViewRecord{ID: id, Revision: 1, Closed: closed, View: view}
+	}
+	unreadable := func(id int, updatedAt time.Time, closed bool) error {
+		return &runstore.RecordError{
+			ID: id, Closed: closed, UpdatedAt: updatedAt, SavedStatus: resultSucceeded,
+			Message: "Cannot open in this session.", Err: errors.New("unsupported prototype view"),
+		}
+	}
+	history := manager.History()
+	history.reader = &dashboardTestReader{
+		active: []*runstore.ViewRecord{
+			completed(1, start.Add(3*time.Hour), false),
+			completed(2, start.Add(time.Hour), false),
+		},
+		recent: []*runstore.ViewRecord{completed(3, start.Add(2*time.Hour), true)},
+		activeErr: errors.Join(
+			unreadable(8, start.Add(5*time.Hour), false),
+			unreadable(9, start, false),
+		),
+		queryErr: errors.Join(
+			unreadable(5, start.Add(4*time.Hour), true),
+			unreadable(4, start, true),
+			unreadable(6, time.Time{}, true),
+			unreadable(7, time.Time{}, true),
+		),
+	}
+	dashboard := history.Dashboard(context.Background())
+	for _, list := range []struct {
+		name           string
+		entries        []webview.ReleaseSummary
+		wantIDs        []int
+		wantUnreadable []int
+	}{
+		{name: "ongoing", entries: dashboard.Ongoing, wantIDs: []int{8, 1, 2, 9}, wantUnreadable: []int{8, 9}},
+		{name: "recent", entries: dashboard.Recent, wantIDs: []int{5, 3, 4, 6, 7}, wantUnreadable: []int{5, 4, 6, 7}},
+	} {
+		var ids, unreadableIDs []int
+		for _, entry := range list.entries {
+			ids = append(ids, entry.RecordID)
+			if entry.Issue != nil {
+				unreadableIDs = append(unreadableIDs, entry.RecordID)
+			}
+		}
+		if !reflect.DeepEqual(ids, list.wantIDs) || !reflect.DeepEqual(unreadableIDs, list.wantUnreadable) {
+			t.Fatalf("%s IDs = %v, unreadable IDs = %v; want %v and %v",
+				list.name, ids, unreadableIDs, list.wantIDs, list.wantUnreadable)
+		}
+	}
+	if dashboard.TrackingError != "" {
+		t.Fatalf("read-only entries became an unclassified error: %s", dashboard.TrackingError)
+	}
+}
+
 func TestViewingUsesOnlyPublishedData(t *testing.T) {
 	for _, foreign := range []bool{false, true} {
 		t.Run(map[bool]string{false: "configured process", true: "unavailable process"}[foreign], func(t *testing.T) {
@@ -75,8 +226,8 @@ func TestViewingUsesOnlyPublishedData(t *testing.T) {
 					t.Fatalf("published view = %#v", response)
 				}
 				dashboard := manager.History().Dashboard(context.Background())
-				if dashboard.TrackingError != "" || len(dashboard.NeedsAttention) != 1 ||
-					dashboard.NeedsAttention[0].Href != "/releases/1" {
+				if dashboard.TrackingError != "" || len(dashboard.Ongoing) != 1 ||
+					dashboard.Ongoing[0].Href != "/releases/1" {
 
 					t.Fatalf("dashboard = %#v", dashboard)
 				}
