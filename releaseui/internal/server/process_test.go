@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/internal/localserver"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -217,7 +219,7 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 }
 
 func TestPreparationDistinguishesInputErrors(t *testing.T) {
-	inputFailure := errors.Join(errors.New("choose at most 50 dimensions"), contract.ErrInvalidInput)
+	inputFailure := errors.Join(errors.New("choose at most 50 dimensions"), releaseinput.ErrInvalidInput)
 	for _, test := range []struct {
 		name   string
 		source string
@@ -269,6 +271,64 @@ func TestPreparationDistinguishesInputErrors(t *testing.T) {
 			}
 			if test.err != nil && !strings.Contains(result.Error, test.err.Error()) {
 				t.Fatalf("error cause was lost: %q", result.Error)
+			}
+		})
+	}
+}
+
+func TestPreparationAssociatesInputErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		target  func(*[2]int) any
+		inputID string
+	}{
+		{name: "registered", target: func(values *[2]int) any { return &values[1] }, inputID: "input2"},
+		{name: "nil", target: func(*[2]int) any { return nil }},
+		{name: "typed nil", target: func(*[2]int) any { return (*int)(nil) }},
+		{name: "unregistered equal value", target: func(values *[2]int) any {
+			value := values[1]
+			return &value
+		}},
+		{name: "nonpointer", target: func(*[2]int) any { return []int{51} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryProcessRunStore()
+			process := exampleProcess()
+			process.inputForm = func(inputs *releaseinput.Set) any {
+				values := new([2]int)
+				for index := range values {
+					inputs.PositiveIntVar(&values[index], releaseinput.FieldOptions{Label: "Dimensions"})
+				}
+				return values
+			}
+			process.prepare = func(_ context.Context, input any) (*contract.StateSnapshot, error) {
+				values := input.(*[2]int)
+				if *values != [2]int{2, 51} {
+					t.Fatalf("parsed values = %v", *values)
+				}
+				return nil, fmt.Errorf("prepare: %w", releaseinput.NewInvalidInputError(test.target(values), "choose at most 50 dimensions"))
+			}
+			server, err := New(context.Background(), WithProcesses(newFakeProcessGroup(process)), WithReleaseRunStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan",
+				strings.NewReader(`{"input1":"2","input2":"51"}`))
+			request.Header.Set("Origin", "http://localhost")
+			response := httptest.NewRecorder()
+			server.handlePrepareProcessRun("example", response, request)
+			var result struct {
+				Error   string `json:"error"`
+				Kind    string `json:"kind"`
+				InputID string `json:"inputId"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusBadRequest || result.Kind != "input" || result.InputID != test.inputID ||
+				result.Error != "prepare: choose at most 50 dimensions" || store.count() != 0 {
+
+				t.Fatalf("status=%d, response=%#v, records=%d", response.Code, result, store.count())
 			}
 		})
 	}

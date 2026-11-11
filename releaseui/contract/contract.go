@@ -7,16 +7,10 @@ package contract
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
-
-// ErrInvalidInput marks an error caused by operator-controlled process input. When
-// [Process.Prepare] or [Process.Validate] returns an error of this type during preparation, it is
-// shown beside the input form. Other preparation errors are shown differently.
-var ErrInvalidInput = errors.New("invalid release input")
 
 // ProcessGroup represents a collection of closely related release processes. For example, go-images
 // might want to rebuild all images, or it might be a build that rolls back to an earlier set of
@@ -69,6 +63,12 @@ type Process interface {
 	// inputFormResult contains the parsed results from the inputs. It is the same type returned by
 	// the [InputForm] method on this instance. Use a type assertion to convert it to the expected
 	// type.
+	//
+	// Return a [releaseinput.ErrInvalidInput] to show an input validation error, or more
+	// specifically, return the result of [releaseinput.NewInvalidInputError] to show a validation
+	// error beside a specific input field.
+	//
+	// Prepare may use an external service to determine the validity of the user's input.
 	Prepare(ctx context.Context, inputFormResult any) (*StateSnapshot, error)
 
 	// Validate is called by releaseui to check the snapshot's input and state before releaseui
@@ -80,8 +80,9 @@ type Process interface {
 	// without any further inspection of the decoded data if there are no states that would cause a
 	// catastrophic problem.
 	//
-	// During preparation, Validate may return [ErrInvalidInput] to indicate that operator input
-	// is not valid. Releaseui shows this error beside the input form rather than as a general error.
+	// Return a [releaseinput.ErrInvalidInput] to show an input validation error, or more
+	// specifically, return the result of [releaseinput.NewInvalidInputError] to show a validation
+	// error beside a specific input field if validation failed during preparation.
 	//
 	// Validate must be deterministic and must not modify the snapshot or use an external service.
 	Validate(*StateSnapshot) error

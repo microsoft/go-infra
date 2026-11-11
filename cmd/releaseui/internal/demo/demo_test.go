@@ -6,6 +6,7 @@ package demo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
 	"testing"
@@ -88,6 +89,23 @@ func TestProcessGroup(t *testing.T) {
 		}
 		if view := run.TakeView(); !view.Test || view.RunURL != "" || view.Summary != "Ready" {
 			t.Fatalf("view = %#v", view)
+		}
+	}
+}
+
+func TestPrepareAssociatesInvalidDimensions(t *testing.T) {
+	process := NewProcess().Processes()[0]
+	for _, dimensions := range []int{51, 128} {
+		var inputs releaseinput.Set
+		result := process.InputForm(&inputs).(*input)
+		result.Dimensions = dimensions
+		saved, err := process.Prepare(context.Background(), result)
+		var invalid *releaseinput.InvalidInputError
+		if saved != nil || !errors.Is(err, releaseinput.ErrInvalidInput) || !errors.As(err, &invalid) {
+			t.Fatalf("dimensions=%d, snapshot=%#v, error=%v", dimensions, saved, err)
+		}
+		if inputs.FieldID(invalid.Target) != "input1" {
+			t.Fatalf("dimensions=%d, target=%v", dimensions, invalid.Target)
 		}
 	}
 }

@@ -7,7 +7,6 @@ package demo
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
@@ -79,6 +78,7 @@ func (p *process) Preflight(ctx context.Context) (warning error, blocking error)
 
 func (p *process) InputForm(s *releaseinput.Set) any {
 	var i input
+	// This helper enforces that Dimensions will be >= 1.
 	s.PositiveIntVar(&i.Dimensions, releaseinput.FieldOptions{Label: "Number of dimensions"})
 	return &i
 }
@@ -86,11 +86,8 @@ func (p *process) InputForm(s *releaseinput.Set) any {
 func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.StateSnapshot, error) {
 	i := inputFormResult.(*input)
 	// Validate user-facing inputs to make sure they're reasonable.
-	if i.Dimensions <= 0 {
-		return nil, fmt.Errorf("dimensional order must be positive: %w", contract.ErrInvalidInput)
-	}
 	if i.Dimensions > 50 {
-		return nil, fmt.Errorf("dimensional order must not exceed 50 to prevent multiverse excess: %w", contract.ErrInvalidInput)
+		return nil, releaseinput.NewInvalidInputError(&i.Dimensions, "dimensional order must not exceed 50 to prevent multiverse excess")
 	}
 	// We only create the slice after verifying the number given to us by the user is reasonable.
 	s := state{Determinants: make([]float64, i.Dimensions)}

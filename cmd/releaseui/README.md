@@ -84,7 +84,11 @@ These IDs connect browser fields to Go bindings; they do not change the process'
 `Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
 `Process.Validate` checks snapshot input and state before the host accepts prepared state, loads a run, imports a checkpoint, or saves captured state.
 It must accept valid intermediate states without changing the snapshot or performing external I/O.
-During preparation, errors marked with `contract.ErrInvalidInput` appear beside the input form and remain visible until the inputs change or preparation is retried.
+During preparation, errors marked with `releaseinput.ErrInvalidInput` appear beside the input form and remain visible until the inputs change or preparation is retried.
+To associate a validation error with a field, return `releaseinput.NewInvalidInputError(&result.RunID, "run ID must identify a successful build")` from `Prepare`.
+Releaseui matches the pointer against the fields registered in `releaseinput.Set`, displays the message beside the matching input, and gives that input a red outline.
+A nil or unmatched pointer displays the message at the form level.
+The error still matches `releaseinput.ErrInvalidInput` through `errors.Is`, and field matching works through wrapped errors.
 `Process.Load` decodes the validated snapshot and constructs a `Run`; it does not need to repeat validation.
 `Run.TakeSnapshot` returns an independent durable state copy and an error if capture or encoding fails.
 `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.

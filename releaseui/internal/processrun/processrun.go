@@ -100,8 +100,9 @@ const (
 
 // Error describes a process-run failure that a transport can map to its own error response.
 type Error struct {
-	Kind ErrorKind
-	Err  error
+	Kind    ErrorKind
+	Err     error
+	InputID string
 }
 
 func (e *Error) Error() string {
@@ -244,16 +245,15 @@ func (s *Manager) Prepare(
 
 	snapshot, err := registered.Implementation.Prepare(ctx, input)
 	if err != nil {
-		kind := ErrorConflict
-		if errors.Is(err, contract.ErrInvalidInput) {
-			kind = ErrorInvalid
+		if errors.Is(err, releaseinput.ErrInvalidInput) {
+			return webview.ProcessRunResponse[*contract.Plan]{}, newInputError(inputs, err)
 		}
-		return webview.ProcessRunResponse[*contract.Plan]{}, newError(kind, err)
+		return webview.ProcessRunResponse[*contract.Plan]{}, newError(ErrorConflict, err)
 	}
 	run, err := loadReleaseRun(registered.Implementation, snapshot)
 	if err != nil {
-		if errors.Is(err, contract.ErrInvalidInput) {
-			return webview.ProcessRunResponse[*contract.Plan]{}, newError(ErrorInvalid, err)
+		if errors.Is(err, releaseinput.ErrInvalidInput) {
+			return webview.ProcessRunResponse[*contract.Plan]{}, newInputError(inputs, err)
 		}
 		return webview.ProcessRunResponse[*contract.Plan]{},
 			errorf(ErrorInternal, "load prepared release run: %w", err)
@@ -845,6 +845,15 @@ func (c *processCheckpointer) failureError() error {
 	c.failureMu.Lock()
 	defer c.failureMu.Unlock()
 	return c.failure
+}
+
+func newInputError(inputs *releaseinput.Set, err error) error {
+	result := &Error{Kind: ErrorInvalid, Err: err}
+	var invalid *releaseinput.InvalidInputError
+	if errors.As(err, &invalid) {
+		result.InputID = inputs.FieldID(invalid.Target)
+	}
+	return result
 }
 
 func newError(kind ErrorKind, err error) error {
