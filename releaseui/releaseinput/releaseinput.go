@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ func (s *Set) PositiveIntVar(target *int, options FieldOptions) {
 	}
 	id := fmt.Sprintf("input%d", len(s.bindings)+1)
 	s.bindings = append(s.bindings, inputBinding{
+		target: target,
 		definition: webview.Input{
 			ID: id, Type: "number", Label: options.Label,
 			Description: options.Description, Placeholder: options.Placeholder,
@@ -82,6 +84,19 @@ func (s *Set) Inputs() []webview.Input {
 		inputs[index] = binding.definition
 	}
 	return inputs
+}
+
+// FieldID returns the ID bound to target, or an empty string if target is not a registered pointer.
+func (s *Set) FieldID(target any) string {
+	if target == nil || reflect.TypeOf(target).Kind() != reflect.Ptr {
+		return ""
+	}
+	for _, binding := range s.bindings {
+		if binding.target == target {
+			return binding.definition.ID
+		}
+	}
+	return ""
 }
 
 // Parse binds one JSON object to the registered Go fields.
@@ -123,5 +138,6 @@ func (s *Set) Parse(data json.RawMessage) error {
 
 type inputBinding struct {
 	definition webview.Input
+	target     any
 	set        func(json.RawMessage) error
 }

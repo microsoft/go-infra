@@ -217,7 +217,7 @@ func prepareGoImages(
 	}
 	normalized, err := normalizePlanInput(input)
 	if err != nil {
-		return nil, errors.Join(err, contract.ErrInvalidInput)
+		return nil, errors.Join(err, releaseinput.ErrInvalidInput)
 	}
 	if _, err := service.Preflight(ctx); err != nil {
 		return nil, fmt.Errorf("azure preflight failed: %w", err)

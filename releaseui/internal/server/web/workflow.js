@@ -197,10 +197,19 @@
     wrapper.append(label, control);
     if (input.description) {
       const description = document.createElement("p");
+      description.id = `${id}-help`;
       description.className = "field-help";
       description.textContent = input.description;
       wrapper.append(description);
+      control.setAttribute("aria-describedby", description.id);
     }
+    const error = document.createElement("p");
+    error.id = `${id}-error`;
+    error.className = "field-error";
+    error.setAttribute("role", "alert");
+    error.hidden = true;
+    wrapper.append(error);
+    control.setAttribute("aria-describedby", [control.getAttribute("aria-describedby"), error.id].filter(Boolean).join(" "));
     inputRecords.set(input.id, control);
     return wrapper;
   }
@@ -249,9 +258,18 @@
     } catch (error) {
       if (selectedSession === session) {
         if (error.kind === "input") {
-          inputErrorMessage.textContent = error.message;
-          inputError.hidden = false;
-          inputError.focus();
+          const control = inputRecords.get(error.inputId);
+          if (control) {
+            const message = document.getElementById(`${control.id}-error`);
+            message.textContent = error.message;
+            message.hidden = false;
+            control.setAttribute("aria-invalid", "true");
+            control.focus();
+          } else {
+            inputErrorMessage.textContent = error.message;
+            inputError.hidden = false;
+            inputError.focus();
+          }
         } else {
           showError(error.message);
         }
@@ -267,6 +285,12 @@
   function clearInputError() {
     inputError.hidden = true;
     inputErrorMessage.textContent = "";
+    for (const control of inputRecords.values()) {
+      control.removeAttribute("aria-invalid");
+      const message = document.getElementById(`${control.id}-error`);
+      message.hidden = true;
+      message.textContent = "";
+    }
   }
 
   async function startRelease() {
@@ -871,6 +895,7 @@
     if (!response.ok) {
       const error = new Error(data.error || `${response.status} ${response.statusText}`);
       error.kind = data.kind;
+      error.inputId = data.inputId;
       throw error;
     }
     return data;
