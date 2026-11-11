@@ -88,7 +88,7 @@ func (s *Set) Inputs() []webview.Input {
 
 // FieldID returns the ID bound to target, or an empty string if target is not a registered pointer.
 func (s *Set) FieldID(target any) string {
-	if target == nil || reflect.TypeOf(target).Kind() != reflect.Ptr {
+	if target == nil || reflect.TypeOf(target).Kind() != reflect.Pointer {
 		return ""
 	}
 	for _, binding := range s.bindings {
