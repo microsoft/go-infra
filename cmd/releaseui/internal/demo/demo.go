@@ -7,6 +7,7 @@ package demo
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
@@ -84,6 +85,14 @@ func (p *process) InputForm(s *releaseinput.Set) any {
 
 func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.StateSnapshot, error) {
 	i := inputFormResult.(*input)
+	// Validate user-facing inputs to make sure they're reasonable.
+	if i.Dimensions <= 0 {
+		return nil, fmt.Errorf("dimensional order must be positive: %w", contract.ErrInvalidInput)
+	}
+	if i.Dimensions > 50 {
+		return nil, fmt.Errorf("dimensional order must not exceed 50 to prevent multiverse excess: %w", contract.ErrInvalidInput)
+	}
+	// We only create the slice after verifying the number given to us by the user is reasonable.
 	s := state{Determinants: make([]float64, i.Dimensions)}
 	return snapshot.Encode(i, s)
 }
@@ -93,27 +102,16 @@ func (p *process) Validate(saved *contract.StateSnapshot) error {
 	if err != nil {
 		return err
 	}
-
-	if input.Dimensions <= 0 {
-		return errors.Join(errors.New("dimensional order must be positive"), contract.ErrInvalidInput)
+	// Validate may have looser rules than the user-focused validation in Prepare. This allows a
+	// process to load old runs that started before the user-facing limit was reduced, or to support
+	// ad-hoc custom-modified runs.
+	if input.Dimensions <= 0 || input.Dimensions > 128 {
+		return errors.New("dimensional order out of calculable range")
 	}
-	if input.Dimensions > 50 {
-		return errors.Join(errors.New("dimensional order must not exceed 50 to prevent multiverse excess"), contract.ErrInvalidInput)
-	}
-
+	// If state contains fixed-length slices, it's usually worth validating that it has the expected
+	// number of slots.
 	if len(state.Determinants) != input.Dimensions {
-		return errors.New("demo determinant results must match the dimensional order")
-	}
-	for dimension, result := range state.Determinants {
-		if result != 0 && result != determinant(dimension+1) {
-			return errors.New("demo result must be zero or the determinant of the dimension's scaled identity matrix")
-		}
-		if state.Number != 0 && result == 0 {
-			return errors.New("demo number requires all determinant results")
-		}
-	}
-	if state.Number != 0 && state.Number != estimateNumber(state.Determinants) {
-		return errors.New("demo number must match the estimate from all determinant results")
+		return errors.New("determinant result count must match the dimensional order")
 	}
 	return nil
 }
