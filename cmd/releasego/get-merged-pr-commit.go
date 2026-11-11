@@ -86,13 +86,18 @@ func handleGetMergedPRCommit(p subcmd.ParseFunc) error {
 		var checks []*github.CheckRun
 		if err := githubutil.FetchEachPage(func(options github.ListOptions) (*github.Response, error) {
 			completed := "completed"
-			result, resp, err := client.Checks.ListCheckRunsForRef(
-				ctx, owner, name, headCommit,
-				&github.ListCheckRunsOptions{
-					Status:      &completed,
-					ListOptions: options,
-				})
-			if err != nil {
+			var result *github.ListCheckRunsResults
+			var resp *github.Response
+			if err := githubutil.Retry(func() error {
+				var err error
+				result, resp, err = client.Checks.ListCheckRunsForRef(
+					ctx, owner, name, headCommit,
+					&github.ListCheckRunsOptions{
+						Status:      &completed,
+						ListOptions: options,
+					})
+				return err
+			}); err != nil {
 				return nil, err
 			}
 			checks = append(checks, result.CheckRuns...)
