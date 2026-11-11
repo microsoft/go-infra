@@ -34,7 +34,7 @@ var webFiles embed.FS
 const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 2 * time.Minute
-	shutdownTimeout   = 5 * time.Second
+	shutdownTimeout   = 15 * time.Second
 
 	maxReleaseRecordImportSize = 1 << 20
 )
@@ -377,6 +377,9 @@ func (s *Server) handleEvents(response http.ResponseWriter, request *http.Reques
 // ListenAndServe runs the release UI on a loopback address until ctx is canceled or the HTTP
 // server stops. The ready callback receives the one-time launch URL after the listener starts.
 func ListenAndServe(ctx context.Context, address string, ready func(string), options ...Option) error {
+	if ctx == nil {
+		return errors.New("server context is nil")
+	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen on %q: %w", address, err)
@@ -387,6 +390,8 @@ func ListenAndServe(ctx context.Context, address string, ready func(string), opt
 	if !ok || !tcpAddress.IP.IsLoopback() {
 		return fmt.Errorf("refusing to serve release UI on non-loopback address %q", listener.Addr())
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	ui, err := New(ctx, options...)
 	if err != nil {
 		return err
@@ -421,12 +426,13 @@ func ListenAndServe(ctx context.Context, address string, ready func(string), opt
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil && serveErr == nil {
-		return fmt.Errorf("shut down release UI: %w", err)
+	cancel()
+	shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer stopShutdown()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		serveErr = errors.Join(serveErr, fmt.Errorf("shut down release UI: %w", err))
 	}
-	return serveErr
+	return errors.Join(serveErr, ui.runs.Shutdown(shutdownCtx))
 }
 
 func streamRunnerEvents(response http.ResponseWriter, request *http.Request, runner *coordinator.StepRunner) {

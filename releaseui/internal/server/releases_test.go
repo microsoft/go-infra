@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -166,7 +167,7 @@ func TestDashboardRetainsValidViewsAndReadOnlyProblems(t *testing.T) {
 	}
 }
 
-func TestClosedAndReservedViewsCannotOfferResume(t *testing.T) {
+func TestClosedAndRecentlyReservedViewsCannotOfferResume(t *testing.T) {
 	for _, closed := range []bool{false, true} {
 		store := newMemoryProcessRunStore()
 		run := testProcessRun(t)
@@ -184,6 +185,56 @@ func TestClosedAndReservedViewsCannotOfferResume(t *testing.T) {
 		if data.ResumeURL != "" {
 			t.Fatal("closed or owned record offered execution")
 		}
+	}
+}
+
+func TestStaleReleaseResumesThroughExistingEndpoint(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	state := testProcessRun(t)
+	state.Started, state.Checkpointed, state.Executing = true, true, true
+	seedReleaseRecord(store, testReleaseRunRecord(42, state, false, time.Now().Add(-2*time.Minute)))
+	executions := new(atomic.Int32)
+	process := exampleProcess()
+	process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
+		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
+			executions.Add(1)
+			return coordinator.ErrCanceled
+		}), nil
+	}
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+	response, err := ui.client.Get(ui.http.URL + "/api/releases/42/view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var saved webview.ReleaseViewResponse[*runstore.ViewRecord]
+	decodeResponse(t, response, &saved)
+	if saved.ResumeURL != "/api/processes/example/resume" || saved.Record.Revision != 1 ||
+		!saved.Record.View.Executing || executions.Load() != 0 {
+
+		t.Fatalf("opening the stale release changed or hid it: %#v", saved)
+	}
+	request := webview.ReleaseStartRequest{RecordID: 42, Revision: 1, PlanDigest: state.Digest}
+	response = postJSONValue(t, ui, saved.ResumeURL, request)
+	closeResponse(t, response)
+	if response.StatusCode != http.StatusBadRequest || executions.Load() != 0 {
+		t.Fatal("Resume ran without confirmation")
+	}
+	request.Confirmed = true
+	response = postJSONValue(t, ui, saved.ResumeURL, request)
+	closeResponse(t, response)
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("Resume status = %d, want accepted", response.StatusCode)
+	}
+	store.waitForCompleted(t, 1)
+	record, err := store.Get(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Run.Executing || record.Run.Result != string(runstore.StatusCanceled) ||
+		record.Revision != 3 || record.Closed || store.count() != 1 || executions.Load() != 1 {
+
+		t.Fatalf("Resume did not reuse and finish the stale record: %#v, executions=%d", record, executions.Load())
 	}
 }
 

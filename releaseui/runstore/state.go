@@ -36,8 +36,8 @@ type State struct {
 	Started      bool                    `json:"started"`
 	Checkpointed bool                    `json:"checkpointed,omitempty"`
 	Complete     bool                    `json:"complete"`
-	// Executing reserves the record until the runner releases it. Abandoned reservations require
-	// explicit operator repair after confirming that the previous runner has stopped.
+	// Executing reports that the record was reserved by a runner. The host checks whether a
+	// reservation is stale before allowing an interrupted execution to resume.
 	Executing bool      `json:"executing,omitempty"`
 	Result    string    `json:"result,omitempty"`
 	UpdatedAt time.Time `json:"-"`

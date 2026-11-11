@@ -230,7 +230,7 @@ input[aria-invalid="true"] { border-color: var(--red); box-shadow: 0 0 0 3px rgb
 .step-card[data-status="running"]::before { background: var(--cyan); box-shadow: 0 0 15px var(--cyan); }
 .step-card[data-status="succeeded"]::before { background: var(--green); }
 .step-card[data-status="failed"]::before, .step-card[data-status="canceled"]::before { background: var(--red); }
-.step-card[data-status="blocked"]::before { background: var(--yellow); }
+.step-card[data-status="blocked"]::before, .step-card[data-status="saved"]::before, .step-card[data-status="stale"]::before { background: var(--yellow); }
 .step-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .step-title { margin: 0; font-size: 14px; line-height: 1.45; }
 .status-badge { flex: 0 0 auto; padding: 5px 8px; border-radius: 99px; background: #192e42; color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: 0; text-transform: uppercase; }
@@ -332,6 +332,9 @@ a.process-card:hover { transform: translateY(-3px); border-color: rgb(57 213 255
 .status-badge[data-status="running"], .status-badge[data-status="reconciling"] { background: rgb(57 213 255 / 13%); color: var(--cyan); }
 .status-badge[data-status="ready"] { background: rgb(241 199 91 / 13%); color: var(--yellow); }
 .status-badge[data-status="succeeded"] { background: rgb(72 213 151 / 13%); color: var(--green); }
+.status-badge[data-status="saved"], .status-badge[data-status="stale"] { background: rgb(241 199 91 / 13%); color: var(--yellow); }
+.safety-card[data-status="saved"], .safety-card[data-status="stale"] { border-color: rgb(241 199 91 / 36%); background: rgb(241 199 91 / 8%); }
+.safety-card[data-status="saved"] .safety-icon, .safety-card[data-status="stale"] .safety-icon { background: rgb(241 199 91 / 13%); color: var(--yellow); }
 
 @keyframes gentle-pulse { 50% { opacity: .58; } }
 @keyframes graph-flow { to { stroke-dashoffset: -13; } }

@@ -46,6 +46,9 @@ type processSession struct {
 	record       *runstore.Record
 	running      bool
 	checkpointer *processCheckpointer
+	stopping     bool
+	done         chan struct{}
+	shutdownErr  error
 }
 
 type processRunUpdate struct {
@@ -53,6 +56,7 @@ type processRunUpdate struct {
 	expectedRecord *runstore.Record
 	plan           *contract.Plan
 	runner         *coordinator.StepRunner
+	done           chan struct{}
 }
 
 type processCheckpointer struct {
@@ -116,6 +120,7 @@ func (e *Error) Unwrap() error {
 // Manager owns the independent runtime session for each configured release process.
 type Manager struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
 	processes *processregistry.Registry
 	store     runstore.Store
 	sessions  map[string]*processSession
@@ -123,9 +128,39 @@ type Manager struct {
 
 // New creates a process-run manager.
 func New(ctx context.Context, processes *processregistry.Registry, store runstore.Store) *Manager {
+	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
-		ctx: ctx, processes: processes, store: store, sessions: newProcessSessions(processes),
+		ctx: ctx, cancel: cancel, processes: processes, store: store, sessions: newProcessSessions(processes),
 	}
+}
+
+// Shutdown stops new executions, cancels local work, and waits for final checkpoint saves.
+func (s *Manager) Shutdown(ctx context.Context) error {
+	pending := make(map[string]<-chan struct{}, len(s.sessions))
+	for id, session := range s.sessions {
+		session.mu.Lock()
+		session.stopping = true
+		pending[id] = session.done
+		session.mu.Unlock()
+	}
+	s.cancel()
+	var shutdownErr error
+	for id, done := range pending {
+		if done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return errors.Join(shutdownErr, fmt.Errorf("wait for release process %q to stop: %w", id, ctx.Err()))
+			}
+		}
+		session := s.sessions[id]
+		session.mu.Lock()
+		if session.shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, fmt.Errorf("shut down release process %q: %w", id, session.shutdownErr))
+		}
+		session.mu.Unlock()
+	}
+	return shutdownErr
 }
 
 // History returns the durable release history associated with the manager.
@@ -306,6 +341,9 @@ func (s *Manager) Resume(ctx context.Context, processID string, start webview.Re
 }
 
 func (s *Manager) start(ctx context.Context, processID string, start webview.ReleaseStartRequest, resume bool) error {
+	if s.ctx.Err() != nil {
+		return newError(ErrorConflict, errors.New("release UI is shutting down"))
+	}
 	registered, ok := s.processes.Lookup(processID)
 	if !ok {
 		return newError(ErrorNotFound, errors.New("release process is not configured"))
@@ -332,6 +370,12 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	if err != nil {
 		return err
 	}
+	launched := false
+	defer func() {
+		if !launched {
+			close(update.done)
+		}
+	}()
 	state := update.state
 
 	if _, blocking := registered.Implementation.Preflight(ctx); blocking != nil {
@@ -420,7 +464,11 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 		return newError(ErrorConflict, err)
 	}
 
-	go s.executeProcessRun(session, state.Digest, executionContext, runner, steps, run, checkpointer)
+	launched = true
+	go func() {
+		defer close(update.done)
+		s.executeProcessRun(session, state.Digest, executionContext, runner, steps, run, checkpointer)
+	}()
 	return nil
 }
 
@@ -453,7 +501,11 @@ func (s *Manager) executeProcessRun(
 	if err := runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
 		Update: checkpointer.Capture,
 		Finalize: func(executionErr error) error {
-			return s.finishProcessRun(session, digest, run, checkpointer, executionErr)
+			err := s.finishProcessRun(session, digest, run, checkpointer, executionErr)
+			session.mu.Lock()
+			session.shutdownErr = err
+			session.mu.Unlock()
+			return err
 		},
 	}); err != nil {
 		log.Printf("Release run finished: %v", err)
@@ -586,6 +638,9 @@ func (s *processSession) publishPreparedRun(
 ) (webview.ProcessRunResponse[*contract.Plan], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopping {
+		return webview.ProcessRunResponse[*contract.Plan]{}, errors.New("release UI is shutting down")
+	}
 	if s.running {
 		return webview.ProcessRunResponse[*contract.Plan]{}, errors.New("cannot replace the plan while a workflow is running")
 	}
@@ -602,6 +657,9 @@ func (s *processSession) publishPreparedRun(
 func (s *processSession) reserveStart(start webview.ReleaseStartRequest, saved *runstore.Record) (*processRunUpdate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stopping {
+		return nil, newError(ErrorConflict, errors.New("release UI is shutting down"))
+	}
 	if s.running {
 		return nil, newError(ErrorConflict, errors.New("a workflow is already running"))
 	}
@@ -615,8 +673,10 @@ func (s *processSession) reserveStart(start webview.ReleaseStartRequest, saved *
 			return nil, newError(ErrorConflict, errors.New("release record changed; review it again before resuming"))
 		}
 		s.running = true
+		s.done = make(chan struct{})
+		s.shutdownErr = nil
 		return &processRunUpdate{
-			state: saved.Run.Clone(), expectedRecord: saved, runner: s.runner,
+			state: saved.Run.Clone(), expectedRecord: saved, runner: s.runner, done: s.done,
 		}, nil
 	}
 	if s.run == nil || s.state == nil {
@@ -632,8 +692,10 @@ func (s *processSession) reserveStart(start webview.ReleaseStartRequest, saved *
 		return nil, newError(ErrorConflict, errors.New("the reviewed external action has already started"))
 	}
 	s.running = true
+	s.done = make(chan struct{})
+	s.shutdownErr = nil
 	return &processRunUpdate{
-		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan, runner: s.runner,
+		state: s.state.Clone(), expectedRecord: s.record, plan: s.plan, runner: s.runner, done: s.done,
 	}, nil
 }
 
@@ -926,8 +988,12 @@ func validateRecordForExecution(record *runstore.Record) error {
 	if record.Closed && !record.Run.Complete {
 		return errors.New("closed release run record cannot be resumed")
 	}
-	if record.Run.Complete || record.Run.Executing {
-		return errors.New("release is complete or reserved by a runner; an abandoned reservation requires operator repair")
+	if record.Run.Complete {
+		return errors.New("completed release cannot be resumed")
+	}
+	// The single-user prototype can explicitly resume a stale reservation.
+	if record.Run.Executing && time.Since(record.UpdatedAt) < staleHeartbeatTimeout {
+		return errors.New("release was updated recently; wait for its heartbeat to become stale before resuming")
 	}
 	return nil
 }

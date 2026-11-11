@@ -260,9 +260,14 @@ The dashboard uses the same published data.
 Release pages refresh the stored view every five seconds and show its last-published timestamp.
 The host assigns this timestamp when publishing checkpoints, progress, heartbeats, and the final outcome.
 Processes report live step progress through `ctl.ReportProgress`; `RunView` does not carry a timestamp.
-If the runner stops publishing, the page keeps the last saved progress and warns that it may be
-stale. It does not independently monitor or restart the external operation. Use a step's
-**Open external run** link or **Open release run** to inspect the provider directly.
+The dashboard and saved release page show the last heartbeat timestamp for unfinished runs.
+The dashboard refreshes its saved records every 15 seconds, so an active worker's newer heartbeats
+replace the displayed timestamp. Saved release pages refresh every five seconds.
+After a minute without a heartbeat, an executing run is labeled **Probably interrupted**.
+This label does not change the stored record or automatically resume the run.
+The page keeps the last reported step progress. It does not independently monitor or restart the
+external operation. Use a step's **Open external run** link or **Open release run** to inspect the
+provider directly.
 
 Records whose last publication reports an executing runner appear under **Ongoing releases**.
 Open failed, canceled, uncertain, and interrupted unfinished work appears
@@ -280,11 +285,19 @@ that process session.
 Every new real run uses a two-step **Run** then **Confirm run** interaction.
 The second request must include explicit confirmation and the exact current plan digest, so a stale or changed plan is rejected.
 An open unfinished record offers **Resume release** then **Confirm resume** when its process is
-configured and it is not reserved by a runner. Only that confirmed operation loads the checkpoint.
+configured and it is not executing, or its last heartbeat is at least a minute old.
+Only that confirmed operation loads the checkpoint.
 It rechecks execution readiness and claims the reviewed record revision before any actions run.
-A durable execution reservation prevents another server from resuming the same record.
-Graceful completion or interruption releases it. If the runner crashes, verify it has stopped,
-then use **View JSON** to clear `executing` before resuming. Do not clear an active runner's reservation.
+The prototype assumes a single operator. Confirmed Resume can replace an old `executing`
+reservation without a separate JSON repair. The backend rejects a recently updated record,
+a changed revision, a closed or completed run, or an execution already active in this server.
+This is not a multi-user handoff mechanism. Opening a release remains view-only.
+On Ctrl+C, the server stops accepting new executions, cancels local work, and waits for final
+checkpoint saves before exiting. External pipelines and workflows are not canceled.
+Shutdown has a 15-second deadline and reports errors if local work or final saves cannot finish.
+An unfinished run with a saved recovery checkpoint appears as **Interrupted** after a successful
+shutdown save. **Resume release** continues that checkpoint. The Go-images queue step skips
+creating a build when its ID is already saved, and the wait step checks that existing build.
 Normal and rollback runs can publish production images under `public/`.
 Test runs are fixed to `dev/`.
 Do not confirm a real execution without authorization.
