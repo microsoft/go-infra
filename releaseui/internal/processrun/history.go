@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -20,8 +21,9 @@ import (
 )
 
 const (
-	dashboardActiveLimit = 50
-	dashboardRecentLimit = 10
+	dashboardActiveLimit  = 50
+	dashboardRecentLimit  = 10
+	staleHeartbeatTimeout = time.Minute
 )
 
 // History reads published views. Checkpoint export and repair are explicit administrative actions.
@@ -75,7 +77,8 @@ func (h *History) View(ctx context.Context, id int) (webview.ReleaseViewResponse
 	}
 	result := webview.ReleaseViewResponse[*runstore.ViewRecord]{Record: record}
 	if _, configured := h.manager.processes.Lookup(record.View.ProcessID); configured &&
-		!record.Closed && !record.View.Executing && record.View.Status == runstore.StatusRunning {
+		!record.Closed && record.View.Status == runstore.StatusRunning &&
+		(!record.View.Executing || time.Since(record.View.UpdatedAt) >= staleHeartbeatTimeout) {
 
 		result.ResumeURL = "/api/processes/" + record.View.ProcessID + "/resume"
 	}

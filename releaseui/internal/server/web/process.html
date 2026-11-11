@@ -6,6 +6,7 @@
   <title>Release Process · Microsoft build of Go Release UI</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/process.js" defer></script>
+  <script src="/assets/status.js" defer></script>
   <script src="/assets/workflow.js" defer></script>
 </head>
 <body>
@@ -86,6 +87,7 @@
         </div>
 
         <div id="plan-content" class="plan-content" hidden>
+          <span id="release-status" class="status-badge" hidden></span>
           <p id="checkpoint-warning" class="input-error" role="alert" hidden></p>
           <div id="plan-facts" class="source-grid"></div>
 

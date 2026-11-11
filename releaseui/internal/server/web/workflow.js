@@ -20,6 +20,7 @@
   const emptyState = document.querySelector("#empty-state");
   const planContent = document.querySelector("#plan-content");
   const planSubtitle = document.querySelector("#plan-subtitle");
+  const releaseStatus = document.querySelector("#release-status");
   const planFacts = document.querySelector("#plan-facts");
   const progressSummary = document.querySelector(".progress-summary");
   const progressLabel = document.querySelector("#progress-label");
@@ -416,7 +417,7 @@
     title.textContent = step.name;
     const status = document.createElement("span");
     status.className = "status-badge";
-    status.textContent = statusText(step.status || "waiting");
+    status.textContent = releaseStatusText(step.status || "waiting");
     head.append(title, status);
     const liveProgress = document.createElement("div");
     liveProgress.className = "step-live-progress";
@@ -561,7 +562,7 @@
       const card = findStepCard(step.name);
       if (!card) continue;
       card.dataset.status = step.status || "waiting";
-      card.querySelector(".status-badge").textContent = statusText(step.status || "waiting");
+      card.querySelector(".status-badge").textContent = releaseStatusText(step.status || "waiting");
       card.querySelectorAll(".step-error").forEach((error) => error.remove());
       for (const message of [step.error].filter(Boolean)) {
         const error = document.createElement("p");
@@ -610,13 +611,9 @@
     for (const step of steps) counts.set(step.status || "waiting", (counts.get(step.status || "waiting") || 0) + 1);
     statusCounts.replaceChildren(...Array.from(counts.entries()).map(([status, count]) => {
       const label = document.createElement("span");
-      label.textContent = `${statusText(status)} ${count}`;
+      label.textContent = `${releaseStatusText(status)} ${count}`;
       return label;
     }));
-  }
-
-  function statusText(status) {
-    return status === "running" ? "in progress" : status;
   }
 
   async function observeSavedRelease() {
@@ -635,9 +632,13 @@
     });
     const controller = new AbortController();
     let timer;
+    const heartbeatTimer = setInterval(() => {
+      if (publishedRecord) renderSavedHeartbeat();
+    }, 5000);
     globalThis.addEventListener("pagehide", () => {
       controller.abort();
       clearTimeout(timer);
+      clearInterval(heartbeatTimer);
     }, { once: true });
     const refresh = async () => {
       try {
@@ -684,27 +685,59 @@
       renderStepGraph(view.graph.steps);
       stepList.dataset.topology = topology;
     }
-    updateSteps(view.graph);
-    updateProgress(view.graph);
-    const age = Math.max(0, Math.floor((Date.now() - new Date(view.updatedAt).getTime()) / 1000));
-    progressLabel.textContent = `Last published ${new Date(view.updatedAt).toLocaleString()} · ${age}s ago`;
-    safetyCopy.textContent = age >= 30 && view.executing
-      ? "The runner has not published recently. Progress may be stale. Opening this page does not restart it."
-      : "This page reads published progress. It does not check external runs or execute release steps.";
+    renderSavedHeartbeat();
     if (view.graph.error) showError(view.graph.error);
     renderLinks({ runUrl: view.runUrl, record: publishedRecord });
     renderSavedControls();
   }
 
+  function renderSavedHeartbeat() {
+    const view = publishedRecord.view;
+    const status = view.status === "running" && !view.executing ? "saved" : view.status;
+    const published = publishedReleaseStatus(status, view.updatedAt);
+    releaseStatus.hidden = false;
+    releaseStatus.dataset.status = published.status;
+    releaseStatus.textContent = published.label;
+    const interrupted = published.status === "saved" || published.status === "stale";
+    processSafety.dataset.status = published.status;
+    processSafety.querySelector(".safety-icon").textContent = interrupted ? "!" : "i";
+    const graph = {
+      ...view.graph,
+      steps: view.graph.steps.map((step) => {
+        if (!interrupted || step.status !== "running" && step.status !== "canceled") return step;
+        return {
+          ...step, status: published.status,
+          progress: step.progress ? {
+            ...step.progress, summary: `Last reported: ${step.progress.summary || "Working"}`,
+          } : undefined,
+        };
+      }),
+    };
+    updateSteps(graph);
+    updateProgress(graph);
+    progressLabel.textContent = status === "running" || status === "saved"
+      ? `Last heartbeat: ${new Date(view.updatedAt).toLocaleString()}`
+      : `Last published ${new Date(view.updatedAt).toLocaleString()}`;
+    safetyTitle.textContent = interrupted ? published.label : "Published release progress";
+    safetyCopy.textContent = published.status === "stale"
+      ? "No heartbeat has been saved for at least a minute. The worker may have stopped or lost storage access. External work may still be running."
+      : published.status === "saved"
+        ? "The RelUI worker stopped. External work may still be running. Resume this saved release to continue its steps and check existing external work."
+        : "This page reads published progress. It does not check external runs or execute release steps.";
+  }
+
   function renderSavedControls() {
     executionControls.hidden = false;
     executionTitle.textContent = resumeURL ? "Resume saved release" : "Read-only release";
-    executionWarning.textContent = publishedRecord.view.executing
-      ? "This release is reserved by a runner. If it stopped unexpectedly, confirm it is stopped before repairing the checkpoint."
-      : resumeURL ? "Resuming may perform external actions and will load the process checkpoint."
-      : "This release is read-only here. Resuming requires an open unfinished record and a configured process.";
+    executionWarning.textContent = publishedRecord.closed
+      ? "This tracking item is closed. Closed releases cannot be resumed."
+      : resumeURL ? "Resuming loads the saved checkpoint and may perform external actions. Steps reuse external work already recorded in that checkpoint."
+      : publishedRecord.view.status !== "running" ? "This release has finished."
+      : publishedRecord.view.executing
+        ? "This release is reserved by a runner. Resume is available after its updates become stale, if its process is configured here."
+        : "Resuming requires the matching release process to be configured in this UI.";
     runConfirmation.hidden = !runConfirmationPending;
-    runConfirmationCopy.textContent = "Confirm that the previous runner has stopped and you want to resume this release.";
+    runConfirmationCopy.textContent = "Continue this release from its saved checkpoint. Its steps may perform external actions.";
     executionCancel.hidden = !runConfirmationPending;
     executionButton.disabled = !resumeURL || Boolean(submitting);
     executionButton.textContent = submitting ? "Resuming release…"

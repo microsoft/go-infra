@@ -252,7 +252,59 @@ func TestViewingUsesOnlyPublishedData(t *testing.T) {
 	}
 }
 
-func TestResumeRequiresConfirmationRevisionAndUnownedCheckpoint(t *testing.T) {
+func TestPublishedResumeAvailability(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		executing bool
+		age       time.Duration
+		closed    bool
+		complete  bool
+		foreign   bool
+		want      bool
+	}{
+		{name: "interrupted", want: true},
+		{name: "fresh", executing: true},
+		{name: "just before stale", executing: true, age: time.Minute - time.Nanosecond},
+		{name: "stale", executing: true, age: time.Minute, want: true},
+		{name: "old", executing: true, age: 24 * time.Hour, want: true},
+		{name: "closed stale", executing: true, age: time.Minute, closed: true},
+		{name: "complete", age: time.Hour, complete: true},
+		{name: "unconfigured stale", executing: true, age: time.Minute, foreign: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager, store, loads, executions, cancel := publishedTestManager(t, nil)
+				defer cancel()
+				store.record.Closed = test.closed
+				store.view.Executing = test.executing
+				store.view.UpdatedAt = time.Now().Add(-test.age)
+				if test.complete {
+					store.view.Status = runstore.StatusSucceeded
+				}
+				if test.foreign {
+					store.view.ProcessID = "another-process"
+				}
+				// Offering Resume must not need a usable execution checkpoint.
+				store.record.Run = nil
+				before := store.view.Clone()
+				response, err := manager.History().View(context.Background(), 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (response.ResumeURL != "") != test.want {
+					t.Fatalf("Resume URL = %q, want available = %v", response.ResumeURL, test.want)
+				}
+				if loads.Load() != 0 || executions.Load() != 0 || store.updates.Load() != 0 ||
+					!reflect.DeepEqual(before, store.view) {
+
+					t.Fatal("opening the saved release changed or executed it")
+				}
+			})
+		})
+	}
+}
+
+func TestResumeRequiresConfirmationRevisionAndAvailableCheckpoint(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		change func(*runstore.Record, *webview.ReleaseStartRequest)
@@ -261,7 +313,7 @@ func TestResumeRequiresConfirmationRevisionAndUnownedCheckpoint(t *testing.T) {
 		{name: "revision", change: func(_ *runstore.Record, r *webview.ReleaseStartRequest) { r.Revision-- }},
 		{name: "digest", change: func(_ *runstore.Record, r *webview.ReleaseStartRequest) { r.PlanDigest = "different" }},
 		{name: "closed", change: func(r *runstore.Record, _ *webview.ReleaseStartRequest) { r.Closed = true }},
-		{name: "owned", change: func(r *runstore.Record, _ *webview.ReleaseStartRequest) { r.Run.Executing = true }},
+		{name: "recently executing", change: func(r *runstore.Record, _ *webview.ReleaseStartRequest) { r.Run.Executing = true }},
 		{name: "complete", change: func(r *runstore.Record, _ *webview.ReleaseStartRequest) {
 			r.Run.Complete, r.Run.Result = true, resultSucceeded
 		}},
@@ -279,6 +331,97 @@ func TestResumeRequiresConfirmationRevisionAndUnownedCheckpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResumeStaleCheckpoint(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, store, _, executions, cancel := publishedTestManager(t, nil)
+		defer cancel()
+		store.record.Run.Executing = true
+		store.record.UpdatedAt = time.Now().Add(-time.Minute)
+		// Execution uses the checkpoint, not the published view.
+		store.view = nil
+		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		record, err := store.Get(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Run.Executing || !record.Run.Complete || record.Run.Result != resultSucceeded ||
+			executions.Load() != 1 || record.Revision != 5 {
+
+			t.Fatalf("resumed release = %#v, executions=%d", record, executions.Load())
+		}
+	})
+}
+
+func TestStaleResumeRejectsInvalidCheckpointOrClaim(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(*testStore, *webview.ReleaseStartRequest)
+	}{
+		{name: "unconfirmed", change: func(_ *testStore, r *webview.ReleaseStartRequest) { r.Confirmed = false }},
+		{name: "closed", change: func(s *testStore, _ *webview.ReleaseStartRequest) { s.record.Closed = true }},
+		{name: "completed", change: func(s *testStore, _ *webview.ReleaseStartRequest) {
+			s.record.Run.Executing = false
+			s.record.Run.Complete, s.record.Run.Result = true, resultSucceeded
+		}},
+		{name: "invalid checkpoint", change: func(s *testStore, _ *webview.ReleaseStartRequest) { s.record.Run.Snapshot.State = nil }},
+		{name: "newer revision", change: func(s *testStore, _ *webview.ReleaseStartRequest) { s.record.Revision++ }},
+		{name: "newer update", change: func(s *testStore, _ *webview.ReleaseStartRequest) { s.record.UpdatedAt = time.Now() }},
+		{name: "claim conflict", change: func(s *testStore, _ *webview.ReleaseStartRequest) { s.updateErr = runstore.ErrConflict }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, store, _, executions, cancel := publishedTestManager(t, nil)
+			defer cancel()
+			store.record.Run.Executing = true
+			store.record.UpdatedAt = time.Now().Add(-2 * time.Minute)
+			request := webview.ReleaseStartRequest{
+				RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+			}
+			test.change(store, &request)
+			before := cloneTestRecord(store.record)
+			if err := manager.Resume(context.Background(), "example", request); err == nil {
+				t.Fatal("invalid Resume accepted")
+			}
+			if executions.Load() != 0 || manager.Running("example") || !reflect.DeepEqual(before, store.record) {
+				t.Fatal("rejected Resume executed or changed the record")
+			}
+		})
+	}
+}
+
+func TestStaleResumeDoesNotDuplicateLocalExecution(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		manager, store, _, executions, cancel := publishedTestManager(t, release)
+		defer cancel()
+		request := webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}
+		if err := manager.Resume(context.Background(), "example", request); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		store.record.UpdatedAt = time.Now().Add(-2 * time.Minute)
+		request.Revision = store.record.Revision
+		before := store.updates.Load()
+		if err := manager.Resume(context.Background(), "example", request); err == nil {
+			t.Fatal("Resume duplicated an active local execution")
+		}
+		if store.updates.Load() != before || executions.Load() != 1 {
+			t.Fatal("rejected Resume wrote or executed another run")
+		}
+		close(release)
+		synctest.Wait()
+		if err := manager.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestResumeDoesNotReadPublishedViewAsExecutionState(t *testing.T) {
