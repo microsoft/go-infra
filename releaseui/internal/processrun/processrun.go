@@ -573,7 +573,6 @@ func (s *processSession) responseLocked() webview.ProcessRunResponse[*contract.P
 	}
 	return webview.ProcessRunResponse[*contract.Plan]{
 		VariantID: state.ProcessID,
-		Input:     append(json.RawMessage(nil), state.Snapshot.Input...),
 		Steps:     steps, Execution: execution, Plan: s.plan,
 	}
 }
