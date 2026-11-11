@@ -227,18 +227,6 @@
     return input;
   }
 
-  function restoreInputs(variantId, values) {
-    if (workflow.variants.some((variant) => variant.id === variantId)) {
-      processVariant.value = variantId;
-    }
-    renderVariant();
-    if (!values) return;
-    for (const [id, control] of inputRecords) {
-      if (!Object.prototype.hasOwnProperty.call(values, id)) continue;
-      control.value = String(values[id] ?? "");
-    }
-  }
-
   async function prepareRelease(event) {
     event.preventDefault();
     if (planButton.disabled) return;
@@ -326,7 +314,6 @@
       throw new Error("The returned plan does not belong to the selected release process.");
     }
     plan = nextPlan;
-    restoreInputs(nextPlan.variantId, nextPlan.input);
     emptyState.hidden = true;
     planContent.hidden = false;
 
