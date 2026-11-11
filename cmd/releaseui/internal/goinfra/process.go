@@ -190,7 +190,7 @@ func prepareGoInfra(
 	}
 	normalized, pullRequestNumber, err := normalizeGoInfraPlanInput(input)
 	if err != nil {
-		return nil, errors.Join(err, contract.ErrInvalidInput)
+		return nil, errors.Join(err, releaseinput.ErrInvalidInput)
 	}
 	state := goInfraSnapshotState{SchemaVersion: goInfraStateSchema, UpdatedAt: time.Now().UTC()}
 	if normalized.Action == goInfraActionReleaseOnMerge {

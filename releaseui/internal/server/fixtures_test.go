@@ -22,6 +22,7 @@ import (
 type fakeProcess struct {
 	definition contract.ProcessDefinition
 	preflight  func(context.Context) (error, error)
+	inputForm  func(*releaseinput.Set) any
 	prepare    func(context.Context, any) (*contract.StateSnapshot, error)
 	validate   func(*contract.StateSnapshot) error
 	build      func(*fakeReleaseRun) ([]*coordinator.Step, error)
@@ -47,7 +48,10 @@ func (p *fakeProcess) Preflight(ctx context.Context) (error, error) {
 	return p.preflight(ctx)
 }
 
-func (p *fakeProcess) InputForm(*releaseinput.Set) any {
+func (p *fakeProcess) InputForm(inputs *releaseinput.Set) any {
+	if p.inputForm != nil {
+		return p.inputForm(inputs)
+	}
 	return nil
 }
 
