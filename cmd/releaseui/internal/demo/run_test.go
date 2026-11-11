@@ -51,10 +51,15 @@ func TestRunParallelProgress(t *testing.T) {
 			t.Fatalf("completed state = %#v, checkpoints = %d", state, checkpoints)
 		}
 		for _, step := range runner.Snapshot().Steps {
-			if step.Status != coordinator.StepStatusSucceeded ||
-				step.Progress != nil && step.Progress.Summary != "Complete" &&
-					step.Progress.Summary != "Calculated the number" {
+			if step.Status != coordinator.StepStatusSucceeded {
 				t.Fatalf("step = %#v", step)
+			}
+			if progress := step.Progress; progress != nil {
+				switch progress.Summary {
+				case "Complete", "Calculated the number":
+				default:
+					t.Fatalf("step = %#v", step)
+				}
 			}
 		}
 		if view.Summary != "Ready" || !reflect.DeepEqual(plan, run.Plan()) {
@@ -299,8 +304,10 @@ func TestRebelliousRunRepeatsUnfinishedAnalysisWhenResumed(t *testing.T) {
 			if err := <-done; err == nil || !strings.Contains(err.Error(), "sabotaged the third dimension") {
 				t.Fatalf("attempt %d error = %v", attempt, err)
 			}
-			if time.Since(start) != time.Duration(dimensionWorkTotal(3)/2)*workDelay ||
-				!slices.Equal(demoRun.state.Determinants, []float64{0, 0, 0}) {
+			if elapsed := time.Since(start); elapsed != time.Duration(dimensionWorkTotal(3)/2)*workDelay {
+				t.Fatalf("attempt %d duration=%v", attempt, elapsed)
+			}
+			if !slices.Equal(demoRun.state.Determinants, []float64{0, 0, 0}) {
 				t.Fatalf("attempt %d duration=%v, state=%#v", attempt, time.Since(start), demoRun.state)
 			}
 			restored, err := process.Load(testSnapshot(t, demoRun))
