@@ -68,12 +68,6 @@ Steps:
 
 If any polling steps fail (or time out), the pipeline notifies the dev handling the release by commenting on the release issue on GitHub.
 
-When polling an AzDO build, transient API errors and unexpected non-JSON successful
-responses are retried up to ten consecutive times. Non-JSON responses to JSON
-AzDO API requests are included in full in errors and logs to help diagnose
-outages. Bodies are quoted and pipeline logging-command prefixes are escaped.
-Review those logs for sensitive server response data before sharing them.
-
 ## (3) release-go-images
 
 Inputs:
