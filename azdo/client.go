@@ -100,6 +100,7 @@ func (t *jsonResponseTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if err != nil || resp == nil || resp.Body == nil ||
 		req.Method == http.MethodHead ||
 		!strings.Contains(req.Header.Get("Accept"), "application/json") {
+
 		return resp, err
 	}
 

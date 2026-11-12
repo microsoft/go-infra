@@ -73,6 +73,7 @@ func TestWaitBuildAPIResponses(t *testing.T) {
 				if !strings.Contains(output, strconv.Quote(tt.body)) ||
 					!strings.Contains(output, fmt.Sprintf("HTTP %d", tt.status)) ||
 					!strings.Contains(output, tt.contentType) {
+
 					t.Fatal("diagnostics omitted the status, content type, or complete body")
 				}
 				if err != nil {
@@ -103,6 +104,7 @@ func TestWaitBuildRetryLimit(t *testing.T) {
 	err := runAzureCommand(t, handleWaitBuild, azureCommandArgs(server, "-id=123", "-poll-delay=0")...)
 	if err == nil || !strings.Contains(err.Error(), "too many sequential flaky errors") ||
 		!strings.Contains(err.Error(), strconv.Quote(body)) || calls.Load() != 11 {
+
 		t.Fatalf("error = %v, calls = %d; want failure after 11 calls with the response", err, calls.Load())
 	}
 
