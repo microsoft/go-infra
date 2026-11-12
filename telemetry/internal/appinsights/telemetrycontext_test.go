@@ -3,6 +3,7 @@ package appinsights
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,15 @@ import (
 )
 
 const test_ikey = "01234567-0000-89ab-cdef-000000000000"
+
+type channelTestTransmitter struct {
+	sent chan int
+}
+
+func (t channelTestTransmitter) transmit(_ context.Context, items []batchItem) (*transmissionResponse, error) {
+	t.sent <- len(items)
+	return &transmissionResponse{statusCode: http.StatusOK}, nil
+}
 
 func TestDefaultTags(t *testing.T) {
 	context := newTelemetryContext(test_ikey)
@@ -182,5 +192,62 @@ func TestPartialResponseCountsAcceptedItems(t *testing.T) {
 	succeeded, failed, retries := response.result(make([]batchItem, 3))
 	if succeeded != 2 || failed != 0 || len(retries) != 1 {
 		t.Errorf("result = (%d succeeded, %d failed, %d retries), want (2, 0, 1)", succeeded, failed, len(retries))
+	}
+}
+
+func TestThrottleExpiryFlushesEventsAfterEmptyRetry(t *testing.T) {
+	channel := newInMemoryChannel("https://example.invalid", 1, time.Hour, nil, nil)
+	sent := make(chan int, 1)
+	channel.transmitter = channelTestTransmitter{sent: sent}
+	go channel.acceptLoop()
+	defer channel.stop()
+
+	retryAt := time.Now().Add(250 * time.Millisecond)
+	channel.setThrottle(retryAt)
+	if !channel.retry(true, retryAt, nil) {
+		t.Fatal("could not enqueue empty throttled retry")
+	}
+	channel.send(newTelemetryContext(test_ikey).envelop(contracts.EventData{Name: "event", Ver: 2}))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	channel.close(ctx)
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("Close waited for its context instead of flushing after throttle expiry: %v", err)
+	}
+	select {
+	case count := <-sent:
+		if count != 1 {
+			t.Errorf("transmitted %d items, want 1", count)
+		}
+	default:
+		t.Fatal("buffered event was not transmitted")
+	}
+}
+
+func TestExpiredThrottleRetryDoesNotRestoreThrottle(t *testing.T) {
+	channel := newInMemoryChannel("https://example.invalid", 1, time.Hour, nil, nil)
+	sent := make(chan int, 1)
+	channel.transmitter = channelTestTransmitter{sent: sent}
+	go channel.acceptLoop()
+	defer channel.stop()
+
+	retryAt := time.Now().Add(-time.Second)
+	channel.setThrottle(retryAt)
+	if !channel.waitUntilUnthrottled() {
+		t.Fatal("expired throttle unexpectedly blocked transmission")
+	}
+	if !channel.retry(true, retryAt, nil) {
+		t.Fatal("could not enqueue expired throttled retry")
+	}
+	channel.send(newTelemetryContext(test_ikey).envelop(contracts.EventData{Name: "event", Ver: 2}))
+
+	select {
+	case count := <-sent:
+		if count != 1 {
+			t.Errorf("transmitted %d items, want 1", count)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event remained buffered after the throttle deadline")
 	}
 }

@@ -243,13 +243,18 @@ func (channel *inMemoryChannel) start() {
 			}
 			items = append(items, msg.items...)
 
-			if msg.throttled {
-				channel.throttled.Store(true)
-			}
 			if len(items) == 0 {
 				channel.sendBatch(items)
 				if msg.throttled && channel.closed.Load() && channel.inflight.Load() == 0 {
 					channel.cancelCauseFunc(errClosed)
+					continue
+				}
+				if msg.throttled {
+					if msg.retryAfter.IsZero() {
+						timer.Reset(channel.batchInterval)
+					} else {
+						timer.Reset(time.Until(msg.retryAfter))
+					}
 				}
 				continue
 			}
