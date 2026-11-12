@@ -109,6 +109,10 @@ func setupContext(instrumentationKey string, tags map[string]string) *telemetryC
 
 // NewEvent creates a new event with the specified name.
 // If c is nil, returns a usable Event that does not send any telemetry.
+//
+// NewEvent takes ownership of properties, which may be modified during
+// sanitization and read asynchronously. The caller must not access the map
+// after this call.
 func (c *Client) NewEvent(name string, properties map[string]string) *Event {
 	return &Event{
 		name:       name,
@@ -119,6 +123,10 @@ func (c *Client) NewEvent(name string, properties map[string]string) *Event {
 
 // TrackEvent logs a user action with the specified name.
 // If c is nil, nothing is logged.
+//
+// TrackEvent takes ownership of properties, which may be modified during
+// sanitization and read asynchronously. The caller must not access the map
+// after this call.
 func (c *Client) TrackEvent(name string, properties map[string]string) {
 	c.NewEvent(name, properties).Inc()
 }

@@ -42,13 +42,15 @@ type inMemoryChannel struct {
 	cancelCtx       context.Context
 	cancelCauseFunc context.CancelCauseFunc
 
-	throttled   atomic.Bool
-	closed      atomic.Bool
-	closeOnce   sync.Once
-	sendQueue   []*[]batchItem
-	sendQueueMu sync.Mutex
-	sendMu      sync.Mutex
-	inflight    atomic.Int64 // Number of items currently being sent.
+	throttled     atomic.Bool
+	throttleUntil atomic.Int64
+	closed        atomic.Bool
+	closeOnce     sync.Once
+	sendQueue     []*[]batchItem
+	sendQueueMu   sync.Mutex
+	sendMu        sync.Mutex
+	sending       atomic.Int64
+	inflight      atomic.Int64 // Number of items currently being sent.
 
 	itemsBuf sync.Pool
 }
@@ -125,10 +127,13 @@ func (channel *inMemoryChannel) flush() {
 	}
 }
 
-func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []batchItem) {
-	// Retry even if the channel is closed to allow for
-	// retrying items that were already sent.
-	channel.retryChan <- retryMessage{throttled, retryAfter, items}
+func (channel *inMemoryChannel) retry(throttled bool, retryAfter time.Time, items []batchItem) bool {
+	select {
+	case channel.retryChan <- retryMessage{throttled, retryAfter, items}:
+		return true
+	case <-channel.cancelCtx.Done():
+		return false
+	}
 }
 
 var errStopped = errors.New("client stopped")
@@ -186,6 +191,7 @@ func (channel *inMemoryChannel) start() {
 			if item == nil {
 				panic("received nil event")
 			}
+			channel.expireThrottle(&dropped)
 			if channel.throttled.Load() {
 				// Check if there is space to add the item to the batch.
 				// If not, then drop the event.
@@ -209,6 +215,7 @@ func (channel *inMemoryChannel) start() {
 			}
 
 		case <-channel.flushChan:
+			channel.expireThrottle(&dropped)
 			if channel.throttled.Load() {
 				// Ignore the flush request if we are throttled.
 				continue
@@ -218,14 +225,10 @@ func (channel *inMemoryChannel) start() {
 			items = items[:0]
 
 		case <-timer.C:
-			if channel.throttled.Load() {
-				// When throttled, the timer is reset to the retry time,
-				// so if we get here, then we're no longer throttled.
-				channel.throttled.Store(false)
-				if dropped > 0 {
-					channel.error("items dropped due to throttling", "itemsLost", dropped)
-					dropped = 0
-				}
+			channel.expireThrottle(&dropped)
+			if dropped > 0 {
+				channel.error("items dropped due to throttling", "itemsLost", dropped)
+				dropped = 0
 			}
 			channel.sendBatch(items)
 			items = items[:0]
@@ -240,8 +243,20 @@ func (channel *inMemoryChannel) start() {
 			}
 			items = append(items, msg.items...)
 
-			if msg.throttled {
-				channel.throttled.Store(true)
+			if len(items) == 0 {
+				channel.sendBatch(items)
+				if msg.throttled && channel.closed.Load() && channel.inflight.Load() == 0 {
+					channel.cancelCauseFunc(errClosed)
+					continue
+				}
+				if msg.throttled {
+					if msg.retryAfter.IsZero() {
+						timer.Reset(channel.batchInterval)
+					} else {
+						timer.Reset(time.Until(msg.retryAfter))
+					}
+				}
+				continue
 			}
 			if msg.retryAfter.IsZero() {
 				// If the retry time is not set, use the default batch interval.
@@ -258,6 +273,20 @@ func (channel *inMemoryChannel) start() {
 	}
 }
 
+func (channel *inMemoryChannel) expireThrottle(dropped *int) {
+	deadline := channel.throttleUntil.Load()
+	if deadline == 0 || time.Now().Before(time.Unix(0, deadline)) {
+		return
+	}
+	if channel.throttleUntil.CompareAndSwap(deadline, 0) {
+		channel.throttled.Store(false)
+		if *dropped > 0 {
+			channel.error("items dropped due to throttling", "itemsLost", *dropped)
+			*dropped = 0
+		}
+	}
+}
+
 // sendBatch schedules a batch of items for transmission.
 func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 	channel.sendQueueMu.Lock()
@@ -265,7 +294,7 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 
 	if len(items) == 0 {
 		// Cancel the accept loop if we are closed and the queue is empty.
-		if len(channel.sendQueue) == 0 && channel.closed.Load() {
+		if len(channel.sendQueue) == 0 && channel.sending.Load() == 0 && channel.closed.Load() {
 			channel.cancelCauseFunc(errClosed)
 		}
 		return
@@ -286,7 +315,7 @@ func (channel *inMemoryChannel) sendBatch(items []batchItem) {
 		retry := channel.transmitRetry()
 		channel.sendQueueMu.Lock()
 		defer channel.sendQueueMu.Unlock()
-		if !retry && len(channel.sendQueue) == 0 && channel.closed.Load() {
+		if !retry && len(channel.sendQueue) == 0 && channel.sending.Load() == 0 && channel.closed.Load() {
 			// Cancel the accept loop if we are closed and the queue is empty.
 			channel.cancelCauseFunc(errClosed)
 		}
@@ -301,11 +330,17 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	channel.sendMu.Lock()
 	defer channel.sendMu.Unlock()
 
+	if !channel.waitUntilUnthrottled() {
+		return false
+	}
+
 	// Pop the first item from the queue.
 	channel.sendQueueMu.Lock()
 	itemsPtr := channel.sendQueue[0]
 	channel.sendQueue = channel.sendQueue[1:]
+	channel.sending.Add(1)
 	channel.sendQueueMu.Unlock()
+	defer channel.sending.Add(-1)
 
 	defer channel.itemsBuf.Put(itemsPtr)
 	resp, err := channel.transmitter.transmit(channel.cancelCtx, *itemsPtr)
@@ -341,9 +376,45 @@ func (channel *inMemoryChannel) transmitRetry() bool {
 	if dropped > 0 {
 		channel.error("items dropped due to retry limit", "itemsLost", dropped)
 	}
-	if len(retryItems) == 0 {
+	throttled := resp.isThrottled()
+	if throttled {
+		channel.setThrottle(resp.retryAfter)
+	}
+	if len(retryItems) == 0 && !throttled {
 		return false
 	}
-	channel.retry(resp.isThrottled(), resp.retryAfter, retryItems)
-	return true
+	return channel.retry(throttled, resp.retryAfter, retryItems)
+}
+
+func (channel *inMemoryChannel) setThrottle(retryAfter time.Time) {
+	if retryAfter.IsZero() {
+		retryAfter = time.Now().Add(channel.batchInterval)
+	}
+	channel.throttleUntil.Store(retryAfter.UnixNano())
+	channel.throttled.Store(true)
+}
+
+func (channel *inMemoryChannel) waitUntilUnthrottled() bool {
+	for {
+		deadline := channel.throttleUntil.Load()
+		if deadline == 0 || !time.Now().Before(time.Unix(0, deadline)) {
+			if deadline != 0 && channel.throttleUntil.CompareAndSwap(deadline, 0) {
+				channel.throttled.Store(false)
+			}
+			return true
+		}
+
+		timer := time.NewTimer(time.Until(time.Unix(0, deadline)))
+		select {
+		case <-timer.C:
+		case <-channel.cancelCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return false
+		}
+	}
 }

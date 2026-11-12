@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
@@ -79,7 +81,6 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Content-Type", "application/x-json-stream")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
 
 	resp, err := transmitter.client.Do(req)
 	if err != nil {
@@ -89,7 +90,7 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 
 	result := &transmissionResponse{statusCode: resp.StatusCode}
 	if retryAfterValue := resp.Header.Get("Retry-After"); retryAfterValue != "" {
-		if result.retryAfter, err = time.Parse(time.RFC1123, retryAfterValue); err != nil {
+		if result.retryAfter, err = parseRetryAfter(retryAfterValue, time.Now()); err != nil {
 			return nil, fmt.Errorf("failed to parse Retry-After header: %v", err)
 		}
 	}
@@ -101,6 +102,23 @@ func (transmitter *httpTransmitter) transmit(ctx context.Context, items []batchI
 		return nil, fmt.Errorf("failed to parse response: %v", err)
 	}
 	return result, jsonErr
+}
+
+func parseRetryAfter(value string, now time.Time) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if retryAfter, err := http.ParseTime(value); err == nil {
+		return retryAfter, nil
+	}
+
+	seconds, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid Retry-After value %q", value)
+	}
+	maxSeconds := uint64((1<<63 - 1) / int64(time.Second))
+	if seconds > maxSeconds {
+		seconds = maxSeconds
+	}
+	return now.Add(time.Duration(seconds) * time.Second), nil
 }
 
 func (resp *transmissionResponse) isSuccess() bool {
@@ -147,11 +165,17 @@ func (resp *transmissionResponse) result(items []batchItem) (succeed, failed int
 			return cmp.Compare(a.Index, b.Index)
 		})
 
+		succeed = min(max(resp.response.ItemsAccepted, 0), len(items))
 		retries = make([]batchItem, 0, len(resp.response.Errors))
+		successfulItems := make(map[int]struct{})
 		// Find each retryable error
 		for _, responseResult := range resp.response.Errors {
+			if responseResult.Index < 0 || responseResult.Index >= len(items) {
+				failed++
+				continue
+			}
 			if responseResult.StatusCode == successResponse {
-				succeed++
+				successfulItems[responseResult.Index] = struct{}{}
 				continue
 			}
 			if !canRetryBackendError(responseResult) {
@@ -164,6 +188,7 @@ func (resp *transmissionResponse) result(items []batchItem) (succeed, failed int
 			retries = append(retries, items[responseResult.Index])
 		}
 
+		succeed = max(succeed, len(successfulItems))
 		return succeed, failed, retries
 	} else if resp.canRetry() {
 		return 0, 0, items

@@ -5,10 +5,12 @@ package appinsights_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -552,4 +554,132 @@ func TestClientStopBeforeInit(t *testing.T) {
 		InstrumentationKey: test_ikey,
 	}
 	client.Stop()
+}
+
+type regressionRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f regressionRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func regressionResponse(status int, header http.Header, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestCloseWaitsForActiveRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		result := make(chan error, 1)
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			MaxBatchSize:       1,
+			HTTPClient: &http.Client{Transport: regressionRoundTripper(func(req *http.Request) (*http.Response, error) {
+				close(started)
+				select {
+				case <-req.Context().Done():
+					result <- req.Context().Err()
+					return nil, req.Context().Err()
+				case <-time.After(time.Second):
+					result <- nil
+					return regressionResponse(http.StatusOK, nil, ""), nil
+				}
+			})},
+		}
+		defer client.Stop()
+
+		client.TrackEvent("event", nil)
+		<-started
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		client.Close(ctx)
+		if err := <-result; err != nil {
+			t.Errorf("Close canceled an active upload before its deadline: %v", err)
+		}
+	})
+}
+
+func TestQueuedBatchWaitsForRetryAfter(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	secondRequest := make(chan time.Time, 1)
+	retryAt := time.Now().UTC().Add(2 * time.Second).Truncate(time.Second)
+	var requestMu sync.Mutex
+	requests := 0
+	client := &appinsights.Client{
+		InstrumentationKey: test_ikey,
+		MaxBatchSize:       1,
+		MaxBatchInterval:   time.Hour,
+		HTTPClient: &http.Client{Transport: regressionRoundTripper(func(req *http.Request) (*http.Response, error) {
+			requestMu.Lock()
+			requests++
+			request := requests
+			requestMu.Unlock()
+			if request == 1 {
+				close(started)
+				<-release
+				header := make(http.Header)
+				header.Set("Retry-After", retryAt.UTC().Format(http.TimeFormat))
+				return regressionResponse(http.StatusTooManyRequests, header, ""), nil
+			}
+			secondRequest <- time.Now()
+			return regressionResponse(http.StatusOK, nil, ""), nil
+		})},
+	}
+	defer client.Stop()
+
+	client.TrackEvent("first", nil)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first upload did not start")
+	}
+	client.TrackEvent("second", nil)
+	close(release)
+
+	select {
+	case at := <-secondRequest:
+		if at.Before(retryAt) {
+			t.Errorf("queued upload bypassed Retry-After by %v", retryAt.Sub(at))
+		}
+	case <-time.After(3 * time.Second):
+		requestMu.Lock()
+		requestCount := requests
+		requestMu.Unlock()
+		t.Fatalf("queued upload did not start after Retry-After (requests=%d)", requestCount)
+	}
+}
+
+func TestCanceledCloseDoesNotBlockRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		client := &appinsights.Client{
+			InstrumentationKey: test_ikey,
+			MaxBatchSize:       1,
+			HTTPClient: &http.Client{Transport: regressionRoundTripper(func(req *http.Request) (*http.Response, error) {
+				close(started)
+				<-release
+				return regressionResponse(http.StatusInternalServerError, nil, ""), nil
+			})},
+		}
+		defer client.Stop()
+		client.TrackEvent("event", nil)
+		<-started
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		closeDone := make(chan struct{})
+		go func() {
+			client.Close(ctx)
+			close(closeDone)
+		}()
+		cancel()
+		<-closeDone
+		synctest.Wait()
+		close(release)
+	})
 }
