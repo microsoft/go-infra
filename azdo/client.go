@@ -44,8 +44,12 @@ func NewPipelinesClient(connection *azuredevops.Connection) pipelines.Client {
 	return &pipelines.ClientImpl{Client: *client}
 }
 
-// The SDK creates its own HTTP client during resource-area discovery, so do
-// the same discovery with our HTTP client before constructing the SDK client.
+// newResourceAreaClient replicates the SDK's Connection.GetClientByResourceAreaId
+// using an HTTP client that wraps responses with jsonResponseTransport. The SDK
+// builds its clients with azuredevops.NewClient, which always constructs its
+// own http.Client and offers no way to supply one, so discovery requests would
+// otherwise bypass the transport. This can be removed if the SDK lets callers
+// provide a custom HTTP client to the connection.
 func newResourceAreaClient(ctx context.Context, connection *azuredevops.Connection, areaID uuid.UUID) (*azuredevops.Client, error) {
 	httpClient := newHTTPClient(connection)
 	baseClient := newClientForURL(connection, connection.BaseUrl, httpClient)
@@ -91,6 +95,13 @@ func newHTTPClient(connection *azuredevops.Connection) *http.Client {
 	return client
 }
 
+// jsonResponseTransport works around the SDK discarding response bodies that
+// it can't decode. As of azure-devops-go-api v7.1.0, Client.UnmarshalBody and
+// Client.UnwrapError return only the json.Unmarshal error, so an HTML outage or
+// sign-in page surfaces as "invalid character '<' looking for beginning of
+// value". Wrapping the body makes the SDK's read fail with a
+// NonJSONResponseError that carries the complete response instead. This can be
+// removed if the SDK preserves response details in its decode errors.
 type jsonResponseTransport struct {
 	base http.RoundTripper
 }
