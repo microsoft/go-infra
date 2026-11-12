@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -136,6 +137,9 @@ func TestBuildPipelineSDKValidationRetry(t *testing.T) {
 			err := runAzureCommand(t, handleBuildPipeline, azureCommandArgs(s, "-id=191", "p", "version", "1.26.1", "pOptional", "newFeature", "true", "v", "buildVar", "preserved")...)
 			if (err != nil) != tc.wantError || int(calls.Load()) != tc.wantCalls {
 				t.Fatalf("got error %v, %d requests; want error=%v, %d requests", err, calls.Load(), tc.wantError, tc.wantCalls)
+			}
+			if tc.name == "invalid JSON" && !strings.Contains(err.Error(), strconv.Quote(tc.body)) {
+				t.Errorf("error omitted invalid response body: %v", err)
 			}
 			if tc.secondFail {
 				wrapped, ok := errors.AsType[azuredevops.WrappedError](err)

@@ -6,9 +6,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"syscall"
 	"testing"
 
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
+	"github.com/microsoft/go-infra/azdo"
 	"golang.org/x/net/http2"
 )
 
@@ -47,6 +50,38 @@ func TestIsKnownAPIFlakiness(t *testing.T) {
 				Code:     http2.ErrCodeProtocol,
 				Cause:    errors.New(http2ErrFromPeer),
 			},
+		},
+		{
+			name: "successful non-JSON response",
+			err:  fmt.Errorf("wrapped: %w", &azdo.NonJSONResponseError{StatusCode: http.StatusOK}),
+			want: true,
+		},
+		{
+			name: "non-JSON server error",
+			err:  &azdo.NonJSONResponseError{StatusCode: http.StatusServiceUnavailable},
+			want: true,
+		},
+		{
+			name: "non-JSON unauthorized",
+			err:  &azdo.NonJSONResponseError{StatusCode: http.StatusUnauthorized},
+		},
+		{
+			name: "rate limited",
+			err:  fmt.Errorf("wrapped: %w", azuredevops.WrappedError{StatusCode: new(http.StatusTooManyRequests)}),
+			want: true,
+		},
+		{
+			name: "server error pointer",
+			err:  fmt.Errorf("wrapped: %w", &azuredevops.WrappedError{StatusCode: new(http.StatusBadGateway)}),
+			want: true,
+		},
+		{
+			name: "forbidden",
+			err:  &azuredevops.WrappedError{StatusCode: new(http.StatusForbidden)},
+		},
+		{
+			name: "unknown status",
+			err:  azuredevops.WrappedError{},
 		},
 	}
 

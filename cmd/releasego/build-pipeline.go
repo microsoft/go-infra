@@ -114,7 +114,7 @@ func handleBuildPipeline(p subcmd.ParseFunc) error {
 	connection := azdoFlags.NewConnection()
 	// Generous timeout. Maximum observed time on dev machine during development: 10 seconds.
 	connection.Timeout = new(time.Minute * 3)
-	client, err := build.NewClient(ctx, connection)
+	client, err := azdo.NewBuildClient(ctx, connection)
 	if err != nil {
 		return err
 	}

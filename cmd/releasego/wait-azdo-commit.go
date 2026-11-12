@@ -49,7 +49,7 @@ func handleWaitAzDOCommit(p subcmd.ParseFunc) error {
 
 	ctx := context.Background()
 
-	c, err := git.NewClient(ctx, azdoFlags.NewConnection())
+	c, err := azdo.NewGitClient(ctx, azdoFlags.NewConnection())
 	if err != nil {
 		return err
 	}
