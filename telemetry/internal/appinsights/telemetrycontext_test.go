@@ -1,8 +1,14 @@
 package appinsights
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/go-infra/telemetry/internal/appinsights/internal/contracts"
 )
@@ -118,5 +124,63 @@ func TestSanitizeProperties(t *testing.T) {
 	}
 	if ps["ok"] != "OK" {
 		t.Error("Property with short key was changed")
+	}
+}
+
+func TestRetryAfterSupportsDeltaSeconds(t *testing.T) {
+	now := time.Now()
+	got, err := parseRetryAfter("30", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(30 * time.Second); !got.Equal(want) {
+		t.Errorf("parsed retry time = %v, want %v", got, want)
+	}
+}
+
+func TestCompressedPartialResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(http.StatusPartialContent)
+		var body bytes.Buffer
+		writer := gzip.NewWriter(&body)
+		if _, err := io.WriteString(writer, `{"itemsReceived":2,"itemsAccepted":1,"errors":[{"index":1,"statusCode":500}]}`); err != nil {
+			t.Error(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Error(err)
+		}
+		if _, err := w.Write(body.Bytes()); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+
+	item := batchItem{
+		item: newTelemetryContext(test_ikey).envelop(contracts.EventData{Name: "event", Ver: 2}),
+	}
+	response, err := newTransmitter(server.URL, server.Client()).transmit(t.Context(), []batchItem{item, item})
+	if err != nil {
+		t.Fatalf("transmit rejected a valid compressed response: %v", err)
+	}
+	if response.response.ItemsAccepted != 1 || len(response.response.Errors) != 1 {
+		t.Errorf("decoded response = %+v, want one accepted item and one error", response.response)
+	}
+}
+
+func TestPartialResponseCountsAcceptedItems(t *testing.T) {
+	response := &transmissionResponse{
+		statusCode: http.StatusPartialContent,
+		response: contracts.BackendResponse{
+			ItemsReceived: 3,
+			ItemsAccepted: 2,
+			Errors: []contracts.BackendResponseError{
+				{Index: 1, StatusCode: http.StatusInternalServerError},
+			},
+		},
+	}
+	succeeded, failed, retries := response.result(make([]batchItem, 3))
+	if succeeded != 2 || failed != 0 || len(retries) != 1 {
+		t.Errorf("result = (%d succeeded, %d failed, %d retries), want (2, 0, 1)", succeeded, failed, len(retries))
 	}
 }

@@ -61,6 +61,10 @@ func Close(ctx context.Context) {
 }
 
 // TrackEvent sends a telemetry event with the specified name and properties.
+//
+// TrackEvent takes ownership of properties, which may be modified during
+// sanitization and read asynchronously. The caller must not access the map
+// after this call.
 func TrackEvent(name string, properties map[string]string) {
 	telemetry.Client.TrackEvent(name, properties)
 }

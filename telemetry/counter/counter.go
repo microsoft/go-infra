@@ -34,6 +34,10 @@ func New(name string) *Counter {
 // Properties are sent as custom dimensions in Application Insights, allowing
 // high-cardinality values (such as hashes) to be sent as values rather than
 // as part of the counter name.
+//
+// NewWithProperties takes ownership of properties, which may be modified during
+// sanitization and read asynchronously. The caller must not access the map
+// after this call.
 func NewWithProperties(name string, properties map[string]string) *Counter {
 	return telemetry.Client.NewEvent(name, properties)
 }
