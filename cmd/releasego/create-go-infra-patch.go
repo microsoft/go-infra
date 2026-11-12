@@ -11,35 +11,51 @@ import (
 	"log"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/mod/semver"
 )
 
 func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "create-go-infra-patch",
-		Summary: "Create the next v0.0.x release for go-infra.",
+		Summary: "Create the next patch or minor release for a go-infra module.",
 		Description: `
 
-Using the GitHub API, find the latest published release, calculate the next v0.0.x patch tag, and
-create a release with generated release notes. If someone creates the same release first, GitHub's
-create-release operation fails and this command exits with an error.
+Using the GitHub API, find the highest published stable version for the selected module, calculate
+the next patch tag (or minor tag with -minor), and create a release with generated release notes.
+Nested module tags include the module directory prefix, for example goinstallscript/v1.3.1.
+The module must already have a published stable release. If someone creates the same release first,
+GitHub's create-release operation fails and this command exits with an error.
 `,
 		Handle: handleCreateGoInfraPatch,
 	})
 }
 
-var goInfraPatchTagPattern = regexp.MustCompile(`^v0\.0\.(\d+)$`)
+var modulePatchTagPattern = regexp.MustCompile(`^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
 
 func handleCreateGoInfraPatch(p subcmd.ParseFunc) error {
 	repo := githubutil.BindRepoFlag()
 	gitHubAuthFlags := githubutil.BindGitHubAuthFlags("")
+	module := flag.String("module", ".", "Module directory: ., assets, goinstallscript, telemetry, or telemetry/config.")
+	minor := flag.Bool("minor", false, "Advance the minor version and reset the patch version to zero instead of advancing the patch version.")
 	dryRun := flag.Bool("dry-run", false, "Print the next release tag without creating it.")
 
 	if err := p(); err != nil {
 		return err
+	}
+
+	switch *module {
+	case ".", "assets", "goinstallscript", "telemetry", "telemetry/config":
+	default:
+		return fmt.Errorf("unsupported module %q", *module)
+	}
+	prefix := ""
+	if *module != "." {
+		prefix = *module + "/"
 	}
 
 	owner, name, err := githubutil.ParseRepoFlag(repo)
@@ -62,21 +78,43 @@ func handleCreateGoInfraPatch(p subcmd.ParseFunc) error {
 		return errors.New("repository default branch is empty")
 	}
 
-	var latestRelease *github.RepositoryRelease
-	if err := githubutil.Retry(func() error {
-		var err error
-		log.Printf("Fetching latest release from %v/%v...\n", owner, name)
-		latestRelease, _, err = client.Repositories.GetLatestRelease(ctx, owner, name)
-		return err
-	}); err != nil {
-		return err
+	var latestVersion string
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		var releases []*github.RepositoryRelease
+		var response *github.Response
+		if err := githubutil.Retry(func() error {
+			var err error
+			log.Printf("Fetching releases from %v/%v (page %v)...\n", owner, name, opts.Page)
+			releases, response, err = client.Repositories.ListReleases(ctx, owner, name, opts)
+			return err
+		}); err != nil {
+			return err
+		}
+		for _, release := range releases {
+			if release.GetDraft() || release.GetPrerelease() || !strings.HasPrefix(release.GetTagName(), prefix) {
+				continue
+			}
+			version := strings.TrimPrefix(release.GetTagName(), prefix)
+			if modulePatchTagPattern.MatchString(version) && (latestVersion == "" || semver.Compare(version, latestVersion) > 0) {
+				latestVersion = version
+			}
+		}
+		if response.NextPage == 0 {
+			break
+		}
+		opts.Page = response.NextPage
+	}
+	if latestVersion == "" {
+		return fmt.Errorf("no published stable release found for module %q; create its initial release manually", *module)
 	}
 
-	latestTag := latestRelease.GetTagName()
-	nextTag, err := nextGoInfraPatchTag(latestTag)
+	latestTag := prefix + latestVersion
+	nextVersion, err := nextModuleVersion(latestVersion, *minor)
 	if err != nil {
 		return err
 	}
+	nextTag := prefix + nextVersion
 
 	log.Printf("Latest release: %v\n", latestTag)
 	log.Printf("Next release: %v\n", nextTag)
@@ -107,14 +145,24 @@ func handleCreateGoInfraPatch(p subcmd.ParseFunc) error {
 	return nil
 }
 
-func nextGoInfraPatchTag(latestTag string) (string, error) {
-	match := goInfraPatchTagPattern.FindStringSubmatch(latestTag)
+func nextModuleVersion(latestTag string, minor bool) (string, error) {
+	match := modulePatchTagPattern.FindStringSubmatch(latestTag)
 	if match == nil {
-		return "", fmt.Errorf("latest release tag %q is not a v0.0.x tag", latestTag)
+		return "", fmt.Errorf("latest release tag %q is not a stable vMAJOR.MINOR.PATCH tag", latestTag)
 	}
-	patch, err := strconv.Atoi(match[1])
+	component, index := "patch", 3
+	if minor {
+		component, index = "minor", 2
+	}
+	number, err := strconv.Atoi(match[index])
 	if err != nil {
-		return "", fmt.Errorf("parse patch number from %q: %w", latestTag, err)
+		return "", fmt.Errorf("parse %s number from %q: %w", component, latestTag, err)
 	}
-	return fmt.Sprintf("v0.0.%d", patch+1), nil
+	if number+1 < 0 {
+		return "", fmt.Errorf("%s number overflows for %q", component, latestTag)
+	}
+	if minor {
+		return fmt.Sprintf("v%s.%d.0", match[1], number+1), nil
+	}
+	return fmt.Sprintf("v%s.%s.%d", match[1], match[2], number+1), nil
 }
