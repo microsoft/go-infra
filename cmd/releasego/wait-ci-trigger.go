@@ -64,12 +64,12 @@ func handleWaitCITrigger(p subcmd.ParseFunc) error {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	g, err := git.NewClient(ctx, azdoFlags.NewConnection())
+	g, err := azdo.NewGitClient(ctx, azdoFlags.NewConnection())
 	if err != nil {
 		return err
 	}
 
-	pc := pipelines.NewClient(ctx, azdoFlags.NewConnection())
+	pc := azdo.NewPipelinesClient(azdoFlags.NewConnection())
 	pipeline, err := pc.GetPipeline(ctx, pipelines.GetPipelineArgs{
 		Project:    azdoFlags.Proj,
 		PipelineId: pipelineID,

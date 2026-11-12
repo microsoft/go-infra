@@ -48,7 +48,7 @@ func handleGetBuildInfo(p subcmd.ParseFunc) error {
 	}
 
 	ctx := context.Background()
-	c, err := build.NewClient(ctx, azdoFlags.NewConnection())
+	c, err := azdo.NewBuildClient(ctx, azdoFlags.NewConnection())
 	if err != nil {
 		return err
 	}

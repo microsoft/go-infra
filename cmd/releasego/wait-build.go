@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"syscall"
 	"time"
 
+	"github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/build"
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
@@ -22,7 +24,12 @@ func init() {
 	subcommands = append(subcommands, subcmd.Option{
 		Name:    "wait-build",
 		Summary: "Wait until the AzDO Pipeline build is complete and successful.",
-		Handle:  handleWaitBuild,
+		Description: `
+Transient API failures and unexpected non-JSON successful responses are retried
+up to ten consecutive times. Non-JSON responses include their full body in errors
+and logs.
+`,
+		Handle: handleWaitBuild,
 	})
 }
 
@@ -47,14 +54,33 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 	pollDelay := time.Duration(*pollDelaySeconds) * time.Second
 
 	ctx := context.Background()
-
-	c, err := build.NewClient(ctx, azdoFlags.NewConnection())
-	if err != nil {
-		return err
-	}
-
 	const maxSequentialFlakyErrors = 10
 	sequentialFlakyErrors := 0
+	retryFlakyError := func(action string, err error) error {
+		if !isKnownAPIFlakiness(err) {
+			return err
+		}
+		sequentialFlakyErrors++
+		if sequentialFlakyErrors > maxSequentialFlakyErrors {
+			return fmt.Errorf("too many sequential flaky errors: %w", err)
+		}
+		log.Printf("Encountered suspected AzDO API flakiness when %s, next poll in %v: %v", action, pollDelay, err)
+		time.Sleep(pollDelay)
+		return nil
+	}
+
+	var c build.Client
+	for {
+		var err error
+		c, err = azdo.NewBuildClient(ctx, azdoFlags.NewConnection())
+		if err == nil {
+			break
+		}
+		if err := retryFlakyError("initializing build client", err); err != nil {
+			return err
+		}
+	}
+	sequentialFlakyErrors = 0
 
 	for {
 		b, err := c.GetBuild(ctx, build.GetBuildArgs{
@@ -62,19 +88,16 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 			Project: azdoFlags.Proj,
 		})
 		if err != nil {
-			if isKnownAPIFlakiness(err) {
-				sequentialFlakyErrors++
-				if sequentialFlakyErrors > maxSequentialFlakyErrors {
-					return fmt.Errorf("too many sequential flaky errors: %w", err)
-				}
-				log.Printf("Encountered suspected AzDO API flakiness when querying build, next poll in %v: %v", pollDelay, err)
-				time.Sleep(pollDelay)
-				continue
+			if err := retryFlakyError("querying build", err); err != nil {
+				return err
 			}
-			return err
+			continue
 		}
 		sequentialFlakyErrors = 0
 
+		if b == nil || b.Status == nil {
+			return fmt.Errorf("build %d response did not contain a status", *id)
+		}
 		url, _ := azdo.GetBuildWebURL(b)
 
 		if *b.Status != build.BuildStatusValues.Completed {
@@ -83,6 +106,9 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 			continue
 		}
 
+		if b.Result == nil {
+			return fmt.Errorf("completed build %d response did not contain a result", *id)
+		}
 		if *b.Result != build.BuildResultValues.Succeeded &&
 			*b.Result != build.BuildResultValues.PartiallySucceeded {
 
@@ -102,11 +128,25 @@ func isKnownAPIFlakiness(err error) bool {
 		return true
 	}
 
+	if response, ok := errors.AsType[*azdo.NonJSONResponseError](err); ok && response != nil {
+		return response.StatusCode >= 200 && response.StatusCode < 300 || retryableHTTPStatus(response.StatusCode)
+	}
+	if response, ok := errors.AsType[azuredevops.WrappedError](err); ok && response.StatusCode != nil {
+		return retryableHTTPStatus(*response.StatusCode)
+	}
+	if response, ok := errors.AsType[*azuredevops.WrappedError](err); ok && response != nil && response.StatusCode != nil {
+		return retryableHTTPStatus(*response.StatusCode)
+	}
+
 	var streamError http2.StreamError
 	return errors.As(err, &streamError) &&
 		streamError.Code == http2.ErrCodeCancel &&
 		streamError.Cause != nil &&
 		streamError.Cause.Error() == http2ErrFromPeer
+}
+
+func retryableHTTPStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500 && status < 600
 }
 
 const (
