@@ -82,6 +82,7 @@ func TestWaitBuildAPIResponses(t *testing.T) {
 					}
 				}
 			}
+
 			if strings.Contains(output, sdkTestPAT) {
 				t.Fatal("diagnostics exposed the request PAT")
 			}
@@ -104,6 +105,7 @@ func TestWaitBuildRetryLimit(t *testing.T) {
 		!strings.Contains(err.Error(), strconv.Quote(body)) || calls.Load() != 11 {
 		t.Fatalf("error = %v, calls = %d; want failure after 11 calls with the response", err, calls.Load())
 	}
+
 	if got := strings.Count(logs.String(), strconv.Quote(body)); got != 10 {
 		t.Fatalf("logged %d retry responses, want 10", got)
 	}

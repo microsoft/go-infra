@@ -54,18 +54,18 @@ func newResourceAreaClient(ctx context.Context, connection *azuredevops.Connecti
 		return nil, err
 	}
 	if areas == nil {
-		return nil, errors.New("Azure DevOps resource area response is nil")
+		return nil, errors.New("resource area response is nil")
 	}
 	if len(*areas) == 0 {
 		return baseClient, nil
 	}
 	for _, area := range *areas {
 		if area.Id == nil {
-			return nil, errors.New("Azure DevOps resource area has no ID")
+			return nil, errors.New("resource area has no ID")
 		}
 		if *area.Id == areaID {
 			if area.LocationUrl == nil || *area.LocationUrl == "" {
-				return nil, fmt.Errorf("Azure DevOps resource area %s has no location URL", areaID)
+				return nil, fmt.Errorf("resource area %s has no location URL", areaID)
 			}
 			return newClientForURL(connection, *area.LocationUrl, httpClient), nil
 		}
@@ -102,6 +102,7 @@ func (t *jsonResponseTransport) RoundTrip(req *http.Request) (*http.Response, er
 		!strings.Contains(req.Header.Get("Accept"), "application/json") {
 		return resp, err
 	}
+
 	resp.Body = &jsonResponseBody{
 		ReadCloser:  resp.Body,
 		status:      resp.Status,
