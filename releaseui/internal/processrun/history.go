@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,8 +34,8 @@ type History struct {
 
 func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 	result := webview.DashboardResponse{
-		Ongoing: []webview.ReleaseSummary{}, NeedsAttention: []webview.ReleaseSummary{},
-		Recent: []webview.ReleaseSummary{}, Processes: h.processSummaries(),
+		Ongoing: []webview.ReleaseSummary{},
+		Recent:  []webview.ReleaseSummary{}, Processes: h.processSummaries(),
 	}
 	active, activeErr := h.reader.QueryViews(ctx, false, dashboardActiveLimit)
 	recent, recentErr := h.reader.QueryViews(ctx, true, dashboardRecentLimit)
@@ -55,11 +56,12 @@ func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 			RunURL: view.RunURL, RecordID: record.ID, RecordURL: record.URL,
 			Closed: record.Closed, Href: releaseViewPath(record.ID),
 		}
-		if record.Closed {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			addDashboardRelease(&result, summary)
-		}
+		addDashboardRelease(&result, summary)
+	}
+	for _, releases := range [][]webview.ReleaseSummary{result.Ongoing, result.Recent} {
+		sort.SliceStable(releases, func(i, j int) bool {
+			return releases[i].UpdatedAt.After(releases[j].UpdatedAt)
+		})
 	}
 	return result
 }
@@ -222,13 +224,13 @@ func exportRecord(record *runstore.Record) webview.ReleaseRecordExport[*runstore
 
 func addDashboardRelease(result *webview.DashboardResponse, summary webview.ReleaseSummary) {
 	switch summary.Status {
-	case resultSucceeded:
-		result.Recent = append(result.Recent, summary)
-	case resultFailed, resultCanceled, resultUncertain, "saved":
-		result.NeedsAttention = append(result.NeedsAttention, summary)
-	default:
-		result.Ongoing = append(result.Ongoing, summary)
+	case resultSucceeded, resultFailed, resultCanceled, resultUncertain:
+		if summary.Closed {
+			result.Recent = append(result.Recent, summary)
+			return
+		}
 	}
+	result.Ongoing = append(result.Ongoing, summary)
 }
 
 func addTrackingError(result *webview.DashboardResponse, err error) {
@@ -245,7 +247,7 @@ func addTrackingError(result *webview.DashboardResponse, err error) {
 	}
 	switch err := err.(type) {
 	case *runstore.RecordError:
-		for _, summaries := range [][]webview.ReleaseSummary{result.NeedsAttention, result.Recent} {
+		for _, summaries := range [][]webview.ReleaseSummary{result.Ongoing, result.Recent} {
 			for _, summary := range summaries {
 				if summary.Issue != nil && summary.RecordID == err.ID {
 					return
@@ -264,11 +266,7 @@ func addTrackingError(result *webview.DashboardResponse, err error) {
 				RecordState: err.RecordState, Message: err.Message, Guidance: err.Guidance, Detail: err.Error(),
 			},
 		}
-		if summary.Closed {
-			result.Recent = append(result.Recent, summary)
-		} else {
-			result.NeedsAttention = append(result.NeedsAttention, summary)
-		}
+		addDashboardRelease(result, summary)
 	case interface{ Unwrap() []error }:
 		for _, child := range err.Unwrap() {
 			addTrackingError(result, child)

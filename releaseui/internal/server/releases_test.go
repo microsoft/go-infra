@@ -119,14 +119,16 @@ func TestPublishedViewRoutesDoNotLoadProcessOrCheckpoint(t *testing.T) {
 
 func TestDashboardUsesPublishedLifecycleStatus(t *testing.T) {
 	store := newMemoryProcessRunStore()
-	for id, status := range []runstore.Status{runstore.StatusRunning, runstore.StatusRunning, runstore.StatusSucceeded, runstore.StatusCanceled} {
+	for id, status := range []runstore.Status{
+		runstore.StatusRunning, runstore.StatusRunning, runstore.StatusSucceeded, runstore.StatusCanceled, runstore.StatusRunning,
+	} {
 		run := testProcessRun(t)
 		run.Started = true
-		run.Executing = id == 0
+		run.Executing = id == 0 || id == 4
 		if status != runstore.StatusRunning {
 			run.Complete, run.Result = true, string(status)
 		}
-		seedReleaseRecord(store, testReleaseRunRecord(id+1, run, id == 3, time.Now().Add(time.Duration(id)*time.Second)))
+		seedReleaseRecord(store, testReleaseRunRecord(id+1, run, id == 3 || id == 4, time.Now().Add(time.Duration(id)*time.Second)))
 	}
 	ui := newTestUI(t, WithReleaseRunStore(store))
 	response, err := ui.client.Get(ui.http.URL + "/api/dashboard")
@@ -136,8 +138,9 @@ func TestDashboardUsesPublishedLifecycleStatus(t *testing.T) {
 	defer response.Body.Close()
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
-	if dashboard.TrackingError != "" || len(dashboard.Ongoing) != 1 || len(dashboard.NeedsAttention) != 1 ||
-		len(dashboard.Recent) != 2 || dashboard.NeedsAttention[0].Status != "saved" {
+	if dashboard.TrackingError != "" || len(dashboard.Ongoing) != 4 || len(dashboard.Recent) != 1 ||
+		dashboard.Ongoing[0].RecordID != 5 || !dashboard.Ongoing[0].Closed || dashboard.Ongoing[0].Status != "running" ||
+		dashboard.Ongoing[1].Status != "succeeded" || dashboard.Ongoing[1].Closed || dashboard.Ongoing[2].Status != "saved" {
 
 		t.Fatalf("dashboard=%#v", dashboard)
 	}
@@ -160,7 +163,7 @@ func TestDashboardRetainsValidViewsAndReadOnlyProblems(t *testing.T) {
 	defer response.Body.Close()
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
-	if len(dashboard.NeedsAttention) != 1 || len(dashboard.Recent) != 1 ||
+	if len(dashboard.Ongoing) != 1 || len(dashboard.Recent) != 1 ||
 		dashboard.Recent[0].Issue == nil || !strings.Contains(dashboard.TrackingError, "tracking temporarily unavailable") {
 
 		t.Fatalf("partial dashboard=%#v", dashboard)

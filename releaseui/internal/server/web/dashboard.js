@@ -1,8 +1,6 @@
 "use strict";
 
 const ongoingReleases = document.querySelector("#ongoing-releases");
-const attentionSection = document.querySelector("#attention-section");
-const attentionReleases = document.querySelector("#attention-releases");
 const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
 const processGrid = document.querySelector("#process-grid");
@@ -40,8 +38,6 @@ async function loadDashboard() {
     const focused = document.activeElement;
     const focusKey = focused?.dataset.focusKey;
     renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
-    attentionSection.hidden = dashboardState.needsAttention.length === 0;
-    renderReleases(attentionReleases, dashboardState.needsAttention, "");
     processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
     recentSection.hidden = dashboardState.recent.length === 0;
     renderReleases(recentReleases, dashboardState.recent, "");
@@ -88,21 +84,18 @@ function createReleaseCard(release) {
   const status = document.createElement("span");
   status.className = "status-badge";
   status.dataset.status = release.issue ? "unavailable" : release.status;
-  status.textContent = release.issue
-    ? release.closed ? "Read-only" : "Needs attention"
-    : releaseStatusText(release.status);
+  status.textContent = release.issue ? "Read-only" : releaseStatusText(release.status);
   top.append(title, status);
   body.append(top);
 
   const details = document.createElement("p");
+  const trackingState = release.closed ? "Tracking item closed" : "Tracking item still open";
   if (release.issue) {
     card.classList.add("release-card-issue");
-    if (release.closed) card.classList.add("release-card-history");
-    details.textContent = `Saved release status: ${release.savedStatus || release.status || "Not readable"}`;
+    if (release.closed) card.classList.add("release-card-closed");
+    details.textContent = `Saved release status: ${release.savedStatus || release.status || "Not readable"} · ${trackingState}`;
     if (release.issue.recordState) {
       details.textContent += ` · Work-item state: ${release.issue.recordState}`;
-    } else if (release.closed) {
-      details.textContent += " · Tracking item: closed";
     }
 
     const message = document.createElement("p");
@@ -133,14 +126,15 @@ function createReleaseCard(release) {
       body.append(technical);
     }
   } else {
+    details.textContent = trackingState;
     if (release.status === "running" || release.status === "saved") {
       card.dataset.publishedStatus = release.status;
       card.dataset.updatedAt = release.updatedAt;
       const heartbeat = document.createElement("span");
       heartbeat.className = "release-heartbeat";
-      details.append(heartbeat);
+      details.append(" · ", heartbeat);
     } else {
-      details.textContent = `Updated ${new Date(release.updatedAt).toLocaleString()} · Last published by the runner`;
+      details.textContent += ` · Updated ${new Date(release.updatedAt).toLocaleString()} · Last published by the runner`;
     }
     body.append(details);
   }
