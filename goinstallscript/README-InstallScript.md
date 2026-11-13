@@ -17,19 +17,33 @@ The script is intended for use in CI/CD pipelines or to reproduce the results of
 
 We recommend using tools from the `github.com/microsoft/go-infra/goinstallscript` module described in [the module README](README.md) to set up the script in your repository and make sure it stays up to date.
 
-## Archive integrity
+## Archive verification
 
 Before extracting a new download, the script requires a 64-character hexadecimal `sha256` digest in the selected asset's manifest entry and checks it against the archive.
 Missing, malformed, or mismatched digests cause installation to fail.
 
-This checks integrity, not authenticity: both the manifest and archive are fetched remotely, so an attacker able to replace both can supply a matching malicious digest.
-Authenticity verification would require checking the signature at `pgpSignatureUrl` against a locally pinned Microsoft public key; the script does not perform that verification.
+When GnuPG (`gpg`) is available on `PATH`, the script also downloads the detached OpenPGP signature from `pgpSignatureUrl`, or from the archive URL with `.sig` appended when that field is absent or empty.
+It verifies the signature against the Microsoft Managed Languages Compiler public key embedded in the script, using an isolated temporary keyring without the user's GnuPG configuration or automatic key retrieval.
+The key's OpenPGP fingerprint is `B035FAC203AB9A45AAC802B4811005347B8E732C`; the published key is available at <https://aka.ms/managed-lang-compiler-public-key>.
+
+If GnuPG is missing, the script warns and continues with SHA-256 verification only.
+This checks integrity, not authenticity: an attacker able to replace both the manifest and archive can supply a matching digest.
+Use **`-RequireSignature`** to fail before downloading the archive when GnuPG is missing.
+When GnuPG is available, missing or invalid signatures and GnuPG errors always stop installation before extraction; the script never falls back to checksum-only verification after a failure.
+This also means older unsigned releases, including older Windows archives such as `go1.21.2-1`, cannot be installed when GnuPG is available.
+
+Signature verification authenticates the archive, not the remotely supplied version or platform metadata; it does not prevent substitution with another archive signed by the same key.
+Dry runs and already-installed versions do not download or verify archives.
+Temporary signature files and keyrings are removed; `-KeepArchive` retains only the downloaded archive, including on verification failure.
 
 ## Prerequisites
 
 On non-Windows platforms, install [PowerShell (`pwsh`)](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
 
 On Windows, either Windows PowerShell or PowerShell can be used.
+
+For signature verification, install [GnuPG](https://gnupg.org/download/) and make sure `gpg` is on `PATH`.
+GnuPG is required when using `-RequireSignature`; otherwise it is optional.
 
 > [!NOTE]
 > PowerShell was formerly known as PowerShell Core.
