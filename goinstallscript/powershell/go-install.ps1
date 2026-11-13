@@ -106,6 +106,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference="Stop"
 $ProgressPreference="SilentlyContinue"
 
+# PSModulePath can be inherited from a different PowerShell edition.
+# Load this edition's built-in utility module explicitly.
+Import-Module (Join-Path $PSHOME "Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1")
+
 $MicrosoftGoInstallScriptVersion = "0.0.1"
 
 function Say($str) {

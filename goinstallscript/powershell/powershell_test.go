@@ -43,11 +43,7 @@ func makeTestFile(t *testing.T, postFuncContent string) string {
 }
 
 func testFileCommand(interpreter, path string, args ...string) *exec.Cmd {
-	cmd := exec.Command(interpreter, append([]string{"-NoProfile", "-File", path}, args...)...)
-	// Let each PowerShell edition find its own modules rather than inherit
-	// a different edition's PSModulePath from the shell running go test.
-	cmd.Env = append(os.Environ(), "PSModulePath=")
-	return cmd
+	return exec.Command(interpreter, append([]string{"-NoProfile", "-File", path}, args...)...)
 }
 
 func runTestFile(t *testing.T, interpreter, path string, args ...string) string {
@@ -68,6 +64,35 @@ func currentOSInterpreters(t *testing.T) []string {
 	}
 	// Other platforms only have pwsh (PowerShell Core).
 	return []string{"pwsh"}
+}
+
+func TestInheritedPSModulePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires both PowerShell editions")
+	}
+	t.Parallel()
+
+	pwshHome, err := exec.Command("pwsh", "-NoProfile", "-Command", "$PSHOME").CombinedOutput()
+	if err != nil {
+		t.Fatalf("error finding PowerShell 7: %v; output:\n%s", err, pwshHome)
+	}
+	script := makeTestFile(t, `
+	(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash | Write-Output
+	exit
+	`)
+	content, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := testFileCommand("powershell", script)
+	cmd.Env = append(os.Environ(), "PSModulePath="+filepath.Join(strings.TrimSpace(string(pwshHome)), "Modules"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("error running %v: %v; output:\n%s", cmd, err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), fmt.Sprintf("%X", sha256.Sum256(content)); got != want {
+		t.Errorf("SHA-256 = %q, want %q", got, want)
+	}
 }
 
 func TestDetectOS(t *testing.T) {
@@ -350,7 +375,6 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					`
 					if tt.hashFailure {
 						injected += `
-						Import-Module Microsoft.PowerShell.Utility
 						function Get-FileHash([string]$LiteralPath, [string]$Algorithm) {
 							throw "simulated hash failure"
 						}
