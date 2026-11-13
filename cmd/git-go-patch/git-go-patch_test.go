@@ -21,6 +21,7 @@ func TestLoadConfigMinimumToolVersion(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "supported", minimum: "v1.0.2"},
+		{name: "fixup supported", minimum: "v1.0.3"},
 		{name: "too new", minimum: "v2.0.0", wantErr: true},
 	}
 	for _, tt := range tests {

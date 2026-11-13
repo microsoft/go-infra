@@ -140,6 +140,34 @@ You can also run each step yourself:
    * Other `git rebase` features like [`git commit --fixup={commit}`](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt---fixupamendrewordltcommitgt) also work as expected.
 1. Use `git go-patch extract` to rewrite the patch files based on the changes in the submodule.
 
+### Fixing up a specific patch
+
+Use `fixup` to fold staged changes into an existing patch without opening an editor:
+
+```bash
+cd go
+git add --all -- path/to/changed/files
+git go-patch fixup -patch 1
+git go-patch extract
+```
+
+The required `-patch` argument selects the number in the extracted patch filename.
+For example, `-patch 1` selects `0001-*.patch`.
+
+Only staged changes are used to fix up the target patch.
+Make sure to stage your additions and deletions, not just modifications.
+The `fixup` command fails safe with a clear error message when repository state isn't valid.
+
+Fixing up an old patch involves moving a change back in history, which can introduce rebase conflicts that you might not have expected.
+When one occurs, resolve it and use `git rebase --continue`, or use `git rebase --abort`.
+The fixup might also cause conflicts in the patches after the target, and you need to resolve those, too.
+
+The `fixup` command itself never rewrites patch files.
+Run `git go-patch extract` yourself after a successful fixup.
+(Or use a utility like `git go-patch shell`.)
+
+Run `git go-patch fixup -h` for more information.
+
 ### Recovering from a bad rebase
 
 It's possible to accidentally squash a commit into the wrong patch file during a rebase.
