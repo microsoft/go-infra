@@ -4,8 +4,12 @@
 package powershell_test
 
 import (
+	"archive/zip"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,9 +42,13 @@ func makeTestFile(t *testing.T, postFuncContent string) string {
 	return p
 }
 
+func testFileCommand(interpreter, path string, args ...string) *exec.Cmd {
+	return exec.Command(interpreter, append([]string{"-NoProfile", "-File", path}, args...)...)
+}
+
 func runTestFile(t *testing.T, interpreter, path string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(interpreter, append([]string{"-NoProfile", path}, args...)...)
+	cmd := testFileCommand(interpreter, path, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("error running %v: %v; output:\n---\n%s\n---", cmd, err, out)
@@ -56,6 +64,35 @@ func currentOSInterpreters(t *testing.T) []string {
 	}
 	// Other platforms only have pwsh (PowerShell Core).
 	return []string{"pwsh"}
+}
+
+func TestInheritedPSModulePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires both PowerShell editions")
+	}
+	t.Parallel()
+
+	pwshHome, err := exec.Command("pwsh", "-NoProfile", "-Command", "$PSHOME").CombinedOutput()
+	if err != nil {
+		t.Fatalf("error finding PowerShell 7: %v; output:\n%s", err, pwshHome)
+	}
+	script := makeTestFile(t, `
+	(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash | Write-Output
+	exit
+	`)
+	content, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := testFileCommand("powershell", script)
+	cmd.Env = append(os.Environ(), "PSModulePath="+filepath.Join(strings.TrimSpace(string(pwshHome)), "Modules"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("error running %v: %v; output:\n%s", cmd, err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), fmt.Sprintf("%X", sha256.Sum256(content)); got != want {
+		t.Errorf("SHA-256 = %q, want %q", got, want)
+	}
 }
 
 func TestDetectOS(t *testing.T) {
@@ -268,6 +305,187 @@ func TestDownloadFileDoesNotRetryNotFound(t *testing.T) {
 	}
 }
 
+func TestInstallArchiveIntegrity(t *testing.T) {
+	const toolchainContent = "test toolchain"
+	var archive bytes.Buffer
+	w := zip.NewWriter(&archive)
+	f, err := w.Create("go/bin/go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte(toolchainContent)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(archive.Bytes()))
+	wrongDigest := strings.Repeat("0", 64)
+
+	for _, interpreter := range currentOSInterpreters(t) {
+		t.Run(interpreter, func(t *testing.T) {
+			for _, tt := range []struct {
+				name         string
+				digest       any
+				keepArchive  bool
+				hashFailure  bool
+				dryRun       bool
+				installed    bool
+				wantDownload bool
+				wantError    string
+			}{
+				{name: "lowercase", digest: digest, wantDownload: true},
+				{name: "uppercase", digest: strings.ToUpper(digest), wantDownload: true},
+				{name: "mixed-case-kept", digest: strings.ToUpper(digest[:32]) + digest[32:], keepArchive: true, wantDownload: true},
+				{name: "mismatch", digest: wrongDigest, wantDownload: true, wantError: "SHA-256 mismatch"},
+				{name: "mismatch-kept", digest: wrongDigest, keepArchive: true, wantDownload: true, wantError: "SHA-256 mismatch"},
+				{name: "missing", wantError: "valid SHA-256 digest"},
+				{name: "null", digest: json.RawMessage("null"), wantError: "valid SHA-256 digest"},
+				{name: "empty", digest: "", wantError: "valid SHA-256 digest"},
+				{name: "short", digest: digest[:63], wantError: "valid SHA-256 digest"},
+				{name: "long", digest: digest + "0", wantError: "valid SHA-256 digest"},
+				{name: "non-hex", digest: "g" + digest[1:], wantError: "valid SHA-256 digest"},
+				{name: "leading-space", digest: " " + digest, wantError: "valid SHA-256 digest"},
+				{name: "trailing-space", digest: digest + " ", wantError: "valid SHA-256 digest"},
+				{name: "trailing-newline", digest: digest + "\n", wantError: "valid SHA-256 digest"},
+				{name: "trailing-crlf", digest: digest + "\r\n", wantError: "valid SHA-256 digest"},
+				{name: "embedded-newline", digest: digest[:32] + "\n" + digest[32:], wantError: "valid SHA-256 digest"},
+				{name: "boolean", digest: true, wantError: "valid SHA-256 digest"},
+				{name: "number", digest: 1234, wantError: "valid SHA-256 digest"},
+				{name: "object", digest: map[string]string{"value": digest}, wantError: "valid SHA-256 digest"},
+				{name: "empty-array", digest: []string{}, wantError: "valid SHA-256 digest"},
+				{name: "single-element-array", digest: []string{digest}, wantError: "valid SHA-256 digest"},
+				{name: "multiple-element-array", digest: []string{digest, digest}, wantError: "valid SHA-256 digest"},
+				{name: "hash-error", digest: digest, hashFailure: true, wantDownload: true, wantError: "simulated hash failure"},
+				{name: "hash-error-kept", digest: digest, hashFailure: true, keepArchive: true, wantDownload: true, wantError: "simulated hash failure"},
+				{name: "dry-run", dryRun: true},
+				{name: "already-installed", installed: true},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
+
+					injected := `
+					trap {
+						Write-Output $_.Exception.Message
+						exit 1
+					}
+					function DownloadJson([string]$Source) {
+						return Get-Content -LiteralPath (Join-Path $PSScriptRoot "assets.json") -Raw | ConvertFrom-Json
+					}
+					`
+					if tt.hashFailure {
+						injected += `
+						function Get-FileHash([string]$LiteralPath, [string]$Algorithm) {
+							throw "simulated hash failure"
+						}
+						`
+					}
+					script := makeTestFile(t, injected)
+					dir := filepath.Dir(script)
+					source := filepath.Join(dir, "source.zip")
+					if err := os.WriteFile(source, archive.Bytes(), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					asset := map[string]any{
+						"env": map[string]string{"GOOS": "windows", "GOARCH": "amd64"},
+						"url": source,
+					}
+					if tt.digest != nil {
+						asset["sha256"] = tt.digest
+					}
+					manifest, err := json.Marshal(map[string]any{
+						"version": "1.21.2-1",
+						"arches": []any{
+							map[string]any{
+								"env":    map[string]string{"GOOS": "linux", "GOARCH": "amd64"},
+								"url":    "https://example.invalid/unselected",
+								"sha256": "invalid",
+							},
+							asset,
+						},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(dir, "assets.json"), manifest, 0o600); err != nil {
+						t.Fatal(err)
+					}
+
+					installDir := filepath.Join(dir, "install")
+					goPath := filepath.Join(installDir, "go1.21.2-1", "bin", "go")
+					if tt.installed {
+						if err := os.MkdirAll(filepath.Dir(goPath), 0o755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(goPath, []byte("existing toolchain"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					archivePath := filepath.Join(dir, "download archive.zip")
+					args := []string{
+						"-Version", "go1.21.2-1",
+						"-OS", "windows", "-Architecture", "amd64",
+						"-InstallDir", installDir,
+						"-ArchivePath", archivePath,
+						"-NoPath",
+					}
+					if tt.keepArchive {
+						args = append(args, "-KeepArchive")
+					}
+					if tt.dryRun {
+						args = append(args, "-DryRun")
+					}
+					cmd := testFileCommand(interpreter, script, args...)
+					out, err := cmd.CombinedOutput()
+					output := string(out)
+					if tt.wantError == "" {
+						if err != nil {
+							t.Fatalf("error running %v: %v; output:\n%s", cmd, err, output)
+						}
+					} else if err == nil || !strings.Contains(output, tt.wantError) {
+						t.Fatalf("expected error containing %q, got %v; output:\n%s", tt.wantError, err, output)
+					}
+					if tt.wantError == "SHA-256 mismatch" {
+						for _, want := range []string{"Expected: " + wrongDigest, "Actual: " + strings.ToUpper(digest)} {
+							if !strings.Contains(output, want) {
+								t.Errorf("missing %q in mismatch error:\n%s", want, output)
+							}
+						}
+					}
+					if got := strings.Contains(output, "Copying file from "); got != tt.wantDownload {
+						t.Errorf("download attempted = %v, want %v; output:\n%s", got, tt.wantDownload, output)
+					}
+					wantExtract := tt.wantDownload && tt.wantError == ""
+					if got := strings.Contains(output, "Extracting the archive."); got != wantExtract {
+						t.Errorf("extraction attempted = %v, want %v; output:\n%s", got, wantExtract, output)
+					}
+
+					installed, err := os.ReadFile(goPath)
+					if wantExtract || tt.installed {
+						wantContent := toolchainContent
+						if tt.installed {
+							wantContent = "existing toolchain"
+						}
+						if err != nil || string(installed) != wantContent {
+							t.Errorf("installed toolchain = %q, %v; want %q", installed, err, wantContent)
+						}
+					} else if !os.IsNotExist(err) {
+						t.Errorf("expected no installed toolchain, got %q, %v", installed, err)
+					}
+					kept, err := os.ReadFile(archivePath)
+					if tt.keepArchive && tt.wantDownload {
+						if err != nil || !bytes.Equal(kept, archive.Bytes()) {
+							t.Errorf("expected downloaded archive to be kept unchanged: %v", err)
+						}
+					} else if !os.IsNotExist(err) {
+						t.Errorf("expected no downloaded archive, got error %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestInstall(t *testing.T) {
 	if !*download {
 		t.Skip("skipping test that downloads Microsoft build of Go from the internet; use -download to run it")
@@ -287,8 +505,8 @@ func TestInstall(t *testing.T) {
 
 					installDir := t.TempDir()
 
-					cmd := exec.Command(
-						interpreter, "-NoProfile",
+					cmd := testFileCommand(
+						interpreter,
 						makeTestFile(t, ``),
 						"-InstallDir", installDir,
 						"-Version", version,
