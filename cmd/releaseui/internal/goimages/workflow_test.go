@@ -231,24 +231,33 @@ func TestGraphBlocksQueueUntilMirrorAvailable(t *testing.T) {
 }
 
 func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
-	state, err := NewState(testInput)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.QueueAttempted = true
-	state.BuildID = "888"
-	state.VerifiedMirroredCommit = workflowTestCommit
-	service := &fakeService{}
-	steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var runner coordinator.StepRunner
-	if err := runner.Execute(context.Background(), steps); err != nil {
-		t.Fatal(err)
-	}
-	if service.mirrors != 0 || service.queues != 0 || service.polls != 1 || !state.Complete {
-		t.Fatalf("service = %#v, state = %#v", service, state)
+	for _, status := range []coordinator.StepStatus{coordinator.StepStatusSucceeded, coordinator.StepStatusCanceled} {
+		t.Run(string(status), func(t *testing.T) {
+			state, err := NewState(testInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.QueueAttempted = true
+			state.BuildID = "888"
+			state.VerifiedMirroredCommit = workflowTestCommit
+			service := &fakeService{status: status}
+			steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var runner coordinator.StepRunner
+			err = runner.Execute(context.Background(), steps)
+			if status == coordinator.StepStatusSucceeded && err != nil ||
+				status == coordinator.StepStatusCanceled && !errors.Is(err, coordinator.ErrCanceled) {
+
+				t.Fatalf("resumed build result = %v, want %s", err, status)
+			}
+			if service.mirrors != 0 || service.queues != 0 || service.polls != 1 ||
+				!state.Complete || state.Result != string(status) {
+
+				t.Fatalf("service = %#v, state = %#v", service, state)
+			}
+		})
 	}
 }
 

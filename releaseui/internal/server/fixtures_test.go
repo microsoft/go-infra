@@ -343,6 +343,33 @@ func (s *memoryProcessRunStore) waitForCompleted(t *testing.T, count int) {
 	}
 }
 
+type shutdownTestStore struct {
+	*memoryProcessRunStore
+	finalStarted chan struct{}
+	finalRelease <-chan struct{}
+	finalErr     error
+}
+
+func (s *shutdownTestStore) Update(
+	ctx context.Context,
+	current *runstore.Record,
+	run *runstore.State,
+	view *runstore.View,
+) (*runstore.Record, error) {
+	if !run.Executing {
+		close(s.finalStarted)
+		select {
+		case <-s.finalRelease:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if s.finalErr != nil {
+			return nil, s.finalErr
+		}
+	}
+	return s.memoryProcessRunStore.Update(ctx, current, run, view)
+}
+
 func cloneReleaseRunRecord(record *runstore.Record) *runstore.Record {
 	if record == nil {
 		return nil

@@ -286,12 +286,17 @@ func TestValidateRecordForExecution(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		closed    bool
+		executing bool
+		age       time.Duration
 		complete  bool
 		result    string
 		malformed string
 		wantError bool
 	}{
 		{name: "open unfinished"},
+		{name: "recently executing", executing: true, wantError: true},
+		{name: "stale executing", executing: true, age: 2 * time.Minute},
+		{name: "closed stale executing", closed: true, executing: true, age: 2 * time.Minute, wantError: true},
 		{name: "closed unfinished", closed: true, wantError: true},
 		{name: "open succeeded", complete: true, result: resultSucceeded, wantError: true},
 		{name: "closed succeeded", closed: true, complete: true, result: resultSucceeded, wantError: true},
@@ -302,9 +307,10 @@ func TestValidateRecordForExecution(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			record := &runstore.Record{
-				ID: 1, Revision: 1, Closed: test.closed, UpdatedAt: time.Now().UTC(), Run: state.Clone(),
+				ID: 1, Revision: 1, Closed: test.closed, UpdatedAt: time.Now().UTC().Add(-test.age), Run: state.Clone(),
 			}
 			record.Run.Complete, record.Run.Result = test.complete, test.result
+			record.Run.Executing = test.executing
 			switch test.malformed {
 			case "id":
 				record.ID = 0
@@ -554,6 +560,190 @@ func TestFinalPersistenceFailureIsVisible(t *testing.T) {
 	if session.state.Result != resultUncertain || session.running {
 		t.Fatalf("session result = %q, running = %v", session.state.Result, session.running)
 	}
+}
+
+func TestRunnerRejectionStopsCheckpointerAndFailsShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, session, run, store, cancel := checkpointTestRun(t)
+		defer cancel()
+		manager = New(manager.ctx, manager.processes, store)
+		manager.sessions["example"] = session
+		ctx, stop := context.WithCancel(manager.ctx)
+		checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, stop)
+		defer checkpointer.Close()
+		steps := []*coordinator.Step{coordinator.NewRootStep("Different graph", time.Minute,
+			func(context.Context, coordinator.StepControl) error {
+				t.Fatal("rejected graph executed a step")
+				return nil
+			})}
+		manager.executeProcessRun(session, session.state.Digest, ctx, session.runner, steps, run, checkpointer)
+		select {
+		case <-checkpointer.done:
+		default:
+			t.Error("runner rejection left the checkpointer running")
+		}
+		err := manager.Shutdown(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "execution graph does not match") {
+			t.Fatalf("shutdown error = %v, want runner rejection", err)
+		}
+		if store.updates.Load() != 0 {
+			t.Fatal("rejected execution rewrote the saved record")
+		}
+	})
+}
+
+func TestShutdownWaitsForCheckpointAndAllowsResume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		manager, store, _, executions, cancel := publishedTestManager(t, release)
+		defer cancel()
+		request := webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}
+		if err := manager.Resume(context.Background(), "example", request); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		store.updateStarted = make(chan struct{})
+		save := make(chan struct{})
+		store.updateRelease = save
+		stopped := make(chan error, 1)
+		go func() { stopped <- manager.Shutdown(context.Background()) }()
+		synctest.Wait()
+		select {
+		case <-store.updateStarted:
+		default:
+			t.Fatal("shutdown did not attempt the final save")
+		}
+		select {
+		case err := <-stopped:
+			t.Fatalf("shutdown returned before saving the checkpoint: %v", err)
+		default:
+		}
+		if err := manager.Resume(context.Background(), "example", request); err == nil {
+			t.Fatal("shutdown accepted another execution")
+		}
+		close(save)
+		if err := <-stopped; err != nil {
+			t.Fatal(err)
+		}
+		record, err := store.Get(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Run.Executing || record.Run.Complete || !record.Run.Checkpointed ||
+			store.view.Executing || store.view.Status != runstore.StatusRunning {
+
+			t.Fatalf("shutdown did not publish a resumable interruption: %#v, %#v", record.Run, store.view)
+		}
+		other := New(context.Background(), manager.processes, store)
+		view, err := other.History().View(context.Background(), 1)
+		if err != nil || view.ResumeURL == "" {
+			t.Fatalf("interrupted run cannot offer Resume: %#v, %v", view, err)
+		}
+		close(release)
+		request.Revision = record.Revision
+		if err := other.Resume(context.Background(), "example", request); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if err := other.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		record, err = store.Get(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !record.Run.Complete || record.Run.Result != resultSucceeded || executions.Load() != 2 {
+			t.Fatalf("another instance did not continue the saved run: %#v, executions=%d", record.Run, executions.Load())
+		}
+	})
+}
+
+func TestShutdownReportsCheckpointFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, store, _, _, cancel := publishedTestManager(t, make(chan struct{}))
+		defer cancel()
+		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		failure := errors.New("final checkpoint unavailable")
+		store.updateErr = failure
+		if err := manager.Shutdown(context.Background()); !errors.Is(err, failure) {
+			t.Fatalf("shutdown error = %v, want checkpoint failure", err)
+		}
+		if !store.record.Run.Executing || !store.view.Executing {
+			t.Fatal("failed shutdown save claimed to release the durable reservation")
+		}
+	})
+}
+
+func TestShutdownDeadlineDoesNotReleaseReservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, store, _, _, cancel := publishedTestManager(t, make(chan struct{}))
+		defer cancel()
+		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		save := make(chan struct{})
+		store.updateRelease = save
+		ctx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := manager.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want deadline", err)
+		}
+		if !store.record.Run.Executing || !store.view.Executing {
+			t.Fatal("timed-out shutdown released a reservation before persistence")
+		}
+		close(save)
+		if err := manager.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if store.record.Run.Executing || store.view.Executing {
+			t.Fatal("completed shutdown did not release its reservation")
+		}
+	})
+}
+
+func TestShutdownWaitsForStartingExecution(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, store, _, _, cancel := publishedTestManager(t, make(chan struct{}))
+		defer cancel()
+		store.updateStarted = make(chan struct{})
+		save := make(chan struct{})
+		store.updateRelease = save
+		started := make(chan error, 1)
+		go func() {
+			started <- manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+				RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+			})
+		}()
+		synctest.Wait()
+		stopped := make(chan error, 1)
+		go func() { stopped <- manager.Shutdown(context.Background()) }()
+		synctest.Wait()
+		select {
+		case err := <-stopped:
+			t.Fatalf("shutdown missed an execution being started: %v", err)
+		default:
+		}
+		close(save)
+		if err := <-started; err != nil {
+			t.Fatal(err)
+		}
+		if err := <-stopped; err != nil {
+			t.Fatal(err)
+		}
+		if store.record.Run.Executing || store.view.Executing {
+			t.Fatal("an in-flight start left an abandoned reservation")
+		}
+	})
 }
 
 func TestCheckpointDoesNotOverwriteChangedRun(t *testing.T) {

@@ -14,20 +14,44 @@ const jsonCopy = document.querySelector("#json-copy");
 const jsonSave = document.querySelector("#json-save");
 
 let editingRecord = 0;
+let loadingDashboard = false;
 
 loadDashboard();
+const heartbeatTimer = setInterval(refreshHeartbeats, 5000);
+const dashboardTimer = setInterval(loadDashboard, 15000);
+globalThis.addEventListener("pagehide", () => {
+  clearInterval(heartbeatTimer);
+  clearInterval(dashboardTimer);
+}, { once: true });
 jsonClose.addEventListener("click", () => jsonDialog.close());
+jsonDialog.addEventListener("close", () => {
+  document.querySelector(`[data-focus-key="release-${editingRecord}-json"]`)?.focus({ preventScroll: true });
+});
 jsonCopy.addEventListener("click", copyJSON);
 jsonSave.addEventListener("click", saveJSON);
 
 async function loadDashboard() {
-  const dashboardState = await requestJSON("/api/dashboard");
-  renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
-  processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
-  recentSection.hidden = dashboardState.recent.length === 0;
-  renderReleases(recentReleases, dashboardState.recent, "");
-  trackingError.hidden = !dashboardState.trackingError;
-  trackingError.textContent = dashboardState.trackingError || "";
+  if (loadingDashboard) return;
+  loadingDashboard = true;
+  try {
+    const dashboardState = await requestJSON("/api/dashboard", { signal: AbortSignal.timeout(10000) });
+    const focused = document.activeElement;
+    const focusKey = focused?.dataset.focusKey;
+    renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
+    processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
+    recentSection.hidden = dashboardState.recent.length === 0;
+    renderReleases(recentReleases, dashboardState.recent, "");
+    trackingError.hidden = !dashboardState.trackingError;
+    trackingError.textContent = dashboardState.trackingError || "";
+    refreshHeartbeats();
+    if (focusKey && !focused.isConnected) {
+      document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    }
+  } catch (error) {
+    showTrackingError(`Unable to refresh published progress: ${error.message}`);
+  } finally {
+    loadingDashboard = false;
+  }
 }
 
 function renderReleases(container, releases, emptyText) {
@@ -44,6 +68,8 @@ function renderReleases(container, releases, emptyText) {
 function createReleaseCard(release) {
   const card = document.createElement("article");
   card.className = "release-card";
+  const focusKey = `release-${release.recordId || release.href}`;
+  card.dataset.focusKey = focusKey;
 
   const icon = document.createElement("span");
   icon.className = "release-icon";
@@ -58,7 +84,7 @@ function createReleaseCard(release) {
   const status = document.createElement("span");
   status.className = "status-badge";
   status.dataset.status = release.issue ? "unavailable" : release.status;
-  status.textContent = release.issue ? "Read-only" : statusText(release.status);
+  status.textContent = release.issue ? "Read-only" : releaseStatusText(release.status);
   top.append(title, status);
   body.append(top);
 
@@ -100,8 +126,16 @@ function createReleaseCard(release) {
       body.append(technical);
     }
   } else {
-    details.textContent = `${trackingState} · Updated ${new Date(release.updatedAt).toLocaleString()}`;
-    details.textContent += " · Last published by the runner";
+    details.textContent = trackingState;
+    if (release.status === "running" || release.status === "saved") {
+      card.dataset.publishedStatus = release.status;
+      card.dataset.updatedAt = release.updatedAt;
+      const heartbeat = document.createElement("span");
+      heartbeat.className = "release-heartbeat";
+      details.append(" · ", heartbeat);
+    } else {
+      details.textContent += ` · Updated ${new Date(release.updatedAt).toLocaleString()} · Last published by the runner`;
+    }
     body.append(details);
   }
 
@@ -110,6 +144,7 @@ function createReleaseCard(release) {
   if (release.runUrl) {
     const runLink = document.createElement("a");
     runLink.className = "button button-secondary compact-button";
+    runLink.dataset.focusKey = `${focusKey}-run`;
     runLink.href = release.runUrl;
     runLink.target = "_blank";
     runLink.rel = "noreferrer";
@@ -119,6 +154,7 @@ function createReleaseCard(release) {
   if (release.recordId && release.recordUrl) {
     const recordLink = document.createElement("a");
     recordLink.className = "button button-secondary compact-button";
+    recordLink.dataset.focusKey = `${focusKey}-record`;
     recordLink.href = release.recordUrl;
     recordLink.target = "_blank";
     recordLink.rel = "noreferrer";
@@ -128,12 +164,14 @@ function createReleaseCard(release) {
   if (!release.issue && release.recordId) {
     const edit = document.createElement("button");
     edit.className = "button button-secondary compact-button";
+    edit.dataset.focusKey = `${focusKey}-json`;
     edit.type = "button";
     edit.textContent = "View JSON";
     edit.addEventListener("click", () => openJSON(release));
 
     const open = document.createElement("button");
     open.className = "button button-secondary compact-button";
+    open.dataset.focusKey = `${focusKey}-open`;
     open.type = "button";
     open.textContent = "Open";
     const openRelease = () => {
@@ -154,6 +192,7 @@ function createReleaseCard(release) {
   } else if (!release.issue) {
     const link = document.createElement("a");
     link.className = "button button-secondary compact-button";
+    link.dataset.focusKey = `${focusKey}-track`;
     link.href = release.href;
     link.textContent = "Track release";
     actions.append(link);
@@ -230,6 +269,7 @@ function showJSONError(message) {
 function createProcessCard(process) {
   const card = document.createElement("a");
   card.className = "process-card";
+  card.dataset.focusKey = `process-${process.id}`;
   card.href = process.href;
 
   const mark = document.createElement("span");
@@ -252,9 +292,14 @@ function formatMode(mode) {
   return mode ? `${mode[0].toUpperCase()}${mode.slice(1)}` : "Release";
 }
 
-function statusText(status) {
-  if (status === "saved") return "Interrupted";
-  return status === "running" ? "in progress" : status;
+function refreshHeartbeats() {
+  for (const card of document.querySelectorAll(".release-card[data-published-status]")) {
+    const published = publishedReleaseStatus(card.dataset.publishedStatus, card.dataset.updatedAt);
+    const badge = card.querySelector(".status-badge");
+    badge.dataset.status = published.status;
+    badge.textContent = published.label;
+    card.querySelector(".release-heartbeat").textContent = `Last heartbeat: ${new Date(card.dataset.updatedAt).toLocaleString()}`;
+  }
 }
 
 async function requestJSON(path, options = {}) {
