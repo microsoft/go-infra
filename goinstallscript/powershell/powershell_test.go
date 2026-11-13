@@ -42,9 +42,17 @@ func makeTestFile(t *testing.T, postFuncContent string) string {
 	return p
 }
 
+func testFileCommand(interpreter, path string, args ...string) *exec.Cmd {
+	cmd := exec.Command(interpreter, append([]string{"-NoProfile", "-File", path}, args...)...)
+	// Let each PowerShell edition find its own modules rather than inherit
+	// a different edition's PSModulePath from the shell running go test.
+	cmd.Env = append(os.Environ(), "PSModulePath=")
+	return cmd
+}
+
 func runTestFile(t *testing.T, interpreter, path string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command(interpreter, append([]string{"-NoProfile", path}, args...)...)
+	cmd := testFileCommand(interpreter, path, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("error running %v: %v; output:\n---\n%s\n---", cmd, err, out)
@@ -391,7 +399,6 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					}
 					archivePath := filepath.Join(dir, "download archive.zip")
 					args := []string{
-						"-NoProfile", "-File", script,
 						"-Version", "go1.21.2-1",
 						"-OS", "windows", "-Architecture", "amd64",
 						"-InstallDir", installDir,
@@ -404,10 +411,7 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					if tt.dryRun {
 						args = append(args, "-DryRun")
 					}
-					cmd := exec.Command(interpreter, args...)
-					// Let each PowerShell edition find its own modules rather than inherit
-					// a different edition's PSModulePath from the shell running go test.
-					cmd.Env = append(os.Environ(), "PSModulePath=")
+					cmd := testFileCommand(interpreter, script, args...)
 					out, err := cmd.CombinedOutput()
 					output := string(out)
 					if tt.wantError == "" {
@@ -477,8 +481,8 @@ func TestInstall(t *testing.T) {
 
 					installDir := t.TempDir()
 
-					cmd := exec.Command(
-						interpreter, "-NoProfile",
+					cmd := testFileCommand(
+						interpreter,
 						makeTestFile(t, ``),
 						"-InstallDir", installDir,
 						"-Version", version,
