@@ -153,19 +153,20 @@ git go-patch extract
 
 The required `-patch` argument selects the number in the extracted patch filename.
 For example, `-patch 1` selects `0001-*.patch`.
-Selection uses the commits after the base recorded by `apply` and honors `patch number` commands in commit messages.
-It does not depend on commit subjects being unique or on patch files already having been extracted.
 
-Only staged changes are committed, including staged additions and deletions.
-Stage or stash any remaining unstaged or untracked changes first.
-The patch history must be linear, with no pending fixup/squash commits or Git operation in progress.
-The command creates a fixup commit and autosquashes it non-interactively.
-With nothing staged, it validates the selection but does not commit or rebase.
+Only staged changes are used to fix up the target patch.
+Make sure to stage your additions and deletions, not just modifications.
+The `fixup` command fails safe with a clear error message when repository state isn't valid.
 
-If rebasing fails, the command leaves the Git state available for recovery and returns an error.
-Resolve conflicts in the submodule and run `git rebase --continue`, or use `git rebase --abort`.
-Run `git go-patch extract` only after a successful fixup or after completing conflict resolution.
+Fixing up an old patch involves moving a change back in history, which can introduce rebase conflicts that you might not have expected.
+When one occurs, resolve it and use `git rebase --continue`, or use `git rebase --abort`.
+The fixup might also cause conflicts in the patches after the target, and you need to resolve those, too.
+
 The `fixup` command itself never rewrites patch files.
+Run `git go-patch extract` yourself after a successful fixup.
+(Or use a utility like `git go-patch shell`.)
+
+Run `git go-patch fixup -h` for more information.
 
 ### Recovering from a bad rebase
 

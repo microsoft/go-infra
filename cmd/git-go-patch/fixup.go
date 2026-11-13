@@ -21,9 +21,11 @@ func init() {
 		Summary: "Fix up staged changes into an existing patch without opening an editor.",
 		Description: `
 
-Select the patch with -patch N, where N is its extracted filename's number. Numbering overrides
-in commit messages are honored. The target is resolved within the commits after the base recorded
-by 'apply', not by searching commit subjects.
+Select the patch with -patch N, where N is its extracted filename's number. fixup numbers the
+submodule's commits after the base recorded by 'apply', oldest first, using the same numbering rules
+as 'extract': numbering starts at 1, and a numbering override in a commit's body sets that commit's
+number and advances the numbering for subsequent commits. The commit that ends up assigned N is the
+fixup target. fixup doesn't check if the commit message or contents match the patch being fixed up.
 
 Stage all intended changes in the submodule first, including new and deleted files. Unstaged or
 untracked changes, an in-progress Git operation, merge commits, and pending fixup/squash commits
