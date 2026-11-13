@@ -22,7 +22,7 @@ import (
 
 var download = flag.Bool(
 	"download", false,
-	"Run tests that include downloading Microsoft build of Go from the internet. "+
+	"Run tests that include downloading Microsoft build of Go from the internet; requires GnuPG on PATH. "+
 		"These may be very slow and not totally reproducible.")
 
 const endOfFunctionsMarker = "# [END OF FUNCTIONS]"
@@ -321,22 +321,33 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(archive.Bytes()))
 	wrongDigest := strings.Repeat("0", 64)
+	signature := []byte("test signature")
+	untrustedSignature := []byte("untrusted signature")
 
 	for _, interpreter := range currentOSInterpreters(t) {
 		t.Run(interpreter, func(t *testing.T) {
 			for _, tt := range []struct {
-				name         string
-				digest       any
-				keepArchive  bool
-				hashFailure  bool
-				dryRun       bool
-				installed    bool
-				wantDownload bool
-				wantError    string
+				name                     string
+				digest                   any
+				keepArchive              bool
+				hashFailure              bool
+				gpgMissing               bool
+				gpgImportFailure         bool
+				requireSignature         bool
+				signatureURL             any
+				explicitSignatureURL     bool
+				signatureDownloadFailure bool
+				untrustedSignature       bool
+				dryRun                   bool
+				installed                bool
+				wantDownload             bool
+				wantSignature            bool
+				wantWarning              bool
+				wantError                string
 			}{
-				{name: "lowercase", digest: digest, wantDownload: true},
-				{name: "uppercase", digest: strings.ToUpper(digest), wantDownload: true},
-				{name: "mixed-case-kept", digest: strings.ToUpper(digest[:32]) + digest[32:], keepArchive: true, wantDownload: true},
+				{name: "lowercase", digest: digest, wantDownload: true, wantSignature: true},
+				{name: "uppercase", digest: strings.ToUpper(digest), wantDownload: true, wantSignature: true},
+				{name: "mixed-case-kept", digest: strings.ToUpper(digest[:32]) + digest[32:], keepArchive: true, wantDownload: true, wantSignature: true},
 				{name: "mismatch", digest: wrongDigest, wantDownload: true, wantError: "SHA-256 mismatch"},
 				{name: "mismatch-kept", digest: wrongDigest, keepArchive: true, wantDownload: true, wantError: "SHA-256 mismatch"},
 				{name: "missing", wantError: "valid SHA-256 digest"},
@@ -358,13 +369,35 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 				{name: "multiple-element-array", digest: []string{digest, digest}, wantError: "valid SHA-256 digest"},
 				{name: "hash-error", digest: digest, hashFailure: true, wantDownload: true, wantError: "simulated hash failure"},
 				{name: "hash-error-kept", digest: digest, hashFailure: true, keepArchive: true, wantDownload: true, wantError: "simulated hash failure"},
+				{name: "explicit-signature-url", digest: digest, explicitSignatureURL: true, wantDownload: true, wantSignature: true},
+				{name: "empty-signature-url", digest: digest, signatureURL: "", wantDownload: true, wantSignature: true},
+				{name: "null-signature-url", digest: digest, signatureURL: json.RawMessage("null"), wantDownload: true, wantSignature: true},
+				{name: "whitespace-signature-url", digest: digest, signatureURL: " ", wantError: "valid OpenPGP signature URL"},
+				{name: "boolean-signature-url", digest: digest, signatureURL: true, wantError: "valid OpenPGP signature URL"},
+				{name: "number-signature-url", digest: digest, signatureURL: 123, wantError: "valid OpenPGP signature URL"},
+				{name: "array-signature-url", digest: digest, signatureURL: []string{"signature"}, wantError: "valid OpenPGP signature URL"},
+				{name: "empty-array-signature-url", digest: digest, signatureURL: []string{}, wantError: "valid OpenPGP signature URL"},
+				{name: "object-signature-url", digest: digest, signatureURL: map[string]string{"value": "signature"}, wantError: "valid OpenPGP signature URL"},
+				{name: "missing-signature", digest: digest, signatureDownloadFailure: true, wantDownload: true, wantSignature: true, wantError: "Downloading or verifying the archive"},
+				{name: "missing-signature-kept", digest: digest, signatureDownloadFailure: true, keepArchive: true, wantDownload: true, wantSignature: true, wantError: "Downloading or verifying the archive"},
+				{name: "untrusted-signature", digest: digest, untrustedSignature: true, wantDownload: true, wantSignature: true, wantError: "not signed by the pinned Microsoft key"},
+				{name: "untrusted-signature-kept", digest: digest, untrustedSignature: true, keepArchive: true, wantDownload: true, wantSignature: true, wantError: "not signed by the pinned Microsoft key"},
+				{name: "gpg-missing", digest: digest, gpgMissing: true, wantDownload: true, wantWarning: true},
+				{name: "gpg-missing-kept", digest: digest, gpgMissing: true, keepArchive: true, wantDownload: true, wantWarning: true},
+				{name: "gpg-missing-bad-hash", digest: wrongDigest, gpgMissing: true, wantDownload: true, wantWarning: true, wantError: "SHA-256 mismatch"},
+				{name: "gpg-missing-invalid-signature-url", digest: digest, gpgMissing: true, signatureURL: true, wantDownload: true, wantWarning: true},
+				{name: "gpg-required", digest: digest, requireSignature: true, wantDownload: true, wantSignature: true},
+				{name: "gpg-required-missing", digest: digest, gpgMissing: true, requireSignature: true, wantError: "requires GnuPG"},
+				{name: "gpg-import-error", digest: digest, gpgImportFailure: true, wantDownload: true, wantSignature: true, wantError: "import diagnostic"},
 				{name: "dry-run", dryRun: true},
 				{name: "already-installed", installed: true},
+				{name: "dry-run-gpg-required-missing", dryRun: true, gpgMissing: true, requireSignature: true},
+				{name: "installed-gpg-required-missing", installed: true, gpgMissing: true, requireSignature: true},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
 					t.Parallel()
 
-					injected := `
+					injected := mockGpg + `
 					trap {
 						Write-Output $_.Exception.Message
 						exit 1
@@ -372,7 +405,20 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					function DownloadJson([string]$Source) {
 						return Get-Content -LiteralPath (Join-Path $PSScriptRoot "assets.json") -Raw | ConvertFrom-Json
 					}
+					$script:OriginalDownloadFile = ${function:DownloadFile}
+					function DownloadFile($Source, [string]$OutPath) {
+						if ($OutPath -ne $ArchivePath) {
+							[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "signature-path"), $OutPath)
+						}
+						& $script:OriginalDownloadFile -Source $Source -OutPath $OutPath
+					}
 					`
+					if tt.gpgMissing {
+						injected += "\n$script:TestGpgMissing = $true\n"
+					}
+					if tt.gpgImportFailure {
+						injected += "\n$script:TestGpgImportExitCode = 2\n"
+					}
 					if tt.hashFailure {
 						injected += `
 						function Get-FileHash([string]$LiteralPath, [string]$Algorithm) {
@@ -392,6 +438,22 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					}
 					if tt.digest != nil {
 						asset["sha256"] = tt.digest
+					}
+					signatureSource := source + ".sig"
+					if tt.explicitSignatureURL {
+						signatureSource = filepath.Join(dir, "detached signature.asc")
+						asset["pgpSignatureUrl"] = signatureSource
+					} else if tt.signatureURL != nil {
+						asset["pgpSignatureUrl"] = tt.signatureURL
+					}
+					if !tt.signatureDownloadFailure {
+						signed := signature
+						if tt.untrustedSignature {
+							signed = untrustedSignature
+						}
+						if err := os.WriteFile(signatureSource, signed, 0o600); err != nil {
+							t.Fatal(err)
+						}
 					}
 					manifest, err := json.Marshal(map[string]any{
 						"version": "1.21.2-1",
@@ -435,6 +497,9 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					if tt.dryRun {
 						args = append(args, "-DryRun")
 					}
+					if tt.requireSignature {
+						args = append(args, "-RequireSignature")
+					}
 					cmd := testFileCommand(interpreter, script, args...)
 					out, err := cmd.CombinedOutput()
 					output := string(out)
@@ -455,6 +520,28 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					if got := strings.Contains(output, "Copying file from "); got != tt.wantDownload {
 						t.Errorf("download attempted = %v, want %v; output:\n%s", got, tt.wantDownload, output)
 					}
+					if got := strings.Contains(output, "Skipping OpenPGP signature verification"); got != tt.wantWarning {
+						t.Errorf("signature warning = %v, want %v; output:\n%s", got, tt.wantWarning, output)
+					}
+					signaturePath, signatureErr := os.ReadFile(filepath.Join(dir, "signature-path"))
+					if tt.wantSignature {
+						if signatureErr != nil {
+							t.Fatalf("signature download was not attempted: %v; output:\n%s", signatureErr, output)
+						}
+						if _, err := os.Stat(string(signaturePath)); !os.IsNotExist(err) {
+							t.Errorf("expected temporary signature to be removed, got %v", err)
+						}
+					} else if !os.IsNotExist(signatureErr) {
+						t.Errorf("unexpected signature download: %v", signatureErr)
+					}
+					wantGpgCalls := 0
+					if tt.wantSignature && !tt.signatureDownloadFailure {
+						wantGpgCalls = 2
+						if tt.gpgImportFailure {
+							wantGpgCalls = 1
+						}
+					}
+					checkGpgCalls(t, dir, wantGpgCalls)
 					wantExtract := tt.wantDownload && tt.wantError == ""
 					if got := strings.Contains(output, "Extracting the archive."); got != wantExtract {
 						t.Errorf("extraction attempted = %v, want %v; output:\n%s", got, wantExtract, output)
@@ -504,12 +591,23 @@ func TestInstall(t *testing.T) {
 					t.Parallel()
 
 					installDir := t.TempDir()
+					args := []string{
+						"-InstallDir", installDir,
+						"-Version", version,
+						"-RequireSignature",
+					}
+					targetOS := runtime.GOOS
+					if version == "go1.21.2-1" {
+						// Historical Windows archives are unsigned. Exercise the immutable
+						// version alias using a signed Linux archive on every host.
+						targetOS = "linux"
+						args = append(args, "-OS", "linux", "-Architecture", "amd64")
+					}
 
 					cmd := testFileCommand(
 						interpreter,
 						makeTestFile(t, ``),
-						"-InstallDir", installDir,
-						"-Version", version,
+						args...,
 					)
 					out, err := cmd.CombinedOutput()
 					if err != nil {
@@ -519,7 +617,7 @@ func TestInstall(t *testing.T) {
 
 					// Check that there is an installed go or go.exe binary.
 					goBlob := filepath.Join(installDir, "go*", "bin", "go")
-					if runtime.GOOS == "windows" {
+					if targetOS == "windows" {
 						goBlob += ".exe"
 					}
 					results, err := filepath.Glob(goBlob)

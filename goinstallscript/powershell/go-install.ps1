@@ -67,6 +67,11 @@
 .PARAMETER DownloadTimeout
     Determines timeout duration in seconds for downloading the toolset file.
     Default: 1200 seconds (20 minutes)
+.PARAMETER RequireSignature
+    If set, the script fails when a download is needed and GnuPG (gpg) is not on PATH.
+    Otherwise, missing GnuPG produces a warning and only SHA-256 is checked.
+    When GnuPG is available, missing or invalid signatures always fail installation.
+    Dry runs and already-installed versions do not require GnuPG or perform signature verification.
 .PARAMETER KeepArchive
     If set, the downloaded file is kept.
 .PARAMETER ArchivePath
@@ -97,6 +102,7 @@ param(
     [switch]$ProxyUseDefaultCredentials,
     [string[]]$ProxyBypassList=@(),
     [int]$DownloadTimeout=1200,
+    [switch]$RequireSignature,
     [switch]$KeepArchive,
     [string]$ArchivePath,
     [switch]$Help
@@ -662,6 +668,88 @@ function DownloadFile($Source, [string]$OutPath) {
     ValidateRemoteLocalFileSizes -LocalFileOutPath $OutPath -SourceUri $Source
 }
 
+function Get-MicrosoftGoSigningKey {
+    # https://aka.ms/managed-lang-compiler-public-key
+    return @{
+        Fingerprint = "B035FAC203AB9A45AAC802B4811005347B8E732C"
+        PublicKey = @'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: BSN Pgp v1.1.0.0
+
+mQENBGBt3ocBCAC0eCjRdhrHwMGh4pxw/JFulp+QcqymS9eYr7leZutRB9CpjW4O
+lXUzHzr8nIKoTbgNiak5Ws80LYvoPHwUjKqVypeRqG1vHoWzwy1t5U6imtcCspLK
+nbqkx2JFG6zcG5Dve4Kp1VeiJBQ+SwVaZfwEFFPDeCFqg2MptC7xIka2WqSTXZyL
+3PY/hNKXVeBJEg/et31FLZxWVr4/AJszu+aqhNqVMsqM8ldQF4QwVmoJQjCS/+Uy
+Nw8Dt/THbaFQvn5Tnio3Yjc+7wiKhcE1JQAi5Cj/lTFQHLGTCm21c1fJ5HTI+pTt
+O+HwJg4Wj3DEn7o+5VXj5JBtPmDxU0U6cR3vABEBAAG0QE1hbmFnZWQgTGFuZ3Vh
+Z2VzIENvbXBpbGVyIERldiBUZWFtIDxtbGFuZ2NvbXBkZXZAbWljcm9zb2Z0LmNv
+bT6JATgEEwEIACIFAmBt3ocCGwMGCwkIBwMCBhUIAgkKCwQWAgMBAh4BAheAAAoJ
+EIEQBTR7jnMsdlQH/1XJO01wECeC1AMIQhNJueb5hBv+7AfSeKF36uQuX9rx5Lxp
+hBgb9x3iEK5CE+xDtLmXx2yJZJIUtLbqxXhAa0Ph1dyLXRKAbVgv3dPlsAzPusMu
+GjTyGeHNAVwodyTp3pggxzWtjoBGnVxpCNpqVDlepzoyBAfP51dd0oQ2JBfaBpNP
+ft04A69W8eS/6pwFvUL5g5zPvczsBJmqMmSiDrNKeSa68/2k9ey1DlbhfA3FPPUx
+13xCFv9pwieHHSyunbTbLzPnfRVdSlA16W7WT9aeF46R4/QyHc4AeU1p8HJtlDPz
+jy3zx0Vd4u+rvgekEhHI7zFyHIdwHWD3UoV9Flk=
+=EZkZ
+-----END PGP PUBLIC KEY BLOCK-----
+'@
+    }
+}
+
+function Invoke-Gpg([string]$GpgPath, [string[]]$Arguments) {
+    # Windows PowerShell turns native stderr into error records, even on success.
+    # Keep that diagnostic output, but use the process exit code to detect failure.
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = $null
+    $Output = @(& $GpgPath @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $ExitCode = $global:LASTEXITCODE
+    if ($null -eq $ExitCode -or $ExitCode -ne 0) {
+        throw "GnuPG failed (exit code '$ExitCode'):`n$($Output -join [Environment]::NewLine)"
+    }
+    return $Output
+}
+
+function Verify-ArchiveSignature([string]$ArchivePath, [string]$SignaturePath, [string]$GpgPath) {
+    Say-Invocation $MyInvocation
+
+    $ArchivePath = Get-Absolute-Path $ArchivePath
+    $SignaturePath = Get-Absolute-Path $SignaturePath
+    $Directory = Join-Path ([System.IO.Path]::GetTempPath()) ("go-install-gpg-" + [System.IO.Path]::GetRandomFileName())
+    $Directory = (New-Item -ItemType Directory -Path $Directory).FullName
+    try {
+        $Key = Get-MicrosoftGoSigningKey
+        $KeyPath = Join-Path $Directory "microsoft.asc"
+        [System.IO.File]::WriteAllText($KeyPath, $Key.PublicKey, [System.Text.Encoding]::ASCII)
+        # A relative homedir also works with Git for Windows' MSYS build of GnuPG.
+        Push-Location -LiteralPath $Directory
+        try {
+            $CommonArguments = @(
+                "--no-options", "--homedir", ".", "--batch", "--no-tty",
+                "--no-auto-key-retrieve", "--no-autostart", "--status-fd", "1"
+            )
+            [void](Invoke-Gpg -GpgPath $GpgPath -Arguments ($CommonArguments + @("--import", $KeyPath)))
+            $Output = Invoke-Gpg -GpgPath $GpgPath -Arguments ($CommonArguments + @(
+                "--verify", $SignaturePath, $ArchivePath
+            ))
+            if (-not ($Output -cmatch ("^\[GNUPG:\] VALIDSIG " + [regex]::Escape($Key.Fingerprint) + " "))) {
+                throw "OpenPGP signature verification failed for '$ArchivePath': not signed by the pinned Microsoft key."
+            }
+        }
+        finally {
+            Pop-Location
+        }
+        Say-Verbose "OpenPGP signature verification succeeded."
+    }
+    finally {
+        try {
+            Remove-Item -LiteralPath $Directory -Recurse -Force
+        }
+        catch {
+            Say-Warning "Failed to remove the temporary GnuPG directory '$Directory'; remove it manually."
+        }
+    }
+}
+
 function ValidateRemoteLocalFileSizes([string]$LocalFileOutPath, $SourceUri) {
     try {
         $remoteFileSize = Get-Remote-File-Size -zipUri $SourceUri
@@ -738,7 +826,12 @@ function PrintDryRunOutput($Invocation) {
 
     foreach ($key in $Invocation.BoundParameters.Keys) {
         if (-not (@("Version","InstallDir","OS","Architecture","DryRun") -contains $key)) {
-            $RepeatableCommand+=" -$key `"$($Invocation.BoundParameters[$key])`""
+            if ($Invocation.BoundParameters[$key] -is [System.Management.Automation.SwitchParameter]) {
+                $RepeatableCommand+=" -${key}:`$$($Invocation.BoundParameters[$key].IsPresent)"
+            }
+            else {
+                $RepeatableCommand+=" -$key `"$($Invocation.BoundParameters[$key])`""
+            }
         }
     }
     Say "Repeatable invocation: $RepeatableCommand"
@@ -897,24 +990,46 @@ if ($ExpectedSHA256 -isnot [string] -or $ExpectedSHA256 -notmatch '\A[0-9a-fA-F]
     throw "The asset manifest does not contain a valid SHA-256 digest for '$DownloadLink'."
 }
 
+$GpgCommand = Get-Command gpg -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$SignatureLink = $null
+if ($null -ne $GpgCommand) {
+    $SignatureLink = Get-OrNull $Arch 'pgpSignatureUrl'
+    if ($null -eq $SignatureLink -or ($SignatureLink -is [string] -and $SignatureLink.Length -eq 0)) {
+        $SignatureLink = "$DownloadLink.sig"
+    }
+    elseif ($SignatureLink -isnot [string] -or [string]::IsNullOrWhiteSpace($SignatureLink)) {
+        throw "The asset manifest does not contain a valid OpenPGP signature URL for '$DownloadLink'."
+    }
+}
+elseif ($RequireSignature) {
+    throw "-RequireSignature requires GnuPG (gpg) on PATH. Install GnuPG before retrying."
+}
+else {
+    Say-Warning "GnuPG (gpg) was not found on PATH. Skipping OpenPGP signature verification; only SHA-256 will be checked. Use -RequireSignature to reject installations without GnuPG."
+}
+
 Measure-Action "Installation directory preparation" { Prepare-Install-Directory }
 
 Say-Verbose "Zip path: $ArchivePath"
 
 Say-Verbose "Downloading link $DownloadLink"
 
+$SignaturePath = $null
 try {
     Measure-Action "Package download" { DownloadFile -Source $DownloadLink -OutPath $ArchivePath }
     Say-Verbose "Download succeeded."
 
-    # This checks integrity, not authenticity: the manifest and archive are both remote.
-    # An attacker able to replace both can supply a matching digest. Authenticity requires
-    # verifying the signature at pgpSignatureUrl against a locally pinned Microsoft public key.
     $ActualSHA256 = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash
     if ($ActualSHA256 -ne $ExpectedSHA256) {
         throw "SHA-256 mismatch for '$ArchivePath'. Expected: $ExpectedSHA256. Actual: $ActualSHA256."
     }
     Say-Verbose "SHA-256 verification succeeded."
+
+    if ($null -ne $GpgCommand) {
+        $SignaturePath = [System.IO.Path]::GetTempFileName()
+        Measure-Action "Signature download" { DownloadFile -Source $SignatureLink -OutPath $SignaturePath }
+        Measure-Action "Signature verification" { Verify-ArchiveSignature -ArchivePath $ArchivePath -SignaturePath $SignaturePath -GpgPath $GpgCommand.Source }
+    }
 }
 catch {
     $StatusCode = $null
@@ -934,7 +1049,12 @@ catch {
         Remove-FileSafely -Path $ArchivePath
     }
 
-    throw "Downloading or verifying the archive has failed with error:`nUri: $DownloadLink`nStatusCode: $StatusCode`nError: $ErrorMessage"
+    throw "Downloading or verifying the archive has failed with error:`nUri: $DownloadLink`nSignature URI: $SignatureLink`nStatusCode: $StatusCode`nError: $ErrorMessage"
+}
+finally {
+    if ($null -ne $SignaturePath) {
+        Remove-FileSafely -Path $SignaturePath
+    }
 }
 
 Say "Extracting the archive."
