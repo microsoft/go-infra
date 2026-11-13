@@ -17,14 +17,6 @@ The script is intended for use in CI/CD pipelines or to reproduce the results of
 
 We recommend using tools from the `github.com/microsoft/go-infra/goinstallscript` module described in [the module README](README.md) to set up the script in your repository and make sure it stays up to date.
 
-## Archive integrity
-
-Before extracting a new download, the script requires a 64-character hexadecimal `sha256` digest in the selected asset's manifest entry and checks it against the archive.
-Missing, malformed, or mismatched digests cause installation to fail.
-
-This checks integrity, not authenticity: both the manifest and archive are fetched remotely, so an attacker able to replace both can supply a matching malicious digest.
-Authenticity verification would require checking the signature at `pgpSignatureUrl` against a locally pinned Microsoft public key; the script does not perform that verification.
-
 ## Prerequisites
 
 On non-Windows platforms, install [PowerShell (`pwsh`)](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell).
