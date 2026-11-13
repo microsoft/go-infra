@@ -16,10 +16,7 @@ import (
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
 )
 
-var (
-	processIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	inputIDPattern   = regexp.MustCompile(`^[a-z][A-Za-z0-9]*$`)
-)
+var processIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Process is one validated process registration.
 type Process struct {
@@ -110,16 +107,6 @@ func (r *Registry) register(process contract.Process) (*Process, error) {
 	definitions := inputs.Inputs()
 	if result == nil && len(definitions) != 0 {
 		panic(fmt.Sprintf("release process %q declares inputs but returns a nil input value", definition.ID))
-	}
-	seen := make(map[string]struct{}, len(definitions))
-	for _, input := range definitions {
-		if !inputIDPattern.MatchString(input.ID) || input.Type != "number" || strings.TrimSpace(input.Label) == "" {
-			panic(fmt.Sprintf("release process %q has invalid input %q", definition.ID, input.ID))
-		}
-		if _, exists := seen[input.ID]; exists {
-			panic(fmt.Sprintf("release process %q repeats input %q", definition.ID, input.ID))
-		}
-		seen[input.ID] = struct{}{}
 	}
 	entry := &Process{Implementation: process, Definition: definition, Inputs: definitions}
 	r.byID[definition.ID] = entry

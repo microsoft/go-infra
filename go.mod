@@ -11,6 +11,7 @@ require (
 	github.com/go-test/deep v1.1.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v65 v65.0.0
+	github.com/google/uuid v1.6.0
 	github.com/microsoft/azure-devops-go-api/azuredevops v1.0.0-b5
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/crypto v0.55.0
@@ -28,7 +29,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.3.0 // indirect
 	github.com/aclements/go-moremath v0.0.0-20210112150236-f10218a38794 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/matryer/moq v0.6.0 // indirect

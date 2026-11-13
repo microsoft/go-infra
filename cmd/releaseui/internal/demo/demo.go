@@ -5,17 +5,24 @@
 package demo
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/releaseinput"
+	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
+
+type input struct {
+	Dimensions int
+}
+
+type state struct {
+	Determinants []float64 `json:"determinants"`
+	Number       float64   `json:"number"`
+}
+
+const stateSchema = "2026-11-9-estimate"
 
 type processGroup struct{}
 
@@ -28,115 +35,93 @@ func NewProcess() contract.ProcessGroup {
 func (g *processGroup) Identity() *contract.Identity {
 	return &contract.Identity{
 		Name: "Demo", Mark: "DM",
-		Description: "Run simulated work using real Azure DevOps test records.",
+		Description: "Run a demonstration that uses proper work tracking but performs no external work.",
 	}
 }
 
 func (g *processGroup) Processes() []contract.Process {
 	return []contract.Process{
-		&process{id: "demo-a", name: "Demo A"},
-		&process{id: "demo-b", name: "Demo B"},
+		&process{id: "demo-science-" + stateSchema},
+		&process{id: "demo-bad-science-" + stateSchema, rebel: true},
 	}
 }
 
 type process struct {
-	id   string
-	name string
+	id    string
+	rebel bool
 }
 
 func (p *process) Definition() contract.ProcessDefinition {
+	name := "Demo: "
+	if p.rebel {
+		name += "rebellious"
+	} else {
+		name += "diligent"
+	}
+	name += " scientist agents calculate the number"
 	return contract.ProcessDefinition{
 		Identity: contract.Identity{
-			Name: p.name, Description: "Simulate two parallel branches of work without running a release.",
+			Name:        name,
+			Description: "Approximate Euler's number using determinants of scaled identity matrices.",
 		},
-		ID: p.id, InputSubmitLabel: "Review demo",
-		InputPreamble: "The workload and timing are fixed. Run both demos to observe independent releases.",
-		Notice: &contract.Notice{
-			Title:   "Fake work, real tracking items",
-			Message: "Confirmation creates a real Azure DevOps test work item. No builds, workflows, or artifacts are published.",
-		},
+		ID:            p.id,
+		InputPreamble: "Choose the conditions for the calculation. This changes the number of steps involved.",
 	}
 }
 
 func (p *process) Preflight(ctx context.Context) (warning error, blocking error) {
+	if p.rebel {
+		return errors.New("potential for sabotage"), nil
+	}
 	return nil, ctx.Err()
 }
 
-func (p *process) InputForm(*releaseinput.Set) any {
-	return nil
+func (p *process) InputForm(s *releaseinput.Set) any {
+	var i input
+	// This helper enforces that Dimensions will be >= 1.
+	s.PositiveIntVar(&i.Dimensions, releaseinput.FieldOptions{Label: "Number of dimensions"})
+	return &i
 }
 
 func (p *process) Prepare(ctx context.Context, inputFormResult any) (*contract.StateSnapshot, error) {
-	if inputFormResult != nil {
-		panic("demo process received an input value")
+	i := inputFormResult.(*input)
+	// Validate user-facing inputs to make sure they're reasonable.
+	if i.Dimensions > 50 {
+		return nil, releaseinput.NewInvalidInputError(&i.Dimensions, "dimensional order must not exceed 50 to prevent multiverse excess")
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return encodeSnapshot(state{
-		SchemaVersion: stateSchema, UpdatedAt: time.Now().UTC(),
-	})
+	// We only create the slice after verifying the number given to us by the user is reasonable.
+	s := state{Determinants: make([]float64, i.Dimensions)}
+	return snapshot.Encode(i, s)
 }
 
-func (p *process) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	if snapshot == nil {
-		return nil, errors.New("demo snapshot is nil")
-	}
-	input, err := decodeStrictJSON[*struct{}](snapshot.Input)
+func (p *process) Validate(saved *contract.StateSnapshot) error {
+	input, state, err := snapshot.Decode[input, state](saved)
 	if err != nil {
-		return nil, fmt.Errorf("decode demo input: %w", err)
+		return err
 	}
-	if input == nil {
-		return nil, errors.New("demo input must be an object")
+	// Validate may have looser rules than the user-focused validation in Prepare. This allows a
+	// process to load old runs that started before the user-facing limit was reduced, or to support
+	// ad-hoc custom-modified runs.
+	if input.Dimensions <= 0 || input.Dimensions > 128 {
+		return errors.New("dimensional order out of calculable range")
 	}
-	state, err := decodeStrictJSON[state](snapshot.State)
-	if err != nil {
-		return nil, fmt.Errorf("decode demo state: %w", err)
-	}
-	if err := validateState(state); err != nil {
-		return nil, err
-	}
-	return newRun(p.name, state), nil
-}
-
-func encodeSnapshot(state state) (*contract.StateSnapshot, error) {
-	stateJSON, err := json.Marshal(state)
-	if err != nil {
-		return nil, fmt.Errorf("encode demo state: %w", err)
-	}
-	return &contract.StateSnapshot{Input: json.RawMessage(`{}`), State: stateJSON}, nil
-}
-
-func validateState(state state) error {
-	if state.SchemaVersion != stateSchema {
-		return fmt.Errorf("unsupported demo state schema %d", state.SchemaVersion)
-	}
-	if state.UpdatedAt.IsZero() {
-		return errors.New("demo update time is zero")
-	}
-	for _, completed := range state.WorkCompleted {
-		if completed < 0 || completed > workUnits {
-			return errors.New("demo work count is out of range")
-		}
-		if !state.Initialized && (completed != 0 || state.Finished) {
-			return errors.New("demo work started before initialization")
-		}
-		if state.Finished && completed != workUnits {
-			return errors.New("demo finished before both branches completed")
-		}
+	// If state contains fixed-length slices, it's usually worth validating that it has the expected
+	// number of slots.
+	if len(state.Determinants) != input.Dimensions {
+		return errors.New("determinant result count must match the dimensional order")
 	}
 	return nil
 }
 
-func decodeStrictJSON[T any](data json.RawMessage) (T, error) {
-	var value T
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return value, err
+func (p *process) Load(saved *contract.StateSnapshot) (contract.Run, error) {
+	input, state, err := snapshot.Decode[input, state](saved)
+	if err != nil {
+		return nil, err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return value, errors.New("expected exactly one JSON value")
-	}
-	return value, nil
+	return &run{
+		name:  p.Definition().Name,
+		rebel: p.rebel,
+		input: input,
+		state: state,
+	}, nil
 }

@@ -142,10 +142,12 @@ func TestStepRunnerFinalizesBeforeReportingCompletion(t *testing.T) {
 	var runner StepRunner
 	done := make(chan error, 1)
 	go func() {
-		done <- runner.ExecuteWithFinalizer(context.Background(), []*Step{step}, func(error) error {
-			close(entered)
-			<-release
-			return finalErr
+		done <- runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+			Finalize: func(error) error {
+				close(entered)
+				<-release
+				return finalErr
+			},
 		})
 	}()
 	select {
@@ -210,8 +212,8 @@ func TestStepRunnerSnapshots(t *testing.T) {
 func TestStepRunnerProgressSnapshots(t *testing.T) {
 	reported := make(chan struct{})
 	releaseStep := make(chan struct{})
-	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context, control StepControl) error {
-		control.ReportProgress(StepProgress{
+	step := NewRootStep("Progress step", NoTimeout, func(ctx context.Context, ctl StepControl) error {
+		ctl.ReportProgress(StepProgress{
 			Summary:   "Running one pipeline task",
 			Detail:    "1/3 stages complete",
 			Completed: 1,
@@ -267,6 +269,363 @@ func TestStepRunnerProgressSnapshots(t *testing.T) {
 	}
 }
 
+func TestStepControlsShareRunLock(t *testing.T) {
+	var runner StepRunner
+	count := 0
+	work := func(_ context.Context, ctl StepControl) error {
+		for range 10 {
+			ctl.Update(func() {
+				current := count
+				time.Sleep(time.Millisecond)
+				count = current + 1
+				ctl.ReportProgress(StepProgress{Completed: count, Total: 20})
+				runner.Snapshot()
+			})
+		}
+		return nil
+	}
+	a := NewRootStep("A", NoTimeout, work)
+	b := NewRootStep("B", NoTimeout, work)
+	join := All(a, b).Then("Join", NoTimeout, func(_ context.Context, ctl StepControl) error {
+		var result int
+		ctl.Read(func() { result = count })
+		if result != 20 {
+			return fmt.Errorf("count = %d, want 20", result)
+		}
+		return nil
+	})
+	steps, err := join.TransitiveDependencies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Execute(context.Background(), steps); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStepControlRunLocksAreIndependent(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		locked := make(chan struct{})
+		release := make(chan struct{})
+		first := NewRootStep("First", NoTimeout, func(_ context.Context, ctl StepControl) error {
+			ctl.Update(func() {
+				close(locked)
+				<-release
+			})
+			return nil
+		})
+		var firstRunner, secondRunner StepRunner
+		done := make(chan error, 1)
+		go func() { done <- firstRunner.Execute(context.Background(), []*Step{first}) }()
+		<-locked
+
+		called := false
+		second := NewRootStep("Second", NoTimeout, func(_ context.Context, ctl StepControl) error {
+			ctl.Update(func() { called = true })
+			return nil
+		})
+		err := secondRunner.Execute(context.Background(), []*Step{second})
+		close(release)
+		if firstErr := <-done; firstErr != nil {
+			t.Fatal(firstErr)
+		}
+		if err != nil || !called {
+			t.Fatalf("second run error = %v, callback called = %v", err, called)
+		}
+	})
+}
+
+func TestCaptureFailureCancelsAndSurvivesNilStepReturn(t *testing.T) {
+	failure := errors.New("capture failed")
+	mutations, captures := 0, 0
+	step := NewRootStep("Work", NoTimeout, func(ctx context.Context, ctl StepControl) error {
+		ctl.Update(func() { mutations++ })
+		if err := ctl.EnsurePersisted(); !errors.Is(err, failure) {
+			t.Errorf("EnsurePersisted error=%v, want %v", err, failure)
+		}
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Error("Update returned before canceling the step")
+		}
+		ctl.Update(func() { mutations++ })
+		if err := ctl.EnsurePersisted(); err == nil {
+			t.Error("durability barrier ignored the capture failure")
+		}
+		return nil
+	})
+	dependentRan := false
+	dependent := step.Then("Dependent", NoTimeout, func(context.Context, StepControl) error {
+		dependentRan = true
+		return nil
+	})
+	steps, err := dependent.TransitiveDependencies()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runner StepRunner
+	finalized := false
+	err = runner.ExecuteWithCallbacks(context.Background(), steps, ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			captures++
+			return nil, failure
+		},
+		Finalize: func(err error) error {
+			finalized = true
+			if !errors.Is(err, failure) {
+				t.Errorf("finalizer lost update failure: %v", err)
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, failure) || mutations != 2 || captures != 1 || dependentRan || !finalized {
+		t.Fatalf("error=%v, mutations=%d, captures=%d, dependent=%v, finalized=%v",
+			err, mutations, captures, dependentRan, finalized)
+	}
+	if graph := runner.Snapshot(); graph.Error == "" || graph.Steps[0].Status == StepStatusSucceeded {
+		t.Fatalf("failed update reported success: %#v", graph)
+	}
+}
+
+func TestStepReadLocking(t *testing.T) {
+	var runner StepRunner
+	ctl := stepControl{runner: &runner, ctx: context.Background()}
+	ctl.Read(func() {
+		locked := runner.process.mu.TryLock()
+		if locked {
+			runner.process.mu.Unlock()
+		}
+		if locked != raceEnabled {
+			t.Errorf("read permits a writer=%v, race build=%v", locked, raceEnabled)
+		}
+	})
+	runner.ReadState(func() {
+		if runner.process.mu.TryLock() {
+			runner.process.mu.Unlock()
+			t.Error("host read did not exclude writers")
+		}
+		if !runner.process.mu.TryRLock() {
+			t.Error("host read excluded another reader")
+		} else {
+			runner.process.mu.RUnlock()
+		}
+	})
+}
+
+func TestStorageFailureDoesNotCancelAndEnsurePersistedRetries(t *testing.T) {
+	var runner StepRunner
+	failure := errors.New("storage unavailable")
+	attempts := 0
+	storageErr := failure
+	value, saved := 0, 0
+	step := NewRootStep("Work", NoTimeout, func(ctx context.Context, ctl StepControl) error {
+		ctl.Update(func() { value = 1 })
+		if ctx.Err() != nil || runner.Snapshot().CheckpointError == "" {
+			t.Fatal("storage failure canceled execution or was hidden")
+		}
+		if err := ctl.EnsurePersisted(); !errors.Is(err, failure) {
+			t.Fatalf("durability barrier error=%v", err)
+		}
+		if ctx.Err() != nil {
+			t.Fatal("durability barrier canceled execution without the step returning")
+		}
+		ctl.Update(func() { value = 2 })
+		storageErr = nil
+		if err := ctl.EnsurePersisted(); err != nil {
+			return err
+		}
+		if saved != 2 || runner.Snapshot().CheckpointError != "" {
+			t.Fatalf("latest state not saved or warning not cleared: saved=%d", saved)
+		}
+		before := attempts
+		if err := ctl.EnsurePersisted(); err != nil || attempts != before {
+			t.Fatal("already-durable state was saved again")
+		}
+		return nil
+	})
+	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			captured := value
+			return func() error {
+				attempts++
+				if storageErr != nil {
+					return storageErr
+				}
+				saved = captured
+				return nil
+			}, nil
+		},
+	})
+	if err != nil || attempts != 4 {
+		t.Fatalf("execution error=%v, attempts=%d", err, attempts)
+	}
+}
+
+func TestLaterUpdateCanRecoverStorageFailure(t *testing.T) {
+	var runner StepRunner
+	attempts := 0
+	continued := false
+	step := NewRootStep("Work", NoTimeout, func(ctx context.Context, ctl StepControl) error {
+		ctl.Update(func() {})
+		if ctx.Err() != nil {
+			t.Fatal("first save failure canceled execution")
+		}
+		ctl.Update(func() { continued = true })
+		return nil
+	})
+	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			return func() error {
+				attempts++
+				if attempts == 1 {
+					return errors.New("temporary outage")
+				}
+				return nil
+			}, nil
+		},
+	})
+	if err != nil || !continued || runner.Snapshot().CheckpointError != "" {
+		t.Fatalf("later update did not recover: error=%v, continued=%v", err, continued)
+	}
+}
+
+func TestStepRunnerReplacesCheckpointStateBetweenRuns(t *testing.T) {
+	var runner StepRunner
+	step := NewRootStep("Work", NoTimeout, func(_ context.Context, ctl StepControl) error {
+		ctl.Update(func() {})
+		return nil
+	})
+	failure := errors.New("storage unavailable")
+	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) {
+			return func() error { return failure }, nil
+		},
+	})
+	if !errors.Is(err, failure) || runner.Snapshot().CheckpointError != failure.Error() {
+		t.Fatalf("first run error=%v, snapshot=%#v", err, runner.Snapshot())
+	}
+
+	if err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
+		Update: func() (func() error, error) { return nil, nil },
+	}); err != nil {
+		t.Fatalf("second run error=%v", err)
+	}
+	if snapshot := runner.Snapshot(); snapshot.CheckpointError != "" || snapshot.Error != "" {
+		t.Fatalf("second run retained checkpoint state: %#v", snapshot)
+	}
+}
+
+func TestEnsurePersistedWaitsForEarlierUpdate(t *testing.T) {
+	var runner StepRunner
+	saving := make(chan struct{})
+	release := make(chan struct{})
+	barrierStarted := make(chan struct{})
+	barrierDone := make(chan struct{})
+	saved := false
+	writer := NewRootStep("Writer", NoTimeout, func(_ context.Context, ctl StepControl) error {
+		ctl.Update(func() {})
+		return nil
+	})
+	reader := NewRootStep("Barrier", NoTimeout, func(_ context.Context, ctl StepControl) error {
+		<-saving
+		close(barrierStarted)
+		err := ctl.EnsurePersisted()
+		if !saved {
+			t.Error("barrier returned before persistence")
+		}
+		close(barrierDone)
+		return err
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- runner.ExecuteWithCallbacks(context.Background(), []*Step{writer, reader}, ExecutionCallbacks{
+			Update: func() (func() error, error) {
+				return func() error {
+					close(saving)
+					<-release
+					saved = true
+					return nil
+				}, nil
+			},
+		})
+	}()
+	<-barrierStarted
+	select {
+	case <-barrierDone:
+		t.Error("barrier did not wait")
+	default:
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStepReadCancellation(t *testing.T) {
+	for _, during := range []bool{false, true} {
+		t.Run(fmt.Sprintf("during callback=%v", during), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if !during {
+				cancel()
+			}
+			var runner StepRunner
+			ctl := stepControl{runner: &runner, ctx: ctx}
+			called := false
+			ctl.Read(func() {
+				called = true
+				cancel()
+			})
+			if !called {
+				t.Fatal("canceled read did not call its callback")
+			}
+			if !runner.process.mu.TryLock() {
+				t.Fatal("read left the lock held")
+			}
+			runner.process.mu.Unlock()
+		})
+	}
+}
+
+func TestStepReadLockReleasedAfterPanic(t *testing.T) {
+	var runner StepRunner
+	ctl := stepControl{runner: &runner, ctx: context.Background()}
+	sentinel := errors.New("read callback panic")
+	func() {
+		defer func() {
+			if got := recover(); got != sentinel {
+				t.Errorf("panic=%v, want %v", got, sentinel)
+			}
+		}()
+		ctl.Read(func() { panic(sentinel) })
+	}()
+	if !runner.process.mu.TryLock() {
+		t.Fatal("read callback panic left the run lock held")
+	}
+	runner.process.mu.Unlock()
+}
+
+func TestStepControlRunLockReleasedAfterPanic(t *testing.T) {
+	var runner StepRunner
+	runner.process.beginExecution(nil, nil)
+	ctl := stepControl{runner: &runner, ctx: context.Background()}
+	sentinel := errors.New("callback panic")
+	func() {
+		defer func() {
+			if got := recover(); got != sentinel {
+				t.Errorf("panic = %v, want %v", got, sentinel)
+			}
+		}()
+		ctl.Update(func() { panic(sentinel) })
+	}()
+	if !runner.process.mu.TryLock() {
+		t.Fatal("callback panic left the run lock held")
+	}
+	runner.process.mu.Unlock()
+	if !runner.process.updateMu.TryLock() {
+		t.Fatal("callback panic left the update lock held")
+	}
+	runner.process.updateMu.Unlock()
+}
+
 func TestStepControlsReportParallelProgress(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -279,14 +638,14 @@ func TestStepControlsReportParallelProgress(t *testing.T) {
 		var firstControl StepControl
 		steps := make([]*Step, len(expected))
 		for index, progress := range expected {
-			steps[index] = NewRootStep(progress.Summary, NoTimeout, func(ctx context.Context, control StepControl) error {
-				if control == nil {
+			steps[index] = NewRootStep(progress.Summary, NoTimeout, func(ctx context.Context, ctl StepControl) error {
+				if ctl == nil {
 					return errors.New("runner did not supply step control")
 				}
 				if index == 0 {
-					firstControl = control
+					firstControl = ctl
 				}
-				control.ReportProgress(progress)
+				ctl.ReportProgress(progress)
 				select {
 				case <-release:
 					return nil
@@ -324,21 +683,38 @@ func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				started := time.Now()
-				step := NewRootStep("Controlled wait", timeout, func(ctx context.Context, control StepControl) error {
+				mutated, saved := false, false
+				var runner StepRunner
+				step := NewRootStep("Controlled wait", timeout, func(ctx context.Context, ctl StepControl) error {
 					deadline, hasDeadline := ctx.Deadline()
 					if hasDeadline != (timeout != NoTimeout) || hasDeadline && !deadline.Equal(started.Add(timeout)) {
 						return fmt.Errorf("unexpected deadline %s, present=%v", deadline, hasDeadline)
 					}
-					if control == nil {
+					if ctl == nil {
 						return errors.New("runner did not supply step control")
 					}
-					control.ReportProgress(StepProgress{Summary: "Waiting for cancellation"})
+					ctl.ReportProgress(StepProgress{Summary: "Waiting for cancellation"})
 					<-ctx.Done()
+					ctl.Update(func() {
+						mutated = true
+						if locked := runner.process.mu.TryLock(); locked {
+							runner.process.mu.Unlock()
+							t.Error("canceled Update did not hold the state lock")
+						}
+					})
 					return ctx.Err()
 				})
-				var runner StepRunner
 				done := make(chan error, 1)
-				go func() { done <- runner.Execute(ctx, []*Step{step}) }()
+				go func() {
+					done <- runner.ExecuteWithCallbacks(ctx, []*Step{step}, ExecutionCallbacks{
+						Update: func() (func() error, error) {
+							if !mutated {
+								t.Error("capture ran before the canceled callback")
+							}
+							return func() error { saved = true; return nil }, nil
+						},
+					})
+				}()
 				synctest.Wait()
 				progress := runner.Snapshot().Steps[0].Progress
 				if progress == nil || progress.Summary != "Waiting for cancellation" {
@@ -356,6 +732,9 @@ func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
 				}
 				if runner.Snapshot().Active {
 					t.Fatal("canceled or timed-out step left the runner active")
+				}
+				if !mutated || !saved {
+					t.Fatalf("Update after cancellation: mutated=%v, saved=%v", mutated, saved)
 				}
 			})
 		})

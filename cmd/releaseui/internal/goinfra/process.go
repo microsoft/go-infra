@@ -139,7 +139,7 @@ func (p *releaseOnMergeProcess) Preflight(ctx context.Context) (warning error, b
 
 func (p *releaseOnMergeProcess) InputForm(inputs *releaseinput.Set) any {
 	result := new(releaseOnMergeInput)
-	inputs.PositiveIntVar(&result.PullRequest, "pullRequest", releaseinput.FieldOptions{
+	inputs.PositiveIntVar(&result.PullRequest, releaseinput.FieldOptions{
 		Label: "Pull request number", Placeholder: "123",
 		Description: "The server verifies that the PR is open, targets main, and does not come from a fork.",
 	})
@@ -190,7 +190,7 @@ func prepareGoInfra(
 	}
 	normalized, pullRequestNumber, err := normalizeGoInfraPlanInput(input)
 	if err != nil {
-		return nil, errors.Join(err, contract.ErrInvalidInput)
+		return nil, errors.Join(err, releaseinput.ErrInvalidInput)
 	}
 	state := goInfraSnapshotState{SchemaVersion: goInfraStateSchema, UpdatedAt: time.Now().UTC()}
 	if normalized.Action == goInfraActionReleaseOnMerge {
@@ -209,49 +209,63 @@ func prepareGoInfra(
 func loadGoInfraRun(
 	github GitHubService,
 	snapshot *contract.StateSnapshot,
-	match func(goInfraPlanInput) bool,
 ) (contract.Run, error) {
 	input, state, err := decodeGoInfraSnapshot(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	if !match(input) {
-		return nil, errors.New("go-infra snapshot belongs to a different process")
-	}
-	if err := validateGoInfraState(input, state); err != nil {
-		return nil, err
-	}
 	return &goInfraRun{github: github, input: input, state: state}, nil
 }
 
-func (p *releaseOnMergeProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoInfraRun(p.github, snapshot, func(input goInfraPlanInput) bool {
+func validateGoInfraSnapshot(
+	snapshot *contract.StateSnapshot, match func(goInfraPlanInput) bool,
+) error {
+	input, state, err := decodeGoInfraSnapshot(snapshot)
+	if err != nil {
+		return err
+	}
+	if !match(input) {
+		return errors.New("go-infra snapshot belongs to a different process")
+	}
+	return validateGoInfraState(input, state)
+}
+
+func (p *releaseOnMergeProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoInfraSnapshot(snapshot, func(input goInfraPlanInput) bool {
 		return input.Action == goInfraActionReleaseOnMerge
 	})
 }
 
+func (p *releaseOnMergeProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
+	return loadGoInfraRun(p.github, snapshot)
+}
+
 func (p *dryRunProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoInfraRun(p.github, snapshot, func(input goInfraPlanInput) bool {
+	return loadGoInfraRun(p.github, snapshot)
+}
+
+func (p *dryRunProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoInfraSnapshot(snapshot, func(input goInfraPlanInput) bool {
 		return input.Action == goInfraActionManualDispatch &&
 			input.DispatchMode == goInfraDispatchModeDryRun
 	})
 }
 
-func (p *publishProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
-	return loadGoInfraRun(p.github, snapshot, func(input goInfraPlanInput) bool {
+func (p *publishProcess) Validate(snapshot *contract.StateSnapshot) error {
+	return validateGoInfraSnapshot(snapshot, func(input goInfraPlanInput) bool {
 		return input.Action == goInfraActionManualDispatch &&
 			input.DispatchMode == goInfraDispatchModePublish
 	})
 }
 
-func (r *goInfraRun) TakeSnapshot() *contract.StateSnapshot {
+func (p *publishProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
+	return loadGoInfraRun(p.github, snapshot)
+}
+
+func (r *goInfraRun) TakeSnapshot() (*contract.StateSnapshot, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	snapshot, err := encodeGoInfraSnapshot(r.input, r.state)
-	if err != nil {
-		panic(fmt.Sprintf("encode go-infra snapshot: %v", err))
-	}
-	return snapshot
+	return encodeGoInfraSnapshot(r.input, r.state)
 }
 
 func (r *goInfraRun) TakeView() *contract.RunView {
@@ -259,7 +273,7 @@ func (r *goInfraRun) TakeView() *contract.RunView {
 	defer r.mu.RUnlock()
 	view := &contract.RunView{
 		Test: goInfraProcessIsTest(r.input), Summary: "Ready",
-		Detail: goInfraProcessName(r.input), UpdatedAt: r.state.UpdatedAt,
+		Detail: goInfraProcessName(r.input),
 	}
 	if r.state.WorkflowRun == nil {
 		return view
@@ -311,7 +325,7 @@ func (r *goInfraRun) Plan() *contract.Plan {
 	return plan
 }
 
-func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
+func (r *goInfraRun) Build() ([]*coordinator.Step, error) {
 	if err := validateGoInfraConfiguration(r.github); err != nil {
 		return nil, err
 	}
@@ -329,7 +343,7 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	if input.Action != goInfraActionManualDispatch {
 		return nil, fmt.Errorf("unsupported go-infra action %q", input.Action)
 	}
-	dispatch := goInfraProcessStep(input, func(ctx context.Context, _ coordinator.StepControl) error {
+	dispatch := goInfraProcessStep(input, func(ctx context.Context, ctl coordinator.StepControl) error {
 		r.mu.RLock()
 		known := r.state.WorkflowRun != nil
 		r.mu.RUnlock()
@@ -340,12 +354,12 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 		if err != nil {
 			return err
 		}
-		return r.checkpoint(ctx, run, checkpoint)
+		return errors.Join(r.checkpoint(ctl, run), ctx.Err())
 	})
 	monitor := dispatch.Then(
 		"Monitor patch-release workflow",
 		goInfraWorkflowTimeout,
-		func(ctx context.Context, control coordinator.StepControl) error {
+		func(ctx context.Context, ctl coordinator.StepControl) error {
 			r.mu.RLock()
 			saved := *r.state.WorkflowRun
 			r.mu.RUnlock()
@@ -363,11 +377,11 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 				if run.ID != saved.ID || run.URL != saved.URL || run.HeadSHA != saved.HeadSHA {
 					return errors.New("workflow read does not match the saved run")
 				}
-				control.ReportProgress(coordinator.StepProgress{
+				ctl.ReportProgress(coordinator.StepProgress{
 					Summary: "GitHub workflow " + run.Status,
 					Detail:  fmt.Sprintf("Run %d: %s", run.ID, run.Conclusion), RunURL: run.URL,
 				})
-				return r.checkpoint(ctx, run, checkpoint)
+				return errors.Join(r.checkpoint(ctl, run), ctx.Err())
 			})
 			if err != nil && completed.Status == "completed" && completed.Conclusion == "cancelled" {
 				return errors.Join(coordinator.ErrCanceled, err)
@@ -378,18 +392,17 @@ func (r *goInfraRun) Build(_ context.Context, checkpoint contract.CheckpointFunc
 	return monitor.TransitiveDependencies()
 }
 
-func (r *goInfraRun) checkpoint(ctx context.Context, run GoInfraWorkflowRun, checkpoint contract.CheckpointFunc) error {
+func (r *goInfraRun) checkpoint(ctl coordinator.StepControl, run GoInfraWorkflowRun) error {
 	if err := validateGoInfraWorkflowRun(&run); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	r.state.WorkflowRun = &run
-	r.state.UpdatedAt = time.Now().UTC()
-	r.mu.Unlock()
-	if checkpoint != nil {
-		checkpoint()
-	}
-	return ctx.Err()
+	ctl.Update(func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.state.WorkflowRun = &run
+		r.state.UpdatedAt = time.Now().UTC()
+	})
+	return nil
 }
 
 func encodeGoInfraSnapshot(input goInfraPlanInput, state goInfraSnapshotState) (*contract.StateSnapshot, error) {

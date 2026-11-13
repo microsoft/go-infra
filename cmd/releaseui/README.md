@@ -27,6 +27,7 @@ Keep process policy separate from reusable mechanics:
 ```text
 releaseui/                           Local HTTP lifecycle, UI, execution, and built-in storage
 releaseui/contract/                  Process and durable-state contracts
+releaseui/snapshot/                  Typed JSON encoding and strict snapshot decoding
 releaseui/releaseinput/              Process input definitions, parsing, and Go field bindings
 releaseui/internal/azdorunstore/     Azure Boards release storage
 releaseui/internal/runstore/         Private durable-state and storage contracts
@@ -72,23 +73,54 @@ func (p *exampleProcess) Definition() contract.ProcessDefinition {
 }
 
 func (p *exampleProcess) InputForm(inputs *releaseinput.Set) any {
-  result := new(exampleInput)
-  inputs.PositiveIntVar(&result.RunID, "runId", releaseinput.FieldOptions{Label: "Run ID"})
-  return result
+	result := new(exampleInput)
+	inputs.PositiveIntVar(&result.RunID, releaseinput.FieldOptions{Label: "Run ID"})
+	return result
 }
 ```
 
+Releaseui assigns field IDs in registration order, so `InputForm` must register the same fields in the same order each time.
+These IDs connect browser fields to Go bindings; they do not change the process's persisted input schema.
+Preparing a plan leaves the browser's input controls and their values intact, whether preparation succeeds or fails.
 `Process.Prepare` validates the typed form result and returns a `StateSnapshot`.
-`Process.Load` validates a snapshot and constructs a `Run`.
-`Run.TakeSnapshot` returns an independent durable state copy, `Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
+`Process.Validate` checks snapshot input and state before the host accepts prepared state, loads a run, imports a checkpoint, or saves captured state.
+It must accept valid intermediate states without changing the snapshot or performing external I/O.
+During preparation, errors marked with `releaseinput.ErrInvalidInput` appear beside the input form and remain visible until the inputs change or preparation is retried.
+To associate a validation error with a field, return `releaseinput.NewInvalidInputError(&result.RunID, "run ID must identify a successful build")` from `Prepare`.
+Releaseui matches the pointer against the fields registered in `releaseinput.Set`, displays the message beside the matching input, and gives that input a red outline.
+A nil or unmatched pointer displays the message at the form level.
+The error still matches `releaseinput.ErrInvalidInput` through `errors.Is`, and field matching works through wrapped errors.
+`Process.Load` decodes the validated snapshot and constructs a `Run`; it does not need to repeat validation.
+`Run.TakeSnapshot` returns an independent durable state copy and an error if capture or encoding fails.
+`Run.TakeView` reports current display state, `Run.Plan` provides confirmation content, and `Run.Build` constructs the executable graph.
 The shared host names new tracking items from the registered process-group and process names.
 Process implementations do not supply tracking titles. Pipeline identifiers and step counts
 remain in plan facts and review-page subtitles. Updates do not rename existing tracking items.
 Only execution of the returned steps may mutate external state.
 Each step function receives a context for cancellation and deadlines and an explicit
-`coordinator.StepControl` for progress reporting. Call `control.ReportProgress` to publish step
+`coordinator.StepControl` for progress reporting. Call `ctl.ReportProgress` to publish step
 progress, and pass the control explicitly to polling helpers that report progress. The runner
 provides a control bound to each executing step; progress reporting does not use context values.
+Change run state through `ctl.Update`, which captures the resulting snapshot and view under the run's shared state lock.
+The host releases that lock before storage I/O and saves updates in mutation order.
+`Update` captures state and attempts a checkpoint before returning, without returning an error.
+It always calls its callback under the state lock, even after cancellation.
+Storage failures display a warning but do not stop the release.
+Later updates and five-second heartbeats retry saving the latest captured state.
+Call `ctl.EnsurePersisted()` and return its error before an external action that requires durable intent.
+It retries pending persistence and succeeds only when all preceding updates have been saved.
+Capture and validation failures still cancel execution and preserve the original error.
+After such a failure, later `Update` calls still run their callbacks but skip capture and persistence.
+Finalization attempts to save the latest valid state and reports any unresolved save failure.
+`Run.Build` takes no arguments.
+Execution contexts are supplied to step functions when they run.
+Process implementations do not need their own locks for state changed through `Update`.
+Use step dependencies to order reads of completed results.
+Use `ctl.Read` for short, read-only access to run state inside steps.
+`Read` always calls its callback, including after cancellation, so local results are initialized.
+It holds the run's shared read lock in normal builds, but skips locking in race builds so missing step dependencies remain detectable.
+Host snapshot and view reads always lock, including in race builds.
+Do not nest `Read` or `Update` callbacks or wait for another step inside them.
 Release-specific packages own target policy and call neutral Azure or GitHub clients for transport.
 The server owns confirmation, its persistence envelope, duplicate-start protection, checkpoints, restart behavior, state APIs, and event streaming.
 
@@ -99,6 +131,26 @@ A blocking error prevents preparation and starting, but does not prevent restori
 Before preparation, the shared lifecycle creates a fresh input value with `InputForm`.
 `releaseinput.Set.Parse` rejects missing or unknown fields and binds valid positive integers directly to typed Go fields.
 Each process then applies its semantic and fixed-target validation.
+
+## Demo processes
+
+To include two independent simulated releases, start the UI with the demo flag:
+
+```console
+go run ./cmd/releaseui serve -demo
+```
+
+Confirmation creates real Azure DevOps test work items, so authenticate `az` before running a demo.
+No builds, workflows, or artifacts are published.
+Each dimension simulates 30 seconds of analysis, then saves the determinant of the scaled identity matrix `(1 + 1/n) I_n`.
+Its determinant, `(1 + 1/n)^n`, approaches Euler's number `e` as the dimension `n` increases.
+The final step fits a straight line to `n × determinant(n)` against `n` using every dimension and saves its slope as "the number."
+Since `n × determinant(n)` approaches `e × n - e/2`, the slope estimates `e`.
+With only one dimension, the estimate is that dimension's determinant.
+Elapsed-time progress is transient: resuming skips completed dimensions and restarts unfinished ones from zero.
+Rebellious scientists sabotage dimension 1 halfway through each attempt without saving a partial result.
+The saved-estimate snapshot uses new process IDs; older determinant-only, prime-result, and work-count snapshots are not compatible.
+See the [demo implementation and API simplification plans](internal/demo/README.md) for the example's structure and proposed API changes.
 
 ## Go-images release modes
 
@@ -206,6 +258,8 @@ even when the matching process is not configured or its checkpoint uses an unsup
 The dashboard uses the same published data.
 
 Release pages refresh the stored view every five seconds and show its last-published timestamp.
+The host assigns this timestamp when publishing checkpoints, progress, heartbeats, and the final outcome.
+Processes report live step progress through `ctl.ReportProgress`; `RunView` does not carry a timestamp.
 If the runner stops publishing, the page keeps the last saved progress and warns that it may be
 stale. It does not independently monitor or restart the external operation. Use a step's
 **Open external run** link or **Open release run** to inspect the provider directly.

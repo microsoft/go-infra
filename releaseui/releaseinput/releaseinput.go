@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,7 +21,7 @@ import (
 
 // FieldOptions contains the display text for one bound input field.
 type FieldOptions struct {
-	// Label names the field.
+	// Label names the field. Required.
 	Label string
 
 	// Description explains the value expected from the operator.
@@ -41,22 +42,22 @@ func (s *Set) Validate() error {
 	return s.err
 }
 
-// PositiveIntVar binds id to target and renders it as a positive integer field.
-func (s *Set) PositiveIntVar(target *int, id string, options FieldOptions) {
+// PositiveIntVar binds target to a positive integer field.
+func (s *Set) PositiveIntVar(target *int, options FieldOptions) {
 	if s.err != nil {
 		return
 	}
-	if target == nil {
-		s.err = fmt.Errorf("input %q has a nil target", id)
+	if strings.TrimSpace(options.Label) == "" {
+		s.err = fmt.Errorf("input %d has an empty label", len(s.bindings)+1)
 		return
 	}
-	for _, binding := range s.bindings {
-		if binding.definition.ID == id {
-			s.err = fmt.Errorf("input %q is bound more than once", id)
-			return
-		}
+	if target == nil {
+		s.err = fmt.Errorf("input %q has a nil target", options.Label)
+		return
 	}
+	id := fmt.Sprintf("input%d", len(s.bindings)+1)
 	s.bindings = append(s.bindings, inputBinding{
+		target: target,
 		definition: webview.Input{
 			ID: id, Type: "number", Label: options.Label,
 			Description: options.Description, Placeholder: options.Placeholder,
@@ -64,11 +65,11 @@ func (s *Set) PositiveIntVar(target *int, id string, options FieldOptions) {
 		set: func(raw json.RawMessage) error {
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
-				return fmt.Errorf("input %q must be a string", id)
+				return fmt.Errorf("input %q must be a string", options.Label)
 			}
 			number, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
 			if err != nil || number == 0 || uint64(int(number)) != number {
-				return fmt.Errorf("input %q must be a positive integer", id)
+				return fmt.Errorf("input %q must be a positive integer", options.Label)
 			}
 			*target = int(number)
 			return nil
@@ -83,6 +84,19 @@ func (s *Set) Inputs() []webview.Input {
 		inputs[index] = binding.definition
 	}
 	return inputs
+}
+
+// FieldID returns the ID bound to target, or an empty string if target is not a registered pointer.
+func (s *Set) FieldID(target any) string {
+	if target == nil || reflect.TypeOf(target).Kind() != reflect.Pointer {
+		return ""
+	}
+	for _, binding := range s.bindings {
+		if binding.target == target {
+			return binding.definition.ID
+		}
+	}
+	return ""
 }
 
 // Parse binds one JSON object to the registered Go fields.
@@ -104,7 +118,7 @@ func (s *Set) Parse(data json.RawMessage) error {
 	for _, binding := range s.bindings {
 		raw, ok := encoded[binding.definition.ID]
 		if !ok {
-			return fmt.Errorf("input %q is required", binding.definition.ID)
+			return fmt.Errorf("input %q is required", binding.definition.Label)
 		}
 		if err := binding.set(raw); err != nil {
 			return err
@@ -124,5 +138,6 @@ func (s *Set) Parse(data json.RawMessage) error {
 
 type inputBinding struct {
 	definition webview.Input
+	target     any
 	set        func(json.RawMessage) error
 }

@@ -93,18 +93,18 @@ type stateAccess struct {
 	checkpoint CheckpointFunc
 }
 
-func (access *stateAccess) update(ctx context.Context, update func()) error {
-	func() {
-		access.snapshotMu.RLock()
-		defer access.snapshotMu.RUnlock()
-		update()
-	}()
-	if access.checkpoint == nil {
-		return nil
-	}
-	snapshot := access.snapshot()
-	access.checkpoint(&snapshot)
-	return ctx.Err()
+func (access *stateAccess) update(ctl coordinator.StepControl, update func()) {
+	ctl.Update(func() {
+		func() {
+			access.snapshotMu.RLock()
+			defer access.snapshotMu.RUnlock()
+			update()
+		}()
+		if access.checkpoint != nil {
+			snapshot := access.snapshot()
+			access.checkpoint(&snapshot)
+		}
+	})
 }
 
 func (access *stateAccess) snapshot() State {
@@ -177,50 +177,53 @@ func NewGraphWithCheckpoint(
 	verifyMirror := coordinator.NewRootStep(
 		"Verify go-images commit is mirrored internally",
 		internalMirrorTimeout,
-		func(ctx context.Context, control coordinator.StepControl) error {
+		func(ctx context.Context, ctl coordinator.StepControl) error {
 			if state.VerifiedMirroredCommit == input.SourceVersion {
 				return nil
 			}
-			if err := service.PollMirror(ctx, control, input.SourceVersion); err != nil {
+			if err := service.PollMirror(ctx, ctl, input.SourceVersion); err != nil {
 				return err
 			}
-			return access.update(ctx, func() {
+			access.update(ctl, func() {
 				state.VerifiedMirroredCommit = input.SourceVersion
 			})
+			return ctx.Err()
 		},
 	)
 	queue := verifyMirror.Then(
 		"🚀 Queue go-images release",
 		shortTimeout,
-		func(ctx context.Context, _ coordinator.StepControl) error {
+		func(ctx context.Context, ctl coordinator.StepControl) error {
 			if state.BuildID != "" {
 				return nil
 			}
 			if !state.QueueAttempted {
-				if err := access.update(ctx, func() { state.QueueAttempted = true }); err != nil {
-					return err
-				}
+				access.update(ctl, func() { state.QueueAttempted = true })
+			}
+			if err := ctl.EnsurePersisted(); err != nil {
+				return err
 			}
 			buildID, err := service.QueuePipeline(ctx, parameters)
 			if err != nil {
 				return err
 			}
-			return access.update(ctx, func() {
+			access.update(ctl, func() {
 				state.BuildID = buildID
 			})
+			return ctx.Err()
 		},
 	)
 	wait := queue.Then(
 		"⌚ Wait for go-images release",
 		officialPipelineTimeout,
-		func(ctx context.Context, control coordinator.StepControl) error {
+		func(ctx context.Context, ctl coordinator.StepControl) error {
 			if state.Complete {
 				if state.Result == "succeeded" {
 					return nil
 				}
 				return &PipelineResultError{Result: state.Result, Err: fmt.Errorf("saved pipeline result: %s", state.Result)}
 			}
-			err := service.PollPipeline(ctx, control, state.BuildID)
+			err := service.PollPipeline(ctx, ctl, state.BuildID)
 			result := "succeeded"
 			if err != nil {
 				var terminal *PipelineResultError
@@ -229,11 +232,11 @@ func NewGraphWithCheckpoint(
 				}
 				result = terminal.Result
 			}
-			saveErr := access.update(ctx, func() {
+			access.update(ctl, func() {
 				state.Complete = true
 				state.Result = result
 			})
-			return errors.Join(err, saveErr)
+			return errors.Join(err, ctx.Err())
 		},
 	)
 	steps, err := wait.TransitiveDependencies()

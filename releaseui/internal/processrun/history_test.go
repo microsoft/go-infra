@@ -34,6 +34,7 @@ type viewingTestProcess struct {
 	run          *testRun
 	loads        *atomic.Int32
 	preflightErr error
+	validate     func(*contract.StateSnapshot) error
 }
 
 func (p viewingTestProcess) Definition() contract.ProcessDefinition {
@@ -42,7 +43,14 @@ func (p viewingTestProcess) Definition() contract.ProcessDefinition {
 func (p viewingTestProcess) Preflight(context.Context) (error, error) { return nil, p.preflightErr }
 func (p viewingTestProcess) InputForm(*releaseinput.Set) any          { return nil }
 func (p viewingTestProcess) Prepare(context.Context, any) (*contract.StateSnapshot, error) {
-	return p.run.TakeSnapshot(), nil
+	return p.run.TakeSnapshot()
+}
+
+func (p viewingTestProcess) Validate(snapshot *contract.StateSnapshot) error {
+	if p.validate != nil {
+		return p.validate(snapshot)
+	}
+	return runstore.ValidateSnapshot(snapshot)
 }
 
 func (p viewingTestProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, error) {
@@ -410,7 +418,7 @@ func TestRunnerPublishesProgressAndHeartbeatThroughCheckpointWriter(t *testing.T
 	})
 }
 
-func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
+func TestDisplayFailureKeepsExecutionRunningAndRetries(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
 		manager, store, _, _, cancel := publishedTestManager(t, release)
@@ -426,8 +434,12 @@ func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
 		store.mu.Unlock()
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
-		if manager.Running("example") {
-			t.Fatal("execution continued after its writer failed")
+		if !manager.Running("example") {
+			t.Fatal("storage failure stopped execution")
+		}
+		session, _ := manager.processSession("example")
+		if session.runner.Snapshot().CheckpointError == "" {
+			t.Fatal("storage failure was not visible")
 		}
 		record, err := store.Get(context.Background(), 1)
 		if err != nil {
@@ -435,6 +447,21 @@ func TestDisplayFailureCancelsExecutionAndKeepsReservationSafe(t *testing.T) {
 		}
 		if !record.Run.Executing {
 			t.Fatal("failed persistence silently released durable ownership")
+		}
+		store.mu.Lock()
+		store.updateErr = nil
+		store.mu.Unlock()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		if session.runner.Snapshot().CheckpointError != "" {
+			t.Fatal("successful retry did not clear the warning")
+		}
+		close(release)
+		synctest.Wait()
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.record.Run.Result != resultSucceeded {
+			t.Fatalf("recovered release outcome = %s", store.record.Run.Result)
 		}
 	})
 }
@@ -449,10 +476,10 @@ func publishedTestManager(
 		snapshot: snapshot, plan: &contract.Plan{Subtitle: "Published test"},
 		view: &contract.RunView{Test: true, RunURL: "https://example.invalid/runs/888"},
 	}
-	run.build = func(context.Context, contract.CheckpointFunc) ([]*coordinator.Step, error) {
-		return []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, control coordinator.StepControl) error {
+	run.build = func() ([]*coordinator.Step, error) {
+		return []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(ctx context.Context, ctl coordinator.StepControl) error {
 			executions.Add(1)
-			control.ReportProgress(coordinator.StepProgress{Completed: 6, Total: 30, RunURL: "https://example.invalid/runs/888"})
+			ctl.ReportProgress(coordinator.StepProgress{Completed: 6, Total: 30, RunURL: "https://example.invalid/runs/888"})
 			if release != nil {
 				select {
 				case <-release:

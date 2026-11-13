@@ -19,12 +19,20 @@ import (
 type StepStatus string
 
 const (
-	StepStatusWaiting   StepStatus = "waiting"
-	StepStatusRunning   StepStatus = "running"
+	// StepStatusWaiting indicates that the step has not yet started because its dependencies have
+	// not been satisfied.
+	StepStatusWaiting StepStatus = "waiting"
+	// StepStatusRunning indicates that the step is currently executing.
+	StepStatusRunning StepStatus = "running"
+	// StepStatusSucceeded indicates that the step has completed successfully.
 	StepStatusSucceeded StepStatus = "succeeded"
-	StepStatusFailed    StepStatus = "failed"
-	StepStatusBlocked   StepStatus = "blocked"
-	StepStatusCanceled  StepStatus = "canceled"
+	// StepStatusFailed indicates that the step has completed with an error.
+	StepStatusFailed StepStatus = "failed"
+	// StepStatusBlocked indicates that the step cannot proceed because one or more of its
+	// dependencies failed.
+	StepStatusBlocked StepStatus = "blocked"
+	// StepStatusCanceled indicates that the step was canceled before completion.
+	StepStatusCanceled StepStatus = "canceled"
 )
 
 var (
@@ -37,8 +45,9 @@ var (
 
 // StepSnapshot is an immutable view of a step's state at a point in time.
 type StepSnapshot struct {
-	Name      string        `json:"name"`
-	Status    StepStatus    `json:"status"`
+	Name   string     `json:"name"`
+	Status StepStatus `json:"status"`
+	// DependsOn lists the [Name] of each step that this step depends on.
 	DependsOn []string      `json:"dependsOn,omitempty"`
 	Progress  *StepProgress `json:"progress,omitempty"`
 	Error     string        `json:"error,omitempty"`
@@ -55,26 +64,70 @@ type StepProgress struct {
 	RunURL    string `json:"runUrl,omitempty"`
 }
 
-// Snapshot is an immutable view of an entire execution. Sequence increases on every change.
+// Snapshot is an immutable view of an entire execution.
 type Snapshot struct {
-	Sequence uint64         `json:"sequence"`
-	Active   bool           `json:"active"`
-	Error    string         `json:"error,omitempty"`
-	Steps    []StepSnapshot `json:"steps"`
+	// Sequence is a monotonically increasing number that changes on every update to the execution
+	// state. The workitem updater may use this to detect and prevent stale updates. It can also be
+	// used to detect that a change has occurred.
+	Sequence uint64 `json:"sequence"`
+	// Active reports whether the execution is currently in progress.
+	Active bool `json:"active"`
+	// Error reports the last error encountered during execution, if any.
+	Error string `json:"error,omitempty"`
+	// CheckpointError reports a pending storage failure without stopping execution.
+	CheckpointError string `json:"checkpointError,omitempty"`
+	// Steps contains the current state of all steps in the execution.
+	Steps []StepSnapshot `json:"steps"`
+}
+
+// ExecutionCallbacks connects step state updates and final outcomes to the host.
+type ExecutionCallbacks struct {
+	// Update captures independent state after a mutation, with the process-state lock held.
+	// It returns a function that persists the captured state. The runner releases the
+	// process-state lock before persistence, but serializes updates until persistence finishes.
+	// Neither callback may call StepControl.Read, StepControl.Update, or
+	// StepControl.EnsurePersisted, and capture must not call ReadState.
+	Update func() (persist func() error, err error)
+	// Finalize runs after all steps have stopped, outside the state lock.
+	Finalize func(error) error
 }
 
 // StepRunner executes a release step graph and publishes race-free snapshots of its state.
 type StepRunner struct {
+	// mu protects the runner's graph, step statuses, progress, and subscriptions.
 	mu sync.RWMutex
 
-	states   map[*Step]*stepState
-	ordered  []*stepState
-	active   bool
-	runError string
-	sequence uint64
+	// process owns synchronization for shared step data and its checkpoints.
+	process processState
+
+	states          map[*Step]*stepState
+	ordered         []*stepState
+	active          bool
+	runError        string
+	checkpointError string
+	sequence        uint64
 
 	nextSubscriberID uint64
 	subscribers      map[uint64]chan Snapshot
+}
+
+// processState coordinates shared step data with checkpoint capture and persistence.
+type processState struct {
+	// mu protects shared process data. It is released before checkpoint storage I/O so reads can
+	// continue while a checkpoint is being saved.
+	mu sync.RWMutex
+	// updateMu serializes mutations, checkpoint capture, persistence, and durability barriers.
+	updateMu sync.Mutex
+	// execution is replaced as a unit for each run and is protected by updateMu.
+	execution *processExecution
+}
+
+type processExecution struct {
+	update       func() (func() error, error)
+	cancelUpdate context.CancelCauseFunc
+	updateErr    error
+	pending      func() error
+	pendingErr   error
 }
 
 // NewStepRunner initializes the graph's waiting state before execution.
@@ -116,12 +169,11 @@ func (r *StepRunner) ValidateSteps(steps []*Step) error {
 // running steps. A panic is recovered, wrapped with errStepPanic, and treated as an error. The
 // steps must be the validated graph returned by Step.TransitiveDependencies.
 func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
-	return r.ExecuteWithFinalizer(ctx, steps, nil)
+	return r.ExecuteWithCallbacks(ctx, steps, ExecutionCallbacks{})
 }
 
-// ExecuteWithFinalizer finishes the run only after finalize has recorded its outcome.
-// The finalizer runs outside the runner lock, once all steps have returned.
-func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, finalize func(error) error) error {
+// ExecuteWithCallbacks executes steps with host-provided state persistence and finalization.
+func (r *StepRunner) ExecuteWithCallbacks(ctx context.Context, steps []*Step, callbacks ExecutionCallbacks) error {
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
@@ -136,20 +188,27 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 	r.initializeLocked(steps)
 	r.active = true
 	r.runError = ""
+	r.checkpointError = ""
 	r.publishLocked()
 	r.mu.Unlock()
 
 	// Wait for all steps to complete. Cancellation is cooperative: a step may not stop immediately
 	// if it is in the middle of an operation that cannot be resumed safely.
-	eg, egCtx := errgroup.WithContext(ctx)
+	updateCtx, cancelUpdate := context.WithCancelCause(ctx)
+	defer cancelUpdate(nil)
+	eg, egCtx := errgroup.WithContext(updateCtx)
+	r.process.beginExecution(callbacks.Update, cancelUpdate)
 	for _, state := range r.ordered {
 		eg.Go(func() error {
 			return state.run(egCtx, r)
 		})
 	}
 	err := eg.Wait()
-	if finalize != nil {
-		err = errors.Join(err, finalize(err))
+	err = errors.Join(err, r.process.updateError())
+	if callbacks.Finalize != nil {
+		err = errors.Join(err, callbacks.Finalize(err))
+	} else {
+		err = errors.Join(err, r.process.pendingError())
 	}
 
 	r.mu.Lock()
@@ -160,6 +219,16 @@ func (r *StepRunner) ExecuteWithFinalizer(ctx context.Context, steps []*Step, fi
 	r.publishLocked()
 	r.mu.Unlock()
 	return err
+}
+
+// ReadState calls fn while excluding step updates. Hosts use it to read process snapshots and
+// views safely. Unlike StepControl.Read, ReadState always acquires the read lock, including in race
+// builds. The callback must not mutate process state or call ReadState, StepControl.Read, or
+// StepControl.Update.
+func (r *StepRunner) ReadState(fn func()) {
+	r.process.mu.RLock()
+	defer r.process.mu.RUnlock()
+	fn()
 }
 
 // Snapshot returns a race-free copy of the current execution state.
@@ -204,10 +273,11 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 
 func (r *StepRunner) snapshotLocked() Snapshot {
 	snapshot := Snapshot{
-		Sequence: r.sequence,
-		Active:   r.active,
-		Error:    r.runError,
-		Steps:    make([]StepSnapshot, 0, len(r.ordered)),
+		Sequence:        r.sequence,
+		Active:          r.active,
+		Error:           r.runError,
+		CheckpointError: r.checkpointError,
+		Steps:           make([]StepSnapshot, 0, len(r.ordered)),
 	}
 	for _, state := range r.ordered {
 		stepSnapshot := StepSnapshot{
@@ -335,10 +405,11 @@ func stepProgressEqual(current *StepProgress, next StepProgress) bool {
 type stepControl struct {
 	runner *StepRunner
 	state  *stepState
+	ctx    context.Context
 }
 
-func (control stepControl) ReportProgress(progress StepProgress) {
-	runner, state := control.runner, control.state
+func (ctl stepControl) ReportProgress(progress StepProgress) {
+	runner, state := ctl.runner, ctl.state
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	if state.status != StepStatusRunning || stepProgressEqual(state.progress, progress) {
@@ -346,6 +417,108 @@ func (control stepControl) ReportProgress(progress StepProgress) {
 	}
 	state.progress = &progress
 	runner.publishLocked()
+}
+
+func (ctl stepControl) Update(fn func()) {
+	ctl.runner.process.update(ctl.runner, fn)
+}
+
+func (ctl stepControl) EnsurePersisted() error {
+	return ctl.runner.process.ensurePersisted(ctl.runner, ctl.ctx)
+}
+
+func (s *processState) beginExecution(update func() (func() error, error), cancel context.CancelCauseFunc) {
+	s.updateMu.Lock()
+	s.execution = &processExecution{update: update, cancelUpdate: cancel}
+	s.updateMu.Unlock()
+}
+
+func (s *processState) update(runner *StepRunner, fn func()) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	execution := s.execution
+	var persist func() error
+	var err error
+	func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		fn()
+		if execution.updateErr == nil && execution.update != nil {
+			persist, err = execution.update()
+		}
+	}()
+	if execution.updateErr != nil {
+		return
+	}
+	if err != nil {
+		execution.updateErr = err
+		execution.cancelUpdate(err)
+		return
+	}
+	execution.pending = persist
+	// persistPending records and publishes failures; Update remains best-effort.
+	_ = s.persistPending(runner, execution)
+}
+
+func (s *processState) ensurePersisted(runner *StepRunner, ctx context.Context) error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	execution := s.execution
+	if execution.updateErr != nil {
+		return execution.updateErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.persistPending(runner, execution); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (s *processState) updateError() error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	return s.execution.updateErr
+}
+
+func (s *processState) pendingError() error {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	return s.execution.pendingErr
+}
+
+func (s *processState) persistPending(runner *StepRunner, execution *processExecution) error {
+	if execution.pending == nil {
+		return nil
+	}
+	err := execution.pending()
+	execution.pendingErr = err
+	runner.SetCheckpointError(err)
+	if err == nil {
+		execution.pending = nil
+	}
+	return err
+}
+
+// SetCheckpointError publishes a storage failure or clears it after a successful retry.
+// Hosts also use it for background checkpoint retries and final persistence.
+func (r *StepRunner) SetCheckpointError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checkpointError = ""
+	if err != nil {
+		r.checkpointError = err.Error()
+	}
+	r.publishLocked()
+}
+
+func (ctl stepControl) Read(fn func()) {
+	if !raceEnabled {
+		ctl.runner.process.mu.RLock()
+		defer ctl.runner.process.mu.RUnlock()
+	}
+	fn()
 }
 
 type stepState struct {
@@ -364,6 +537,9 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 		// to clean up via context cancellation rather than terminating immediately.
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("%w: %v; stack:\n%v", errStepPanic, recovered, string(debug.Stack()))
+		}
+		if err == nil {
+			err = context.Cause(ctx)
 		}
 
 		status := StepStatusSucceeded
@@ -388,14 +564,16 @@ func (s *stepState) run(ctx context.Context, runner *StepRunner) (err error) {
 		return err
 	}
 	runner.transition(s, StepStatusRunning, nil)
-	control := stepControl{runner: runner, state: s}
-
 	if s.step.Timeout == NoTimeout {
-		return s.step.Func(ctx, control)
+		return s.step.Func(ctx, stepControl{runner: runner, state: s, ctx: ctx})
 	}
 	deadlineCtx, cancel := context.WithTimeout(ctx, s.step.Timeout)
 	defer cancel()
-	return s.step.Func(deadlineCtx, control)
+	err = s.step.Func(deadlineCtx, stepControl{runner: runner, state: s, ctx: deadlineCtx})
+	if err == nil {
+		err = context.Cause(deadlineCtx)
+	}
+	return err
 }
 
 // waitForDependencies waits for all dependencies of the step to complete, or for any dependency

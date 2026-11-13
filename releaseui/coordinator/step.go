@@ -7,19 +7,79 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
 
 const NoTimeout = time.Duration(0)
 
-// StepControl publishes progress for the step it belongs to. StepRunner supplies a non-nil
-// control to every step function.
+// StepControl is a set of utilities that a step implementation can use to interact with the runner.
+// StepRunner supplies a non-nil StepControl to every step function.
 type StepControl interface {
+	// ReportProgress publishes the current progress of the step. It may be called multiple times
+	// during the step's execution. The runner propagates this information so releaseui can display
+	// live progress and persist a progress view to the tracking workitem backend.
 	ReportProgress(StepProgress)
+
+	// Read calls fn while holding the read lock of a RWMutex shared by all steps in this run. fn
+	// must not call other StepControl methods, wait for another step, or wait for a long time.
+	//
+	// Read calls fn even if the step ctx has been canceled, so reads still initialize their
+	// results.
+	//
+	// Steps must not depend on Read for synchronization. If step A reads step B's output,
+	// synchronize the read by making step A have a direct or transitive dependency on B in the step
+	// graph. For example, use [Step.DependsOn] or [Step.Then].
+	//
+	// When the Go race detector is enabled, Read doesn't acquire the read lock and instead runs fn
+	// immediately. This allows the race detector to enforce the rule that steps don't use Read for
+	// synchronization.
+	//
+	// The reasons for this nuance are:
+	//
+	//   - The dependency graph must accurately represent to the user which steps depend on which.
+	//   - Complex synchronization logic between steps can lead to subtle bugs and logic-level race
+	//     conditions that can't be found by the race detector.
+	//
+	// In theory, Read isn't necessary at all. We use it for an extra layer of safety at runtime, to
+	// ensure that a logic bug doesn't lead to an unnecessary crash.
+	Read(fn func())
+
+	// Update calls fn synchronously while holding the write lock of a RWMutex shared by all steps
+	// in this run. fn must not call other StepControl methods, wait for another step, or wait for a
+	// long time.
+	//
+	// After calling fn, releaseui takes a snapshot of the resulting state and attempts to save it
+	// before returning from Update. Snapshot capture or validation failure cancels the step
+	// execution context. After such a failure, later Update calls (by other steps) still call fn,
+	// but skip capture and persistence.
+	//
+	// Storage failures during Update don't cancel execution and don't panic. See [EnsurePersisted]
+	// if you need to ensure that updates are persisted.
+	//
+	// Update calls fn even if the step ctx has been canceled to avoid introducing subtle logic bugs
+	// in step code.
+	Update(fn func())
+
+	// EnsurePersisted waits for all pending checkpoints to complete persistence. releaseui may
+	// perform automatic retries. A nil error means all updates preceding this call have been saved.
+	//
+	// Returns capture, storage, or context errors. If capture has failed or the step ctx has been
+	// canceled, it returns without attempting persistence.
+	//
+	// Storage failures do not cancel execution automatically. So, use EnsurePersisted when it's
+	// important to ensure the state is saved before performing the next action. For example, call
+	// EnsurePersisted when the step just called Update to persist some state that's critical to be
+	// able to retry the step later if the machine running the process crashes. If EnsurePersisted
+	// returns an error, return it rather than continuing.
+	EnsurePersisted() error
 }
 
-type StepFunc func(ctx context.Context, control StepControl) error
+// StepFunc defines the signature of a function that implements a release step. It receives a
+// context for cancellation and a StepControl for reporting progress and other step utilities. It
+// should return an error if the step fails.
+type StepFunc func(ctx context.Context, ctl StepControl) error
 
 // Step represents a step in the release. Just enough information is represented in Step to allow
 // status to be reported, otherwise state is internal to Func.
@@ -148,4 +208,26 @@ func (s *Step) TransitiveDependencies() ([]*Step, error) {
 		return nil, err
 	}
 	return sortedSteps, nil
+}
+
+// StepSet lists dependencies for a new step. Order does not constrain execution, but it does affect
+// the traversal order returned by [Step.TransitiveDependencies].
+type StepSet []*Step
+
+// All returns the given steps as a dependency set. Use All(a, b).Then(...) to create a step that
+// depends on both a and b. This is intended to be useful to help with readability alongside chains
+// created using c.Then(...).
+func All(steps ...*Step) StepSet {
+	return steps
+}
+
+// Then creates a new step that depends on all steps in s. It copies the dependency list so
+// subsequent changes to s do not change the new step's dependencies.
+func (s StepSet) Then(name string, timeout time.Duration, f StepFunc) *Step {
+	return &Step{
+		Name:      name,
+		Timeout:   timeout,
+		Func:      f,
+		DependsOn: slices.Clone(s),
+	}
 }

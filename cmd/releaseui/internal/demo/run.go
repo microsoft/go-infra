@@ -7,165 +7,189 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"math"
+	"slices"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
+	"github.com/microsoft/go-infra/releaseui/snapshot"
 )
 
 const (
-	stateSchema     = 1
-	workUnits       = 30
-	workDelay       = time.Second
-	checkpointUnits = 5
-	stepTimeout     = 2 * time.Minute
+	workUnits   = 30
+	workDelay   = time.Second
+	stepTimeout = 2 * time.Minute
 )
 
-type state struct {
-	SchemaVersion int       `json:"schemaVersion"`
-	Initialized   bool      `json:"initialized"`
-	WorkCompleted [2]int    `json:"workCompleted"`
-	Finished      bool      `json:"finished"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-}
-
 type run struct {
-	mu    sync.RWMutex
 	name  string
+	rebel bool
+	input input
 	state state
 }
 
-func newRun(name string, state state) *run {
-	return &run{name: name, state: state}
-}
-
-func (r *run) TakeSnapshot() *contract.StateSnapshot {
-	snapshot, err := encodeSnapshot(r.readState())
-	if err != nil {
-		panic(fmt.Sprintf("encode demo snapshot: %v", err))
-	}
-	return snapshot
+func (r *run) TakeSnapshot() (*contract.StateSnapshot, error) {
+	return snapshot.Encode(r.input, r.state)
 }
 
 func (r *run) TakeView() *contract.RunView {
-	state := r.readState()
 	summary := "Ready"
-	if state.Finished {
-		summary = "Demo completed"
-	} else if state.Initialized {
-		summary = "Simulated work in progress"
+	completedDimensions := 0
+	for _, result := range r.state.Determinants {
+		if result != 0 {
+			summary = "Calculating the number"
+			completedDimensions++
+		}
+	}
+	if r.state.Number != 0 {
+		summary = fmt.Sprintf("The number is %.6f, an estimate of e", r.state.Number)
 	}
 	return &contract.RunView{
-		Test: true, Summary: summary, UpdatedAt: state.UpdatedAt,
-		Detail: fmt.Sprintf("%s: work A %d/%d units, work B %d/%d units",
-			r.name, state.WorkCompleted[0], workUnits, state.WorkCompleted[1], workUnits),
+		Test: true, Summary: summary,
+		Detail: fmt.Sprintf("%s: %d/%d dimensions analyzed",
+			r.name, completedDimensions, r.input.Dimensions),
 	}
 }
 
 func (r *run) Plan() *contract.Plan {
+	scientists := "Diligent"
+	if r.rebel {
+		scientists = "Rebellious: sabotage third dimension halfway through analysis"
+	}
 	return &contract.Plan{
-		Subtitle: r.name + " simulated release", ExecutionButtonLabel: "Run demo",
+		Subtitle:             r.name,
+		ExecutionButtonLabel: "Calculate the number",
 		Facts: []contract.PlanFact{
 			{Label: "Process", Value: r.name},
-			{Label: "Work", Value: fmt.Sprintf("Two parallel branches, %d units each", workUnits)},
-			{Label: "Timing", Value: workDelay.String() + " per unit, plus checkpoint storage time"},
-			{Label: "Tracking", Value: "Creates and updates a real Azure DevOps work item tagged test"},
+			{Label: "Scientist agents", Value: scientists},
+			{Label: "Work", Value: fmt.Sprintf("Calculate scaled identity determinants for dimensions 1 to %d in parallel", r.input.Dimensions)},
+			{Label: "Equation", Value: "det((1 + 1/n) I_n) = (1 + 1/n)^n approaches e"},
+			{Label: "Estimate", Value: "Fit a line to n times each determinant against n; its slope estimates e using every dimension"},
 			{Label: "External actions", Value: "No builds are queued, workflows dispatched, or artifacts published"},
 		},
 	}
 }
 
-func (r *run) Build(_ context.Context, checkpoint contract.CheckpointFunc) ([]*coordinator.Step, error) {
-	initialize := coordinator.NewRootStep("Initialize demo", stepTimeout, func(ctx context.Context, _ coordinator.StepControl) error {
-		return r.initialize(ctx, checkpoint)
-	})
-	workA := initialize.Then("Fake work A", stepTimeout, func(ctx context.Context, control coordinator.StepControl) error {
-		return r.work(ctx, control, 0, checkpoint)
-	})
-	workB := initialize.Then("Fake work B", stepTimeout, func(ctx context.Context, control coordinator.StepControl) error {
-		return r.work(ctx, control, 1, checkpoint)
-	})
-	finish := workA.Then("Finish demo", stepTimeout, func(ctx context.Context, _ coordinator.StepControl) error {
-		return r.finish(ctx, checkpoint)
-	}, workB)
+func (r *run) Build() ([]*coordinator.Step, error) {
+	analyses := make([]*coordinator.Step, r.input.Dimensions)
+	for dimension := range analyses {
+		analyses[dimension] = coordinator.NewRootStep(
+			fmt.Sprintf("Analyze dimension %d", dimension+1),
+			stepTimeout,
+			func(ctx context.Context, ctl coordinator.StepControl) error {
+				var d float64
+				ctl.Read(func() {
+					d = r.state.Determinants[dimension]
+				})
+				if d != 0 {
+					// Resuming, already calculated.
+					return nil
+				}
+				// Simulate increasing workload per dimension.
+				workTotal := dimensionWorkTotal(dimension + 1)
+				ticker := time.NewTicker(workDelay)
+				for work := range workTotal {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					ctl.ReportProgress(coordinator.StepProgress{
+						Summary:   workingPhrases[(work+dimension)%len(workingPhrases)],
+						Completed: work,
+						Total:     workTotal,
+					})
+					if r.rebel && dimension == 2 && work >= workTotal/2 {
+						return errors.New("rebellious scientist agent sabotaged the third dimension")
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-ticker.C:
+					}
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				ctl.ReportProgress(coordinator.StepProgress{
+					Summary: "Complete",
+				})
+				// Calculation. For demo purposes, pretend it's expensive, so we don't call it
+				// inside the Update fn.
+				d = determinant(dimension + 1)
+				ctl.Update(func() {
+					r.state.Determinants[dimension] = d
+				})
+				return nil
+			},
+		)
+	}
+	finish := coordinator.All(analyses...).Then(
+		"Calculate the number",
+		stepTimeout,
+		func(_ context.Context, ctl coordinator.StepControl) error {
+			var number float64
+			ctl.Read(func() {
+				number = r.state.Number
+			})
+			if number != 0 {
+				// Resuming, already calculated.
+				return nil
+			}
+
+			var dets []float64
+			ctl.Read(func() {
+				dets = slices.Clone(r.state.Determinants)
+			})
+			number = estimateNumber(dets)
+			ctl.Update(func() {
+				r.state.Number = number
+			})
+			ctl.ReportProgress(coordinator.StepProgress{
+				Summary: "Calculated the number",
+				Detail:  fmt.Sprintf("Number: %v", number),
+			})
+			return nil
+		},
+	)
 	return finish.TransitiveDependencies()
 }
 
-func (r *run) initialize(ctx context.Context, checkpoint contract.CheckpointFunc) error {
-	if r.readState().Initialized {
-		return ctx.Err()
-	}
-	return r.update(ctx, checkpoint, func(state *state) { state.Initialized = true })
+func determinant(dimension int) float64 {
+	n := float64(dimension)
+	return math.Pow(1+1/n, n)
 }
 
-func (r *run) work(ctx context.Context, control coordinator.StepControl, branch int, checkpoint contract.CheckpointFunc) error {
-	current := r.readState().WorkCompleted[branch]
-	for {
-		control.ReportProgress(coordinator.StepProgress{
-			Summary: "Simulated work", Detail: fmt.Sprintf("%d of %d units complete", current, workUnits),
-			Completed: current, Total: workUnits,
-		})
-		if current == workUnits {
-			return ctx.Err()
-		}
-		if err := wait(ctx, workDelay); err != nil {
-			return err
-		}
-		current++
-		var save contract.CheckpointFunc
-		if current%checkpointUnits == 0 || current == workUnits {
-			save = checkpoint
-		}
-		if err := r.update(ctx, save, func(state *state) { state.WorkCompleted[branch] = current }); err != nil {
-			return err
-		}
-	}
+func dimensionWorkTotal(dimension int) int {
+	return int(math.Ceil(float64(workUnits) * (1 - math.Pow(0.5, float64(dimension)))))
 }
 
-func (r *run) finish(ctx context.Context, checkpoint contract.CheckpointFunc) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func estimateNumber(determinants []float64) float64 {
+	if len(determinants) == 1 {
+		return determinants[0]
 	}
-	saved := r.readState()
-	if saved.WorkCompleted != [2]int{workUnits, workUnits} {
-		return errors.New("cannot finish demo before both branches complete")
+	// n * determinant(n) approaches e*n - e/2, so the fitted slope estimates e.
+	meanDimension := float64(len(determinants)+1) / 2
+	var covariance, variance float64
+	for dimension, result := range determinants {
+		n := float64(dimension + 1)
+		offset := n - meanDimension
+		covariance += offset * n * result
+		variance += offset * offset
 	}
-	if saved.Finished {
-		return ctx.Err()
-	}
-	return r.update(ctx, checkpoint, func(state *state) { state.Finished = true })
+	return covariance / variance
 }
 
-func (r *run) readState() state {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.state
-}
-
-func (r *run) update(ctx context.Context, checkpoint contract.CheckpointFunc, change func(*state)) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		change(&r.state)
-		r.state.UpdatedAt = time.Now().UTC()
-	}()
-	if checkpoint != nil {
-		checkpoint()
-	}
-	return ctx.Err()
-}
-
-func wait(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return ctx.Err()
-	}
+var workingPhrases = []string{
+	"Analyzing dimensions...",
+	"Calculating determinants...",
+	"Consulting colleagues...",
+	"Carrying the three...",
+	"Reticulating splines...",
+	"Raising powers...",
+	"Questioning the axioms...",
+	"Soothing rounding errors...",
+	"Untangling eigenvectors...",
+	"Checking under the radical...",
+	"Waiting for convergence...",
+	"Reassuring imaginary numbers...",
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -73,11 +74,26 @@ type fakeQueueClient struct {
 }
 
 type recordingStepControl struct {
+	mu       sync.Mutex
 	progress []coordinator.StepProgress
 }
 
-func (control *recordingStepControl) ReportProgress(progress coordinator.StepProgress) {
-	control.progress = append(control.progress, progress)
+func (ctl *recordingStepControl) ReportProgress(progress coordinator.StepProgress) {
+	ctl.progress = append(ctl.progress, progress)
+}
+
+func (ctl *recordingStepControl) Update(fn func()) {
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	fn()
+}
+
+func (ctl *recordingStepControl) EnsurePersisted() error { return nil }
+
+func (ctl *recordingStepControl) Read(fn func()) {
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	fn()
 }
 
 func (q *fakeQueueClient) QueueRelease(_ context.Context, request QueueRequest) (int, error) {
@@ -182,18 +198,18 @@ func TestPollMirrorWaitsForPlannedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := new(recordingStepControl)
-	if err := service.PollMirror(context.Background(), control, serviceTestCommit); err != nil {
+	ctl := new(recordingStepControl)
+	if err := service.PollMirror(context.Background(), ctl, serviceTestCommit); err != nil {
 		t.Fatal(err)
 	}
 	if checks != 3 || sleeps != 2 {
 		t.Fatalf("checks = %d, sleeps = %d; want 3 and 2", checks, sleeps)
 	}
-	if len(control.progress) != 3 || control.progress[0].Summary != "Waiting for source commit in the internal mirror" ||
-		control.progress[2].Summary != "Source commit is available in the internal mirror" ||
-		control.progress[2].Detail != serviceTestCommit {
+	if len(ctl.progress) != 3 || ctl.progress[0].Summary != "Waiting for source commit in the internal mirror" ||
+		ctl.progress[2].Summary != "Source commit is available in the internal mirror" ||
+		ctl.progress[2].Detail != serviceTestCommit {
 
-		t.Fatalf("mirror progress = %#v", control.progress)
+		t.Fatalf("mirror progress = %#v", ctl.progress)
 	}
 }
 
@@ -343,20 +359,20 @@ func TestPollPipelineReportsProgressThroughExplicitControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := new(recordingStepControl)
-	if err := service.PollPipeline(context.Background(), control, "888"); err != nil {
+	ctl := new(recordingStepControl)
+	if err := service.PollPipeline(context.Background(), ctl, "888"); err != nil {
 		t.Fatal(err)
 	}
-	if len(control.progress) != 3 || sleeps != 2 || reader.gets != 3 || queue.calls != 0 {
-		t.Fatalf("progress=%#v, sleeps=%d, gets=%d, queues=%d", control.progress, sleeps, reader.gets, queue.calls)
+	if len(ctl.progress) != 3 || sleeps != 2 || reader.gets != 3 || queue.calls != 0 {
+		t.Fatalf("progress=%#v, sleeps=%d, gets=%d, queues=%d", ctl.progress, sleeps, reader.gets, queue.calls)
 	}
 	for index, status := range []string{"waiting", "running", "succeeded"} {
-		progress := control.progress[index]
+		progress := ctl.progress[index]
 		if progress.Summary != "Azure pipeline "+status || progress.RunURL != pipelineRunURL("888") {
 			t.Fatalf("pipeline progress %d = %#v", index, progress)
 		}
 	}
-	if progress := control.progress[2]; progress.Completed != 1 || progress.Total != 1 {
+	if progress := ctl.progress[2]; progress.Completed != 1 || progress.Total != 1 {
 		t.Fatalf("completion progress = %#v", progress)
 	}
 }
@@ -373,12 +389,12 @@ func TestPollPipelineCancellationPreservesReportedProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	control := new(recordingStepControl)
-	err = service.PollPipeline(ctx, control, "888")
+	ctl := new(recordingStepControl)
+	err = service.PollPipeline(ctx, ctl, "888")
 	if !errors.Is(err, context.Canceled) || errors.Is(err, coordinator.ErrCanceled) ||
-		len(control.progress) != 1 || control.progress[0].Summary != "Azure pipeline running" {
+		len(ctl.progress) != 1 || ctl.progress[0].Summary != "Azure pipeline running" {
 
-		t.Fatalf("cancellation error=%v, progress=%#v", err, control.progress)
+		t.Fatalf("cancellation error=%v, progress=%#v", err, ctl.progress)
 	}
 }
 

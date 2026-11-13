@@ -124,20 +124,20 @@ func NewPipelineRunService(reader PipelineReader, queue QueueClient, config Pipe
 
 // PollMirror waits until the plan's exact source commit is available in the allowlisted
 // internal microsoft-go-images repository.
-func (s *PipelineRunService) PollMirror(ctx context.Context, control coordinator.StepControl, commit string) error {
+func (s *PipelineRunService) PollMirror(ctx context.Context, ctl coordinator.StepControl, commit string) error {
 	if commit != s.config.SourceVersion {
 		return fmt.Errorf("go-images mirror commit %q does not match planned source %q", commit, s.config.SourceVersion)
 	}
 	for {
 		verifyErr := s.config.VerifyMirrorCommit(ctx, commit)
 		if verifyErr == nil {
-			control.ReportProgress(coordinator.StepProgress{
+			ctl.ReportProgress(coordinator.StepProgress{
 				Summary: "Source commit is available in the internal mirror",
 				Detail:  commit,
 			})
 			return nil
 		}
-		control.ReportProgress(coordinator.StepProgress{
+		ctl.ReportProgress(coordinator.StepProgress{
 			Summary: "Waiting for source commit in the internal mirror",
 			Detail:  commit,
 		})
@@ -241,13 +241,13 @@ func templateParameterString(value any) (string, bool) {
 }
 
 // PollPipeline monitors the fixed release run as part of execution.
-func (s *PipelineRunService) PollPipeline(ctx context.Context, control coordinator.StepControl, buildID string) error {
+func (s *PipelineRunService) PollPipeline(ctx context.Context, ctl coordinator.StepControl, buildID string) error {
 	for {
 		status, err := s.readPipelineStatus(ctx, buildID)
 		if err != nil {
 			return err
 		}
-		control.ReportProgress(status.Progress)
+		ctl.ReportProgress(status.Progress)
 		switch status.Status {
 		case coordinator.StepStatusSucceeded:
 			return nil

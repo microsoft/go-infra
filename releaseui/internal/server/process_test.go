@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/internal/localserver"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -39,9 +41,7 @@ func exampleProcess() *fakeProcess {
 		}, nil
 	}
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error { return nil }), nil
 	}
@@ -179,15 +179,14 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 	var builds atomic.Int32
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		run *fakeReleaseRun,
-		checkpoint contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		builds.Add(1)
-		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
+		return exampleProcessSteps(func(_ context.Context, ctl coordinator.StepControl) error {
 			executed.Store(true)
-			run.setState(json.RawMessage(`{"value":"executed"}`))
-			checkpoint()
+			ctl.Update(func() {
+				run.setState(json.RawMessage(`{"value":"executed"}`))
+			})
 			return nil
 		}), nil
 	}
@@ -216,6 +215,122 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 		string(persisted.Snapshot.State) != `{"value":"executed"}` {
 
 		t.Fatalf("persisted = %#v", persisted)
+	}
+}
+
+func TestPreparationDistinguishesInputErrors(t *testing.T) {
+	inputFailure := errors.Join(errors.New("choose at most 50 dimensions"), releaseinput.ErrInvalidInput)
+	for _, test := range []struct {
+		name   string
+		source string
+		err    error
+		status int
+		kind   string
+	}{
+		{name: "Prepare input error", source: "prepare", err: inputFailure, status: http.StatusBadRequest, kind: "input"},
+		{name: "Validate input error", source: "validate", err: inputFailure, status: http.StatusBadRequest, kind: "input"},
+		{name: "Parse input error", source: "parse", status: http.StatusBadRequest, kind: "input"},
+		{name: "Prepare service error", source: "prepare", err: errors.New("service unavailable"), status: http.StatusConflict},
+		{name: "Validate state error", source: "validate", err: errors.New("inconsistent state"), status: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryProcessRunStore()
+			process := exampleProcess()
+			if test.source == "prepare" {
+				process.prepare = func(context.Context, any) (*contract.StateSnapshot, error) { return nil, test.err }
+			}
+			if test.source == "validate" {
+				process.validate = func(*contract.StateSnapshot) error { return test.err }
+			}
+			built := false
+			process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
+				built = true
+				return exampleProcessSteps(func(context.Context, coordinator.StepControl) error { return nil }), nil
+			}
+			server, err := New(context.Background(), WithProcesses(newFakeProcessGroup(process)), WithReleaseRunStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := `{}`
+			if test.source == "parse" {
+				body = `{"unexpected":"1"}`
+			}
+			request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan", strings.NewReader(body))
+			request.Header.Set("Origin", "http://localhost")
+			response := httptest.NewRecorder()
+			server.handlePrepareProcessRun("example", response, request)
+			var result struct {
+				Error string `json:"error"`
+				Kind  string `json:"kind"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != test.status || result.Kind != test.kind || result.Error == "" || built || store.count() != 0 {
+				t.Fatalf("status=%d, response=%#v, built=%v, records=%d", response.Code, result, built, store.count())
+			}
+			if test.err != nil && !strings.Contains(result.Error, test.err.Error()) {
+				t.Fatalf("error cause was lost: %q", result.Error)
+			}
+		})
+	}
+}
+
+func TestPreparationAssociatesInputErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		target  func(*[2]int) any
+		inputID string
+	}{
+		{name: "registered", target: func(values *[2]int) any { return &values[1] }, inputID: "input2"},
+		{name: "nil", target: func(*[2]int) any { return nil }},
+		{name: "typed nil", target: func(*[2]int) any { return (*int)(nil) }},
+		{name: "unregistered equal value", target: func(values *[2]int) any {
+			value := values[1]
+			return &value
+		}},
+		{name: "nonpointer", target: func(*[2]int) any { return []int{51} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryProcessRunStore()
+			process := exampleProcess()
+			process.inputForm = func(inputs *releaseinput.Set) any {
+				values := new([2]int)
+				for index := range values {
+					inputs.PositiveIntVar(&values[index], releaseinput.FieldOptions{Label: "Dimensions"})
+				}
+				return values
+			}
+			process.prepare = func(_ context.Context, input any) (*contract.StateSnapshot, error) {
+				values := input.(*[2]int)
+				if *values != [2]int{2, 51} {
+					t.Fatalf("parsed values = %v", *values)
+				}
+				return nil, fmt.Errorf("prepare: %w", releaseinput.NewInvalidInputError(test.target(values), "choose at most 50 dimensions"))
+			}
+			server, err := New(context.Background(), WithProcesses(newFakeProcessGroup(process)), WithReleaseRunStore(store))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "http://localhost/api/processes/example/plan",
+				strings.NewReader(`{"input1":"2","input2":"51"}`))
+			request.Header.Set("Origin", "http://localhost")
+			response := httptest.NewRecorder()
+			server.handlePrepareProcessRun("example", response, request)
+			var result struct {
+				Error   string `json:"error"`
+				Kind    string `json:"kind"`
+				InputID string `json:"inputId"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusBadRequest || result.Kind != "input" || result.InputID != test.inputID ||
+				result.Error != "prepare: choose at most 50 dimensions" || store.count() != 0 {
+
+				t.Fatalf("status=%d, response=%#v, records=%d", response.Code, result, store.count())
+			}
+		})
 	}
 }
 
@@ -249,9 +364,7 @@ func TestProcessRunCreationFailurePreventsExecution(t *testing.T) {
 	process := exampleProcess()
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
@@ -278,9 +391,7 @@ func TestOpeningIncompleteProcessRunRequiresExplicitResume(t *testing.T) {
 	process := exampleProcess()
 	var executed atomic.Bool
 	process.build = func(
-		_ context.Context,
 		_ *fakeReleaseRun,
-		_ contract.CheckpointFunc,
 	) ([]*coordinator.Step, error) {
 		return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 			executed.Store(true)
@@ -493,9 +604,7 @@ func TestConfiguredProcessesCanRunConcurrently(t *testing.T) {
 		process := exampleProcess()
 		process.definition = testProcessDefinition(processID)
 		process.build = func(
-			_ context.Context,
 			_ *fakeReleaseRun,
-			_ contract.CheckpointFunc,
 		) ([]*coordinator.Step, error) {
 			return exampleProcessSteps(func(context.Context, coordinator.StepControl) error {
 				close(entered[processID])
