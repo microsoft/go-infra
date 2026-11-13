@@ -208,6 +208,48 @@ func TestResumeStaleCheckpoint(t *testing.T) {
 	})
 }
 
+func TestResumeUsesFreshRunnerForRebuiltGraph(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, store, _, executions, cancel := publishedTestManager(t, nil)
+		defer cancel()
+		store.record.Run.Executing = true
+		store.record.UpdatedAt = time.Now().Add(-2 * time.Minute)
+		previous, err := coordinator.NewStepRunner([]*coordinator.Step{
+			coordinator.NewRootStep("Previous graph", time.Minute, func(context.Context, coordinator.StepControl) error {
+				t.Fatal("Resume executed the previous graph")
+				return nil
+			}),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := previous.Snapshot()
+		session, _ := manager.processSession("example")
+		session.runner = previous
+		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if session.checkpointer != nil {
+			defer session.checkpointer.Close()
+		}
+		if executions.Load() != 1 || manager.Running("example") ||
+			store.record.Run.Executing || store.record.Run.Result != resultSucceeded {
+
+			t.Fatalf("rebuilt graph did not execute and finalize: executions=%d, record=%#v",
+				executions.Load(), store.record.Run)
+		}
+		if session.runner == previous || !reflect.DeepEqual(before, previous.Snapshot()) {
+			t.Fatal("Resume reused or changed the previous runner")
+		}
+		if err := manager.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestStaleResumeRejectsInvalidCheckpointOrClaim(t *testing.T) {
 	for _, test := range []struct {
 		name   string

@@ -434,6 +434,9 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 		session.stopStart(state.Digest)
 		return newError(ErrorInternal, err)
 	}
+	if resume {
+		runner = initial
+	}
 	view, err := s.publishedView(state, run.TakeView(), plan, initial.Snapshot())
 	if err != nil {
 		checkpointer.Close()
@@ -456,7 +459,7 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 		}
 		return errorf(ErrorInternal, "save release record before execution: %v", err)
 	}
-	err = session.publishStartedRun(update, run, record, plan, steps, checkpointer)
+	err = session.publishStartedRun(update, run, record, plan, steps, runner, checkpointer)
 	if err != nil {
 		checkpointer.Close()
 		cancel()
@@ -498,16 +501,24 @@ func (s *Manager) executeProcessRun(
 	checkpointer *processCheckpointer,
 ) {
 	defer checkpointer.cancel()
+	defer checkpointer.Close()
+	finalized := false
 	if err := runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
 		Update: checkpointer.Capture,
 		Finalize: func(executionErr error) error {
 			err := s.finishProcessRun(session, digest, run, checkpointer, executionErr)
+			finalized = true
 			session.mu.Lock()
 			session.shutdownErr = err
 			session.mu.Unlock()
 			return err
 		},
 	}); err != nil {
+		if !finalized {
+			session.mu.Lock()
+			session.shutdownErr = err
+			session.mu.Unlock()
+		}
 		log.Printf("Release run finished: %v", err)
 	}
 }
@@ -705,6 +716,7 @@ func (s *processSession) publishStartedRun(
 	record *runstore.Record,
 	plan *contract.Plan,
 	steps []*coordinator.Step,
+	runner *coordinator.StepRunner,
 	checkpointer *processCheckpointer,
 ) error {
 	s.mu.Lock()
@@ -720,6 +732,7 @@ func (s *processSession) publishStartedRun(
 	s.plan = plan
 	s.record = record
 	s.steps = steps
+	s.runner = runner
 	s.checkpointer = checkpointer
 	return nil
 }

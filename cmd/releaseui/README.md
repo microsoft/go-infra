@@ -263,6 +263,7 @@ Processes report live step progress through `ctl.ReportProgress`; `RunView` does
 The dashboard and saved release page show the last heartbeat timestamp for unfinished runs.
 The dashboard refreshes its saved records every 15 seconds, so an active worker's newer heartbeats
 replace the displayed timestamp. Saved release pages refresh every five seconds.
+Dashboard refreshes preserve keyboard focus on a card or action that remains available.
 After a minute without a heartbeat, an executing run is labeled **Probably interrupted**.
 This label does not change the stored record or automatically resume the run.
 The page keeps the last reported step progress. It does not independently monitor or restart the
@@ -287,6 +288,7 @@ The second request must include explicit confirmation and the exact current plan
 An open unfinished record offers **Resume release** then **Confirm resume** when its process is
 configured and it is not executing, or its last heartbeat is at least a minute old.
 Only that confirmed operation loads the checkpoint.
+Resume builds the saved run's graph in a fresh runner.
 It rechecks execution readiness and claims the reviewed record revision before any actions run.
 The prototype assumes a single operator. Confirmed Resume can replace an old `executing`
 reservation without a separate JSON repair. The backend rejects a recently updated record,

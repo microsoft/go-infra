@@ -26,6 +26,9 @@ globalThis.addEventListener("pagehide", () => {
   clearInterval(dashboardTimer);
 }, { once: true });
 jsonClose.addEventListener("click", () => jsonDialog.close());
+jsonDialog.addEventListener("close", () => {
+  document.querySelector(`[data-focus-key="release-${editingRecord}-json"]`)?.focus({ preventScroll: true });
+});
 jsonCopy.addEventListener("click", copyJSON);
 jsonSave.addEventListener("click", saveJSON);
 
@@ -34,6 +37,8 @@ async function loadDashboard() {
   loadingDashboard = true;
   try {
     const dashboardState = await requestJSON("/api/dashboard", { signal: AbortSignal.timeout(10000) });
+    const focused = document.activeElement;
+    const focusKey = focused?.dataset.focusKey;
     renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
     attentionSection.hidden = dashboardState.needsAttention.length === 0;
     renderReleases(attentionReleases, dashboardState.needsAttention, "");
@@ -43,6 +48,9 @@ async function loadDashboard() {
     trackingError.hidden = !dashboardState.trackingError;
     trackingError.textContent = dashboardState.trackingError || "";
     refreshHeartbeats();
+    if (focusKey && !focused.isConnected) {
+      document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+    }
   } catch (error) {
     showTrackingError(`Unable to refresh published progress: ${error.message}`);
   } finally {
@@ -64,6 +72,8 @@ function renderReleases(container, releases, emptyText) {
 function createReleaseCard(release) {
   const card = document.createElement("article");
   card.className = "release-card";
+  const focusKey = `release-${release.recordId || release.href}`;
+  card.dataset.focusKey = focusKey;
 
   const icon = document.createElement("span");
   icon.className = "release-icon";
@@ -140,6 +150,7 @@ function createReleaseCard(release) {
   if (release.runUrl) {
     const runLink = document.createElement("a");
     runLink.className = "button button-secondary compact-button";
+    runLink.dataset.focusKey = `${focusKey}-run`;
     runLink.href = release.runUrl;
     runLink.target = "_blank";
     runLink.rel = "noreferrer";
@@ -149,6 +160,7 @@ function createReleaseCard(release) {
   if (release.recordId && release.recordUrl) {
     const recordLink = document.createElement("a");
     recordLink.className = "button button-secondary compact-button";
+    recordLink.dataset.focusKey = `${focusKey}-record`;
     recordLink.href = release.recordUrl;
     recordLink.target = "_blank";
     recordLink.rel = "noreferrer";
@@ -158,12 +170,14 @@ function createReleaseCard(release) {
   if (!release.issue && release.recordId) {
     const edit = document.createElement("button");
     edit.className = "button button-secondary compact-button";
+    edit.dataset.focusKey = `${focusKey}-json`;
     edit.type = "button";
     edit.textContent = "View JSON";
     edit.addEventListener("click", () => openJSON(release));
 
     const open = document.createElement("button");
     open.className = "button button-secondary compact-button";
+    open.dataset.focusKey = `${focusKey}-open`;
     open.type = "button";
     open.textContent = "Open";
     const openRelease = () => {
@@ -184,6 +198,7 @@ function createReleaseCard(release) {
   } else if (!release.issue) {
     const link = document.createElement("a");
     link.className = "button button-secondary compact-button";
+    link.dataset.focusKey = `${focusKey}-track`;
     link.href = release.href;
     link.textContent = "Track release";
     actions.append(link);
@@ -260,6 +275,7 @@ function showJSONError(message) {
 function createProcessCard(process) {
   const card = document.createElement("a");
   card.className = "process-card";
+  card.dataset.focusKey = `process-${process.id}`;
   card.href = process.href;
 
   const mark = document.createElement("span");

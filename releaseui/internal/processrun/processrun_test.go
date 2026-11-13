@@ -562,6 +562,36 @@ func TestFinalPersistenceFailureIsVisible(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectionStopsCheckpointerAndFailsShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, session, run, store, cancel := checkpointTestRun(t)
+		defer cancel()
+		manager = New(manager.ctx, manager.processes, store)
+		manager.sessions["example"] = session
+		ctx, stop := context.WithCancel(manager.ctx)
+		checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, stop)
+		defer checkpointer.Close()
+		steps := []*coordinator.Step{coordinator.NewRootStep("Different graph", time.Minute,
+			func(context.Context, coordinator.StepControl) error {
+				t.Fatal("rejected graph executed a step")
+				return nil
+			})}
+		manager.executeProcessRun(session, session.state.Digest, ctx, session.runner, steps, run, checkpointer)
+		select {
+		case <-checkpointer.done:
+		default:
+			t.Error("runner rejection left the checkpointer running")
+		}
+		err := manager.Shutdown(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "execution graph does not match") {
+			t.Fatalf("shutdown error = %v, want runner rejection", err)
+		}
+		if store.updates.Load() != 0 {
+			t.Fatal("rejected execution rewrote the saved record")
+		}
+	})
+}
+
 func TestShutdownWaitsForCheckpointAndAllowsResume(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		release := make(chan struct{})
