@@ -20,3 +20,14 @@ For more information about this release and the changes included, see the table 
 {{- range .Versions }}
 | [{{.MSGoVersion}}]({{.MSGoVersionLink}}) | {{.GoVersion}} [release notes]({{.GoVersionLink}}) |
 {{- end }}
+{{- if eq (len .GoAnnouncements) 1 }}
+
+Read the [Go release announcement]({{(index .GoAnnouncements 0).URL}}) on the golang-announce mailing list.
+{{- else if .GoAnnouncements }}
+
+Read the Go release announcements on the golang-announce mailing list:
+
+{{ range .GoAnnouncements -}}
+- [{{.Subject}}]({{.URL}})
+{{ end -}}
+{{- end }}
