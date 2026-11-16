@@ -6,14 +6,93 @@ package json2junit
 import (
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
+
+func TestConverterRepeatedNameCollisions(t *testing.T) {
+	const input = `{"Action":"start","Package":"example"}
+{"Action":"run","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated [4]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [4]"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated [3]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [3]"}
+{"Action":"pass","Package":"example"}
+`
+	for _, includePackage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("include_package=%t", includePackage), func(t *testing.T) {
+			var out bytes.Buffer
+			if err := ConvertWithOptions(&out, strings.NewReader(input), &Options{
+				IncludePackageInTestName: includePackage,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Suite struct {
+					Tests     int `xml:"tests,attr"`
+					TestCases []struct {
+						Name string `xml:"name,attr"`
+					} `xml:"testcase"`
+				} `xml:"testsuite"`
+			}
+			if err := xml.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"TestRepeated", "TestRepeated [2]", "TestRepeated [3]",
+				"TestRepeated [3] [2]", "TestRepeated [4]", "TestRepeated [5]",
+			}
+			if includePackage {
+				for i := range want {
+					want[i] = "example." + want[i]
+				}
+			}
+			var got []string
+			for _, testCase := range result.Suite.TestCases {
+				got = append(got, testCase.Name)
+			}
+			if result.Suite.Tests != len(want) || !slices.Equal(got, want) {
+				t.Errorf("got tests=%d names=%q, want tests=%d names=%q", result.Suite.Tests, got, len(want), want)
+			}
+		})
+	}
+}
+
+func BenchmarkConverterRepeatedTests(b *testing.B) {
+	for _, runs := range []int{1000, 4000} {
+		b.Run(fmt.Sprint(runs), func(b *testing.B) {
+			var input strings.Builder
+			input.WriteString("{\"Action\":\"start\",\"Package\":\"example\"}\n")
+			for range runs {
+				input.WriteString("{\"Action\":\"run\",\"Package\":\"example\",\"Test\":\"TestRepeated\"}\n")
+				input.WriteString("{\"Action\":\"pass\",\"Package\":\"example\",\"Test\":\"TestRepeated\"}\n")
+			}
+			input.WriteString("{\"Action\":\"pass\",\"Package\":\"example\"}\n")
+			data := input.String()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := Convert(io.Discard, strings.NewReader(data)); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func TestConverterRepeatedTests(t *testing.T) {
 	const input = `{"Action":"start","Package":"crypto/rand"}

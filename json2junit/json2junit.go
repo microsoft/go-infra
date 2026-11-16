@@ -185,8 +185,9 @@ type junitTestSuite struct {
 	SystemOut *systemOut `xml:",omitempty"`
 	TestCases []*junitTestCase
 
-	testCases map[string]*junitTestCase `xml:"-"` // Active test cases, keyed by Go test name.
-	testNames map[string]bool           `xml:"-"` // JUnit names already used in this suite.
+	testCases      map[string]*junitTestCase `xml:"-"` // Active test cases, keyed by Go test name.
+	testNames      map[string]bool           `xml:"-"` // JUnit names already used in this suite.
+	nextTestSuffix map[string]int            `xml:"-"` // Next suffix to try for each base JUnit name.
 }
 
 type systemOut struct {
@@ -223,10 +224,11 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			suiteName += " [attempt " + c.opts.JobAttempt + "]"
 		}
 		c.suites[entry.Package] = &junitTestSuite{
-			Name:      suiteName,
-			Timestamp: entry.Time.Format(time.RFC3339),
-			testCases: make(map[string]*junitTestCase),
-			testNames: make(map[string]bool),
+			Name:           suiteName,
+			Timestamp:      entry.Time.Format(time.RFC3339),
+			testCases:      make(map[string]*junitTestCase),
+			testNames:      make(map[string]bool),
+			nextTestSuffix: make(map[string]int),
 		}
 	case "run":
 		// start a new test case.
@@ -243,9 +245,12 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			name = entry.Package + "." + entry.Test
 		}
 		baseName := name
-		for n := 2; suite.testNames[name]; n++ {
+		n := max(2, suite.nextTestSuffix[baseName])
+		for suite.testNames[name] {
 			name = fmt.Sprintf("%s [%d]", baseName, n)
+			n++
 		}
+		suite.nextTestSuffix[baseName] = n
 		suite.testNames[name] = true
 		testCase := &junitTestCase{
 			Name:      name,
