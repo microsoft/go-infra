@@ -4,14 +4,175 @@
 package json2junit
 
 import (
+	"bytes"
+	"encoding/xml"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/microsoft/go-infra/goldentest"
 )
+
+func TestConverterRepeatedNameCollisions(t *testing.T) {
+	const input = `{"Action":"start","Package":"example"}
+{"Action":"run","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated [4]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [4]"}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated"}
+{"Action":"run","Package":"example","Test":"TestRepeated [3]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [3]"}
+{"Action":"pass","Package":"example"}
+`
+	for _, includePackage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("include_package=%t", includePackage), func(t *testing.T) {
+			var out bytes.Buffer
+			if err := ConvertWithOptions(&out, strings.NewReader(input), &Options{
+				IncludePackageInTestName: includePackage,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Suite struct {
+					Tests     int `xml:"tests,attr"`
+					TestCases []struct {
+						Name string `xml:"name,attr"`
+					} `xml:"testcase"`
+				} `xml:"testsuite"`
+			}
+			if err := xml.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				"TestRepeated", "TestRepeated [2]", "TestRepeated [3]",
+				"TestRepeated [3] [2]", "TestRepeated [4]", "TestRepeated [5]",
+			}
+			if includePackage {
+				for i := range want {
+					want[i] = "example." + want[i]
+				}
+			}
+			var got []string
+			for _, testCase := range result.Suite.TestCases {
+				got = append(got, testCase.Name)
+			}
+			if result.Suite.Tests != len(want) || !slices.Equal(got, want) {
+				t.Errorf("got tests=%d names=%q, want tests=%d names=%q", result.Suite.Tests, got, len(want), want)
+			}
+		})
+	}
+}
+
+func BenchmarkConverterRepeatedTests(b *testing.B) {
+	for _, runs := range []int{1000, 4000} {
+		b.Run(fmt.Sprint(runs), func(b *testing.B) {
+			var input strings.Builder
+			input.WriteString("{\"Action\":\"start\",\"Package\":\"example\"}\n")
+			for range runs {
+				input.WriteString("{\"Action\":\"run\",\"Package\":\"example\",\"Test\":\"TestRepeated\"}\n")
+				input.WriteString("{\"Action\":\"pass\",\"Package\":\"example\",\"Test\":\"TestRepeated\"}\n")
+			}
+			input.WriteString("{\"Action\":\"pass\",\"Package\":\"example\"}\n")
+			data := input.String()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := Convert(io.Discard, strings.NewReader(data)); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestConverterRepeatedTests(t *testing.T) {
+	const input = `{"Action":"start","Package":"crypto/rand"}
+{"Action":"run","Package":"crypto/rand","Test":"TestAllocations"}
+{"Action":"output","Package":"crypto/rand","Test":"TestAllocations","Output":"first run\n"}
+{"Action":"fail","Package":"crypto/rand","Test":"TestAllocations","Elapsed":1}
+{"Action":"run","Package":"crypto/rand","Test":"TestAllocations"}
+{"Action":"output","Package":"crypto/rand","Test":"TestAllocations","Output":"second run\n"}
+{"Action":"skip","Package":"crypto/rand","Test":"TestAllocations","Elapsed":2}
+{"Action":"run","Package":"crypto/rand","Test":"TestAllocations"}
+{"Action":"output","Package":"crypto/rand","Test":"TestAllocations","Output":"third run\n"}
+{"Action":"pass","Package":"crypto/rand","Test":"TestAllocations","Elapsed":3}
+{"Action":"fail","Package":"crypto/rand","Elapsed":6}
+`
+	for _, includePackage := range []bool{false, true} {
+		name := "without_package"
+		prefix := ""
+		if includePackage {
+			name = "with_package"
+			prefix = "crypto/rand."
+		}
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := ConvertWithOptions(&out, strings.NewReader(input), &Options{
+				IncludePackageInTestName: includePackage,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			type testResult struct {
+				Content string `xml:",cdata"`
+			}
+			var result struct {
+				Suites []struct {
+					Tests     int `xml:"tests,attr"`
+					Failures  int `xml:"failures,attr"`
+					Skipped   int `xml:"skipped,attr"`
+					TestCases []struct {
+						Name      string      `xml:"name,attr"`
+						Classname string      `xml:"classname,attr"`
+						Time      float64     `xml:"time,attr"`
+						Failure   *testResult `xml:"failure"`
+						Skipped   *testResult `xml:"skipped"`
+					} `xml:"testcase"`
+				} `xml:"testsuite"`
+			}
+			if err := xml.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Suites) != 1 {
+				t.Fatalf("got %d suites, want 1", len(result.Suites))
+			}
+			suite := result.Suites[0]
+			if suite.Tests != 3 || suite.Failures != 1 || suite.Skipped != 1 {
+				t.Errorf("got tests=%d failures=%d skipped=%d, want 3, 1, 1", suite.Tests, suite.Failures, suite.Skipped)
+			}
+			if len(suite.TestCases) != 3 {
+				t.Fatalf("got %d test cases, want 3", len(suite.TestCases))
+			}
+			for i, wantName := range []string{"TestAllocations", "TestAllocations [2]", "TestAllocations [3]"} {
+				got := suite.TestCases[i]
+				if got.Name != prefix+wantName || got.Classname != "crypto/rand" || got.Time != float64(i+1) {
+					t.Errorf("test case %d: got name=%q classname=%q time=%v", i, got.Name, got.Classname, got.Time)
+				}
+				if i == 2 {
+					if got.Failure != nil || got.Skipped != nil {
+						t.Errorf("passing run has failure=%+v skipped=%+v", got.Failure, got.Skipped)
+					}
+					continue
+				}
+				gotResult, otherResult, wantOutput := got.Failure, got.Skipped, "first run"
+				if i == 1 {
+					gotResult, otherResult, wantOutput = got.Skipped, got.Failure, "second run"
+				}
+				if gotResult == nil || gotResult.Content != wantOutput || otherResult != nil {
+					t.Errorf("test case %d: got result=%+v other=%+v, want output %q", i, gotResult, otherResult, wantOutput)
+				}
+			}
+		})
+	}
+}
 
 func TestConverter(t *testing.T) {
 	dir := filepath.Join("testdata", "inputs", "good")

@@ -1,0 +1,10 @@
+{"Time":"2026-11-16T21:57:36Z","Action":"start","Package":"example"}
+{"Action":"run","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [2]","Elapsed":1}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated","Elapsed":2}
+{"Action":"run","Package":"example","Test":"TestRepeated"}
+{"Action":"pass","Package":"example","Test":"TestRepeated","Elapsed":3}
+{"Action":"run","Package":"example","Test":"TestRepeated [2]"}
+{"Action":"pass","Package":"example","Test":"TestRepeated [2]","Elapsed":4}
+{"Action":"pass","Package":"example","Elapsed":10}

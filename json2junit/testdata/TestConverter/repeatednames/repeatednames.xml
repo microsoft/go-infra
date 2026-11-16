@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="example" tests="4" failures="0" skipped="0" time="10" timestamp="2026-11-16T21:57:36Z">
+	<testcase classname="example" name="TestRepeated" time="2"></testcase>
+	<testcase classname="example" name="TestRepeated [2]" time="1"></testcase>
+	<testcase classname="example" name="TestRepeated [2] [2]" time="4"></testcase>
+	<testcase classname="example" name="TestRepeated [3]" time="3"></testcase>
+</testsuite>
+</testsuites>
