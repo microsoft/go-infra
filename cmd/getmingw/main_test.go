@@ -133,6 +133,54 @@ func TestCreateFreshChecksumRejectsNonOKResponse(t *testing.T) {
 	}
 }
 
+func TestLatestNixmanBuilds(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		versions []string
+		source   string
+		want     string
+		count    int
+		wantErr  string
+	}{
+		{name: "GCC version", versions: []string{"9.5.0-rt_v12-rev2", "15.1.0-rt_v11-rev0", "14.2.0-rt_v13-rev10"}, want: "15.1.0-rt_v11-rev0", count: 1},
+		{name: "runtime version", versions: []string{"14.2.0-rt_v9-rev99", "14.2.0-rt_v12-rev2"}, want: "14.2.0-rt_v12-rev2", count: 1},
+		{name: "revision", versions: []string{"14.2.0-rt_v12-rev2", "14.2.0-rt_v12-rev10"}, want: "14.2.0-rt_v12-rev10", count: 1},
+		{name: "retain matching variants", versions: []string{"14.2.0-rt_v12-rev2", "13.2.0-rt_v11-rev0", "14.2.0-rt_v12-rev2"}, want: "14.2.0-rt_v12-rev2", count: 2},
+		{name: "invalid version", versions: []string{"unknown"}, wantErr: "invalid Nixman version"},
+		{name: "invalid numeric component", versions: []string{"14.2.0-rt_v12-rev999999999999999999999"}, wantErr: "invalid Nixman version"},
+		{name: "unsupported source", versions: []string{"8.1.0"}, source: Sourceforge, wantErr: "-source nixman"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := tt.source
+			if source == "" {
+				source = Nixman
+			}
+			var builds []*build
+			for _, version := range tt.versions {
+				builds = append(builds, &build{Source: source, Version: version})
+			}
+			got, err := latestNixmanBuilds(builds)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("latestNixmanBuilds() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.count {
+				t.Fatalf("got %d builds, want %d", len(got), tt.count)
+			}
+			for _, b := range got {
+				if b.Version != tt.want {
+					t.Errorf("selected version %q, want %q", b.Version, tt.want)
+				}
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

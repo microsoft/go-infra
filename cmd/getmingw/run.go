@@ -10,6 +10,9 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -29,6 +32,7 @@ func init() {
 func run(p subcmd.ParseFunc) error {
 	initFilterFlags()
 	multi := flag.Bool("multi", false, "Run the command once per matching MinGW version rather than only match one version.")
+	latest := flag.Bool("latest", false, "Select the newest matching Nixman version by GCC version, runtime version, and revision.")
 	ciType := flag.String("ci", "", "In addition to the command, prepend to PATH in a CI-specific way. 'github-actions-env', 'azdo', or none.")
 	if err := p(); err != nil {
 		return err
@@ -61,6 +65,12 @@ func run(p subcmd.ParseFunc) error {
 	matches := filter(builds)
 	if len(matches) == 0 {
 		return fmt.Errorf("no matching MinGW found")
+	}
+	if *latest {
+		matches, err = latestNixmanBuilds(matches)
+		if err != nil {
+			return err
+		}
 	}
 	if *multi {
 		log.Printf("Running comamnd with each of %v matches.\n", len(matches))
@@ -159,4 +169,37 @@ func run(p subcmd.ParseFunc) error {
 		}
 	}
 	return nil
+}
+
+var nixmanVersionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)-rt_v(\d+)-rev(\d+)$`)
+
+func latestNixmanBuilds(builds []*build) ([]*build, error) {
+	var latest [5]int
+	var matches []*build
+	for _, b := range builds {
+		if b.Source != Nixman {
+			return nil, fmt.Errorf("-latest supports Nixman builds only; use -source nixman")
+		}
+		parts := nixmanVersionPattern.FindStringSubmatch(b.Version)
+		if parts == nil {
+			return nil, fmt.Errorf("invalid Nixman version %q", b.Version)
+		}
+		var version [5]int
+		for i, part := range parts[1:] {
+			var err error
+			version[i], err = strconv.Atoi(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid Nixman version %q: %w", b.Version, err)
+			}
+		}
+		switch slices.Compare(version[:], latest[:]) {
+		case -1:
+			continue
+		case 1:
+			latest = version
+			matches = nil
+		}
+		matches = append(matches, b)
+	}
+	return matches, nil
 }
