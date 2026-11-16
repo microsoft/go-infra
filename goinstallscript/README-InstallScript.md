@@ -36,7 +36,7 @@ pwsh ./go-install.ps1
 ```
 
 Pass `-RequireSignature` to require signature verification whenever the script needs to download an archive.
-To use this option, install [GnuPG](https://gnupg.org/download/) and make sure `gpg` is on `PATH`.
+This option requires `gpg` to be available on `PATH`.
 Without this option, GnuPG is optional: if it is missing, the script warns and checks only the SHA-256 checksum.
 When GnuPG is available, missing or invalid signatures always stop installation, even without `-RequireSignature`.
 Dry runs and already-installed versions do not download or verify archives.
