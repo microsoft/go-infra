@@ -82,6 +82,10 @@ func ConvertFileWithOptions(out, in string, opts *Options) error {
 // size chunks that don't have to align with the JSON lines.
 // The JUnit output is not written immediately, but chunked into test
 // suites which are written to w as soon as they are complete.
+//
+// Repeated test names are supported when their runs do not overlap, as can
+// happen with tests in a package and its external test package, or with -count.
+// Later runs receive a numeric suffix in their JUnit names.
 type Converter struct {
 	b      []byte // input buffer
 	suites map[string]*junitTestSuite
@@ -171,17 +175,18 @@ type jsonEntry struct {
 // https://llg.cubic.org/docs/junit/.
 
 type junitTestSuite struct {
-	XMLName   xml.Name         `xml:"testsuite"`
-	Name      string           `xml:"name,attr"`
-	Tests     int              `xml:"tests,attr"`
-	Failures  int              `xml:"failures,attr"`
-	Skipped   int              `xml:"skipped,attr"`
-	Time      float64          `xml:"time,attr"`
-	Timestamp string           `xml:"timestamp,attr"`
-	SystemOut *systemOut       `xml:",omitempty"`
-	TestCases []*junitTestCase // Empty until written to XML. Will be filled in with testCases.
+	XMLName   xml.Name   `xml:"testsuite"`
+	Name      string     `xml:"name,attr"`
+	Tests     int        `xml:"tests,attr"`
+	Failures  int        `xml:"failures,attr"`
+	Skipped   int        `xml:"skipped,attr"`
+	Time      float64    `xml:"time,attr"`
+	Timestamp string     `xml:"timestamp,attr"`
+	SystemOut *systemOut `xml:",omitempty"`
+	TestCases []*junitTestCase
 
-	testCases map[string]*junitTestCase `xml:"-"` // Map from test name to *junitTestCase.
+	testCases map[string]*junitTestCase `xml:"-"` // Active test cases, keyed by Go test name.
+	testNames map[string]bool           `xml:"-"` // JUnit names already used in this suite.
 }
 
 type systemOut struct {
@@ -221,6 +226,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 			Name:      suiteName,
 			Timestamp: entry.Time.Format(time.RFC3339),
 			testCases: make(map[string]*junitTestCase),
+			testNames: make(map[string]bool),
 		}
 	case "run":
 		// start a new test case.
@@ -236,10 +242,17 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		if c.opts.IncludePackageInTestName {
 			name = entry.Package + "." + entry.Test
 		}
-		suite.testCases[entry.Test] = &junitTestCase{
+		baseName := name
+		for n := 2; suite.testNames[name]; n++ {
+			name = fmt.Sprintf("%s [%d]", baseName, n)
+		}
+		suite.testNames[name] = true
+		testCase := &junitTestCase{
 			Name:      name,
 			Classname: entry.Package,
 		}
+		suite.testCases[entry.Test] = testCase
+		suite.TestCases = append(suite.TestCases, testCase)
 	case "output":
 		// append output to the current test case or suite.
 		suite, ok := c.suites[entry.Package]
@@ -305,6 +318,7 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 		// Clear systemOut, it's already in the event.
 		// In case of success, we don't care about the output.
 		testCase.systemOut = nil
+		delete(suite.testCases, entry.Test)
 	case "pause", "cont":
 		// Ignore.
 	default:
@@ -316,10 +330,6 @@ func (c *Converter) processJSONEntry(entry jsonEntry) error {
 // writeXMLTestSuite writes a single test suite to the writer.
 // Test cases are sorted by name.
 func (c *Converter) writeXMLTestSuite(suite *junitTestSuite) error {
-	suite.TestCases = make([]*junitTestCase, 0, len(suite.testCases))
-	for _, testCase := range suite.testCases {
-		suite.TestCases = append(suite.TestCases, testCase)
-	}
 	slices.SortFunc(suite.TestCases, func(a, b *junitTestCase) int {
 		return cmp.Compare(a.Name, b.Name)
 	})
