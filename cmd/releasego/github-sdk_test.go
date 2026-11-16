@@ -203,7 +203,7 @@ func TestGitHubReleaseLifecycle(t *testing.T) {
 				switch {
 				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/releases":
 					var body map[string]any
-					if json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{"tag_name": "v1.26.1-1", "name": "v1.26.1-1", "body": "Microsoft build of Go v1.26.1-1", "draft": true}) {
+					if json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{"tag_name": "v1.26.1-1", "name": "v1.26.1-1", "generate_release_notes": true, "draft": true}) {
 						t.Errorf("wrong draft payload: %v", body)
 					}
 					created.Store(true)

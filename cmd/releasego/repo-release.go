@@ -26,8 +26,9 @@ func init() {
 		Summary: "Create a release on a GitHub repository.",
 		Description: `
 
-Using the GitHub API, create a release on the GitHub repository using a given tag name. Attach the
-given build asset JSON file and the artifacts it lists that are found in the specified directory.
+Using the GitHub API, create a release with generated release notes on the GitHub repository using a
+given tag name. Attach the given build asset JSON file and the artifacts it lists that are found in
+the specified directory.
 `,
 		Handle: handleRepoRelease,
 	})
@@ -139,13 +140,13 @@ func handleRepoRelease(p subcmd.ParseFunc) error {
 }
 
 func draftRelease(tag *string) github.CreateReleaseRequest {
-	body := "Microsoft build of Go " + *tag
+	generateReleaseNotes := true
 	draft := true
 	return github.CreateReleaseRequest{
-		TagName: *tag,
-		Name:    tag,
-		Body:    &body,
-		Draft:   &draft,
+		TagName:              *tag,
+		Name:                 tag,
+		GenerateReleaseNotes: &generateReleaseNotes,
+		Draft:                &draft,
 	}
 }
 
