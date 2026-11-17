@@ -82,12 +82,15 @@ type Snapshot struct {
 
 // ExecutionCallbacks connects step state updates and final outcomes to the host.
 type ExecutionCallbacks struct {
-	// Update captures independent state after a mutation, with the process-state lock held.
-	// It returns a function that persists the captured state. The runner releases the
-	// process-state lock before persistence, but serializes updates until persistence finishes.
-	// Neither callback may call StepControl.Read, StepControl.Update, or
-	// StepControl.EnsurePersisted, and capture must not call ReadState.
-	Update func() (persist func() error, err error)
+	// Capture copies state after a mutation, with the process-state lock held. It must not
+	// perform storage I/O or call ReadState.
+	Capture func() error
+	// Persist saves the latest captured state or retries a failed save. It returns nil without
+	// writing when nothing is pending. The host owns pending checkpoints and storage errors.
+	// The runner releases the process-state lock before Persist but serializes step updates
+	// until it returns. Capture and Persist must be supplied together, and neither may call
+	// StepControl.Read, StepControl.Update, or StepControl.EnsurePersisted.
+	Persist func() error
 	// Finalize runs after all steps have stopped, outside the state lock.
 	Finalize func(error) error
 }
@@ -109,25 +112,6 @@ type StepRunner struct {
 
 	nextSubscriberID uint64
 	subscribers      map[uint64]chan Snapshot
-}
-
-// processState coordinates shared step data with checkpoint capture and persistence.
-type processState struct {
-	// mu protects shared process data. It is released before checkpoint storage I/O so reads can
-	// continue while a checkpoint is being saved.
-	mu sync.RWMutex
-	// updateMu serializes mutations, checkpoint capture, persistence, and durability barriers.
-	updateMu sync.Mutex
-	// execution is replaced as a unit for each run and is protected by updateMu.
-	execution *processExecution
-}
-
-type processExecution struct {
-	update       func() (func() error, error)
-	cancelUpdate context.CancelCauseFunc
-	updateErr    error
-	pending      func() error
-	pendingErr   error
 }
 
 // NewStepRunner initializes the graph's waiting state before execution.
@@ -174,6 +158,9 @@ func (r *StepRunner) Execute(ctx context.Context, steps []*Step) error {
 
 // ExecuteWithCallbacks executes steps with host-provided state persistence and finalization.
 func (r *StepRunner) ExecuteWithCallbacks(ctx context.Context, steps []*Step, callbacks ExecutionCallbacks) error {
+	if (callbacks.Capture == nil) != (callbacks.Persist == nil) {
+		return errors.New("state capture and persistence callbacks must be supplied together")
+	}
 	r.mu.Lock()
 	if r.active {
 		r.mu.Unlock()
@@ -197,18 +184,19 @@ func (r *StepRunner) ExecuteWithCallbacks(ctx context.Context, steps []*Step, ca
 	updateCtx, cancelUpdate := context.WithCancelCause(ctx)
 	defer cancelUpdate(nil)
 	eg, egCtx := errgroup.WithContext(updateCtx)
-	r.process.beginExecution(callbacks.Update, cancelUpdate)
+	r.process.beginExecution(callbacks.Capture, callbacks.Persist, cancelUpdate)
 	for _, state := range r.ordered {
 		eg.Go(func() error {
 			return state.run(egCtx, r)
 		})
 	}
 	err := eg.Wait()
-	err = errors.Join(err, r.process.updateError())
+	captureErr := r.process.captureError()
+	err = errors.Join(err, captureErr)
 	if callbacks.Finalize != nil {
 		err = errors.Join(err, callbacks.Finalize(err))
-	} else {
-		err = errors.Join(err, r.process.pendingError())
+	} else if captureErr == nil {
+		err = errors.Join(err, r.process.ensurePersisted(r, context.Background()))
 	}
 
 	r.mu.Lock()
@@ -269,6 +257,18 @@ func (r *StepRunner) Subscribe(buffer int) (Snapshot, <-chan Snapshot, func()) {
 		})
 	}
 	return initial, updates, cancel
+}
+
+// SetCheckpointError publishes a storage failure or clears it after a successful retry.
+// Hosts also use it for background checkpoint retries and final persistence.
+func (r *StepRunner) SetCheckpointError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checkpointError = ""
+	if err != nil {
+		r.checkpointError = err.Error()
+	}
+	r.publishLocked()
 }
 
 func (r *StepRunner) snapshotLocked() Snapshot {
@@ -419,6 +419,14 @@ func (ctl stepControl) ReportProgress(progress StepProgress) {
 	runner.publishLocked()
 }
 
+func (ctl stepControl) Read(fn func()) {
+	if !raceEnabled {
+		ctl.runner.process.mu.RLock()
+		defer ctl.runner.process.mu.RUnlock()
+	}
+	fn()
+}
+
 func (ctl stepControl) Update(fn func()) {
 	ctl.runner.process.update(ctl.runner, fn)
 }
@@ -427,9 +435,27 @@ func (ctl stepControl) EnsurePersisted() error {
 	return ctl.runner.process.ensurePersisted(ctl.runner, ctl.ctx)
 }
 
-func (s *processState) beginExecution(update func() (func() error, error), cancel context.CancelCauseFunc) {
+type processExecution struct {
+	capture      func() error
+	persist      func() error
+	cancelUpdate context.CancelCauseFunc
+	captureErr   error
+}
+
+// processState coordinates shared step data with checkpoint capture and persistence.
+type processState struct {
+	// mu protects shared process data. It is released before checkpoint storage I/O so reads can
+	// continue while a checkpoint is being saved.
+	mu sync.RWMutex
+	// updateMu serializes mutations, checkpoint capture, persistence, and durability barriers.
+	updateMu sync.Mutex
+	// execution is replaced as a unit for each run and is protected by updateMu.
+	execution *processExecution
+}
+
+func (s *processState) beginExecution(capture, persist func() error, cancel context.CancelCauseFunc) {
 	s.updateMu.Lock()
-	s.execution = &processExecution{update: update, cancelUpdate: cancel}
+	s.execution = &processExecution{capture: capture, persist: persist, cancelUpdate: cancel}
 	s.updateMu.Unlock()
 }
 
@@ -437,88 +463,56 @@ func (s *processState) update(runner *StepRunner, fn func()) {
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
 	execution := s.execution
-	var persist func() error
 	var err error
 	func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		fn()
-		if execution.updateErr == nil && execution.update != nil {
-			persist, err = execution.update()
+		if execution.captureErr == nil && execution.capture != nil {
+			err = execution.capture()
 		}
 	}()
-	if execution.updateErr != nil {
+	if execution.captureErr != nil {
 		return
 	}
 	if err != nil {
-		execution.updateErr = err
+		execution.captureErr = err
 		execution.cancelUpdate(err)
 		return
 	}
-	execution.pending = persist
-	// persistPending records and publishes failures; Update remains best-effort.
-	_ = s.persistPending(runner, execution)
+	// Storage failures are visible but do not stop the step.
+	_ = s.persist(runner)
 }
 
 func (s *processState) ensurePersisted(runner *StepRunner, ctx context.Context) error {
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
 	execution := s.execution
-	if execution.updateErr != nil {
-		return execution.updateErr
+	if execution.captureErr != nil {
+		return execution.captureErr
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.persistPending(runner, execution); err != nil {
+	if err := s.persist(runner); err != nil {
 		return err
 	}
 	return ctx.Err()
 }
 
-func (s *processState) updateError() error {
+func (s *processState) captureError() error {
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
-	return s.execution.updateErr
+	return s.execution.captureErr
 }
 
-func (s *processState) pendingError() error {
-	s.updateMu.Lock()
-	defer s.updateMu.Unlock()
-	return s.execution.pendingErr
-}
-
-func (s *processState) persistPending(runner *StepRunner, execution *processExecution) error {
-	if execution.pending == nil {
+func (s *processState) persist(runner *StepRunner) error {
+	if s.execution.persist == nil {
 		return nil
 	}
-	err := execution.pending()
-	execution.pendingErr = err
+	err := s.execution.persist()
 	runner.SetCheckpointError(err)
-	if err == nil {
-		execution.pending = nil
-	}
 	return err
-}
-
-// SetCheckpointError publishes a storage failure or clears it after a successful retry.
-// Hosts also use it for background checkpoint retries and final persistence.
-func (r *StepRunner) SetCheckpointError(err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.checkpointError = ""
-	if err != nil {
-		r.checkpointError = err.Error()
-	}
-	r.publishLocked()
-}
-
-func (ctl stepControl) Read(fn func()) {
-	if !raceEnabled {
-		ctl.runner.process.mu.RLock()
-		defer ctl.runner.process.mu.RUnlock()
-	}
-	fn()
 }
 
 type stepState struct {

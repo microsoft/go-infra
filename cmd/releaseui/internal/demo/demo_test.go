@@ -146,46 +146,46 @@ func TestSnapshotIsolation(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalidState(t *testing.T) {
+func TestValidateAllowsCustomResults(t *testing.T) {
 	process := NewProcess().Processes()[0]
-	tests := []struct {
-		name   string
-		change func(*state)
+	for _, test := range []struct {
+		name    string
+		results []float64
+		number  float64
 	}{
-		{"negative determinant", func(s *state) { s.Determinants[0] = -1 }},
-		{"incorrect determinant", func(s *state) { s.Determinants[0] = 4 }},
-		{"wrong dimension", func(s *state) { s.Determinants[1] = 2 }},
-		{"premature estimate", func(s *state) { s.Number = 2.5 }},
-		{"incorrect estimate", func(s *state) {
-			s.Determinants = []float64{2, 2.25}
-			s.Number = 2.25
-		}},
-	}
-	for _, test := range tests {
+		{name: "partial results", results: []float64{2, 0}},
+		{name: "custom determinants", results: []float64{-1, 4}},
+		{name: "custom estimate", results: []float64{2, 2.25}, number: 2.25},
+		{name: "estimate with unfinished results", results: []float64{0, 0}, number: 2.5},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			state := state{Determinants: make([]float64, 2)}
-			test.change(&state)
-			snapshot, err := snapshot.Encode(input{Dimensions: 2}, state)
+			saved, err := snapshot.Encode(input{Dimensions: 2}, state{
+				Determinants: test.results, Number: test.number,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := process.Validate(snapshot); err == nil {
-				t.Fatal("invalid state was accepted for persistence")
+			if err := process.Validate(saved); err != nil {
+				t.Fatalf("stored results were rejected: %v", err)
 			}
 		})
 	}
 }
 
-func TestValidateRejectsInvalidDimensions(t *testing.T) {
+func TestValidateDimensions(t *testing.T) {
 	process := NewProcess().Processes()[0]
 	for _, test := range []struct {
 		name       string
 		dimensions int
 		results    []float64
+		valid      bool
 	}{
+		{name: "minimum dimensions", dimensions: 1, results: []float64{0}, valid: true},
+		{name: "above preparation limit", dimensions: 51, results: make([]float64, 51), valid: true},
+		{name: "maximum saved dimensions", dimensions: 128, results: make([]float64, 128), valid: true},
 		{name: "zero dimensions"},
 		{name: "negative dimensions", dimensions: -1},
-		{name: "too many dimensions", dimensions: 51, results: make([]float64, 51)},
+		{name: "too many dimensions", dimensions: 129, results: make([]float64, 129)},
 		{name: "missing determinants", dimensions: 2},
 		{name: "too few determinants", dimensions: 2, results: []float64{0}},
 		{name: "too many determinants", dimensions: 2, results: []float64{0, 0, 0}},
@@ -195,8 +195,8 @@ func TestValidateRejectsInvalidDimensions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := process.Validate(saved); err == nil {
-				t.Fatal("invalid dimensional state was accepted")
+			if err := process.Validate(saved); (err == nil) != test.valid {
+				t.Fatalf("validation error = %v, want valid = %v", err, test.valid)
 			}
 		})
 	}

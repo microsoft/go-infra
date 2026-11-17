@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
@@ -82,7 +81,6 @@ type goImagesSnapshotState struct {
 }
 
 type goImagesRun struct {
-	mu      sync.RWMutex
 	service ProcessService
 	input   PlanInput
 	state   goImagesSnapshotState
@@ -320,14 +318,10 @@ func (p *testProcess) Load(snapshot *contract.StateSnapshot) (contract.Run, erro
 }
 
 func (r *goImagesRun) TakeSnapshot() (*contract.StateSnapshot, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	return encodeGoImagesSnapshot(r.input, r.state)
 }
 
 func (r *goImagesRun) TakeView() *contract.RunView {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	view := &contract.RunView{
 		Test: r.input.Mode == ModeTest, Summary: "Ready",
 		Detail: modeName(r.input.Mode),
@@ -345,8 +339,6 @@ func (r *goImagesRun) TakeView() *contract.RunView {
 }
 
 func (r *goImagesRun) Plan() *contract.Plan {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	parameters, err := PipelineParameters(r.input.Mode, r.input.SourceBuildID)
 	if err != nil {
 		panic(err)
@@ -358,21 +350,17 @@ func (r *goImagesRun) Build() ([]*coordinator.Step, error) {
 	if err := validateGoImagesConfiguration(r.service); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
 	input := r.state.Document.Input
 	state := r.state.Workflow
 	request := goImagesRunRequest(r.state)
-	r.mu.RUnlock()
 
 	service, err := r.service.NewRunService(request)
 	if err != nil {
 		return nil, fmt.Errorf("create go-images execution service: %w", err)
 	}
 	workflowCheckpoint := func(state *State) {
-		r.mu.Lock()
 		r.state.Workflow = *state
 		r.state.UpdatedAt = time.Now().UTC()
-		r.mu.Unlock()
 	}
 	steps, _, err := NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
 	return steps, err

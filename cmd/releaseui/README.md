@@ -103,15 +103,21 @@ progress, and pass the control explicitly to polling helpers that report progres
 provides a control bound to each executing step; progress reporting does not use context values.
 Change run state through `ctl.Update`, which captures the resulting snapshot and view under the run's shared state lock.
 The host releases that lock before storage I/O and saves updates in mutation order.
+The host connects the coordinator to a checkpoint writer through separate `Capture` and `Persist`
+callbacks. The writer owns pending snapshots and retries. The coordinator serializes step updates
+and asks the writer to persist; it does not retain a second pending save.
 `Update` captures state and attempts a checkpoint before returning, without returning an error.
 It always calls its callback under the state lock, even after cancellation.
 Storage failures display a warning but do not stop the release.
 Later updates and five-second heartbeats retry saving the latest captured state.
 Call `ctl.EnsurePersisted()` and return its error before an external action that requires durable intent.
 It retries pending persistence and succeeds only when all preceding updates have been saved.
+If a heartbeat already saved the checkpoint, `EnsurePersisted` does not write it again.
 Capture and validation failures still cancel execution and preserve the original error.
 After such a failure, later `Update` calls still run their callbacks but skip capture and persistence.
 Finalization attempts to save the latest valid state and reports any unresolved save failure.
+The host starts the checkpoint writer only after validating the execution graph and saving the
+initial record. Failed starts release the local session through one cleanup path.
 `Run.Build` takes no arguments.
 Execution contexts are supplied to step functions when they run.
 Process implementations do not need their own locks for state changed through `Update`.

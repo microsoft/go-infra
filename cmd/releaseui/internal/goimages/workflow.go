@@ -12,7 +12,6 @@ import (
 	"hash/crc32"
 	"regexp"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -85,32 +84,18 @@ func (e *PipelineResultError) Is(target error) bool {
 type CheckpointFunc func(*State)
 
 type stateAccess struct {
-	// Updates hold snapshotMu for reading. This unusual use lets independent graph steps update
-	// different fields concurrently, while snapshot takes the write lock to exclude every update.
-	// The dependency graph must order steps that access the same field. Race tests detect mistakes.
-	snapshotMu sync.RWMutex
 	state      *State
 	checkpoint CheckpointFunc
 }
 
 func (access *stateAccess) update(ctl coordinator.StepControl, update func()) {
 	ctl.Update(func() {
-		func() {
-			access.snapshotMu.RLock()
-			defer access.snapshotMu.RUnlock()
-			update()
-		}()
+		update()
 		if access.checkpoint != nil {
-			snapshot := access.snapshot()
+			snapshot := *access.state
 			access.checkpoint(&snapshot)
 		}
 	})
-}
-
-func (access *stateAccess) snapshot() State {
-	access.snapshotMu.Lock()
-	defer access.snapshotMu.Unlock()
-	return *access.state
 }
 
 const (

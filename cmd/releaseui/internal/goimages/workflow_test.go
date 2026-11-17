@@ -8,7 +8,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
@@ -154,20 +153,22 @@ func TestQueueRequiresPersistedIntent(t *testing.T) {
 	}
 	failure := errors.New("cannot save queue intent")
 	attempts := 0
+	queueAttempted := false
 	var runner coordinator.StepRunner
 	err = runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
-		Update: func() (func() error, error) {
-			queueAttempted := state.QueueAttempted
-			return func() error {
-				if queueAttempted {
-					attempts++
-					return failure
-				}
-				return nil
-			}, nil
+		Capture: func() error {
+			queueAttempted = state.QueueAttempted
+			return nil
+		},
+		Persist: func() error {
+			if queueAttempted {
+				attempts++
+				return failure
+			}
+			return nil
 		},
 	})
-	if !errors.Is(err, failure) || service.queues != 0 || attempts != 2 {
+	if !errors.Is(err, failure) || service.queues != 0 || attempts != 3 {
 		t.Fatalf("error=%v, queues=%d, intent save attempts=%d", err, service.queues, attempts)
 	}
 }
@@ -332,39 +333,5 @@ func TestStateAccessReportsChangeAndObservesCancellation(t *testing.T) {
 	}
 	if checkpointCalls != 1 || !state.QueueAttempted {
 		t.Fatalf("checkpoint calls = %d, state = %#v", checkpointCalls, state)
-	}
-}
-
-func TestStateAccessSnapshotWaitsForUpdate(t *testing.T) {
-	state := &State{}
-	access := &stateAccess{state: state}
-	updateStarted := make(chan struct{})
-	finishUpdate := make(chan struct{})
-	updateDone := make(chan error, 1)
-	go func() {
-		access.update(new(recordingStepControl), func() {
-			close(updateStarted)
-			<-finishUpdate
-			state.QueueAttempted = true
-		})
-		updateDone <- nil
-	}()
-	<-updateStarted
-
-	snapshotDone := make(chan State, 1)
-	go func() {
-		snapshotDone <- access.snapshot()
-	}()
-	select {
-	case snapshot := <-snapshotDone:
-		t.Fatalf("snapshot completed during update: %#v", snapshot)
-	case <-time.After(10 * time.Millisecond):
-	}
-	close(finishUpdate)
-	if err := <-updateDone; err != nil {
-		t.Fatal(err)
-	}
-	if snapshot := <-snapshotDone; !snapshot.QueueAttempted {
-		t.Fatalf("snapshot = %#v, want completed update", snapshot)
 	}
 }
