@@ -88,6 +88,10 @@ type ConfigEntry struct {
 	// repository.
 	SubmoduleTarget string
 
+	// RegenerateDockerfiles reruns the go-images Dockerfile templates after a submodule update.
+	// It requires SubmoduleTarget to be "go".
+	RegenerateDockerfiles bool
+
 	// GoVersionFileContent	is empty, or the Go version that the microsoft/go build should use
 	// after the sync. Should be in the upstream format, e.g. go1.17.10 and go1.18. Sync examines
 	// VERSION in the submodule, and if it doesn't match the expected value, creates/updates VERSION

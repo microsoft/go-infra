@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/internal/dockerfilegen"
 	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
@@ -308,6 +309,15 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
+	if entry.RegenerateDockerfiles {
+		if entry.SubmoduleTarget != "go" {
+			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget to be \"go\"")
+		}
+		if err := dockerfilegen.EnsurePrerequisites(); err != nil {
+			return nil, err
+		}
+	}
+
 	if entry.SyncDocs {
 		if entry.MainBranch == "" ||
 			entry.SubmoduleTarget != "" ||
@@ -678,6 +688,12 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 						return nil, err
 					}
 				}
+
+				if entry.RegenerateDockerfiles {
+					if err := regenerateDockerfiles(dir, dockerfilegen.Run); err != nil {
+						return nil, err
+					}
+				}
 			}
 
 			upstreamCommitMessage, err := getTrimmedCmdOutput("log", "--format=%B", "-n", "1", newCommit)
@@ -991,6 +1007,13 @@ func run(c *exec.Cmd) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func regenerateDockerfiles(repoRoot string, generate func(string, bool, bool) error) error {
+	if err := generate(repoRoot, false, false); err != nil {
+		return err
+	}
+	return run(exec.Command("git", "-C", repoRoot, "add", "--", "src/microsoft"))
 }
 
 // combinedOutput returns the output string of c.CombinedOutput.

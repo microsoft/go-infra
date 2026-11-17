@@ -32,6 +32,7 @@
     "AutoSyncBranches": [
       "master"
     ],
-    "SubmoduleTarget": "go"
+    "SubmoduleTarget": "go",
+    "RegenerateDockerfiles": true
   }
 ]

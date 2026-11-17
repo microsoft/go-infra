@@ -35,6 +35,13 @@ When index preservation is enabled, sync restores the index lines before applyin
 
 For help resolving patch conflicts, see [the patch fixup section of the `git-go-patch` README](/cmd/git-go-patch#fix-up-patch-files-after-a-submodule-update).
 
+## Dockerfile regeneration
+
+The `RegenerateDockerfiles` option can be enabled for a `go` submodule sync in go-images. When the
+submodule commit changes, sync regenerates `src/microsoft` Dockerfiles from the new upstream
+templates and stages the generated files in the sync PR. This requires `bash`, `jq`, and `awk` on
+the sync agent.
+
 ## Documentation updates
 
 The `SyncDocs` entry in [/eng/sync-config.json](/eng/sync-config.json) copies documentation from `microsoft/go`'s `microsoft/main` branch to the current and previous stable support branches defined by [msmajorversions](/msmajorversions).
