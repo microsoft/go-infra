@@ -342,7 +342,6 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 				installed                bool
 				wantDownload             bool
 				wantSignature            bool
-				wantWarning              bool
 				wantError                string
 			}{
 				{name: "lowercase", digest: digest, wantDownload: true, wantSignature: true},
@@ -382,10 +381,10 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 				{name: "missing-signature-kept", digest: digest, signatureDownloadFailure: true, keepArchive: true, wantDownload: true, wantSignature: true, wantError: "Downloading or verifying the archive"},
 				{name: "untrusted-signature", digest: digest, untrustedSignature: true, wantDownload: true, wantSignature: true, wantError: "not signed by the pinned Microsoft key"},
 				{name: "untrusted-signature-kept", digest: digest, untrustedSignature: true, keepArchive: true, wantDownload: true, wantSignature: true, wantError: "not signed by the pinned Microsoft key"},
-				{name: "gpg-missing", digest: digest, gpgMissing: true, wantDownload: true, wantWarning: true},
-				{name: "gpg-missing-kept", digest: digest, gpgMissing: true, keepArchive: true, wantDownload: true, wantWarning: true},
-				{name: "gpg-missing-bad-hash", digest: wrongDigest, gpgMissing: true, wantDownload: true, wantWarning: true, wantError: "SHA-256 mismatch"},
-				{name: "gpg-missing-invalid-signature-url", digest: digest, gpgMissing: true, signatureURL: true, wantDownload: true, wantWarning: true},
+				{name: "gpg-missing", digest: digest, gpgMissing: true, wantDownload: true},
+				{name: "gpg-missing-kept", digest: digest, gpgMissing: true, keepArchive: true, wantDownload: true},
+				{name: "gpg-missing-bad-hash", digest: wrongDigest, gpgMissing: true, wantDownload: true, wantError: "SHA-256 mismatch"},
+				{name: "gpg-missing-invalid-signature-url", digest: digest, gpgMissing: true, signatureURL: true, wantDownload: true},
 				{name: "gpg-required", digest: digest, requireSignature: true, wantDownload: true, wantSignature: true},
 				{name: "gpg-required-missing", digest: digest, gpgMissing: true, requireSignature: true, wantError: "requires GnuPG"},
 				{name: "gpg-import-error", digest: digest, gpgImportFailure: true, wantDownload: true, wantSignature: true, wantError: "import diagnostic"},
@@ -520,8 +519,8 @@ func TestInstallArchiveIntegrity(t *testing.T) {
 					if got := strings.Contains(output, "Copying file from "); got != tt.wantDownload {
 						t.Errorf("download attempted = %v, want %v; output:\n%s", got, tt.wantDownload, output)
 					}
-					if got := strings.Contains(output, "Skipping OpenPGP signature verification"); got != tt.wantWarning {
-						t.Errorf("signature warning = %v, want %v; output:\n%s", got, tt.wantWarning, output)
+					if strings.Contains(output, "Skipping OpenPGP signature verification") {
+						t.Errorf("unexpected signature warning; output:\n%s", output)
 					}
 					signaturePath, signatureErr := os.ReadFile(filepath.Join(dir, "signature-path"))
 					if tt.wantSignature {

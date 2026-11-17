@@ -69,7 +69,7 @@
     Default: 1200 seconds (20 minutes)
 .PARAMETER RequireSignature
     If set, the script fails when a download is needed and GnuPG (gpg) is not on PATH.
-    Otherwise, missing GnuPG produces a warning and only SHA-256 is checked.
+    Otherwise, only SHA-256 is checked when GnuPG is not on PATH.
     When GnuPG is available, missing or invalid signatures always fail installation.
     Dry runs and already-installed versions do not require GnuPG or perform signature verification.
 .PARAMETER KeepArchive
@@ -1003,9 +1003,6 @@ if ($null -ne $GpgCommand) {
 }
 elseif ($RequireSignature) {
     throw "-RequireSignature requires GnuPG (gpg) on PATH. Install GnuPG before retrying."
-}
-else {
-    Say-Warning "GnuPG (gpg) was not found on PATH. Skipping OpenPGP signature verification; only SHA-256 will be checked. Use -RequireSignature to reject installations without GnuPG."
 }
 
 Measure-Action "Installation directory preparation" { Prepare-Install-Directory }
