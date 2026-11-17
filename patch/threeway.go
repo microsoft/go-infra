@@ -48,8 +48,7 @@ func TryThreeWayRebaseWithStatus(rootDir, submoduleDir, baseCommit string) (upda
 	if config == nil || filepath.Clean(config.SubmoduleDir) != filepath.Clean(submoduleDir) {
 		return nil, false, nil
 	}
-	updatedFiles, err = tryThreeWayRebase(config, rootDir, baseCommit, &conflicted)
-	return updatedFiles, conflicted, err
+	return tryThreeWayRebase(config, rootDir, baseCommit)
 }
 
 type fileReplacement struct {
@@ -121,16 +120,16 @@ func writeFileReplacements(rootDir string, replacements []fileReplacement) ([]st
 	return updatedFiles, nil
 }
 
-func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, conflicted *bool) ([]string, error) {
+func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]string, bool, error) {
 	var patchPaths []string
 	if err := WalkGoPatches(config, func(path string) error {
 		patchPaths = append(patchPaths, path)
 		return nil
 	}); err != nil {
-		return nil, fmt.Errorf("failed to find patches to rebase: %w", err)
+		return nil, false, fmt.Errorf("failed to find patches to rebase: %w", err)
 	}
 	if len(patchPaths) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	var index Index
@@ -139,7 +138,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 		var err error
 		index, err = ReadIndex(filepath.Join(config.RootDir, config.PatchesDir))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if index == nil {
 			index = make(Index)
@@ -147,7 +146,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 		if len(index) != 0 {
 			indexedPatchDir, err = os.MkdirTemp("", "indexed-patches-*")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			defer func() {
 				if err := os.RemoveAll(indexedPatchDir); err != nil {
@@ -159,12 +158,12 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 
 	workDir, err := gitcmd.NewTempCloneRepo(sourceRepo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temporary repo for patch rebase: %w", err)
+		return nil, false, fmt.Errorf("failed to create temporary repo for patch rebase: %w", err)
 	}
 	defer gitcmd.AttemptDelete(workDir)
 
 	if err := gitcmd.Run(workDir, "checkout", "--detach", "--quiet", baseCommit); err != nil {
-		return nil, fmt.Errorf("failed to check out patch base commit %q: %w", baseCommit, err)
+		return nil, false, fmt.Errorf("failed to check out patch base commit %q: %w", baseCommit, err)
 	}
 
 	var replacements []fileReplacement
@@ -174,15 +173,15 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 	for _, patchPath := range patchPaths {
 		baseTree, err := gitcmd.RevParse(workDir, "HEAD^{tree}")
 		if err != nil {
-			return nil, fmt.Errorf("failed to find patch base tree for %q: %w", patchPath, err)
+			return nil, false, fmt.Errorf("failed to find patch base tree for %q: %w", patchPath, err)
 		}
 		applyPatchPath, err := index.restoreFile(patchPath, indexedPatchDir)
 		if err != nil {
-			return nil, fmt.Errorf("failed to restore index lines for patch %q: %w", patchPath, err)
+			return nil, false, fmt.Errorf("failed to restore index lines for patch %q: %w", patchPath, err)
 		}
 		if err := gitcmd.Am(workDir, "--quiet", applyPatchPath); err == nil {
 			if _, err := recordObsoletePatch(workDir, patchPath, baseTree, &obsoletePatches, index, &indexChanged); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			continue
 		} else {
@@ -190,30 +189,29 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 		}
 
 		if err := gitcmd.Run(workDir, "am", "--abort"); err != nil {
-			return nil, fmt.Errorf("failed to abort clean patch apply before three-way retry: %w", err)
+			return nil, false, fmt.Errorf("failed to abort clean patch apply before three-way retry: %w", err)
 		}
 
 		if err := gitcmd.Run(workDir, "am", "--3way", "--whitespace=nowarn", "--quiet", applyPatchPath); err != nil {
 			resolved, resolveErr := resolveModuleConflicts(workDir)
 			if resolveErr != nil {
-				return nil, fmt.Errorf("failed to resolve module conflicts in %q: %w", filepath.Base(patchPath), resolveErr)
+				return nil, false, fmt.Errorf("failed to resolve module conflicts in %q: %w", filepath.Base(patchPath), resolveErr)
 			}
 			if !resolved {
 				log.Printf("Three-way patch merge did not resolve %q; leaving patch files unchanged: %v\n", filepath.Base(patchPath), err)
-				*conflicted = true
 				// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
 				_ = gitcmd.Run(workDir, "am", "--abort")
-				return nil, nil
+				return nil, true, nil
 			}
 			log.Printf("Resolved dependency additions adjacent to upstream version updates in %q", filepath.Base(patchPath))
 			if err := gitcmd.Run(workDir, "am", "--continue", "--quiet"); err != nil {
-				return nil, fmt.Errorf("failed to commit resolved module patch %q: %w", filepath.Base(patchPath), err)
+				return nil, false, fmt.Errorf("failed to commit resolved module patch %q: %w", filepath.Base(patchPath), err)
 			}
 		}
 
 		obsolete, err := recordObsoletePatch(workDir, patchPath, baseTree, &obsoletePatches, index, &indexChanged)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if obsolete {
 			continue
@@ -225,11 +223,11 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 		}
 		formatted, err := FormatPatch(workDir, formatArgs...)
 		if err != nil {
-			return nil, fmt.Errorf("failed to regenerate patch %q: %w", filepath.Base(patchPath), err)
+			return nil, false, fmt.Errorf("failed to regenerate patch %q: %w", filepath.Base(patchPath), err)
 		}
 		p, err := Read(strings.NewReader(formatted))
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse regenerated patch %q: %w", filepath.Base(patchPath), err)
+			return nil, false, fmt.Errorf("failed to parse regenerated patch %q: %w", filepath.Base(patchPath), err)
 		}
 		if config.ExtractAsAuthor != "" {
 			p.SetAuthor(config.ExtractAsAuthor)
@@ -240,14 +238,14 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 		}
 		replacements = append(replacements, replacement)
 		if config.PreserveIndex && !index.Record(filepath.Base(patchPath), replacement.content, p) {
-			return nil, fmt.Errorf("failed to record index lines for regenerated patch %q", patchPath)
+			return nil, false, fmt.Errorf("failed to record index lines for regenerated patch %q", patchPath)
 		}
 	}
 
 	if config.PreserveIndex && (len(replacements) > 0 || indexChanged) {
 		content, err := index.marshal()
 		if err != nil {
-			return nil, fmt.Errorf("failed to generate patch index: %w", err)
+			return nil, false, fmt.Errorf("failed to generate patch index: %w", err)
 		}
 		replacements = append(replacements, fileReplacement{
 			path:        filepath.Join(config.RootDir, config.PatchesDir, IndexFileName),
@@ -258,19 +256,19 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, confl
 
 	updatedFiles, err := writeFileReplacements(config.RootDir, replacements)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, patchPath := range obsoletePatches {
 		if err := os.Remove(patchPath); err != nil {
-			return nil, fmt.Errorf("failed to remove obsolete patch %q: %w", patchPath, err)
+			return nil, false, fmt.Errorf("failed to remove obsolete patch %q: %w", patchPath, err)
 		}
 		relativePath, err := filepath.Rel(config.RootDir, patchPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to determine obsolete patch path: %w", err)
+			return nil, false, fmt.Errorf("failed to determine obsolete patch path: %w", err)
 		}
 		updatedFiles = append(updatedFiles, relativePath)
 	}
-	return updatedFiles, nil
+	return updatedFiles, false, nil
 }
 
 func recordObsoletePatch(workDir, patchPath, baseTree string, obsoletePatches *[]string, index Index, indexChanged *bool) (bool, error) {

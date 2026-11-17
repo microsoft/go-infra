@@ -525,7 +525,7 @@ func EnsureDockerfileGenerationPrerequisites() error {
 // doesn't check for prerequisites: EnsureDockerfileGenerationPrerequisites should be called before
 // any auto-update code runs to detect problems before wasting time on an incompletable update.
 func RunDockerfileGeneration(repoRoot string, forceSubmoduleReset, skipSubmoduleUpdate bool) error {
-	return dockerfilegen.Run(repoRoot, forceSubmoduleReset, skipSubmoduleUpdate)
+	return dockerfilegen.Run(repoRoot, "go", forceSubmoduleReset, skipSubmoduleUpdate)
 }
 
 // getwd gets the current working dir or panics, for easy use in expressions.

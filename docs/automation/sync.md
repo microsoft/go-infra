@@ -38,10 +38,10 @@ For help resolving patch conflicts, see [the patch fixup section of the `git-go-
 
 ## Dockerfile regeneration
 
-The `RegenerateDockerfiles` option can be enabled for a `go` submodule sync in go-images. When the
-submodule commit changes, sync regenerates `src/microsoft` Dockerfiles from the new upstream
-templates and stages the generated files in the sync PR. This requires `bash`, `jq`, and `awk` on
-the sync agent.
+The `RegenerateDockerfiles` option can be enabled for a submodule sync in go-images.
+`SubmoduleTarget` specifies the upstream Docker repository's submodule path. When the submodule commit changes, sync regenerates `src/microsoft` Dockerfiles from the new
+upstream templates and stages the generated files in the sync PR. This requires `bash`, `jq`, and
+`awk` on the sync agent.
 
 ## Documentation updates
 

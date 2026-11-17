@@ -39,46 +39,50 @@ func Test_syncPRLabel(t *testing.T) {
 }
 
 func Test_regenerateDockerfiles(t *testing.T) {
-	dir := t.TempDir()
-	if err := setupMockRepo(dir, "main"); err != nil {
-		t.Fatal(err)
-	}
-	dockerfile := filepath.Join(dir, "src", "microsoft", "Dockerfile")
-	if err := os.MkdirAll(filepath.Dir(dockerfile), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := addMockFile(dir, filepath.Join("src", "microsoft", "Dockerfile"), "before"); err != nil {
-		t.Fatal(err)
-	}
+	for _, submoduleDir := range []string{"go", "golang", filepath.Join("upstream", "golang")} {
+		t.Run(submoduleDir, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := setupMockRepo(dir, "main"); err != nil {
+				t.Fatal(err)
+			}
+			dockerfile := filepath.Join(dir, "src", "microsoft", "Dockerfile")
+			if err := os.MkdirAll(filepath.Dir(dockerfile), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := addMockFile(dir, filepath.Join("src", "microsoft", "Dockerfile"), "before"); err != nil {
+				t.Fatal(err)
+			}
 
-	called := false
-	generate := func(repoRoot string, forceSubmoduleReset, skipSubmoduleUpdate bool) error {
-		called = true
-		if repoRoot != dir || forceSubmoduleReset || skipSubmoduleUpdate {
-			t.Errorf("generation arguments = (%q, %v, %v), want (%q, false, false)", repoRoot, forceSubmoduleReset, skipSubmoduleUpdate, dir)
-		}
-		return os.WriteFile(dockerfile, []byte("generated"), 0o666)
-	}
-	if err := regenerateDockerfiles(dir, false, generate); err != nil {
-		t.Fatal(err)
-	}
-	if !called {
-		t.Fatal("generation callback was not called")
-	}
+			called := false
+			generate := func(repoRoot, sourceDir string, forceSubmoduleReset, skipSubmoduleUpdate bool) error {
+				called = true
+				if repoRoot != dir || sourceDir != submoduleDir || forceSubmoduleReset || skipSubmoduleUpdate {
+					t.Errorf("generation arguments = (%q, %q, %v, %v), want (%q, %q, false, false)", repoRoot, sourceDir, forceSubmoduleReset, skipSubmoduleUpdate, dir, submoduleDir)
+				}
+				return os.WriteFile(dockerfile, []byte("generated"), 0o666)
+			}
+			if err := regenerateDockerfiles(dir, submoduleDir, false, generate); err != nil {
+				t.Fatal(err)
+			}
+			if !called {
+				t.Fatal("generation callback was not called")
+			}
 
-	cmd := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.ReplaceAll(strings.TrimSpace(string(out)), `\`, "/"), "src/microsoft/Dockerfile"; got != want {
-		t.Fatalf("staged files = %q, want %q", got, want)
+			cmd := exec.Command("git", "-C", dir, "diff", "--cached", "--name-only")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := strings.ReplaceAll(strings.TrimSpace(string(out)), `\`, "/"), "src/microsoft/Dockerfile"; got != want {
+				t.Fatalf("staged files = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
 func Test_regenerateDockerfilesSkipsUnresolvedPatchConflict(t *testing.T) {
 	called := false
-	err := regenerateDockerfiles(t.TempDir(), true, func(string, bool, bool) error {
+	err := regenerateDockerfiles(t.TempDir(), "golang", true, func(string, string, bool, bool) error {
 		called = true
 		return nil
 	})
@@ -92,7 +96,7 @@ func Test_regenerateDockerfilesSkipsUnresolvedPatchConflict(t *testing.T) {
 
 func Test_regenerateDockerfilesReturnsGenerationError(t *testing.T) {
 	wantErr := errors.New("generation failed")
-	err := regenerateDockerfiles(t.TempDir(), false, func(string, bool, bool) error {
+	err := regenerateDockerfiles(t.TempDir(), "golang", false, func(string, string, bool, bool) error {
 		return wantErr
 	})
 	if !errors.Is(err, wantErr) {
@@ -100,9 +104,9 @@ func Test_regenerateDockerfilesReturnsGenerationError(t *testing.T) {
 	}
 }
 
-func Test_MakeBranchPRs_RegenerateDockerfilesRequiresGoSubmodule(t *testing.T) {
+func Test_MakeBranchPRs_RegenerateDockerfilesRequiresSubmodule(t *testing.T) {
 	_, err := MakeBranchPRs(&Flags{}, "", &ConfigEntry{RegenerateDockerfiles: true})
-	if err == nil || !strings.Contains(err.Error(), `RegenerateDockerfiles requires SubmoduleTarget to be "go"`) {
+	if err == nil || err.Error() != "RegenerateDockerfiles requires SubmoduleTarget" {
 		t.Fatalf("MakeBranchPRs error = %v, want invalid submodule target error", err)
 	}
 }

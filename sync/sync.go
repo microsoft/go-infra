@@ -310,8 +310,8 @@ type SyncResult struct {
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
 	if entry.RegenerateDockerfiles {
-		if entry.SubmoduleTarget != "go" {
-			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget to be \"go\"")
+		if entry.SubmoduleTarget == "" {
+			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget")
 		}
 		if err := dockerfilegen.EnsurePrerequisites(); err != nil {
 			return nil, err
@@ -690,7 +690,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 
 				if entry.RegenerateDockerfiles {
-					if err := regenerateDockerfiles(dir, patchConflict, dockerfilegen.Run); err != nil {
+					if err := regenerateDockerfiles(dir, entry.SubmoduleTarget, patchConflict, dockerfilegen.Run); err != nil {
 						return nil, err
 					}
 				}
@@ -1009,12 +1009,12 @@ func run(c *exec.Cmd) error {
 	return c.Run()
 }
 
-func regenerateDockerfiles(repoRoot string, unresolvedPatchConflict bool, generate func(string, bool, bool) error) error {
+func regenerateDockerfiles(repoRoot, submoduleDir string, unresolvedPatchConflict bool, generate func(string, string, bool, bool) error) error {
 	if unresolvedPatchConflict {
 		fmt.Println("---- Skipping Dockerfile regeneration because patch rebase has unresolved conflicts; sync PR will need manual repair.")
 		return nil
 	}
-	if err := generate(repoRoot, false, false); err != nil {
+	if err := generate(repoRoot, submoduleDir, false, false); err != nil {
 		return err
 	}
 	return run(exec.Command("git", "-C", repoRoot, "add", "--", "src/microsoft"))
