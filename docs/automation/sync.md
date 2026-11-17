@@ -31,6 +31,7 @@ Edits to the same dependency by both sides, other upstream changes, and conflict
 If the three-way merge succeeds, sync regenerates and stages only that patch.
 Patches that apply normally remain byte-for-byte unchanged to keep the sync PR diff focused.
 Regenerated patches are buffered until the entire patch set succeeds, so an unresolved conflict leaves all patch files unchanged and the sync PR can proceed for manual repair.
+When Dockerfile regeneration is enabled, an unresolved patch conflict also skips regeneration with a diagnostic, so the sync PR can still be published for manual repair.
 When index preservation is enabled, sync restores the index lines before applying each patch and stages the updated `index.json` alongside any regenerated patches.
 
 For help resolving patch conflicts, see [the patch fixup section of the `git-go-patch` README](/cmd/git-go-patch#fix-up-patch-files-after-a-submodule-update).

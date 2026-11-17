@@ -30,18 +30,26 @@ import (
 // returned paths are relative to rootDir. If rootDir has no matching patch configuration, the
 // function does nothing.
 func TryThreeWayRebase(rootDir, submoduleDir, baseCommit string) ([]string, error) {
-	rootDir, err := filepath.Abs(rootDir)
+	updatedFiles, _, err := TryThreeWayRebaseWithStatus(rootDir, submoduleDir, baseCommit)
+	return updatedFiles, err
+}
+
+// TryThreeWayRebaseWithStatus is like TryThreeWayRebase, but also reports whether an unresolved
+// patch conflict prevented the rebase. On conflict, patch files remain unchanged.
+func TryThreeWayRebaseWithStatus(rootDir, submoduleDir, baseCommit string) (updatedFiles []string, conflicted bool, err error) {
+	rootDir, err = filepath.Abs(rootDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve repository path: %w", err)
+		return nil, false, fmt.Errorf("failed to resolve repository path: %w", err)
 	}
 	config, err := findConfigInDir(rootDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read git-go-patch configuration: %w", err)
+		return nil, false, fmt.Errorf("failed to read git-go-patch configuration: %w", err)
 	}
 	if config == nil || filepath.Clean(config.SubmoduleDir) != filepath.Clean(submoduleDir) {
-		return nil, nil
+		return nil, false, nil
 	}
-	return tryThreeWayRebase(config, rootDir, baseCommit)
+	updatedFiles, err = tryThreeWayRebase(config, rootDir, baseCommit, &conflicted)
+	return updatedFiles, conflicted, err
 }
 
 type fileReplacement struct {
@@ -113,7 +121,7 @@ func writeFileReplacements(rootDir string, replacements []fileReplacement) ([]st
 	return updatedFiles, nil
 }
 
-func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]string, error) {
+func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string, conflicted *bool) ([]string, error) {
 	var patchPaths []string
 	if err := WalkGoPatches(config, func(path string) error {
 		patchPaths = append(patchPaths, path)
@@ -192,6 +200,7 @@ func tryThreeWayRebase(config *FoundConfig, sourceRepo, baseCommit string) ([]st
 			}
 			if !resolved {
 				log.Printf("Three-way patch merge did not resolve %q; leaving patch files unchanged: %v\n", filepath.Base(patchPath), err)
+				*conflicted = true
 				// The temporary repo is about to be deleted, so an abort is only best-effort cleanup.
 				_ = gitcmd.Run(workDir, "am", "--abort")
 				return nil, nil

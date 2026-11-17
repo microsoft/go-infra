@@ -59,7 +59,7 @@ func Test_regenerateDockerfiles(t *testing.T) {
 		}
 		return os.WriteFile(dockerfile, []byte("generated"), 0o666)
 	}
-	if err := regenerateDockerfiles(dir, generate); err != nil {
+	if err := regenerateDockerfiles(dir, false, generate); err != nil {
 		t.Fatal(err)
 	}
 	if !called {
@@ -73,6 +73,30 @@ func Test_regenerateDockerfiles(t *testing.T) {
 	}
 	if got, want := strings.ReplaceAll(strings.TrimSpace(string(out)), `\`, "/"), "src/microsoft/Dockerfile"; got != want {
 		t.Fatalf("staged files = %q, want %q", got, want)
+	}
+}
+
+func Test_regenerateDockerfilesSkipsUnresolvedPatchConflict(t *testing.T) {
+	called := false
+	err := regenerateDockerfiles(t.TempDir(), true, func(string, bool, bool) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("Dockerfile generator called despite unresolved patch conflict")
+	}
+}
+
+func Test_regenerateDockerfilesReturnsGenerationError(t *testing.T) {
+	wantErr := errors.New("generation failed")
+	err := regenerateDockerfiles(t.TempDir(), false, func(string, bool, bool) error {
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("regenerateDockerfiles error = %v, want %v", err, wantErr)
 	}
 }
 

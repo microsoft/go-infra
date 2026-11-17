@@ -679,7 +679,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			// upstream already contains them. Clean patches and unresolved patch sets remain
 			// unchanged to keep the sync diff focused.
 			if oldSubmoduleCommit != newCommit {
-				updatedPatches, err := patch.TryThreeWayRebase(dir, entry.SubmoduleTarget, newCommit)
+				updatedPatches, patchConflict, err := patch.TryThreeWayRebaseWithStatus(dir, entry.SubmoduleTarget, newCommit)
 				if err != nil {
 					return nil, err
 				}
@@ -690,7 +690,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				}
 
 				if entry.RegenerateDockerfiles {
-					if err := regenerateDockerfiles(dir, dockerfilegen.Run); err != nil {
+					if err := regenerateDockerfiles(dir, patchConflict, dockerfilegen.Run); err != nil {
 						return nil, err
 					}
 				}
@@ -1009,7 +1009,11 @@ func run(c *exec.Cmd) error {
 	return c.Run()
 }
 
-func regenerateDockerfiles(repoRoot string, generate func(string, bool, bool) error) error {
+func regenerateDockerfiles(repoRoot string, unresolvedPatchConflict bool, generate func(string, bool, bool) error) error {
+	if unresolvedPatchConflict {
+		fmt.Println("---- Skipping Dockerfile regeneration because patch rebase has unresolved conflicts; sync PR will need manual repair.")
+		return nil
+	}
 	if err := generate(repoRoot, false, false); err != nil {
 		return err
 	}
