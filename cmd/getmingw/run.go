@@ -10,14 +10,13 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 )
 
 func init() {
@@ -32,7 +31,7 @@ func init() {
 func run(p subcmd.ParseFunc) error {
 	initFilterFlags()
 	multi := flag.Bool("multi", false, "Run the command once per matching MinGW version rather than only match one version.")
-	latest := flag.Bool("latest", false, "Select the newest matching Nixman version by GCC version, runtime version, and revision.")
+	latest := flag.Bool("latest", false, "Keep only the latest version of each matching build configuration. Numbers within versions are compared numerically.")
 	ciType := flag.String("ci", "", "In addition to the command, prepend to PATH in a CI-specific way. 'github-actions-env', 'azdo', or none.")
 	if err := p(); err != nil {
 		return err
@@ -67,10 +66,7 @@ func run(p subcmd.ParseFunc) error {
 		return fmt.Errorf("no matching MinGW found")
 	}
 	if *latest {
-		matches, err = latestNixmanBuilds(matches)
-		if err != nil {
-			return err
-		}
+		matches = latestBuilds(matches)
 	}
 	if *multi {
 		log.Printf("Running comamnd with each of %v matches.\n", len(matches))
@@ -171,35 +167,26 @@ func run(p subcmd.ParseFunc) error {
 	return nil
 }
 
-var nixmanVersionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)-rt_v(\d+)-rev(\d+)$`)
-
-func latestNixmanBuilds(builds []*build) ([]*build, error) {
-	var latest [5]int
+func latestBuilds(builds []*build) []*build {
+	configuration := func(b *build) build {
+		key := *b
+		// Download metadata varies with the version, not the build configuration.
+		key.Version, key.URL, key.SHA512 = "", "", ""
+		return key
+	}
+	order := collate.New(language.Und, collate.Numeric)
+	latest := make(map[build]string)
+	for _, b := range builds {
+		key := configuration(b)
+		if version, ok := latest[key]; !ok || order.CompareString(b.Version, version) > 0 {
+			latest[key] = b.Version
+		}
+	}
 	var matches []*build
 	for _, b := range builds {
-		if b.Source != Nixman {
-			return nil, fmt.Errorf("-latest supports Nixman builds only; use -source nixman")
+		if b.Version == latest[configuration(b)] {
+			matches = append(matches, b)
 		}
-		parts := nixmanVersionPattern.FindStringSubmatch(b.Version)
-		if parts == nil {
-			return nil, fmt.Errorf("invalid Nixman version %q", b.Version)
-		}
-		var version [5]int
-		for i, part := range parts[1:] {
-			var err error
-			version[i], err = strconv.Atoi(part)
-			if err != nil {
-				return nil, fmt.Errorf("invalid Nixman version %q: %w", b.Version, err)
-			}
-		}
-		switch slices.Compare(version[:], latest[:]) {
-		case -1:
-			continue
-		case 1:
-			latest = version
-			matches = nil
-		}
-		matches = append(matches, b)
 	}
-	return matches, nil
+	return matches
 }
