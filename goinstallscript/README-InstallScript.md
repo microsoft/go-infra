@@ -40,6 +40,7 @@ This option requires `gpg` to be available on `PATH`.
 Without this option, GnuPG is optional: if it is missing, the script warns and checks only the SHA-256 checksum.
 When GnuPG is available, missing or invalid signatures always stop installation, even without `-RequireSignature`.
 Dry runs and already-installed versions do not download or verify archives.
+Artifacts are downloaded from a TLS-protected endpoint controlled by Microsoft, but we encourage this extra signature check for defense in depth.
 
 If you're using Azure Pipelines, pass `-AzurePipelinePath` to make `go` commands work in future steps.
 
