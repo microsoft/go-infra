@@ -18,6 +18,36 @@ These files control how automated sync operates:
 Sync applies `sync:docs` to documentation PRs and `sync:upstream` to submodule update PRs, including existing PRs that it updates.
 It creates missing repository labels.
 
+## Preparing the next release branch
+
+Scheduled sync prepares only [`msmajorversions.Next`](/msmajorversions), on the first run that
+sees `release-branch.go1.N` in upstream Go and its configured mirror. No release tag is needed.
+This does not publish a release, promote a version, or update downloads. `releasego sync`
+continues to handle individual releases.
+
+Only the official sync pipeline opts in with `-prepare-next-release`. An ordinary sync or a run
+of the unofficial pipeline does not cut branches. The `PrepareNextRelease` entry in
+[/eng/sync-config.json](/eng/sync-config.json) selects the repository; its default `{}` forks
+the missing Microsoft release branch from `microsoft/main`.
+To fork before an incompatible change, set a version-specific override before the cut, e.g.
+`"PrepareNextRelease": {"1.28": "<full commit SHA on microsoft/main>"}`. An existing branch is
+never reset. Omit the field to disable preparation.
+
+The bot opens two PRs for human review, without enabling auto-merge:
+
+* On `microsoft/release-branch.go1.N`, pin the `go` submodule to the latest commit shared by
+  upstream's release branch and its mirror. The published PR head records that choice across
+  retries. Fix any remaining patch conflicts on the PR. A manually prepared release-line commit
+  is left alone; a manual move to a commit before the upstream branch point or outside the
+  release branch's history stops preparation for review.
+* On `microsoft/main`, start the notes for **1.(N+1)**. The 1.N notes stay on the cut branch;
+  remove the main copy only when the cut branch contains identical notes.
+
+Reruns leave open preparation PRs and existing notes alone. If publishing a PR head succeeds
+but posting the PR fails, the retry verifies the retained patch against its original parent and
+reuses the head. Unrelated changes on main don't invalidate it. To preview without pushing
+branches or submitting PRs, run `go run ./cmd/sync -prepare-next-release -n`.
+
 ## Patch updates
 
 When a sync entry updates a submodule managed by a `.git-go-patch` file at the target repository root, sync checks each patch against the new upstream commit.

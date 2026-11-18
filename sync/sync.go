@@ -40,7 +40,8 @@ type Flags struct {
 	SyncConfig *string
 	TempGitDir *string
 
-	CreateBranches *bool
+	CreateBranches     *bool
+	PrepareNextRelease bool
 
 	GitAuthString *string
 }
@@ -222,6 +223,16 @@ func MakePRs(f *Flags) error {
 			fmt.Println(err)
 			fmt.Printf("=== Failed sync %v\n", syncNum)
 			success = false
+			continue
+		}
+		if f.PrepareNextRelease && entry.PrepareNextRelease != nil {
+			// Reuse the objects just fetched and mirrored, but not the normal sync's PR branches.
+			cutFlags := *f
+			cutFlags.InitialCloneDir = &repositoryDir
+			if err := prepareNextRelease(&cutFlags, repositoryDir+"-cut", entry); err != nil {
+				fmt.Printf("=== Failed to prepare next release: %v\n", err)
+				success = false
+			}
 		}
 	}
 
@@ -252,18 +263,22 @@ func (b *changedBranch) pushLease() string {
 }
 
 func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
-	ref := "refs/heads/" + b.Refs.PRBranch()
-	cmd := exec.Command("git", "ls-remote", "--heads", remote, ref)
-	cmd.Dir = dir
-	output, err := executil.Output(cmd)
-	if err != nil {
-		return err
-	}
-	b.RemoteCommit = ""
-	if strings.TrimSpace(output) != "" {
-		b.RemoteCommit, err = gitcmd.FetchRefCommit(dir, remote, ref)
-	}
+	var err error
+	b.RemoteCommit, err = fetchRemoteBranch(dir, remote, b.Refs.PRBranch())
 	return err
+}
+
+func fetchRemoteBranch(dir, remote, branch string) (string, error) {
+	exists, err := remoteBranchExists(dir, remote, branch)
+	if err != nil || !exists {
+		return "", err
+	}
+	return gitcmd.FetchRefCommit(dir, remote, "refs/heads/"+branch)
+}
+
+func remoteBranchExists(dir, remote, branch string) (bool, error) {
+	output, err := executil.Output(executil.Dir(dir, "git", "ls-remote", "--heads", remote, "refs/heads/"+branch))
+	return strings.TrimSpace(output) != "", err
 }
 
 func (b *changedBranch) checkRemoteAuthor(dir string) error {
@@ -309,6 +324,10 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
+	return makeBranchPRs(f, dir, entry, nil)
+}
+
+func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([]SyncResult, error) {
 	if entry.RegenerateDockerfiles {
 		if entry.SubmoduleTarget == "" {
 			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget")
@@ -391,7 +410,7 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		})
 	}
 
-	if *f.CreateBranches {
+	if cut == nil && *f.CreateBranches {
 		if entry.MainBranch == "" {
 			return nil, errors.New("the create-branches flag requires MainBranch to be configured, but it is not")
 		}
@@ -447,6 +466,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 	fetchUpstream := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Upstream))
 	fetchOrigin := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Target))
+	if cut != nil {
+		fetchUpstream.Args = append(fetchUpstream.Args, "HEAD:"+cutUpstreamDefaultRef)
+	}
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
@@ -457,8 +479,10 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	if err := run(fetchUpstream); err != nil {
 		return nil, err
 	}
-	if err := run(fetchOrigin); err != nil {
-		return nil, err
+	if cut == nil {
+		if err := run(fetchOrigin); err != nil {
+			return nil, err
+		}
 	}
 
 	// Fetch the state of the official/upstream-maintained mirror (if specified) so we can check
@@ -490,6 +514,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 		if err := run(mirror); err != nil {
 			return nil, err
 		}
+	}
+
+	if cut != nil {
+		// A cut has one upstream submodule update and a separate notes PR based on target main.
+		b := branches[0]
+		b.Purpose = "prepare-release"
+		if err := cut.prepareBases(dir, urlAuther.InsertAuth(entry.Target), urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b, entry.UpstreamMirror != ""); err != nil {
+			return nil, err
+		}
+		branches = append(branches, &cut.notes)
 	}
 
 	// Parse the URLs involved in the PR to get segment information.
@@ -529,7 +563,22 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
 		var prTitle, commitMessage string
 
-		if entry.SyncDocs {
+		if cut != nil {
+			prBody = fmt.Sprintf("Preparing the Microsoft build of Go %s release branch. Please review before merging.", cut.version)
+			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, urlAuther.InsertAuth(entry.PRBranchStorageRepo()), parsedPRHeadRemote, parsedPRTargetRemote, c); err != nil {
+				return nil, err
+			}
+			if c.SkipReason != "" {
+				continue
+			}
+		}
+		if cut != nil && b == &cut.notes {
+			if err := cut.stageNotes(dir); err != nil {
+				return nil, err
+			}
+			prTitle = "Prepare " + cut.notesVersion + " release notes doc"
+			commitMessage = prTitle
+		} else if entry.SyncDocs {
 			if err := syncDocs(dir, entry.Upstream, b); err != nil {
 				return nil, err
 			}
@@ -683,6 +732,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				if err != nil {
 					return nil, err
 				}
+				if cut != nil && patchConflict {
+					prBody += "\n\nSome patches conflict with the selected release commit. Please [repair them on this PR](https://github.com/microsoft/go-infra/tree/main/cmd/git-go-patch#fix-up-patch-files-after-a-submodule-update) before merging."
+				}
 				if len(updatedPatches) > 0 {
 					if err := run(newGitCmd(append([]string{"add", "-A", "--"}, updatedPatches...)...)); err != nil {
 						return nil, err
@@ -704,6 +756,10 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 			prTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
 			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
+			if cut != nil {
+				prTitle = fmt.Sprintf("[%s] Prepare Go %s at %s", b.UpstreamName, cut.version, newCommit[:12])
+				commitMessage = prTitle
+			}
 
 			// Add a compare link and commit list so reviewers can see what changed upstream.
 			// Only emit GitHub links when the resolved URL is actually on github.com.
@@ -822,30 +878,39 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			c.SkipReason = fmt.Sprintf("provided auth doesn't support PR submission: %v", err)
 			continue
 		}
-		if _, err := f.ReviewerAuth.NewAuther(); err != nil {
-			if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+		if cut == nil {
+			if _, err := f.ReviewerAuth.NewAuther(); err != nil {
+				if !errors.Is(err, githubutil.ErrNoAuthProvided) {
+					return nil, err
+				}
+				c.SkipReason = fmt.Sprintf("provided reviewer auth doesn't support PR approval: %v", err)
+				continue
+			}
+			c.ExistingPR, err = gitpr.FindExistingPR(
+				c.PRRequest,
+				parsedPRHeadRemote,
+				parsedPRTargetRemote,
+				c.Refs.PRBranch(),
+				*f.GitHubUser,
+				auther)
+			if err != nil {
 				return nil, err
 			}
-			c.SkipReason = fmt.Sprintf("provided reviewer auth doesn't support PR approval: %v", err)
-			continue
-		}
-
-		c.ExistingPR, err = gitpr.FindExistingPR(
-			c.PRRequest,
-			parsedPRHeadRemote,
-			parsedPRTargetRemote,
-			c.Refs.PRBranch(),
-			*f.GitHubUser,
-			auther)
-		if err != nil {
-			return nil, err
-		}
-		// A branch may exist even without an open PR, such as after PR submission fails.
-		if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
-			return nil, err
+			// A branch may exist even without an open PR, such as after PR submission fails.
+			c.RemoteCommit, err = fetchRemoteBranch(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b.PRBranch())
+			if err != nil {
+				return nil, err
+			}
 		}
 		if err := c.checkRemoteAuthor(dir); err != nil {
 			return nil, err
+		}
+		if cut != nil && c.RemoteCommit != "" {
+			// Compare each commit to its own parent: unrelated changes on main don't change the PR.
+			if err := validateRetainedPreparation(dir, c.RemoteCommit, c.Result.Commit); err != nil {
+				return nil, fmt.Errorf("retained release preparation branch %s differs; reconcile before retrying: %w", c.Refs.PRBranch(), err)
+			}
+			c.Result.Commit = c.RemoteCommit
 		}
 	}
 
@@ -857,6 +922,9 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 
 	newGitPushCommand := func(remote string, leases, refspecs []string) *exec.Cmd {
 		c := newGitCmd("push")
+		if cut != nil {
+			c.Args = append(c.Args, "--atomic")
+		}
 		c.Args = append(c.Args, leases...)
 		c.Args = append(c.Args, urlAuther.InsertAuth(remote))
 		c.Args = append(c.Args, refspecs...)
@@ -876,14 +944,31 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 	mergePushRefspecs := make([]string, 0, len(changedBranches))
 	mergePushLeases := make([]string, 0, len(changedBranches))
 	for _, b := range changedBranches {
-		if b.SkipReason != "" {
+		if b.SkipReason != "" || (cut != nil && b.RemoteCommit != "") {
 			continue
 		}
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
 		mergePushLeases = append(mergePushLeases, b.pushLease())
 	}
+	// Publish a new target branch together with the heads that record the selection. If the
+	// heads live in a fork, publish them first so a retry can recover the original selection.
+	createTarget := cut != nil && cut.newBranch && !*f.DryRun
+	var targetLease, targetRefspec string
+	if createTarget {
+		ref := "refs/heads/" + branches[0].Name
+		targetLease, targetRefspec = "--force-with-lease="+ref+":", cut.releaseBase+":"+ref
+		if entry.PRBranchStorageRepo() == entry.Target {
+			mergePushLeases = append(mergePushLeases, targetLease)
+			mergePushRefspecs = append(mergePushRefspecs, targetRefspec)
+		}
+	}
 	if len(mergePushRefspecs) > 0 {
 		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), mergePushLeases, mergePushRefspecs)); err != nil {
+			return nil, err
+		}
+	}
+	if createTarget && entry.PRBranchStorageRepo() != entry.Target {
+		if err := run(newGitPushCommand(entry.Target, []string{targetLease}, []string{targetRefspec})); err != nil {
 			return nil, err
 		}
 	}
@@ -917,11 +1002,6 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			if err != nil {
 				return fmt.Errorf("failed to create auther, which is unexpected ecause this should have caused a branch skip: %v", err)
 			}
-			reviewAuther, err := f.ReviewerAuth.NewAuther()
-			if err != nil {
-				return fmt.Errorf("failed to create reviewer auther, which is unexpected because this should have caused a branch skip: %v", err)
-			}
-
 			// POST the PR. The call returns success if the PR is created or if we receive a
 			// specific error message back from GitHub saying the PR is already created.
 			pr, err := gitpr.PostGitHub(parsedPRTargetRemote.GetOwnerSlashRepo(), b.PRRequest, auther)
@@ -945,8 +1025,16 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 				fmt.Printf("---- Submitted brand new PR: %v\n", pr.HTMLURL)
 			}
 
+			if cut != nil {
+				b.Result.PR = pr
+				return nil // Both release preparation PRs need human review.
+			}
 			if b.ExistingPR == nil {
 				fmt.Printf("---- Approving with reviewer account...\n")
+				reviewAuther, err := f.ReviewerAuth.NewAuther()
+				if err != nil {
+					return err
+				}
 				if err = gitpr.ApprovePR(pr.NodeID, reviewAuther); err != nil {
 					return err
 				}
@@ -1003,10 +1091,7 @@ func syncPRLabel(entry *ConfigEntry) (name, description string) {
 
 // run sets up the command so it logs directly to our stdout/stderr streams, then runs it.
 func run(c *exec.Cmd) error {
-	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	return executil.Run(c)
 }
 
 func regenerateDockerfiles(repoRoot, submoduleDir string, unresolvedPatchConflict bool, generate func(string, string, bool, bool) error) error {
@@ -1022,12 +1107,11 @@ func regenerateDockerfiles(repoRoot, submoduleDir string, unresolvedPatchConflic
 
 // combinedOutput returns the output string of c.CombinedOutput.
 func combinedOutput(c *exec.Cmd) (string, error) {
-	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
-	out, err := c.CombinedOutput()
+	out, err := executil.CombinedOutput(c)
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return out, nil
 }
 
 func createCommitMessageSnippet(message string) string {
