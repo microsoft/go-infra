@@ -350,20 +350,100 @@ func (r *goImagesRun) Build() ([]*coordinator.Step, error) {
 	if err := validateGoImagesConfiguration(r.service); err != nil {
 		return nil, err
 	}
-	input := r.state.Document.Input
-	state := r.state.Workflow
-	request := goImagesRunRequest(r.state)
-
-	service, err := r.service.NewRunService(request)
+	input, state := &r.state.Document.Input, &r.state.Workflow
+	if !sourceCommitPattern.MatchString(input.SourceVersion) {
+		return nil, fmt.Errorf("invalid go-images source commit %q", input.SourceVersion)
+	}
+	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateState(input, state); err != nil {
+		return nil, err
+	}
+	service, err := r.service.NewRunService(goImagesRunRequest(r.state))
 	if err != nil {
 		return nil, fmt.Errorf("create go-images execution service: %w", err)
 	}
-	workflowCheckpoint := func(state *State) {
-		r.state.Workflow = *state
-		r.state.UpdatedAt = time.Now().UTC()
-	}
-	steps, _, err := NewGraphWithCheckpoint(&input, &state, service, workflowCheckpoint)
-	return steps, err
+
+	verifyMirror := coordinator.NewRootStep(
+		"Verify go-images commit is mirrored internally",
+		internalMirrorTimeout,
+		func(ctx context.Context, ctl coordinator.StepControl) error {
+			var verified bool
+			ctl.Read(func() { verified = state.VerifiedMirroredCommit == input.SourceVersion })
+			if verified {
+				return nil
+			}
+			if err := service.PollMirror(ctx, ctl, input.SourceVersion); err != nil {
+				return err
+			}
+			ctl.Update(func() {
+				state.VerifiedMirroredCommit = input.SourceVersion
+				r.state.UpdatedAt = time.Now().UTC()
+			})
+			return ctx.Err()
+		},
+	)
+	queue := verifyMirror.Then(
+		"🚀 Queue go-images release",
+		shortTimeout,
+		func(ctx context.Context, ctl coordinator.StepControl) error {
+			var saved State
+			ctl.Read(func() { saved = *state })
+			if saved.BuildID != "" {
+				return nil
+			}
+			if !saved.QueueAttempted {
+				ctl.Update(func() {
+					state.QueueAttempted = true
+					r.state.UpdatedAt = time.Now().UTC()
+				})
+			}
+			if err := ctl.EnsurePersisted(); err != nil {
+				return err
+			}
+			buildID, err := service.QueuePipeline(ctx, parameters)
+			if err != nil {
+				return err
+			}
+			ctl.Update(func() {
+				state.BuildID = buildID
+				r.state.UpdatedAt = time.Now().UTC()
+			})
+			return ctx.Err()
+		},
+	)
+	wait := queue.Then(
+		"⌚ Wait for go-images release",
+		officialPipelineTimeout,
+		func(ctx context.Context, ctl coordinator.StepControl) error {
+			var saved State
+			ctl.Read(func() { saved = *state })
+			if saved.Complete {
+				if saved.Result == "succeeded" {
+					return nil
+				}
+				return &PipelineResultError{Result: saved.Result, Err: fmt.Errorf("saved pipeline result: %s", saved.Result)}
+			}
+			err := service.PollPipeline(ctx, ctl, saved.BuildID)
+			result := "succeeded"
+			if err != nil {
+				var terminal *PipelineResultError
+				if !errors.As(err, &terminal) {
+					return err
+				}
+				result = terminal.Result
+			}
+			ctl.Update(func() {
+				state.Complete = true
+				state.Result = result
+				r.state.UpdatedAt = time.Now().UTC()
+			})
+			return errors.Join(err, ctx.Err())
+		},
+	)
+	return wait.TransitiveDependencies()
 }
 
 func goImagesRunRequest(state goImagesSnapshotState) RunRequest {

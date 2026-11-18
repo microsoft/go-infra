@@ -80,24 +80,6 @@ func (e *PipelineResultError) Is(target error) bool {
 	return target == coordinator.ErrCanceled && e.Result == "canceled"
 }
 
-// CheckpointFunc reports that State changed. The state pointer is valid only during the call.
-type CheckpointFunc func(*State)
-
-type stateAccess struct {
-	state      *State
-	checkpoint CheckpointFunc
-}
-
-func (access *stateAccess) update(ctl coordinator.StepControl, update func()) {
-	ctl.Update(func() {
-		update()
-		if access.checkpoint != nil {
-			snapshot := *access.state
-			access.checkpoint(&snapshot)
-		}
-	})
-}
-
 const (
 	shortTimeout            = 10 * time.Minute
 	internalMirrorTimeout   = 16 * time.Minute
@@ -130,105 +112,6 @@ func PipelineParameters(mode Mode, sourceBuildID string) (map[string]string, err
 		return nil, fmt.Errorf("unsupported go-images release mode %q", mode)
 	}
 	return parameters, nil
-}
-
-// NewGraphWithCheckpoint creates the workflow and checkpoints mutation intent and results.
-func NewGraphWithCheckpoint(
-	input *Input,
-	state *State,
-	service RunService,
-	checkpoint CheckpointFunc,
-) ([]*coordinator.Step, *State, error) {
-	if input == nil {
-		return nil, nil, fmt.Errorf("go-images input is nil")
-	}
-	if !sourceCommitPattern.MatchString(input.SourceVersion) {
-		return nil, nil, fmt.Errorf("invalid go-images source commit %q", input.SourceVersion)
-	}
-	parameters, err := PipelineParameters(input.Mode, input.SourceBuildID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if state == nil {
-		state, err = NewState(input)
-	} else {
-		err = ValidateState(input, state)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	access := &stateAccess{state: state, checkpoint: checkpoint}
-
-	verifyMirror := coordinator.NewRootStep(
-		"Verify go-images commit is mirrored internally",
-		internalMirrorTimeout,
-		func(ctx context.Context, ctl coordinator.StepControl) error {
-			if state.VerifiedMirroredCommit == input.SourceVersion {
-				return nil
-			}
-			if err := service.PollMirror(ctx, ctl, input.SourceVersion); err != nil {
-				return err
-			}
-			access.update(ctl, func() {
-				state.VerifiedMirroredCommit = input.SourceVersion
-			})
-			return ctx.Err()
-		},
-	)
-	queue := verifyMirror.Then(
-		"🚀 Queue go-images release",
-		shortTimeout,
-		func(ctx context.Context, ctl coordinator.StepControl) error {
-			if state.BuildID != "" {
-				return nil
-			}
-			if !state.QueueAttempted {
-				access.update(ctl, func() { state.QueueAttempted = true })
-			}
-			if err := ctl.EnsurePersisted(); err != nil {
-				return err
-			}
-			buildID, err := service.QueuePipeline(ctx, parameters)
-			if err != nil {
-				return err
-			}
-			access.update(ctl, func() {
-				state.BuildID = buildID
-			})
-			return ctx.Err()
-		},
-	)
-	wait := queue.Then(
-		"⌚ Wait for go-images release",
-		officialPipelineTimeout,
-		func(ctx context.Context, ctl coordinator.StepControl) error {
-			if state.Complete {
-				if state.Result == "succeeded" {
-					return nil
-				}
-				return &PipelineResultError{Result: state.Result, Err: fmt.Errorf("saved pipeline result: %s", state.Result)}
-			}
-			err := service.PollPipeline(ctx, ctl, state.BuildID)
-			result := "succeeded"
-			if err != nil {
-				var terminal *PipelineResultError
-				if !errors.As(err, &terminal) {
-					return err
-				}
-				result = terminal.Result
-			}
-			access.update(ctl, func() {
-				state.Complete = true
-				state.Result = result
-			})
-			return errors.Join(err, ctx.Err())
-		},
-	)
-	steps, err := wait.TransitiveDependencies()
-	if err != nil {
-		return nil, nil, err
-	}
-	return steps, state, nil
 }
 
 // NewState creates empty durable state bound to input.

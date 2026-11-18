@@ -121,6 +121,9 @@ initial record. Failed starts release the local session through one cleanup path
 `Run.Build` takes no arguments.
 Execution contexts are supplied to step functions when they run.
 Process implementations do not need their own locks for state changed through `Update`.
+The Go-images steps are defined directly in `Run.Build` and update the run's workflow state
+through `ctl.Update`. The host captures that state, so no workflow checkpoint callback or
+copy-back helper is needed.
 Use step dependencies to order reads of completed results.
 Use `ctl.Read` for short, read-only access to run state inside steps.
 `Read` always calls its callback, including after cancellation, so local results are initialized.
