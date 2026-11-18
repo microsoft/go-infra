@@ -168,9 +168,10 @@ func run(p subcmd.ParseFunc) error {
 }
 
 func latestBuilds(builds []*build) []*build {
+	// configuration makes a copy of b that only contains build config information.
+	// The copy is used as a map key to find multiple versions of the same config.
 	configuration := func(b *build) build {
 		key := *b
-		// Download metadata varies with the version, not the build configuration.
 		key.Version, key.URL, key.SHA512 = "", "", ""
 		return key
 	}
