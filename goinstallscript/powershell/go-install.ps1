@@ -68,10 +68,15 @@
     Determines timeout duration in seconds for downloading the toolset file.
     Default: 1200 seconds (20 minutes)
 .PARAMETER RequireSignature
-    If set, the script fails when a download is needed and GnuPG (gpg) is not on PATH.
-    Otherwise, only SHA-256 is checked when GnuPG is not on PATH.
-    When GnuPG is available, missing or invalid signatures always fail installation.
-    Dry runs and already-installed versions do not require GnuPG or perform signature verification.
+    Require the script to verify the GPG signature of every archive it downloads.
+    If set, the script fails when a download is needed and gpg (GnuPG) is not on PATH.
+    Otherwise, when gpg is not available, the script doesn't attempt to verify the GPG signature.
+
+    When gpg is available, the script always verifies signatures regardless of this setting.
+    A verification failure causes the script to fail and stops installation.
+
+    No effect on SHA-256 checksum verification, which is always required and has no dependency.
+    No effect on dry runs and already-installed versions, which never perform signature verification.
 .PARAMETER KeepArchive
     If set, the downloaded file is kept.
 .PARAMETER ArchivePath
