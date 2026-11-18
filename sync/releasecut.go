@@ -21,8 +21,11 @@ import (
 )
 
 const (
+	// cutUpstreamDefaultRef holds upstream HEAD in the temporary repo, not on a remote.
+	// Its merge base with the release tip distinguishes release-line commits from older shared history.
 	cutUpstreamDefaultRef = "refs/release-cut/upstream-default"
-	cutSelectionTrailer   = "Release-Cut"
+	// cutSelectionTrailer records the Microsoft fork point and Go commit on a fork's notes head.
+	cutSelectionTrailer = "Release-Cut"
 )
 
 type releaseCut struct {

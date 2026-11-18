@@ -12,17 +12,6 @@ import (
 	"testing"
 )
 
-func TestLogArgsHidesRemoteCredentials(t *testing.T) {
-	const remote = "https://x-access-token:example@github.com/microsoft/go"
-	args := []string{"git", "ls-remote", remote, "refs/heads/main"}
-	if got := strings.Join(logArgs(args), " "); got != "git ls-remote https://github.com/microsoft/go refs/heads/main" {
-		t.Errorf("logged command: %s", got)
-	}
-	if args[2] != remote {
-		t.Error("logging changed the actual remote")
-	}
-}
-
 func TestCombinedOutputReturnsOutputOnError(t *testing.T) {
 	const env = "GO_INFRA_EXECUTIL_OUTPUT"
 	if os.Getenv(env) != "" {

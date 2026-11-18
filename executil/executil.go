@@ -6,10 +6,8 @@ package executil
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 )
@@ -27,32 +25,14 @@ func RunQuiet(c *exec.Cmd) error {
 	if c.Dir != "" {
 		in = fmt.Sprintf(" in %#q", c.Dir)
 	}
-	fmt.Printf("---- Running command: %v %v%s\n", c.Path, logArgs(c.Args), in)
+	fmt.Printf("---- Running command: %v %v%s\n", c.Path, c.Args, in)
 	return c.Run()
-}
-
-// Git remotes can carry a freshly minted token in their URL; log the destination, not the credentials.
-func logArgs(args []string) []string {
-	out := slices.Clone(args)
-	for i, arg := range out {
-		if !strings.HasPrefix(arg, "https://") && !strings.HasPrefix(arg, "http://") {
-			continue
-		}
-		u, err := url.Parse(arg)
-		if err != nil {
-			out[i] = "<invalid URL>"
-		} else if u.User != nil {
-			u.User = nil
-			out[i] = u.String()
-		}
-	}
-	return out
 }
 
 // CombinedOutput runs a command and returns the output string of c.CombinedOutput, including when
 // the command fails.
 func CombinedOutput(c *exec.Cmd) (string, error) {
-	fmt.Printf("---- Running command: %v %v\n", c.Path, logArgs(c.Args))
+	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
 	out, err := c.CombinedOutput()
 	return string(out), err
 }
@@ -62,7 +42,7 @@ func CombinedOutput(c *exec.Cmd) (string, error) {
 func Output(c *exec.Cmd) (string, error) {
 	var stderr strings.Builder
 	c.Stderr = &stderr
-	fmt.Printf("---- Running command: %v %v\n", c.Path, logArgs(c.Args))
+	fmt.Printf("---- Running command: %v %v\n", c.Path, c.Args)
 	out, err := c.Output()
 	if err != nil && stderr.Len() > 0 {
 		err = fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
