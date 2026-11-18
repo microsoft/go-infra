@@ -8,7 +8,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 )
@@ -96,17 +95,31 @@ func TestPipelineParameters(t *testing.T) {
 
 func TestGraphCheckpointsQueueAndCompletion(t *testing.T) {
 	service := &fakeService{}
+	run := newWorkflowTestRun(t, testInput, nil, service)
 	var checkpoints []State
-	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
-		checkpoints = append(checkpoints, *state)
-	})
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var runner coordinator.StepRunner
-	if err := runner.Execute(context.Background(), steps); err != nil {
+	if err := runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
+		Capture: func() error {
+			saved, err := run.TakeSnapshot()
+			if err != nil {
+				return err
+			}
+			_, stored, err := decodeGoImagesSnapshot(saved)
+			if err != nil {
+				return err
+			}
+			checkpoints = append(checkpoints, stored.Workflow)
+			return validateGoImagesSnapshot(ModeNormal, saved)
+		},
+		Persist: func() error { return nil },
+	}); err != nil {
 		t.Fatal(err)
 	}
+	state := run.state.Workflow
 	if service.mirrors != 1 || service.queues != 1 || service.polls != 1 {
 		t.Fatalf("service calls = mirror %d, queue %d, poll %d", service.mirrors, service.queues, service.polls)
 	}
@@ -125,20 +138,34 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 	for _, result := range []string{"failed", "canceled"} {
 		t.Run(result, func(t *testing.T) {
 			service := &fakeService{status: coordinator.StepStatus(result)}
+			run := newWorkflowTestRun(t, testInput, nil, service)
 			var checkpoint State
-			steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(state *State) {
-				checkpoint = *state
-			})
+			steps, err := run.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
 			var runner coordinator.StepRunner
-			err = runner.Execute(context.Background(), steps)
+			err = runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
+				Capture: func() error {
+					saved, err := run.TakeSnapshot()
+					if err != nil {
+						return err
+					}
+					_, stored, err := decodeGoImagesSnapshot(saved)
+					if err != nil {
+						return err
+					}
+					checkpoint = stored.Workflow
+					return validateGoImagesSnapshot(ModeNormal, saved)
+				},
+				Persist: func() error { return nil },
+			})
 			if err == nil || !strings.Contains(err.Error(), result) ||
 				errors.Is(err, coordinator.ErrCanceled) != (result == "canceled") {
 
 				t.Fatalf("terminal error = %v", err)
 			}
+			state := run.state.Workflow
 			if !state.Complete || state.Result != result || !checkpoint.Complete || checkpoint.Result != result {
 				t.Fatalf("state = %#v, checkpoint = %#v", state, checkpoint)
 			}
@@ -148,26 +175,29 @@ func TestGraphCheckpointsTerminalPipelineResult(t *testing.T) {
 
 func TestQueueRequiresPersistedIntent(t *testing.T) {
 	service := &fakeService{}
-	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, nil)
+	run := newWorkflowTestRun(t, testInput, nil, service)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("cannot save queue intent")
 	attempts := 0
+	queueAttempted := false
 	var runner coordinator.StepRunner
 	err = runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
-		Update: func() (func() error, error) {
-			queueAttempted := state.QueueAttempted
-			return func() error {
-				if queueAttempted {
-					attempts++
-					return failure
-				}
-				return nil
-			}, nil
+		Capture: func() error {
+			queueAttempted = run.state.Workflow.QueueAttempted
+			return nil
+		},
+		Persist: func() error {
+			if queueAttempted {
+				attempts++
+				return failure
+			}
+			return nil
 		},
 	})
-	if !errors.Is(err, failure) || service.queues != 0 || attempts != 2 {
+	if !errors.Is(err, failure) || service.queues != 0 || attempts != 3 {
 		t.Fatalf("error=%v, queues=%d, intent save attempts=%d", err, service.queues, attempts)
 	}
 }
@@ -183,7 +213,8 @@ func TestGraphRecoveryHonorsSavedTerminalOutcome(t *testing.T) {
 			state.QueueAttempted, state.BuildID = true, "888"
 			state.Complete, state.Result = true, result
 			service := &fakeService{pollErr: errors.New("provider unavailable")}
-			steps, _, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+			run := newWorkflowTestRun(t, testInput, state, service)
+			steps, err := run.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -201,7 +232,8 @@ func TestGraphRecoveryHonorsSavedTerminalOutcome(t *testing.T) {
 func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
 	pollErr := errors.New("pipeline read unavailable")
 	service := &fakeService{pollErr: pollErr}
-	steps, state, err := NewGraphWithCheckpoint(testInput, nil, service, func(*State) {})
+	run := newWorkflowTestRun(t, testInput, nil, service)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +241,7 @@ func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
 	if err := runner.Execute(context.Background(), steps); !errors.Is(err, pollErr) {
 		t.Fatalf("error = %v, want %v", err, pollErr)
 	}
+	state := run.state.Workflow
 	if state.Complete || state.Result != "" {
 		t.Fatalf("state = %#v, want resumable incomplete state", state)
 	}
@@ -217,7 +250,8 @@ func TestGraphLeavesTransientPollFailureIncomplete(t *testing.T) {
 func TestGraphBlocksQueueUntilMirrorAvailable(t *testing.T) {
 	mirrorErr := errors.New("not mirrored")
 	service := &fakeService{mirrorErr: mirrorErr}
-	steps, _, err := NewGraphWithCheckpoint(testInput, nil, service, nil)
+	run := newWorkflowTestRun(t, testInput, nil, service)
+	steps, err := run.Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,12 +275,14 @@ func TestGraphResumesKnownBuildWithoutQueue(t *testing.T) {
 			state.BuildID = "888"
 			state.VerifiedMirroredCommit = workflowTestCommit
 			service := &fakeService{status: status}
-			steps, state, err := NewGraphWithCheckpoint(testInput, state, service, nil)
+			run := newWorkflowTestRun(t, testInput, state, service)
+			steps, err := run.Build()
 			if err != nil {
 				t.Fatal(err)
 			}
 			var runner coordinator.StepRunner
 			err = runner.Execute(context.Background(), steps)
+			state = &run.state.Workflow
 			if status == coordinator.StepStatusSucceeded && err != nil ||
 				status == coordinator.StepStatusCanceled && !errors.Is(err, coordinator.ErrCanceled) {
 
@@ -268,7 +304,8 @@ func TestGraphRejectsKnownBuildWithoutMirrorCheckpoint(t *testing.T) {
 	}
 	state.QueueAttempted = true
 	state.BuildID = "888"
-	if _, _, err := NewGraphWithCheckpoint(testInput, state, &fakeService{}, nil); err == nil {
+	run := newWorkflowTestRun(t, testInput, state, &fakeService{})
+	if _, err := run.Build(); err == nil {
 		t.Fatal("state with a build but no mirror checkpoint unexpectedly passed validation")
 	}
 }
@@ -309,62 +346,36 @@ func TestValidateState(t *testing.T) {
 	}
 }
 
-func TestStateAccessReportsChangeAndObservesCancellation(t *testing.T) {
+func TestBuildCapturesStateBeforeCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	checkpointCalls := 0
-	state := &State{}
-	access := &stateAccess{
-		state: state,
-		checkpoint: func(snapshot *State) {
-			checkpointCalls++
-			if !snapshot.QueueAttempted {
-				t.Error("checkpoint did not receive updated state")
-			}
-			cancel()
-		},
-	}
-	step := coordinator.NewRootStep("Update", coordinator.NoTimeout, func(_ context.Context, ctl coordinator.StepControl) error {
-		access.update(ctl, func() { state.QueueAttempted = true })
-		return nil
-	})
-	if err := (&coordinator.StepRunner{}).Execute(ctx, []*coordinator.Step{step}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("update error = %v, want cancellation", err)
-	}
-	if checkpointCalls != 1 || !state.QueueAttempted {
-		t.Fatalf("checkpoint calls = %d, state = %#v", checkpointCalls, state)
-	}
-}
-
-func TestStateAccessSnapshotWaitsForUpdate(t *testing.T) {
-	state := &State{}
-	access := &stateAccess{state: state}
-	updateStarted := make(chan struct{})
-	finishUpdate := make(chan struct{})
-	updateDone := make(chan error, 1)
-	go func() {
-		access.update(new(recordingStepControl), func() {
-			close(updateStarted)
-			<-finishUpdate
-			state.QueueAttempted = true
-		})
-		updateDone <- nil
-	}()
-	<-updateStarted
-
-	snapshotDone := make(chan State, 1)
-	go func() {
-		snapshotDone <- access.snapshot()
-	}()
-	select {
-	case snapshot := <-snapshotDone:
-		t.Fatalf("snapshot completed during update: %#v", snapshot)
-	case <-time.After(10 * time.Millisecond):
-	}
-	close(finishUpdate)
-	if err := <-updateDone; err != nil {
+	defer cancel()
+	service := &fakeService{}
+	run := newWorkflowTestRun(t, testInput, nil, service)
+	steps, err := run.Build()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot := <-snapshotDone; !snapshot.QueueAttempted {
-		t.Fatalf("snapshot = %#v, want completed update", snapshot)
+	captures := 0
+	var captured goImagesSnapshotState
+	err = (&coordinator.StepRunner{}).ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
+		Capture: func() error {
+			captures++
+			saved, err := run.TakeSnapshot()
+			if err != nil {
+				return err
+			}
+			_, captured, err = decodeGoImagesSnapshot(saved)
+			cancel()
+			return err
+		},
+		Persist: func() error { return nil },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("update error = %v, want cancellation", err)
+	}
+	if captures != 1 || captured.Workflow.VerifiedMirroredCommit != testInput.SourceVersion ||
+		service.queues != 0 || service.polls != 0 {
+
+		t.Fatalf("captures=%d, state=%#v, service=%#v", captures, captured, service)
 	}
 }

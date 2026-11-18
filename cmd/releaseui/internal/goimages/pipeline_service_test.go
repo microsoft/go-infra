@@ -465,7 +465,8 @@ func TestPipelineDiagnosticTimeoutKeepsConfirmedFailure(t *testing.T) {
 				}
 				state.VerifiedMirroredCommit, state.QueueAttempted, state.BuildID = serviceTestCommit, true, "888"
 				checkpoints := 0
-				steps, _, err := NewGraphWithCheckpoint(input, state, service, func(*State) { checkpoints++ })
+				run := newWorkflowTestRun(t, input, state, service)
+				steps, err := run.Build()
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -473,9 +474,16 @@ func TestPipelineDiagnosticTimeoutKeepsConfirmedFailure(t *testing.T) {
 				defer cancel()
 				started := time.Now()
 				runner := new(coordinator.StepRunner)
-				err = runner.Execute(ctx, steps)
+				err = runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
+					Capture: func() error {
+						checkpoints++
+						return nil
+					},
+					Persist: func() error { return nil },
+				})
 				snapshot := runner.Snapshot()
 				last := len(snapshot.Steps) - 1
+				state = &run.state.Workflow
 				if snapshot.Steps[last].Status != coordinator.StepStatusFailed ||
 					snapshot.Steps[last].Progress.RunURL != pipelineRunURL("888") ||
 					!strings.Contains(snapshot.Steps[last].Error, `failed with result "failed"`) ||

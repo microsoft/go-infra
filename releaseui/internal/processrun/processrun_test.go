@@ -190,7 +190,7 @@ func TestPendingCheckpointRecovers(t *testing.T) {
 				steps := []*coordinator.Step{coordinator.NewRootStep("Work", time.Minute, func(_ context.Context, ctl coordinator.StepControl) error {
 					ctl.Update(func() { run.snapshot.State = json.RawMessage(`{"value":1}`) })
 					<-release
-					return nil
+					return ctl.EnsurePersisted()
 				})}
 				checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
 				session.checkpointer = checkpointer
@@ -211,6 +211,7 @@ func TestPendingCheckpointRecovers(t *testing.T) {
 					}
 					store.mu.Unlock()
 				}
+				beforeFinish := store.updates.Load()
 				close(release)
 				synctest.Wait()
 				store.mu.Lock()
@@ -220,6 +221,9 @@ func TestPendingCheckpointRecovers(t *testing.T) {
 					session.runner.Snapshot().CheckpointError != "" {
 
 					t.Fatalf("recovered release = %#v", store.record.Run)
+				}
+				if heartbeat && store.updates.Load() != beforeFinish+1 {
+					t.Fatal("EnsurePersisted repeated a checkpoint already saved by the heartbeat")
 				}
 			})
 		})
@@ -488,6 +492,49 @@ func TestCheckpointWaitsForPersistence(t *testing.T) {
 	close(release)
 	waitForTestSignal(t, returned)
 	waitForTestSignal(t, done)
+}
+
+func TestCaptureDoesNotWaitForHeartbeatStorage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, session, run, store, cancel := checkpointTestRun(t)
+		defer cancel()
+		store.updateStarted = make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		unblock := func() { once.Do(func() { close(release) }) }
+		store.updateRelease = release
+		checkpointer := manager.newProcessCheckpointer(session, "example", session.state.Digest, run, cancel)
+		defer checkpointer.Close()
+		defer unblock()
+		session.mu.Lock()
+		session.checkpointer = checkpointer
+		session.mu.Unlock()
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		select {
+		case <-store.updateStarted:
+		default:
+			t.Fatal("heartbeat did not start a storage write")
+		}
+		captured := make(chan error, 1)
+		go func() { captured <- checkpointer.Capture() }()
+		synctest.Wait()
+		select {
+		case err := <-captured:
+			if err != nil {
+				t.Fatal(err)
+			}
+		default:
+			t.Fatal("snapshot capture waited for heartbeat storage")
+		}
+		unblock()
+		if err := checkpointer.Persist(); err != nil {
+			t.Fatal(err)
+		}
+		if !store.record.Run.Checkpointed || store.updates.Load() != 2 {
+			t.Fatal("the captured checkpoint was not saved after the heartbeat")
+		}
+	})
 }
 
 func TestPersistenceDoesNotBlockReads(t *testing.T) {
@@ -1026,11 +1073,10 @@ func TestSnapshotValidationCannotMutatePayload(t *testing.T) {
 }
 
 func saveTestCheckpoint(c *processCheckpointer) error {
-	persist, err := c.Capture()
-	if err != nil {
+	if err := c.Capture(); err != nil {
 		return err
 	}
-	return persist()
+	return c.Persist()
 }
 
 func checkpointTestRun(

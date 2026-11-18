@@ -333,8 +333,20 @@ func startTestRun(
 	runner := new(coordinator.StepRunner)
 	done := make(chan error, 1)
 	go func() {
+		pending := false
 		done <- runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
-			Update: func() (func() error, error) { return checkpoint, nil },
+			Capture: func() error {
+				pending = true
+				return nil
+			},
+			Persist: func() error {
+				if !pending {
+					return nil
+				}
+				err := checkpoint()
+				pending = err != nil
+				return err
+			},
 		})
 	}()
 	return runner, done
