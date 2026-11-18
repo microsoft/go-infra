@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package dockerfilegen generates Dockerfiles in the Microsoft Go images repository.
+// Package dockerfilegen generates Dockerfiles in the Microsoft build of Go images repository.
 package dockerfilegen
 
 import (
