@@ -64,10 +64,8 @@ type ConfigEntry struct {
 	// branch, it is forked from the tip of this branch.
 	MainBranch string
 
-	// PrepareNextRelease configures -prepare-next-release for this repository. An empty map
-	// forks from MainBranch. A version key (e.g. "1.28") can specify an
-	// earlier full commit SHA on MainBranch. An absent map disables preparation.
-	PrepareNextRelease map[string]string
+	// PrepareNextRelease opts this repository in to -prepare-next-release.
+	PrepareNextRelease bool
 
 	// SyncDocs copies the paths listed in [docsSyncPaths] from MainBranch in Upstream to the active
 	// support branches in Target, as defined by msmajorversions. This is a documentation-only sync,

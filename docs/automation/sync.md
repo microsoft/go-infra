@@ -29,9 +29,7 @@ Sync opens these PRs if needed and leaves them for review:
 * On the release branch, update the `go` submodule to the latest commit shared by upstream and the mirror. Fix any patch conflicts in this PR.
 * On `microsoft/main`, start the notes for Go 1.(N+1). The Go 1.N notes stay on the release branch; sync removes the copy on main only if the two copies match.
 
-Most releases need no configuration change.
-For example, if `microsoft/main` already contains a Go 1.29-only build change when cutting Go 1.28, create the 1.28 release branch at the commit before that change.
-To have sync do this instead, set `"PrepareNextRelease": {"1.28": "<full SHA from microsoft/main>"}` in [the sync configuration](/eng/sync-config.json) before the next official run.
+If you need an earlier base, create the release branch at that commit in `microsoft/go` before the next official sync.
 Sync never resets an existing release branch.
 
 To preview the cut without pushing branches or opening PRs, run `go run ./cmd/sync -prepare-next-release -n`.

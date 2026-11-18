@@ -14,7 +14,7 @@
     "AutoMirrorBranches": [
       "release-branch.go*"
     ],
-    "PrepareNextRelease": {},
+    "PrepareNextRelease": true,
     "MainBranch": "microsoft/main",
     "SubmoduleTarget": "go"
   },

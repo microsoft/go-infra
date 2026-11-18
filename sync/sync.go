@@ -225,7 +225,7 @@ func MakePRs(f *Flags) error {
 			success = false
 			continue
 		}
-		if f.PrepareNextRelease && entry.PrepareNextRelease != nil {
+		if f.PrepareNextRelease && entry.PrepareNextRelease {
 			// Reuse the objects just fetched and mirrored, but not the normal sync's PR branches.
 			cutFlags := *f
 			cutFlags.InitialCloneDir = &repositoryDir

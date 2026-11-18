@@ -59,7 +59,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		Upstream: upstream, UpstreamMirror: mirror, Target: target, MainBranch: main, SubmoduleTarget: "go",
 		BranchMap:        map[string]string{"master": main, "release-branch.go*": "microsoft/?"},
 		AutoSyncBranches: []string{"master"}, AutoMirrorBranches: []string{"release-branch.go*"},
-		PrepareNextRelease: map[string]string{},
+		PrepareNextRelease: true,
 	}
 	dry, create := true, false
 	empty, none, bot, pat := "", "none", "test-bot", "test-token"
@@ -116,12 +116,18 @@ func TestPrepareNextRelease(t *testing.T) {
 		t.Fatal("dry run wrote remote state")
 	}
 
-	// Refuse a real, fetched commit outside target main, without creating any remote branch.
-	config.PrepareNextRelease[version] = selected
+	// A maintainer can cut the branch before main advances. Use it without dropping newer notes on main.
 	dry = false
-	if err := prepareNextRelease(flags, filepath.Join(dir, "bad-base"), config); err == nil || heads() != initialHeads {
-		t.Fatalf("invalid fork point not rejected before push: %v", err)
+	git(target, "branch", release, base)
+	must(prepareNextRelease(flags, filepath.Join(dir, "precut"), config))
+	if got := git(target, "rev-parse", release); got != base {
+		t.Fatalf("moved the existing release branch from %s to %s", base, got)
 	}
+	if got := git(target, "show", notesPR+":"+oldNotes); got != "Newer notes on main" {
+		t.Fatalf("notes not on the release branch were dropped: %q", got)
+	}
+	git(target, "branch", "-D", release, notesPR)
+	clear(prs)
 
 	// Shared pre-fork history and off-branch commits don't prove a manual cut is complete.
 	git(upstream, "checkout", "-b", "other", "master")
@@ -143,7 +149,6 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 
 	// Use the scheduled entry point so the cut must coexist with ordinary master sync.
-	config.PrepareNextRelease[version] = base
 	data, err := json.Marshal([]ConfigEntry{config})
 	must(err)
 	must(os.WriteFile(configPath, data, 0o600))
@@ -179,11 +184,8 @@ func TestPrepareNextRelease(t *testing.T) {
 	if len(prs) != 2 || prs[subPR] != release || prs[notesPR] != main {
 		t.Fatalf("unexpected preparation PRs: %v", prs)
 	}
-	if got := git(target, "rev-parse", release); got != base {
-		t.Fatalf("created branch at %s, want override %s", got, base)
-	}
-	if got := git(target, "show", notesPR+":"+oldNotes); got != "Newer notes on main" {
-		t.Fatalf("dropped notes not preserved on release branch: %q", got)
+	if got := git(target, "rev-parse", release); got != mainTip {
+		t.Fatalf("created branch at %s, want original main tip %s", got, mainTip)
 	}
 	if got := git(target, "show", notesPR+":"+newNotes); !strings.Contains(got, fmt.Sprintf("Go 1.%d release notes", n+1)) ||
 		!strings.Contains(got, msmajorversions.Current.Version+" is no longer supported") {
@@ -242,11 +244,10 @@ func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
 	must(setupMockRepo(target, main))
 	must(addMockSubmodule(target, upstream))
 	base := git(target, "rev-parse", "HEAD")
-	must(addMockFile(target, "before.txt", "Main is already past the configured fork point"))
 	git(dir, "clone", "--branch", main, target, fork)
 	config := ConfigEntry{
 		Upstream: upstream, Target: target, Head: fork, MainBranch: main, SubmoduleTarget: "go",
-		BranchMap: map[string]string{source: release}, PrepareNextRelease: map[string]string{version: base},
+		BranchMap: map[string]string{source: release}, PrepareNextRelease: true,
 	}
 	dry, create := false, false
 	empty, none, bot, pat := "", "none", "test-bot", "test-token"
@@ -273,8 +274,6 @@ func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
 	git(upstream, "checkout", source)
 	must(addMockFile(upstream, "later.txt", "Go advances before retry"))
 	git(upstream, "checkout", "master")
-	delete(config.PrepareNextRelease, version)
-
 	// A notes head without its selection is not enough to guess a new fork point.
 	git(fork, "update-ref", "refs/heads/"+notes, base, retained)
 	if err := prepareNextRelease(flags, filepath.Join(dir, "missing-selection"), config); err == nil || !strings.Contains(err.Error(), "review before retrying") {

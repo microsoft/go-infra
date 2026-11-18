@@ -31,7 +31,6 @@ const (
 type releaseCut struct {
 	version, notesVersion string
 	branchPoint           string // Where the shared upstream release history diverges from the default branch.
-	forkPoint             string // Optional override, only used for a missing branch.
 	releaseBase           string // Actual target SHA, before creating either PR.
 	newBranch             bool
 	submoduleHead         string // A published preparation head records the selected upstream commit.
@@ -76,14 +75,9 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 	if err != nil {
 		return fmt.Errorf("invalid next Go major %q: %w", version, err)
 	}
-	forkPoint, override := entry.PrepareNextRelease[version]
-	if override && !fullCommitSHA(forkPoint) {
-		return fmt.Errorf("fork point for %s must be a full commit SHA, got %q", version, forkPoint)
-	}
 	cut := &releaseCut{
 		version:      version,
 		notesVersion: fmt.Sprintf("1.%d", n+1),
-		forkPoint:    forkPoint,
 		notes: gitpr.SyncPRRefSet{
 			UpstreamName: target,
 			PRRefSet:     gitpr.PRRefSet{Name: entry.MainBranch, Purpose: "prepare-notes-go" + version},
@@ -105,7 +99,7 @@ func fullCommitSHA(s string) bool {
 	return err == nil
 }
 
-// The notes parent is the main snapshot, which need not be the configured release fork point.
+// Recover the original cut when only the notes head made it to the fork.
 func retainedNotesSelection(dir, notesHead, shared string) (string, string, error) {
 	trailer, err := gitcmd.ShowQuietPretty(dir, "%(trailers:key="+cutSelectionTrailer+",valueonly)", notesHead)
 	if err != nil {
@@ -159,35 +153,26 @@ func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncP
 	}
 	c.newBranch = c.releaseBase == ""
 	if c.newBranch {
-		base := c.forkPoint
 		// When Head is a fork, publishing the PR head and creating the target branch are
 		// separate pushes. Recover the original fork point if only the first one succeeded.
-		var retained string
 		switch {
 		case c.submoduleHead != "":
-			retained, err = preparationParent(dir, c.submoduleHead)
+			c.releaseBase, err = preparationParent(dir, c.submoduleHead)
 		case headRemote != remote && c.notesHead != "":
-			retained, b.Commit, err = retainedNotesSelection(dir, c.notesHead, b.Commit)
+			c.releaseBase, b.Commit, err = retainedNotesSelection(dir, c.notesHead, b.Commit)
 		}
 		if err != nil {
 			return err
 		}
-		if retained != "" {
-			if base != "" && base != retained {
-				return fmt.Errorf("configured fork point %s disagrees with retained release base %s", base, retained)
-			}
-			base = retained
-		}
-		if base == "" {
-			base, err = gitcmd.RevParse(dir, c.notes.PRBranch())
+		if c.releaseBase == "" {
+			c.releaseBase, err = gitcmd.RevParse(dir, c.notes.PRBranch())
 			if err != nil {
 				return err
 			}
-		} else if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", base, c.notes.PRBranch()); err != nil {
-			return fmt.Errorf("fork point %s is not on %s: %w", base, c.notes.Name, err)
+		} else if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", c.releaseBase, c.notes.PRBranch()); err != nil {
+			return fmt.Errorf("retained release base %s is not on %s: %w", c.releaseBase, c.notes.Name, err)
 		}
-		c.releaseBase = base
-		fmt.Printf("Preparing to create %s at %s.\n", b.Name, base)
+		fmt.Printf("Preparing to create %s at %s.\n", b.Name, c.releaseBase)
 	}
 	return gitcmd.Run(dir, "branch", b.PRBranch(), c.releaseBase)
 }
