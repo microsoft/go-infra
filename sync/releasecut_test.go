@@ -136,6 +136,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		manual := heads()
 		if err := prepareNextRelease(flags, filepath.Join(dir, "manual-"+link), config); err == nil ||
 			!strings.Contains(err.Error(), link) || !strings.Contains(err.Error(), "review") || heads() != manual || len(prs) != 0 {
+
 			t.Fatalf("manual gitlink %s was not preserved and reported for review: %v", link, err)
 		}
 		git(target, "branch", "-D", release)
@@ -167,6 +168,7 @@ func TestPrepareNextRelease(t *testing.T) {
 	git(target, "update-ref", "refs/heads/"+notesPR, wrong, firstNotes)
 	if err := prepareNextRelease(flags, filepath.Join(dir, "unexpected-patch"), config); err == nil ||
 		!strings.Contains(err.Error(), "retained patch differs") || len(prs) != 0 {
+
 		t.Fatalf("unexpected retained patch was not rejected: %v, PRs %v", err, prs)
 	}
 	git(target, "update-ref", "refs/heads/"+notesPR, firstNotes, wrong)
@@ -185,6 +187,7 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 	if got := git(target, "show", notesPR+":"+newNotes); !strings.Contains(got, fmt.Sprintf("Go 1.%d release notes", n+1)) ||
 		!strings.Contains(got, msmajorversions.Current.Version+" is no longer supported") {
+
 		t.Fatalf("unexpected new notes: %s", got)
 	}
 	git(target, "checkout", subPR)
