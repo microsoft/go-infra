@@ -32,6 +32,7 @@ func TestTryThreeWayRebase(t *testing.T) {
 		newBaseContent   string
 		relativeRoot     bool
 		wantPatchChanged bool
+		wantConflict     bool
 		wantApplied      string
 	}{
 		{
@@ -49,6 +50,7 @@ func TestTryThreeWayRebase(t *testing.T) {
 		{
 			name:           "three-way conflict leaves patch unchanged",
 			newBaseContent: conflict,
+			wantConflict:   true,
 		},
 	}
 
@@ -73,9 +75,12 @@ func TestTryThreeWayRebase(t *testing.T) {
 				}
 			}
 
-			updatedFiles, err := TryThreeWayRebase(rootDir, "go", newBase)
+			updatedFiles, conflicted, err := TryThreeWayRebaseWithStatus(rootDir, "go", newBase)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if conflicted != tt.wantConflict {
+				t.Errorf("conflicted = %v, want %v", conflicted, tt.wantConflict)
 			}
 
 			updatedPatch, err := os.ReadFile(patchPath)

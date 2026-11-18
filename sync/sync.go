@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/go-infra/gitcmd"
 	"github.com/microsoft/go-infra/githubutil"
 	"github.com/microsoft/go-infra/gitpr"
+	"github.com/microsoft/go-infra/internal/dockerfilegen"
 	"github.com/microsoft/go-infra/msmajorversions"
 	"github.com/microsoft/go-infra/patch"
 	"github.com/microsoft/go-infra/stringutil"
@@ -308,6 +309,15 @@ type SyncResult struct {
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
+	if entry.RegenerateDockerfiles {
+		if entry.SubmoduleTarget == "" {
+			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget")
+		}
+		if err := dockerfilegen.EnsurePrerequisites(); err != nil {
+			return nil, err
+		}
+	}
+
 	if entry.SyncDocs {
 		if entry.MainBranch == "" ||
 			entry.SubmoduleTarget != "" ||
@@ -669,12 +679,18 @@ func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, erro
 			// upstream already contains them. Clean patches and unresolved patch sets remain
 			// unchanged to keep the sync diff focused.
 			if oldSubmoduleCommit != newCommit {
-				updatedPatches, err := patch.TryThreeWayRebase(dir, entry.SubmoduleTarget, newCommit)
+				updatedPatches, patchConflict, err := patch.TryThreeWayRebaseWithStatus(dir, entry.SubmoduleTarget, newCommit)
 				if err != nil {
 					return nil, err
 				}
 				if len(updatedPatches) > 0 {
 					if err := run(newGitCmd(append([]string{"add", "-A", "--"}, updatedPatches...)...)); err != nil {
+						return nil, err
+					}
+				}
+
+				if entry.RegenerateDockerfiles {
+					if err := regenerateDockerfiles(dir, entry.SubmoduleTarget, patchConflict, dockerfilegen.Run); err != nil {
 						return nil, err
 					}
 				}
@@ -991,6 +1007,17 @@ func run(c *exec.Cmd) error {
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	return c.Run()
+}
+
+func regenerateDockerfiles(repoRoot, submoduleDir string, unresolvedPatchConflict bool, generate func(string, string, bool, bool) error) error {
+	if unresolvedPatchConflict {
+		fmt.Println("---- Skipping Dockerfile regeneration because patch rebase has unresolved conflicts; sync PR will need manual repair.")
+		return nil
+	}
+	if err := generate(repoRoot, submoduleDir, false, false); err != nil {
+		return err
+	}
+	return run(exec.Command("git", "-C", repoRoot, "add", "--", "src/microsoft"))
 }
 
 // combinedOutput returns the output string of c.CombinedOutput.
