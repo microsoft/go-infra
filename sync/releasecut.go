@@ -20,7 +20,10 @@ import (
 	"github.com/microsoft/go-infra/msmajorversions"
 )
 
-const cutUpstreamDefaultRef = "refs/release-cut/upstream-default"
+const (
+	cutUpstreamDefaultRef = "refs/release-cut/upstream-default"
+	cutSelectionTrailer   = "Release-Cut"
+)
 
 type releaseCut struct {
 	version, notesVersion string
@@ -29,6 +32,7 @@ type releaseCut struct {
 	releaseBase           string // Actual target SHA, before creating either PR.
 	newBranch             bool
 	submoduleHead         string // A published preparation head records the selected upstream commit.
+	notesHead             string
 	notes                 gitpr.SyncPRRefSet
 }
 
@@ -70,10 +74,8 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 		return fmt.Errorf("invalid next Go major %q: %w", version, err)
 	}
 	forkPoint, override := entry.PrepareNextRelease[version]
-	if override {
-		if _, err := hex.DecodeString(forkPoint); err != nil || len(forkPoint) != 40 {
-			return fmt.Errorf("fork point for %s must be a full commit SHA, got %q", version, forkPoint)
-		}
+	if override && !fullCommitSHA(forkPoint) {
+		return fmt.Errorf("fork point for %s must be a full commit SHA, got %q", version, forkPoint)
 	}
 	cut := &releaseCut{
 		version:      version,
@@ -90,6 +92,37 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 	entry.GoVersionFileContent, entry.GoMicrosoftRevisionFileContent = "", ""
 	_, err = makeBranchPRs(f, dir, &entry, cut)
 	return err
+}
+
+func fullCommitSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// The notes parent is the main snapshot, which need not be the configured release fork point.
+func retainedNotesSelection(dir, notesHead, shared string) (string, string, error) {
+	trailer, err := gitcmd.ShowQuietPretty(dir, "%(trailers:key="+cutSelectionTrailer+",valueonly)", notesHead)
+	if err != nil {
+		return "", "", err
+	}
+	base, pin, _ := strings.Cut(strings.TrimSpace(trailer), " ")
+	if !fullCommitSHA(base) || !fullCommitSHA(pin) {
+		return "", "", fmt.Errorf("retained notes head %s has no valid %s trailer; review before retrying", notesHead, cutSelectionTrailer)
+	}
+	parent, err := preparationParent(dir, notesHead)
+	if err != nil {
+		return "", "", err
+	}
+	if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", base, parent); err != nil {
+		return "", "", fmt.Errorf("retained release base %s is not on the original main history: %w", base, err)
+	}
+	if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", pin, shared); err != nil {
+		return "", "", fmt.Errorf("cannot verify retained gitlink %s in the shared release history; review before retrying: %w", pin, err)
+	}
+	return base, pin, nil
 }
 
 func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncPRRefSet, hasMirror bool) error {
@@ -113,6 +146,10 @@ func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncP
 	if err != nil {
 		return err
 	}
+	c.notesHead, err = fetchRemoteBranch(dir, headRemote, c.notes.PRBranch())
+	if err != nil {
+		return err
+	}
 	c.releaseBase, err = fetchRemoteBranch(dir, remote, b.Name)
 	if err != nil {
 		return err
@@ -122,15 +159,21 @@ func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncP
 		base := c.forkPoint
 		// When Head is a fork, publishing the PR head and creating the target branch are
 		// separate pushes. Recover the original fork point if only the first one succeeded.
-		if c.submoduleHead != "" {
-			parent, err := preparationParent(dir, c.submoduleHead)
-			if err != nil {
-				return err
+		var retained string
+		switch {
+		case c.submoduleHead != "":
+			retained, err = preparationParent(dir, c.submoduleHead)
+		case headRemote != remote && c.notesHead != "":
+			retained, b.Commit, err = retainedNotesSelection(dir, c.notesHead, b.Commit)
+		}
+		if err != nil {
+			return err
+		}
+		if retained != "" {
+			if base != "" && base != retained {
+				return fmt.Errorf("configured fork point %s disagrees with retained release base %s", base, retained)
 			}
-			if base != "" && base != parent {
-				return fmt.Errorf("configured fork point %s disagrees with retained preparation parent %s", base, parent)
-			}
-			base = parent
+			base = retained
 		}
 		if base == "" {
 			base, err = gitcmd.RevParse(dir, c.notes.PRBranch())
@@ -157,12 +200,10 @@ func (c *releaseCut) onReleaseLine(dir, commit, tip string) (bool, error) {
 
 // Inspect the target first: a maintainer may already have finished the cut, regardless of
 // what remains on the PR head.
-func (c *releaseCut) resumePreparation(f *Flags, dir, submodule, headRemote string, head, target *gitpr.Remote, branch *changedBranch) error {
+func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, head, target *gitpr.Remote, branch *changedBranch) error {
 	b := branch.Refs
 	if b == &c.notes {
-		if err := branch.fetchRemoteCommit(dir, headRemote); err != nil {
-			return err
-		}
+		branch.RemoteCommit = c.notesHead
 	} else {
 		prepared, err := c.submodulePrepared(dir, b, submodule)
 		if err != nil {

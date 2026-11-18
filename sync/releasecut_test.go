@@ -69,7 +69,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		Auth: githubutil.GitHubAuthFlags{GitHubPat: &pat}, GitHubUser: &bot, SyncConfig: &configPath, TempGitDir: &work,
 	}
 	failPost := false
-	prs := mockCutPRs(t, bot, &failPost)
+	prs := mockCutPRs(t, bot, "microsoft", &failPost)
 	heads := func() string { return git(target, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads") }
 	initialHeads := heads()
 
@@ -214,12 +214,98 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 }
 
+func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
+	dir := t.TempDir()
+	upstream := filepath.ToSlash(filepath.Join(dir, "golang", "go"))
+	target := filepath.ToSlash(filepath.Join(dir, "microsoft", "go"))
+	fork := filepath.ToSlash(filepath.Join(dir, "test-bot", "go"))
+	const main = "microsoft/main"
+	version := msmajorversions.Next.Version
+	source := "release-branch.go" + version
+	release := "microsoft/" + source
+	notes := "dev/prepare-notes-go" + version + "/" + main
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	git := func(repo string, args ...string) string {
+		t.Helper()
+		out, err := gitcmd.CombinedOutput(repo, args...)
+		must(err)
+		return strings.TrimSpace(out)
+	}
+	must(setupMockRepo(upstream, "master"))
+	pin := git(upstream, "rev-parse", "HEAD")
+	git(upstream, "branch", source)
+	must(setupMockRepo(target, main))
+	must(addMockSubmodule(target, upstream))
+	base := git(target, "rev-parse", "HEAD")
+	must(addMockFile(target, "before.txt", "Main is already past the configured fork point"))
+	git(dir, "clone", "--branch", main, target, fork)
+	config := ConfigEntry{
+		Upstream: upstream, Target: target, Head: fork, MainBranch: main, SubmoduleTarget: "go",
+		BranchMap: map[string]string{source: release}, PrepareNextRelease: map[string]string{version: base},
+	}
+	dry, create := false, false
+	empty, none, bot, pat := "", "none", "test-bot", "test-token"
+	flags := &Flags{
+		DryRun: &dry, CreateBranches: &create, GitAuthString: &none, InitialCloneDir: &empty,
+		Auth: githubutil.GitHubAuthFlags{GitHubPat: &pat}, GitHubUser: &bot,
+	}
+	failPost := false
+	prs := mockCutPRs(t, bot, bot, &failPost)
+
+	// Reject only the target push. The fork should already have the notes head, but no
+	// submodule head: the inherited gitlink was exactly the shared release tip.
+	git(target, "config", "receive.hideRefs", "refs/heads/"+release)
+	if err := prepareNextRelease(flags, filepath.Join(dir, "first"), config); err == nil {
+		t.Fatal("expected target to reject release branch creation")
+	}
+	retained := git(fork, "rev-parse", notes)
+	subPR := "dev/prepare-release/" + release
+	if git(target, "branch", "--list", release) != "" || git(fork, "branch", "--list", subPR) != "" || len(prs) != 0 {
+		t.Fatal("expected only the notes head to have been published")
+	}
+	git(target, "config", "--unset", "receive.hideRefs")
+	must(addMockFile(target, "after.txt", "Main advances before retry"))
+	git(upstream, "checkout", source)
+	must(addMockFile(upstream, "later.txt", "Go advances before retry"))
+	git(upstream, "checkout", "master")
+	delete(config.PrepareNextRelease, version)
+
+	// A notes head without its selection is not enough to guess a new fork point.
+	git(fork, "update-ref", "refs/heads/"+notes, base, retained)
+	if err := prepareNextRelease(flags, filepath.Join(dir, "missing-selection"), config); err == nil || !strings.Contains(err.Error(), "review before retrying") {
+		t.Fatalf("expected a missing selection to require review, got %v", err)
+	}
+	if git(target, "branch", "--list", release) != "" || len(prs) != 0 {
+		t.Fatal("published a release branch or PR without a retained selection")
+	}
+	git(fork, "update-ref", "refs/heads/"+notes, retained, base)
+
+	must(prepareNextRelease(flags, filepath.Join(dir, "retry"), config))
+	if got := git(target, "rev-parse", release); got != base {
+		t.Fatalf("release branch = %s, want original fork point %s", got, base)
+	}
+	if got := git(target, "rev-parse", release+":go"); got != pin {
+		t.Fatalf("gitlink = %s, want original Go commit %s", got, pin)
+	}
+	if got := git(fork, "rev-parse", notes); got != retained {
+		t.Fatalf("notes head = %s, want retained %s", got, retained)
+	}
+	if len(prs) != 1 || prs[notes] != main || git(fork, "branch", "--list", subPR) != "" {
+		t.Fatalf("retry should submit only the notes PR, got %v", prs)
+	}
+}
+
 type cutTransport func(*http.Request) (*http.Response, error)
 
 func (f cutTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // Only finding and opening PRs are allowed; even a successful auto-approval would fail this test.
-func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
+func mockCutPRs(t *testing.T, bot, headOwner string, failPost *bool) map[string]string {
 	t.Helper()
 	open := map[string]string{}
 	old := http.DefaultTransport
@@ -241,7 +327,7 @@ func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 			}
 			nodes := ""
 			if base, ok := open[q.Variables["headRefName"]]; ok && base == q.Variables["baseRefName"] {
-				nodes = fmt.Sprintf(`{"number":1,"id":"test","author":{"login":%q},"headRepositoryOwner":{"login":"microsoft"},"baseRepository":{"owner":{"login":"microsoft"},"nameWithOwner":"microsoft/go"}}`, bot)
+				nodes = fmt.Sprintf(`{"number":1,"id":"test","author":{"login":%q},"headRepositoryOwner":{"login":%q},"baseRepository":{"owner":{"login":"microsoft"},"nameWithOwner":"microsoft/go"}}`, bot, headOwner)
 			}
 			body = `{"data":{"repository":{"pullRequests":{"nodes":[` + nodes + `]}}}}`
 		case "/repos/microsoft/go/pulls":
@@ -253,7 +339,7 @@ func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 			if err := json.NewDecoder(r.Body).Decode(&pr); err != nil {
 				return nil, err
 			}
-			head := strings.TrimPrefix(pr.Head, "microsoft:")
+			head := strings.TrimPrefix(pr.Head, headOwner+":")
 			if _, found := open[head]; found {
 				return nil, fmt.Errorf("duplicate PR for %s", head)
 			}

@@ -43,7 +43,10 @@ The bot opens two PRs for human review, without enabling auto-merge:
 * On `microsoft/main`, start the notes for **1.(N+1)**. The 1.N notes stay on the cut branch;
   remove the main copy only when the cut branch contains identical notes.
 
-Reruns leave open preparation PRs and existing notes alone. If publishing a PR head succeeds
+Reruns leave open preparation PRs and existing notes alone. When the PR heads are on a fork,
+the notes commit records the Microsoft fork point and the selected Go commit. If the notes
+head is the only one pushed before target branch creation fails, the retry uses those same
+commits even if main or upstream has advanced. If publishing a PR head succeeds
 but posting the PR fails, the retry verifies the retained patch against its original parent and
 reuses the head. Unrelated changes on main don't invalidate it. To preview without pushing
 branches or submitting PRs, run `go run ./cmd/sync -prepare-next-release -n`.

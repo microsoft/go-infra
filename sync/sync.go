@@ -565,7 +565,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 
 		if cut != nil {
 			prBody = fmt.Sprintf("Preparing the Microsoft build of Go %s release branch. Please review before merging.", cut.version)
-			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, urlAuther.InsertAuth(entry.PRBranchStorageRepo()), parsedPRHeadRemote, parsedPRTargetRemote, c); err != nil {
+			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, parsedPRHeadRemote, parsedPRTargetRemote, c); err != nil {
 				return nil, err
 			}
 			if c.SkipReason != "" {
@@ -578,6 +578,10 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 			}
 			prTitle = "Prepare " + cut.notesVersion + " release notes doc"
 			commitMessage = prTitle
+			if cut.newBranch && entry.PRBranchStorageRepo() != entry.Target {
+				// The notes head can be the only durable record if the separate target push fails.
+				commitMessage += fmt.Sprintf("\n\n%s: %s %s", cutSelectionTrailer, cut.releaseBase, branches[0].Commit)
+			}
 		} else if entry.SyncDocs {
 			if err := syncDocs(dir, entry.Upstream, b); err != nil {
 				return nil, err
@@ -897,8 +901,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 				return nil, err
 			}
 			// A branch may exist even without an open PR, such as after PR submission fails.
-			c.RemoteCommit, err = fetchRemoteBranch(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b.PRBranch())
-			if err != nil {
+			if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
 				return nil, err
 			}
 		}
