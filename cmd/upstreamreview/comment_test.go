@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 )
@@ -16,14 +17,28 @@ import (
 func TestLinkSummary(t *testing.T) {
 	const label = "backend review complete"
 	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	pr := github.PullRequest{State: new("open"), Base: &github.PullRequestBranch{SHA: &base}, Head: &github.PullRequestBranch{SHA: &head}}
+	pr := github.PullRequest{State: new("open"), Base: &github.PullRequestBranch{SHA: &base}, Head: &github.PullRequestBranch{SHA: &head}, UpdatedAt: &github.Timestamp{Time: time.Unix(100, 0).UTC()}}
 	event := github.PullRequestEvent{Repo: &github.Repository{FullName: new("fork/runtime")}, Number: new(7), PullRequest: &pr}
 	var body string
 	var writes []string
 	status := http.StatusOK
+	deleteStatus := http.StatusOK
+	labelEvent := int64(21)
+	appliedAt := *pr.UpdatedAt
 	live := pr
 	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch op := r.Method + " " + r.URL.Path; op {
+		case "GET /repos/fork/runtime/issues/7/events":
+			if err := json.NewEncoder(w).Encode([]*github.IssueEvent{{
+				Event: new("labeled"), Label: &github.Label{Name: label}, ID: &labelEvent, CreatedAt: &appliedAt,
+			}}); err != nil {
+				t.Error(err)
+			}
+		case "DELETE /repos/fork/runtime/issues/7/labels/" + label:
+			writes = append(writes, "DELETE")
+			if deleteStatus != http.StatusOK {
+				http.Error(w, `{"message":"cannot delete label"}`, deleteStatus)
+			}
 		case "GET /repos/fork/runtime/issues/7/comments":
 			var comments []*github.IssueComment
 			if r.URL.Query().Get("page") != "2" {
@@ -56,7 +71,7 @@ func TestLinkSummary(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	scan := scanResult{Base: base, Head: head, Attempt: 2}
+	scan := scanResult{Base: base, Head: head, Old: strings.Repeat("1", 40), New: strings.Repeat("2", 40), Attempt: 2}
 	run := func(id int64, v verdict, wantWrite string) {
 		t.Helper()
 		writes = nil
@@ -74,7 +89,7 @@ func TestLinkSummary(t *testing.T) {
 			t.Fatalf("expected heading for %q in %q", state, body)
 		}
 		footer := fmt.Sprintf("_Last scanned PR head [`%s`](https://github.com/fork/runtime/commit/%s) against base [`%s`](https://github.com/fork/runtime/commit/%s)._", head[:12], head, base[:12], base)
-		if !strings.HasSuffix(body, footer) {
+		if !strings.Contains(body, footer) {
 			t.Fatalf("comment does not link to the scanned commits: %q", body)
 		}
 		for _, part := range parts {
@@ -83,16 +98,18 @@ func TestLinkSummary(t *testing.T) {
 			}
 		}
 	}
-	run(10, clean, "")                           // Clean PRs get no new comment.
-	live.Labels = []*github.Label{{Name: label}} // Label added after the scan.
+	run(10, clean, "") // Clean PRs get no new comment.
 	run(11, reviewNeeded, "POST")
 	const filesLink = ". [See the affected files](https://github.com/fork/runtime/actions/runs/11/attempts/2)."
 	checkBody("review needed", filesLink, "After reviewing the diffs", "open **Labels** (shortcut: `L`) and select `"+label+"`")
 	pending := body
 	run(11, reviewNeeded, "") // Same scan already linked.
-	live.Labels = nil         // Label removed after the next scan.
+	live.Labels = []*github.Label{{Name: label}}
+	scan.LabelEvent = labelEvent
 	run(11, acknowledged, "PATCH")
-	checkBody("acknowledged", filesLink, "carries over to new commits", "remove `"+label+"` under **Labels**")
+	checkBody("acknowledged", filesLink, "covers upstream Go `"+scan.Old[:12]+"` to `"+scan.New[:12]+"`", "remove `"+label+"` under **Labels**", scan.ackMarker())
+	live.Labels = nil
+	scan.LabelEvent = 0
 	run(11, reviewNeeded, "PATCH")
 	if body != pending {
 		t.Fatalf("removing the label did not restore the review instructions: %q", body)
@@ -110,15 +127,35 @@ func TestLinkSummary(t *testing.T) {
 	run(13, clean, "")
 	scan.Head = head
 	live.State = new("closed")
-	run(13, acknowledged, "")
+	run(13, reviewNeeded, "")
 	live = pr
-	if err := linkSummary(t.Context(), client, &event, 13, scanResult{Verdict: "unknown", Base: base, Head: head, Attempt: 1}, label); err == nil {
+	invalid := scan
+	invalid.Verdict = "unknown"
+	if err := linkSummary(t.Context(), client, &event, 13, invalid, label); err == nil {
 		t.Fatal("accepted an unknown verdict")
 	}
 	status = http.StatusForbidden
-	run(13, reviewNeeded, "")
-	status = http.StatusInternalServerError
 	if err := linkSummary(t.Context(), client, &event, 13, scan, label); err == nil {
-		t.Fatal("unexpected API error was ignored")
+		t.Fatal("comment write failure was ignored")
+	}
+	status = http.StatusOK
+	live.Labels = []*github.Label{{Name: label}}
+	scan.LabelEvent = labelEvent
+	labelEvent++
+	run(14, reviewNeeded, "") // Do not remove a newer application of the label.
+	labelEvent--
+	appliedAt.Time = appliedAt.Add(time.Minute)
+	run(14, reviewNeeded, "") // An old event must not delete an application made after it fired.
+	appliedAt = *pr.UpdatedAt
+	live.Head = &github.PullRequestBranch{SHA: &other}
+	run(14, reviewNeeded, "") // Or remove it from a newer PR head.
+	live.Head = pr.Head
+	run(14, reviewNeeded, "DELETE,PATCH")
+	checkBody("review needed", "remove it and apply it again")
+	body = "" // A clean diff must still clear stale labels when there's no comment to edit.
+	run(15, clean, "DELETE")
+	deleteStatus = http.StatusForbidden
+	if err := linkSummary(t.Context(), client, &event, 15, scan, label); err == nil || !strings.Contains(err.Error(), "remove stale label") {
+		t.Fatalf("want label cleanup error, got %v", err)
 	}
 }

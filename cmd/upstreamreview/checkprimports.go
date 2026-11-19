@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/githubutil"
 )
 
@@ -46,7 +47,14 @@ func checkPRImports(args []string) error {
 	if err != nil {
 		return err
 	}
-	r, err := g.check(ctx, *n, *merge)
+	var event *github.PullRequestEvent
+	if path := os.Getenv("GITHUB_EVENT_PATH"); path != "" {
+		event, err = readPREvent(path)
+		if err != nil {
+			return err
+		}
+	}
+	r, err := g.check(ctx, *n, *merge, event)
 	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
 		return writeErr
 	}
@@ -73,6 +81,6 @@ func (r report) writeOutput(path, attempt string) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "review=%s\n", data)
+	_, err = fmt.Fprintf(f, "review=%s\nupdate-comment=%t\n", data, r.updateComment)
 	return errors.Join(err, f.Close())
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-github/v92/github"
 	"github.com/microsoft/go-infra/internal/importdiff"
@@ -140,7 +141,7 @@ func TestReviewOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	scan := scanResult{Verdict: reviewNeeded, Base: strings.Repeat("a", 40), Head: strings.Repeat("b", 40)}
-	for _, r := range []report{{}, {summary: "stale scan"}, {summary: "findings", scan: scan}} {
+	for _, r := range []report{{}, {summary: "stale scan"}, {summary: "findings", scan: scan, updateComment: true}} {
 		if err := r.writeOutput(path, "2"); err != nil {
 			t.Fatal(err)
 		}
@@ -150,10 +151,37 @@ func TestReviewOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	output, ok := strings.CutPrefix(string(data), "other=value\nreview=")
+	output, update := strings.CutSuffix(output, "\nupdate-comment=true\n")
 	var got scanResult
 	scan.Attempt = 2
-	if !ok || json.Unmarshal([]byte(output), &got) != nil || got != scan {
+	if !ok || !update || json.Unmarshal([]byte(output), &got) != nil || got != scan {
 		t.Fatalf("expected only the verified scan in the step outputs, got %q", data)
+	}
+}
+
+func TestCurrentLabelApplication(t *testing.T) {
+	const label = "reviewed"
+	event := func(id int64, action, name string) *github.IssueEvent {
+		return &github.IssueEvent{ID: &id, Event: &action, Label: &github.Label{Name: name}, CreatedAt: &github.Timestamp{Time: time.Unix(1, 0).UTC()}}
+	}
+	last := []*github.IssueEvent{event(12, "labeled", "other"), event(13, "labeled", label)}
+	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		events := last
+		if r.URL.Query().Get("page") != "2" {
+			events = []*github.IssueEvent{event(10, "labeled", label), event(11, "unlabeled", label)}
+			w.Header().Set("Link", `<?page=2>; rel="next"`)
+		}
+		if err := json.NewEncoder(w).Encode(events); err != nil {
+			t.Error(err)
+		}
+	})
+	got, err := currentApplication(t.Context(), client, "org", "repo", 7, label)
+	if err != nil || got.id != 13 || !got.ambiguous {
+		t.Fatalf("same-second reapplication = %+v, %v; want ambiguous event 13", got, err)
+	}
+	last = append(last, event(14, "unlabeled", label))
+	if got, err := currentApplication(t.Context(), client, "org", "repo", 7, label); err != nil || got.id != 0 {
+		t.Fatalf("revoked application = %+v, %v", got, err)
 	}
 }
 
@@ -188,6 +216,20 @@ func TestPRCheck(t *testing.T) {
 	t.Chdir(workdir)
 
 	var labels []*github.Label
+	var event *github.PullRequestEvent
+	labelEvent := int64(21)
+	appliedAt := github.Timestamp{Time: time.Unix(100, 0).UTC()}
+	labelWebhook := func() *github.PullRequestEvent {
+		return &github.PullRequestEvent{
+			Repo: &github.Repository{FullName: new("fork/go")}, Number: new(7),
+			Action: new("labeled"), Label: &github.Label{Name: p.label}, Sender: &github.User{ID: new(int64(8))},
+			PullRequest: &github.PullRequest{Base: &github.PullRequestBranch{SHA: new(base)}, Head: &github.PullRequestBranch{SHA: new(head)}, UpdatedAt: new(appliedAt)},
+		}
+	}
+	var comment string
+	commentAuthor := "github-actions[bot]"
+	var historyStatus int
+	commentCount := new(0)
 	files := []importdiff.Change{{Path: "lib/example.go"}}
 	var scanErr error
 	var duringScan func()
@@ -197,11 +239,28 @@ func TestPRCheck(t *testing.T) {
 	mux.HandleFunc("GET /repos/fork/go/pulls/7", func(w http.ResponseWriter, r *http.Request) {
 		prReads.Add(1)
 		pr := github.PullRequest{
-			Number: new(7), State: new("open"), Labels: labels,
+			Number: new(7), State: new("open"), Labels: labels, Comments: commentCount, ReviewComments: new(3),
 			Head: &github.PullRequestBranch{SHA: &head},
 			Base: &github.PullRequestBranch{Ref: new("main"), SHA: &base},
 		}
 		if err := json.NewEncoder(w).Encode(pr); err != nil {
+			t.Error(err)
+		}
+	})
+	mux.HandleFunc("GET /repos/fork/go/issues/7/events", func(w http.ResponseWriter, r *http.Request) {
+		if historyStatus != 0 {
+			http.Error(w, `{"message":"label history unavailable"}`, historyStatus)
+			return
+		}
+		if err := json.NewEncoder(w).Encode([]*github.IssueEvent{{
+			Event: new("labeled"), Label: &github.Label{Name: p.label}, ID: &labelEvent, Actor: &github.User{ID: new(int64(8))}, CreatedAt: &appliedAt,
+		}}); err != nil {
+			t.Error(err)
+		}
+	})
+	mux.HandleFunc("GET /repos/fork/go/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
+		comments := []*github.IssueComment{{Body: &comment, User: &github.User{Login: &commentAuthor}}}
+		if err := json.NewEncoder(w).Encode(comments); err != nil {
 			t.Error(err)
 		}
 	})
@@ -219,23 +278,32 @@ func TestPRCheck(t *testing.T) {
 		}
 		return files, scanErr
 	}
-	run := func(wantErr error, wantVerdict verdict, wantSummary ...string) {
+	run := func(wantErr error, wantVerdict verdict, wantSummary ...string) scanResult {
 		t.Helper()
 		before := prReads.Load()
-		report, err := g.check(t.Context(), 7, merge)
+		report, err := g.check(t.Context(), 7, merge, event)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("check = %v; want %v", err, wantErr)
 		}
 		var want scanResult
 		if wantVerdict != "" {
-			want = scanResult{Verdict: wantVerdict, Base: base, Head: head}
+			want = scanResult{Verdict: wantVerdict, Base: base, Head: head, Old: old, New: updated}
+			if hasLabel(&github.PullRequest{Labels: labels}, p.label) && historyStatus == 0 {
+				want.LabelEvent = labelEvent
+			}
 		}
 		if report.scan != want {
 			t.Errorf("scan = %+v; want %+v", report.scan, want)
 		}
+		wantUpdate := wantVerdict != "" && (wantVerdict != clean || want.LabelEvent != 0 || commentCount == nil || *commentCount > 0)
+		if report.updateComment != wantUpdate {
+			t.Errorf("%s, comments=%v, label event=%d: update-comment = %t; want %t", wantVerdict, commentCount, want.LabelEvent, report.updateComment, wantUpdate)
+		}
 		wantReads := int32(1)
 		if scanErr != nil {
 			wantReads = 0
+		} else if hasLabel(&github.PullRequest{Labels: labels}, p.label) {
+			wantReads = 2
 		}
 		if got := prReads.Load() - before; got != wantReads {
 			t.Errorf("check made %d PR requests; want %d", got, wantReads)
@@ -245,10 +313,11 @@ func TestPRCheck(t *testing.T) {
 				t.Errorf("job summary %q does not contain %q", report.summary, want)
 			}
 		}
+		return report.scan
 	}
 	stale := func(want ...string) {
 		t.Helper()
-		r, err := g.check(t.Context(), 7, merge)
+		r, err := g.check(t.Context(), 7, merge, event)
 		if err == nil || r.scan != (scanResult{}) {
 			t.Fatalf("stale merge produced scan %+v, error %v", r.scan, err)
 		}
@@ -264,10 +333,44 @@ func TestPRCheck(t *testing.T) {
 	labels = []*github.Label{{Name: "unrelated"}}
 	run(errAckRequired, reviewNeeded)
 	labels = append(labels, &github.Label{Name: p.label})
-	run(nil, acknowledged, "Acknowledged", p.label, "lib/example.go")
+	run(errAckRequired, reviewNeeded, "remove it before reapplying") // A pre-existing label is not an acknowledgment.
+	event = labelWebhook()
+	ack := run(nil, acknowledged, "Acknowledged", p.label, "lib/example.go")
+	event = nil
+	run(errAckRequired, reviewNeeded) // A failed/missing comment write is not durable proof.
+	comment, err = ack.summaryComment("fork/go", 100, p.label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commentCount = new(1)
+	commentAuthor = "someone-else"
+	run(errAckRequired, reviewNeeded) // Copying the marker into a human comment doesn't acknowledge anything.
+	commentAuthor = "github-actions[bot]"
+	// Both outer commits can change without invalidating the approved upstream diff.
+	head = git("commit-tree", pinTree(updated), "-p", head, "-m", "docs")
+	base = git("commit-tree", oldTree, "-p", base, "-m", "patch")
+	merge = checkoutMerge(pinTree(updated), base, head)
+	run(nil, acknowledged)
 	duringScan = func() { labels = labels[:1] }
 	run(errAckRequired, reviewNeeded, "Acknowledgment required", "lib/example.go")
 	labels = append(labels, &github.Label{Name: p.label})
+	duringScan = nil
+	labelEvent++
+	appliedAt.Time = appliedAt.Add(time.Minute)
+	event = labelWebhook()
+	event.PullRequest.UpdatedAt = &github.Timestamp{Time: appliedAt.Add(-time.Minute)}
+	run(errAckRequired, reviewNeeded) // An old labeled delivery can't bind a later application, even at the same head.
+	event = labelWebhook()
+	event.Label = &github.Label{Name: "other"}
+	run(errAckRequired, reviewNeeded) // A missed unlabel/relabel can't revive the old record.
+	event = labelWebhook()
+	ack = run(nil, acknowledged)
+	comment, err = ack.summaryComment("fork/go", 101, p.label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldEvent := event
+	event = nil
 
 	newPin := strings.Repeat("6", 40)
 	newTree := pinTree(newPin)
@@ -279,14 +382,42 @@ func TestPRCheck(t *testing.T) {
 	updated = newPin
 	merge = checkoutMerge(newTree, base, head)
 	files = []importdiff.Change{{Path: "lib/another.go"}}
-	run(nil, acknowledged, "Acknowledged", "lib/another.go", head) // Same PR label, newly scanned changes.
+	run(errAckRequired, reviewNeeded, "lib/another.go", head)
+	event = oldEvent // Re-running the old label event cannot acknowledge the new pin.
+	run(errAckRequired, reviewNeeded)
+	labelEvent++
+	appliedAt.Time = appliedAt.Add(time.Minute)
+	event = labelWebhook()
+	ack = run(nil, acknowledged)
+	comment, err = ack.summaryComment("fork/go", 102, p.label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event = nil
+	old = strings.Repeat("3", 40)
+	base = git("commit-tree", pinTree(old), "-p", root, "-m", "different target")
+	merge = checkoutMerge(newTree, base, head)
+	run(errAckRequired, reviewNeeded, "lib/another.go") // Only the base pin changed.
 	scanErr = errors.New("upstream comparison failed")
 	run(scanErr, "")
 	scanErr = nil
-	labels = labels[:1]
-	run(errAckRequired, reviewNeeded, "lib/another.go")
 	files = nil
+	commentCount = new(0)
+	run(nil, clean, "No upstream importer changes") // Still schedule cleanup, even with no comments.
+	historyStatus = http.StatusForbidden
+	run(nil, clean, "Skipping label cleanup")
+	files = []importdiff.Change{{Path: "lib/another.go"}}
+	if r, err := g.check(t.Context(), 7, merge, nil); err == nil || r.scan != (scanResult{}) {
+		t.Fatalf("unverifiable label produced scan %+v, error %v", r.scan, err)
+	}
+	files = nil
+	historyStatus = 0
+	labels = labels[:1]
 	run(nil, clean, "No upstream importer changes") // The new pin only changed unrelated files.
+	commentCount = new(1)
+	run(nil, clean) // A reverted bump might have an existing sticky comment.
+	commentCount = nil
+	run(nil, clean) // Missing count is not evidence that there are no comments.
 	// Target branch advances to the proposed pin. The PR no longer changes it,
 	// even though its head was based on a different revision.
 	base = git("commit-tree", newTree, "-p", base, "-m", "update base")
@@ -303,7 +434,7 @@ func TestPRCheck(t *testing.T) {
 	blob := git("hash-object", "-w", "--stdin")
 	git("update-index", "--add", "--cacheinfo", "100644", blob, p.submodule)
 	merge = checkoutMerge(git("write-tree"), base, head)
-	if _, err := g.check(t.Context(), 7, merge); err == nil || !strings.Contains(err.Error(), "no valid gitlink") {
+	if _, err := g.check(t.Context(), 7, merge, event); err == nil || !strings.Contains(err.Error(), "no valid gitlink") {
 		t.Fatalf("unreadable gitlink: %v", err)
 	}
 }

@@ -43,15 +43,19 @@ const (
 )
 
 type scanResult struct {
-	Verdict verdict `json:"verdict"`
-	Base    string  `json:"base"`
-	Head    string  `json:"head"`
-	Attempt int     `json:"attempt"` // The comment job can be retried without repeating the scan.
+	Verdict    verdict `json:"verdict"`
+	Base       string  `json:"base"`
+	Head       string  `json:"head"`
+	Old        string  `json:"old"` // Upstream pins, independent of the PR commits.
+	New        string  `json:"new"`
+	LabelEvent int64   `json:"labelEvent,omitempty"`
+	Attempt    int     `json:"attempt"`
 }
 
 type report struct {
-	summary string
-	scan    scanResult
+	summary       string
+	scan          scanResult
+	updateComment bool
 }
 
 func (r result) summary(head string, p policy) string {
@@ -165,7 +169,7 @@ func (g *gate) scan(ctx context.Context, baseSHA, mergeSHA string) (result, erro
 	return r, nil
 }
 
-func (g *gate) check(ctx context.Context, n int, mergeSHA string) (report, error) {
+func (g *gate) check(ctx context.Context, n int, mergeSHA string, event *github.PullRequestEvent) (report, error) {
 	out, err := gitOutput(ctx, "rev-list", "-1", "--parents", "HEAD", "--")
 	if err != nil {
 		return report{}, fmt.Errorf("read test merge parents: %w", err)
@@ -180,35 +184,81 @@ func (g *gate) check(ctx context.Context, n int, mergeSHA string) (report, error
 		return report{}, err
 	}
 
-	// The PR head, base, or labels may have changed during the upstream scan.
-	pr, _, err := g.client.PullRequests.Get(ctx, g.owner, g.repo, n)
+	scan := scanResult{Base: base, Head: head, Old: r.old, New: r.new}
+	pr, err := g.currentPR(ctx, n, scan)
 	if err != nil {
-		return report{}, err
+		return report{summary: err.Error() + "\n"}, err
 	}
-	if pr.GetState() != "open" {
-		return report{}, fmt.Errorf("PR #%d is not open", n)
-	}
-	var stale string
-	switch {
-	case head != pr.GetHead().GetSHA():
-		stale = fmt.Sprintf("The PR head moved from `%.12s` to `%.12s`. See the [checks for the new head](https://github.com/%s/%s/pull/%d/checks) for the newer run.", head, pr.GetHead().GetSHA(), g.owner, g.repo, n)
-	case base != pr.GetBase().GetSHA():
-		stale = fmt.Sprintf("The base branch moved from `%.12s` to `%.12s`. Update the PR branch to start a fresh check; re-running this job uses the original commit.", base, pr.GetBase().GetSHA())
-	}
-	if stale != "" {
-		return report{summary: "**Stale scan.** " + stale + "\n"}, errors.New(stale)
-	}
-	verified := func(v verdict, summary string) report {
-		return report{summary: summary, scan: scanResult{Verdict: v, Base: base, Head: head}}
+	var existing *github.IssueComment
+	var labelErr error
+	var freshLabel bool
+	if hasLabel(pr, g.policy.label) {
+		var a labelApplication
+		a, labelErr = currentApplication(ctx, g.client, g.owner, g.repo, n, g.policy.label)
+		scan.LabelEvent = a.id
+		if labelErr == nil && a.id == 0 {
+			labelErr = fmt.Errorf("cannot verify the current application of label %q; rerun the check", g.policy.label)
+		}
+		freshLabel = a.matchesEvent(event, g.owner+"/"+g.repo, n, g.policy.label, scan)
+		if len(r.files) != 0 && labelErr == nil && !freshLabel && mayHaveComment(pr) {
+			existing, err = findSummaryComment(ctx, g.client, g.owner, g.repo, n)
+			if err != nil {
+				return report{}, err
+			}
+		}
+		// Looking up a prior acknowledgment can take multiple pages. Check
+		// the revisions again before attributing it to this comparison.
+		pr, err = g.currentPR(ctx, n, scan)
+		if err != nil {
+			return report{summary: err.Error() + "\n"}, err
+		}
+		if !hasLabel(pr, g.policy.label) {
+			scan.LabelEvent = 0
+			labelErr = nil // It was removed during the lookup.
+		}
 	}
 	if len(r.files) == 0 {
-		return verified(clean, "No upstream importer changes.\n"), nil
+		scan.Verdict = clean
+		summary := "No upstream importer changes.\n"
+		if labelErr != nil { // Label cleanup is best-effort; the comparison is still clean.
+			summary += fmt.Sprintf("\nSkipping label cleanup: %v\n", labelErr)
+		}
+		return report{summary: summary, scan: scan, updateComment: scan.LabelEvent != 0 || mayHaveComment(pr)}, nil
+	}
+	if labelErr != nil {
+		return report{}, labelErr
 	}
 	summary := r.summary(head, g.policy)
-	if hasLabel(pr, g.policy.label) {
-		return verified(acknowledged, "**Acknowledged** by the `"+g.policy.label+"` PR label.\n\n"+summary), nil
+	instructions := "Review the affected files and add the `" + g.policy.label + "` label to this PR."
+	if scan.LabelEvent != 0 {
+		if freshLabel || scan.recordedIn(existing) {
+			scan.Verdict = acknowledged
+			return report{summary: "**Acknowledged** for these upstream pins by the `" + g.policy.label + "` PR label.\n\n" + summary, scan: scan, updateComment: true}, nil
+		}
+		instructions += " The current label does not acknowledge these pins. If it is still present, remove it before reapplying it."
 	}
-	return verified(reviewNeeded, "**Acknowledgment required.** Review the affected files and add the `"+g.policy.label+"` label to this PR.\n\n"+summary), fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+	scan.Verdict = reviewNeeded
+	return report{summary: "**Acknowledgment required.** " + instructions + "\n\n" + summary, scan: scan, updateComment: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+}
+
+func (g *gate) currentPR(ctx context.Context, n int, scan scanResult) (*github.PullRequest, error) {
+	pr, _, err := g.client.PullRequests.Get(ctx, g.owner, g.repo, n)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case pr.GetState() != "open":
+		return nil, fmt.Errorf("PR #%d is not open", n)
+	case scan.Head != pr.GetHead().GetSHA():
+		return nil, fmt.Errorf("**Stale scan.** The PR head moved from `%.12s` to `%.12s`. See the [checks for the new head](https://github.com/%s/%s/pull/%d/checks) for the newer run", scan.Head, pr.GetHead().GetSHA(), g.owner, g.repo, n)
+	case scan.Base != pr.GetBase().GetSHA():
+		return nil, fmt.Errorf("**Stale scan.** The base branch moved from `%.12s` to `%.12s`. Update the PR branch to start a fresh check; re-running this job uses the original commit", scan.Base, pr.GetBase().GetSHA())
+	}
+	return pr, nil
+}
+
+func mayHaveComment(pr *github.PullRequest) bool {
+	return pr.Comments == nil || pr.GetComments() > 0
 }
 
 func hasLabel(pr *github.PullRequest, name string) bool {
