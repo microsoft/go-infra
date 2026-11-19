@@ -40,8 +40,7 @@ type Flags struct {
 	SyncConfig *string
 	TempGitDir *string
 
-	CreateBranches     *bool
-	PrepareNextRelease bool
+	CreateBranches *bool
 
 	GitAuthString *string
 }
@@ -225,7 +224,7 @@ func MakePRs(f *Flags) error {
 			success = false
 			continue
 		}
-		if f.PrepareNextRelease && entry.PrepareNextRelease {
+		if entry.PrepareNextRelease {
 			// Reuse the objects just fetched and mirrored, but not the normal sync's PR branches.
 			cutFlags := *f
 			cutFlags.InitialCloneDir = &repositoryDir

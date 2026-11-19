@@ -148,15 +148,20 @@ func TestPrepareNextRelease(t *testing.T) {
 		git(target, "branch", "-D", release)
 	}
 
-	// Use the scheduled entry point so the cut must coexist with ordinary master sync.
-	data, err := json.Marshal([]ConfigEntry{config})
-	must(err)
-	must(os.WriteFile(configPath, data, 0o600))
+	// Use the same entry point for both runs; only the repository configuration changes.
+	writeConfig := func(prepare bool) {
+		t.Helper()
+		config.PrepareNextRelease = prepare
+		data, err := json.Marshal([]ConfigEntry{config})
+		must(err)
+		must(os.WriteFile(configPath, data, 0o600))
+	}
+	writeConfig(false)
 	must(MakePRs(flags))
 	if heads() != initialHeads || len(prs) != 0 {
-		t.Fatal("configured repo cut a release without the explicit opt-in")
+		t.Fatal("sync prepared a release with PrepareNextRelease disabled")
 	}
-	flags.PrepareNextRelease = true
+	writeConfig(true)
 	failPost = true
 	if err := MakePRs(flags); err == nil || len(prs) != 0 {
 		t.Fatalf("expected interrupted PR posting, got %v, PRs %v", err, prs)

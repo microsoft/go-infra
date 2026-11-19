@@ -64,7 +64,7 @@ type ConfigEntry struct {
 	// branch, it is forked from the tip of this branch.
 	MainBranch string
 
-	// PrepareNextRelease opts this repository in to -prepare-next-release.
+	// PrepareNextRelease enables preparation of the next Go release branch for this repository.
 	PrepareNextRelease bool
 
 	// SyncDocs copies the paths listed in [docsSyncPaths] from MainBranch in Upstream to the active

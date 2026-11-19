@@ -20,7 +20,8 @@ It creates missing repository labels.
 
 ## Preparing the next release branch
 
-The official sync pipeline looks for `release-branch.go1.N`, where `1.N` is [`msmajorversions.Next`](/msmajorversions).
+For repositories with `PrepareNextRelease` enabled in [the sync configuration](/eng/sync-config.json), sync looks for `release-branch.go1.N`, where `1.N` is [`msmajorversions.Next`](/msmajorversions).
+Manual and scheduled runs use the same configuration.
 On the first run that sees the branch in both upstream Go and its GitHub mirror, sync creates `microsoft/release-branch.go1.N` from `microsoft/main` unless the Microsoft branch already exists.
 It does not wait for an RC tag.
 
@@ -30,10 +31,10 @@ Sync opens these PRs if needed and leaves them for manual approval:
 * On `microsoft/main`, start the notes for Go 1.(N+1) and remove the old 1.N notes file.
   * To avoid deleting possibly intentional changes, if the 1.N notes file in `microsoft/main` differs from the file in `microsoft/release-branch.go1.N`, it is not removed.
 
-If you need an earlier base, create the release branch at that commit in `microsoft/go` before the next official sync.
+If you need an earlier base, create the release branch at that commit in `microsoft/go` before the next sync.
 Sync never resets an existing release branch.
 
-To preview the cut without pushing branches or opening PRs, run `go run ./cmd/sync -prepare-next-release -n`.
+To preview the cut without pushing branches or opening PRs, run `go run ./cmd/sync -n`.
 
 ## Patch updates
 

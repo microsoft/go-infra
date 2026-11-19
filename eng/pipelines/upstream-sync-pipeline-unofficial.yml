@@ -66,7 +66,6 @@ extends:
                     Write-Host "##vso[task.setvariable variable=WifAzdoToken;issecret=true]$token"
               - pwsh: |
                   go run ./cmd/sync `
-                    -prepare-next-release=false `
                     -git-auth api `
                     -github-user bot-for-go `
                     -github-app-client-id $(GitHubApp-bot-for-go-client-id) `

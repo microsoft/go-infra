@@ -4,7 +4,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -42,8 +41,6 @@ func main() {
 		log.Panic(err)
 	}
 	f := sync.BindFlags(wd)
-	flag.BoolVar(&f.PrepareNextRelease, "prepare-next-release", false,
-		"Prepare the next major release branch for configured repositories. Use with -n to preview without writing.")
 
 	buildmodel.ParseBoundFlags(description)
 
