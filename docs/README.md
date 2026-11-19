@@ -5,6 +5,7 @@ See the root [README.md](../README.md) for the project overview, and the subdire
 
 * [automation/](automation/) - Some details about the automated infrastructure used to maintain a Go toolset fork.
   * [Dependency history audits](automation/dependency-audit.md) - Shared dependency audits, successful-run checkpoints, and instructions for applying findings.
+  * [Upstream crypto review](automation/upstream-review.md) - Review enforcement for Go submodule updates that touch FIPS importers.
 * [fork/](fork/) - A description of how the Microsoft build of Go fork is set up and why we made certain decisions.
 * [release-process/](release-process/) - A description of how to release a Microsoft build of Go build, and details about the infra behind it.
 * [pipeline-yml-style.md](pipeline-yml-style.md) - Style principles and quirk notes for our YAML pipelines here and in microsoft/go.
