@@ -114,12 +114,12 @@ func summaryComment(pr *github.PullRequest, runURL string, matched bool, label s
 	if !matched {
 		return heading + "no matching changes\n\nNo action needed. [View the scan summary](" + runURL + ")."
 	}
-	files := "[See the affected files](" + runURL + ")."
+	files := " [See the affected files](" + runURL + ")."
 	if label == "" {
-		return heading + "matching changes\n\n" + files
+		return heading + "matching changes\n\nThis update changes Go files that import a package under review." + files
 	}
 	if hasLabel(pr, label) {
-		return heading + "acknowledged\n\n" + files + " This acknowledgment carries over to new commits. To request another review, remove `" + label + "` under **Labels**."
+		return heading + "acknowledged\n\nThis acknowledgment carries over to new commits. To request another review, remove `" + label + "` under **Labels**." + files
 	}
-	return heading + "review needed\n\n" + files + " After reviewing the diffs, open **Labels** (shortcut: `L`) and select `" + label + "`."
+	return heading + "review needed\n\nAfter reviewing the diffs, open **Labels** (shortcut: `L`) and select `" + label + "`." + files
 }

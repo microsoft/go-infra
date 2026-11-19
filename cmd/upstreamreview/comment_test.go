@@ -79,7 +79,7 @@ func TestLinkSummary(t *testing.T) {
 	}
 	run(10, false, "") // Clean PRs get no new comment.
 	run(11, true, "POST")
-	const filesLink = "[See the affected files](https://github.com/fork/runtime/actions/runs/11)"
+	const filesLink = ". [See the affected files](https://github.com/fork/runtime/actions/runs/11)."
 	checkBody("review needed", filesLink, "After reviewing the diffs", "open **Labels** (shortcut: `L`) and select `"+label+"`")
 	pending := body
 	run(11, true, "") // Same run already linked.
