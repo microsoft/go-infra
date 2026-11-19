@@ -73,8 +73,9 @@ func TestLinkSummary(t *testing.T) {
 		if !strings.HasPrefix(body, commentMarker+"### Upstream Go review \u2014 "+state+"\n\n") {
 			t.Fatalf("expected heading for %q in %q", state, body)
 		}
-		if !strings.Contains(body, "Last scanned PR head `"+head[:12]+"` against base `"+base[:12]+"`") {
-			t.Fatalf("comment does not identify the scanned revisions: %q", body)
+		footer := fmt.Sprintf("_Last scanned PR head [`%s`](https://github.com/fork/runtime/commit/%s) against base [`%s`](https://github.com/fork/runtime/commit/%s)._", head[:12], head, base[:12], base)
+		if !strings.HasSuffix(body, footer) {
+			t.Fatalf("comment does not link to the scanned commits: %q", body)
 		}
 		for _, part := range parts {
 			if !strings.Contains(body, part) {

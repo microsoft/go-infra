@@ -67,8 +67,7 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 	if !objectID.MatchString(scan.Base) || !objectID.MatchString(scan.Head) || scan.Attempt <= 0 {
 		return errors.New("expected a review with full base and head SHAs and a positive run attempt")
 	}
-	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d/attempts/%d", repository, runID, scan.Attempt)
-	body, err := scan.summaryComment(runURL, label)
+	body, err := scan.summaryComment(repository, runID, label)
 	if err != nil {
 		return err
 	}
@@ -118,8 +117,10 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 	return err
 }
 
-func (scan scanResult) summaryComment(runURL, label string) (string, error) {
+func (scan scanResult) summaryComment(repository string, runID int64, label string) (string, error) {
 	const heading = commentMarker + "### Upstream Go review \u2014 "
+	repoURL := "https://github.com/" + repository
+	runURL := fmt.Sprintf("%s/actions/runs/%d/attempts/%d", repoURL, runID, scan.Attempt)
 	labelText := "the review label"
 	if label != "" {
 		labelText = "`" + label + "`"
@@ -136,5 +137,8 @@ func (scan scanResult) summaryComment(runURL, label string) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown review verdict %q", scan.Verdict)
 	}
-	return heading + body + fmt.Sprintf("\n\n_Last scanned PR head `%.12s` against base `%.12s`._", scan.Head, scan.Base), nil
+	commitLink := func(sha string) string {
+		return fmt.Sprintf("[`%.12s`](%s/commit/%s)", sha, repoURL, sha)
+	}
+	return heading + body + "\n\n_Last scanned PR head " + commitLink(scan.Head) + " against base " + commitLink(scan.Base) + "._", nil
 }
