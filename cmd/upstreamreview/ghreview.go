@@ -5,11 +5,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/microsoft/go-infra/githubutil"
@@ -48,20 +50,29 @@ func ghReview(args []string) error {
 	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
 		return writeErr
 	}
-	if outputErr := r.writeMatchOutput(os.Getenv("GITHUB_OUTPUT")); outputErr != nil {
-		log.Printf("could not write optional matched output: %v", outputErr)
+	if outputErr := r.writeOutput(os.Getenv("GITHUB_OUTPUT"), os.Getenv("GITHUB_RUN_ATTEMPT")); outputErr != nil {
+		log.Printf("could not write optional review output: %v", outputErr)
 	}
 	return err
 }
 
-func (r report) writeMatchOutput(path string) error {
-	if path == "" || r.summary == "" { // Outside Actions, or no verified result.
+func (r report) writeOutput(path, attempt string) error {
+	if path == "" || r.scan.Verdict == "" { // Outside Actions, or no verified result.
 		return nil
+	}
+	n, err := strconv.Atoi(attempt)
+	if err != nil || n <= 0 {
+		return errors.New("GITHUB_RUN_ATTEMPT must be a positive number")
+	}
+	r.scan.Attempt = n
+	data, err := json.Marshal(r.scan)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(f, "matched=%t\n", r.matched)
+	_, err = fmt.Fprintf(f, "review=%s\n", data)
 	return errors.Join(err, f.Close())
 }

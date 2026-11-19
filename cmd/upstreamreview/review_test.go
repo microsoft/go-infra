@@ -134,18 +134,26 @@ func TestInvalidPolicy(t *testing.T) {
 	}
 }
 
-func TestMatchOutput(t *testing.T) {
+func TestReviewOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "output")
 	if err := os.WriteFile(path, []byte("other=value\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range []report{{}, {summary: "clean"}, {summary: "findings", matched: true}} {
-		if err := r.writeMatchOutput(path); err != nil {
+	scan := scanResult{Verdict: reviewNeeded, Base: strings.Repeat("a", 40), Head: strings.Repeat("b", 40)}
+	for _, r := range []report{{}, {summary: "stale scan"}, {summary: "findings", scan: scan}} {
+		if err := r.writeOutput(path, "2"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got, err := os.ReadFile(path); err != nil || string(got) != "other=value\nmatched=false\nmatched=true\n" {
-		t.Fatalf("step outputs = %q, %v", got, err)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, ok := strings.CutPrefix(string(data), "other=value\nreview=")
+	var got scanResult
+	scan.Attempt = 2
+	if !ok || json.Unmarshal([]byte(output), &got) != nil || got != scan {
+		t.Fatalf("expected only the verified scan in the step outputs, got %q", data)
 	}
 }
 
@@ -211,18 +219,19 @@ func TestPRCheck(t *testing.T) {
 		}
 		return files, scanErr
 	}
-	run := func(wantErr error, wantSummary ...string) {
+	run := func(wantErr error, wantVerdict verdict, wantSummary ...string) {
 		t.Helper()
 		before := prReads.Load()
 		report, err := g.check(t.Context(), 7, merge)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("check = %v; want %v", err, wantErr)
 		}
-		if scanErr != nil && report.summary != "" {
-			t.Fatal("reported a scan error as a valid result")
+		var want scanResult
+		if wantVerdict != "" {
+			want = scanResult{Verdict: wantVerdict, Base: base, Head: head}
 		}
-		if scanErr == nil && report.matched != (len(files) > 0) {
-			t.Errorf("matched = %t with %d files", report.matched, len(files))
+		if report.scan != want {
+			t.Errorf("scan = %+v; want %+v", report.scan, want)
 		}
 		wantReads := int32(1)
 		if scanErr != nil {
@@ -237,15 +246,27 @@ func TestPRCheck(t *testing.T) {
 			}
 		}
 	}
+	stale := func(want ...string) {
+		t.Helper()
+		r, err := g.check(t.Context(), 7, merge)
+		if err == nil || r.scan != (scanResult{}) {
+			t.Fatalf("stale merge produced scan %+v, error %v", r.scan, err)
+		}
+		for _, s := range want {
+			if !strings.Contains(err.Error(), s) || !strings.Contains(r.summary, s) {
+				t.Errorf("missing %q in stale error %q or summary %q", s, err, r.summary)
+			}
+		}
+	}
 	link := fmt.Sprintf("[`lib/example.go`](https://github.com/upstream/runtime/compare/%s..%s#diff-%x)", old, updated, sha256.Sum256([]byte("lib/example.go")))
-	run(errAckRequired, "Acknowledgment required", p.label, link, head,
+	run(errAckRequired, reviewNeeded, "Acknowledgment required", p.label, link, head,
 		`upstreamreview importdiff -repo PATH_TO_UPSTREAM -src 'lib' -src 'tools' -import 'example.org/a' -import 'example.org/b' -exclude 'lib/private' -exclude 'tools/dev'\''s files' `+old+" "+updated)
 	labels = []*github.Label{{Name: "unrelated"}}
-	run(errAckRequired)
+	run(errAckRequired, reviewNeeded)
 	labels = append(labels, &github.Label{Name: p.label})
-	run(nil, "Acknowledged", p.label, "lib/example.go")
+	run(nil, acknowledged, "Acknowledged", p.label, "lib/example.go")
 	duringScan = func() { labels = labels[:1] }
-	run(errAckRequired, "Acknowledgment required", "lib/example.go")
+	run(errAckRequired, reviewNeeded, "Acknowledgment required", "lib/example.go")
 	labels = append(labels, &github.Label{Name: p.label})
 
 	newPin := strings.Repeat("6", 40)
@@ -253,28 +274,27 @@ func TestPRCheck(t *testing.T) {
 	newHead := git("commit-tree", newTree, "-p", head, "-m", "push")
 	files = nil // Even a clean scan can't pass for a head that moved during it.
 	duringScan = func() { head = newHead }
-	if _, err := g.check(t.Context(), 7, merge); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("stale workflow merge %s: %v", merge, err)
-	}
+	stale("PR head moved", newHead[:12], "https://github.com/fork/go/pull/7/checks")
 	duringScan = nil
 	updated = newPin
 	merge = checkoutMerge(newTree, base, head)
 	files = []importdiff.Change{{Path: "lib/another.go"}}
-	run(nil, "Acknowledged", "lib/another.go", head) // Same PR label, newly scanned changes.
+	run(nil, acknowledged, "Acknowledged", "lib/another.go", head) // Same PR label, newly scanned changes.
 	scanErr = errors.New("upstream comparison failed")
-	run(scanErr)
+	run(scanErr, "")
 	scanErr = nil
 	labels = labels[:1]
-	run(errAckRequired, "lib/another.go")
+	run(errAckRequired, reviewNeeded, "lib/another.go")
 	files = nil
-	run(nil, "No upstream importer changes") // The new pin only changed unrelated files.
+	run(nil, clean, "No upstream importer changes") // The new pin only changed unrelated files.
 	// Target branch advances to the proposed pin. The PR no longer changes it,
 	// even though its head was based on a different revision.
-	old = updated
 	base = git("commit-tree", newTree, "-p", base, "-m", "update base")
+	stale("base branch moved", base[:12], "Update the PR branch", "re-running this job uses the original commit")
+	old = updated
 	merge = checkoutMerge(newTree, base, head)
 	before := scans
-	run(nil, "No upstream importer changes")
+	run(nil, clean, "No upstream importer changes")
 	if scans != before {
 		t.Fatal("scanned an unrelated PR")
 	}

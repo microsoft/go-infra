@@ -34,9 +34,24 @@ type result struct {
 	files    []importdiff.Change
 }
 
+type verdict string
+
+const (
+	clean        verdict = "clean"
+	reviewNeeded verdict = "review-needed"
+	acknowledged verdict = "acknowledged"
+)
+
+type scanResult struct {
+	Verdict verdict `json:"verdict"`
+	Base    string  `json:"base"`
+	Head    string  `json:"head"`
+	Attempt int     `json:"attempt"` // The comment job can be retried without repeating the scan.
+}
+
 type report struct {
 	summary string
-	matched bool
+	scan    scanResult
 }
 
 func (r result) summary(head string, p policy) string {
@@ -173,17 +188,27 @@ func (g *gate) check(ctx context.Context, n int, mergeSHA string) (report, error
 	if pr.GetState() != "open" {
 		return report{}, fmt.Errorf("PR #%d is not open", n)
 	}
-	if base != pr.GetBase().GetSHA() || head != pr.GetHead().GetSHA() {
-		return report{}, fmt.Errorf("test merge %s does not match the current PR base %s and head %s", mergeSHA, pr.GetBase().GetSHA(), pr.GetHead().GetSHA())
+	var stale string
+	switch {
+	case head != pr.GetHead().GetSHA():
+		stale = fmt.Sprintf("The PR head moved from `%.12s` to `%.12s`. See the [checks for the new head](https://github.com/%s/%s/pull/%d/checks) for the newer run.", head, pr.GetHead().GetSHA(), g.owner, g.repo, n)
+	case base != pr.GetBase().GetSHA():
+		stale = fmt.Sprintf("The base branch moved from `%.12s` to `%.12s`. Update the PR branch to start a fresh check; re-running this job uses the original commit.", base, pr.GetBase().GetSHA())
+	}
+	if stale != "" {
+		return report{summary: "**Stale scan.** " + stale + "\n"}, errors.New(stale)
+	}
+	verified := func(v verdict, summary string) report {
+		return report{summary: summary, scan: scanResult{Verdict: v, Base: base, Head: head}}
 	}
 	if len(r.files) == 0 {
-		return report{summary: "No upstream importer changes.\n"}, nil
+		return verified(clean, "No upstream importer changes.\n"), nil
 	}
 	summary := r.summary(head, g.policy)
 	if hasLabel(pr, g.policy.label) {
-		return report{summary: "**Acknowledged** by the `" + g.policy.label + "` PR label.\n\n" + summary, matched: true}, nil
+		return verified(acknowledged, "**Acknowledged** by the `"+g.policy.label+"` PR label.\n\n"+summary), nil
 	}
-	return report{summary: "**Acknowledgment required.** Review the affected files and add the `" + g.policy.label + "` label to this PR.\n\n" + summary, matched: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+	return verified(reviewNeeded, "**Acknowledgment required.** Review the affected files and add the `"+g.policy.label+"` label to this PR.\n\n"+summary), fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
 }
 
 func hasLabel(pr *github.PullRequest, name string) bool {

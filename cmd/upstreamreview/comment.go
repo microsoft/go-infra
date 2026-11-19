@@ -25,13 +25,17 @@ const commentMarker = "<!-- upstreamreview:summary -->\n"
 
 func comment(args []string) error {
 	flags := flag.NewFlagSet("upstreamreview comment", flag.ContinueOnError)
-	matched := flags.Bool("matched", false, "create a comment for a match; otherwise only update an existing comment")
+	review := flags.String("review", "", "verified JSON review output from ghreview")
 	label := flags.String("label", "", "PR label that acknowledges matching changes")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %q", flags.Args())
+	}
+	var scan scanResult
+	if err := json.Unmarshal([]byte(*review), &scan); err != nil {
+		return fmt.Errorf("decode -review: %w", err)
 	}
 	data, err := os.ReadFile(os.Getenv("GITHUB_EVENT_PATH"))
 	if err != nil {
@@ -51,15 +55,22 @@ func comment(args []string) error {
 	if err != nil {
 		return err
 	}
-	return linkSummary(ctx, client, &event, runID, *matched, *label)
+	return linkSummary(ctx, client, &event, runID, scan, *label)
 }
 
-func linkSummary(ctx context.Context, client *github.Client, event *github.PullRequestEvent, runID int64, matched bool, label string) error {
+func linkSummary(ctx context.Context, client *github.Client, event *github.PullRequestEvent, runID int64, scan scanResult, label string) error {
 	repository := event.GetRepo().GetFullName()
 	number := event.GetNumber()
-	base, head := event.GetPullRequest().GetBase().GetSHA(), event.GetPullRequest().GetHead().GetSHA()
-	if !repoSlug.MatchString(repository) || !fs.ValidPath(repository) || number <= 0 || !objectID.MatchString(base) || !objectID.MatchString(head) {
-		return errors.New("expected a pull request event with repository, number, base and head")
+	if !repoSlug.MatchString(repository) || !fs.ValidPath(repository) || number <= 0 || event.GetPullRequest() == nil {
+		return errors.New("expected a pull request event with repository and number")
+	}
+	if !objectID.MatchString(scan.Base) || !objectID.MatchString(scan.Head) || scan.Attempt <= 0 {
+		return errors.New("expected a review with full base and head SHAs and a positive run attempt")
+	}
+	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d/attempts/%d", repository, runID, scan.Attempt)
+	body, err := scan.summaryComment(runURL, label)
+	if err != nil {
+		return err
 	}
 	owner, repo, _ := strings.Cut(repository, "/")
 	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
@@ -80,19 +91,17 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 		}
 		opts.Page = resp.NextPage
 	}
-	if existing == nil && !matched {
+	if existing == nil && scan.Verdict == clean {
 		return nil
 	}
 	pr, _, err := client.PullRequests.Get(ctx, owner, repo, number)
 	if err != nil {
 		return err
 	}
-	if pr.GetState() != "open" || pr.GetHead().GetSHA() != head || pr.GetBase().GetSHA() != base {
+	if pr.GetState() != "open" || pr.GetHead().GetSHA() != scan.Head || pr.GetBase().GetSHA() != scan.Base {
 		log.Print("Skipping the summary link: the PR changed since this scan.")
 		return nil
 	}
-	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d", repository, runID)
-	body := summaryComment(pr, runURL, matched, label)
 	if existing.GetBody() == body {
 		return nil
 	}
@@ -109,17 +118,23 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 	return err
 }
 
-func summaryComment(pr *github.PullRequest, runURL string, matched bool, label string) string {
+func (scan scanResult) summaryComment(runURL, label string) (string, error) {
 	const heading = commentMarker + "### Upstream Go review \u2014 "
-	if !matched {
-		return heading + "no matching changes\n\nNo action needed. [View the scan summary](" + runURL + ")."
+	labelText := "the review label"
+	if label != "" {
+		labelText = "`" + label + "`"
 	}
 	files := " [See the affected files](" + runURL + ")."
-	if label == "" {
-		return heading + "matching changes\n\nThis update changes Go files that import a package under review." + files
+	var body string
+	switch scan.Verdict {
+	case clean:
+		body = "no matching changes\n\nNo action needed. [View the scan summary](" + runURL + ")."
+	case acknowledged:
+		body = "acknowledged\n\nThis acknowledgment carries over to new commits. To request another review, remove " + labelText + " under **Labels**." + files
+	case reviewNeeded:
+		body = "review needed\n\nAfter reviewing the diffs, open **Labels** (shortcut: `L`) and select " + labelText + "." + files
+	default:
+		return "", fmt.Errorf("unknown review verdict %q", scan.Verdict)
 	}
-	if hasLabel(pr, label) {
-		return heading + "acknowledged\n\nThis acknowledgment carries over to new commits. To request another review, remove `" + label + "` under **Labels**." + files
-	}
-	return heading + "review needed\n\nAfter reviewing the diffs, open **Labels** (shortcut: `L`) and select `" + label + "`." + files
+	return heading + body + fmt.Sprintf("\n\n_Last scanned PR head `%.12s` against base `%.12s`._", scan.Head, scan.Base), nil
 }
