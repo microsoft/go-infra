@@ -20,14 +20,6 @@ import (
 	"github.com/microsoft/go-infra/msmajorversions"
 )
 
-const (
-	// cutUpstreamDefaultRef holds upstream HEAD in the temporary repo, not on a remote.
-	// Its merge base with the release tip distinguishes release-line commits from older shared history.
-	cutUpstreamDefaultRef = "refs/release-cut/upstream-default"
-	// cutSelectionTrailer records the Microsoft fork point and Go commit on a fork's notes head.
-	cutSelectionTrailer = "Release-Cut"
-)
-
 type releaseCut struct {
 	version, notesVersion string
 	branchPoint           string // Where the shared upstream release history diverges from the default branch.
@@ -38,6 +30,10 @@ type releaseCut struct {
 	notes                 gitpr.SyncPRRefSet
 }
 
+// For a new release, prepareNextRelease picks the latest Go commit available on
+// the release branch in both upstream and its mirror (if configured). It creates
+// the Microsoft release branch from main if needed, then opens separate PRs to
+// pin Go on that branch and start the following release's notes on main.
 func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 	version := msmajorversions.Next.Version
 	upstream := "release-branch.go" + version
@@ -99,7 +95,12 @@ func fullCommitSHA(s string) bool {
 	return err == nil
 }
 
-// Recover the original cut when only the notes head made it to the fork.
+// If only the notes branch made it to the fork before the target push failed,
+// the next run recovers the original selection from that commit:
+//
+//	Release-Cut: <Microsoft branch base> <Go submodule commit>
+const cutSelectionTrailer = "Release-Cut"
+
 func retainedNotesSelection(dir, notesHead, shared string) (string, string, error) {
 	trailer, err := gitcmd.ShowQuietPretty(dir, "%(trailers:key="+cutSelectionTrailer+",valueonly)", notesHead)
 	if err != nil {
@@ -122,7 +123,7 @@ func retainedNotesSelection(dir, notesHead, shared string) (string, string, erro
 	return base, pin, nil
 }
 
-func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncPRRefSet, hasMirror bool) error {
+func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet, hasMirror bool) error {
 	var err error
 	if hasMirror {
 		b.Commit, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", b.UpstreamLocalBranch(), b.UpstreamMirrorLocalBranch()))
@@ -132,13 +133,24 @@ func (c *releaseCut) prepareBases(dir, remote, headRemote string, b *gitpr.SyncP
 	if err != nil {
 		return err
 	}
-	c.branchPoint, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", cutUpstreamDefaultRef, b.Commit))
+	// Commits from before the cut are ancestors of the release tip too. Find where
+	// the branches split so we can tell whether a maintainer already pinned a release commit.
+	defaultTip, err := gitcmd.FetchRefCommit(dir, upstream, "HEAD")
+	if err != nil {
+		return fmt.Errorf("fetching upstream HEAD: %w", err)
+	}
+	c.branchPoint, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", defaultTip, b.Commit))
 	if err != nil {
 		return fmt.Errorf("finding the upstream branch point for %s: %w", b.UpstreamName, err)
 	}
+	return nil
+}
+
+func (c *releaseCut) preparePRBranches(dir, remote, headRemote string, b *gitpr.SyncPRRefSet) error {
 	if err := gitcmd.Run(dir, "fetch", "--no-tags", remote, c.notes.BaseBranchFetchRefspec()); err != nil {
 		return err
 	}
+	var err error
 	c.submoduleHead, err = fetchRemoteBranch(dir, headRemote, b.PRBranch())
 	if err != nil {
 		return err

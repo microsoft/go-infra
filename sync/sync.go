@@ -463,11 +463,9 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 	//
 	// For an overview of the sequence of Git commands below, see the command description.
 
-	fetchUpstream := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Upstream))
+	upstreamRemote := urlAuther.InsertAuth(entry.Upstream)
+	fetchUpstream := newGitCmd("fetch", "--no-tags", upstreamRemote)
 	fetchOrigin := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Target))
-	if cut != nil {
-		fetchUpstream.Args = append(fetchUpstream.Args, "HEAD:"+cutUpstreamDefaultRef)
-	}
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
@@ -519,7 +517,10 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		// A cut has one upstream submodule update and a separate notes PR based on target main.
 		b := branches[0]
 		b.Purpose = "prepare-release"
-		if err := cut.prepareBases(dir, urlAuther.InsertAuth(entry.Target), urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b, entry.UpstreamMirror != ""); err != nil {
+		if err := cut.selectGoCommit(dir, upstreamRemote, b, entry.UpstreamMirror != ""); err != nil {
+			return nil, err
+		}
+		if err := cut.preparePRBranches(dir, urlAuther.InsertAuth(entry.Target), urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b); err != nil {
 			return nil, err
 		}
 		branches = append(branches, &cut.notes)

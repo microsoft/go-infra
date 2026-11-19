@@ -93,12 +93,17 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 
 	git(upstream, "checkout", source)
+	must(addMockFile(upstream, "first.txt", "First release-only change"))
+	manualPin := git(upstream, "rev-parse", "HEAD")
 	must(addMockFile(upstream, "shared.txt", "Shared release work"))
 	selected := git(upstream, "rev-parse", "HEAD")
 	git(mirror, "fetch", upstream, "refs/heads/"+source+":refs/heads/"+source)
 	must(addMockFile(upstream, "later.txt", "Later release work"))
 	later := git(upstream, "rev-parse", "HEAD")
-	git(upstream, "checkout", "master")
+	// This repo advertises its checked-out branch as HEAD. Make the default and release tips diverge.
+	git(upstream, "checkout", "-b", "development", "master")
+	must(addMockFile(upstream, "development.txt", "Development after the cut"))
+	offBranch := git(upstream, "rev-parse", "HEAD")
 	must(prepareNextRelease(flags, preview, config))
 	n, err := strconv.Atoi(strings.TrimPrefix(version, "1."))
 	must(err)
@@ -116,12 +121,19 @@ func TestPrepareNextRelease(t *testing.T) {
 		t.Fatal("dry run wrote remote state")
 	}
 
-	// A maintainer can cut the branch before main advances. Use it without dropping newer notes on main.
+	// A maintainer pinned a release commit older than the mirror tip. Only the notes need a PR.
 	dry = false
-	git(target, "branch", release, base)
+	git(target, "checkout", "-b", release, base)
+	git(target, "update-index", "--cacheinfo", "160000,"+manualPin+",go")
+	git(target, "commit", "-m", "Pin an earlier Go release commit")
+	manualBase := git(target, "rev-parse", "HEAD")
+	git(target, "checkout", main)
 	must(prepareNextRelease(flags, filepath.Join(dir, "precut"), config))
-	if got := git(target, "rev-parse", release); got != base {
-		t.Fatalf("moved the existing release branch from %s to %s", base, got)
+	if got := git(target, "rev-parse", release); got != manualBase {
+		t.Fatalf("moved the existing release branch from %s to %s", manualBase, got)
+	}
+	if len(prs) != 1 || prs[notesPR] != main {
+		t.Fatalf("expected only the notes PR for the manually pinned release branch, got %v", prs)
 	}
 	if got := git(target, "show", notesPR+":"+oldNotes); got != "Newer notes on main" {
 		t.Fatalf("notes not on the release branch were dropped: %q", got)
@@ -130,10 +142,6 @@ func TestPrepareNextRelease(t *testing.T) {
 	clear(prs)
 
 	// Shared pre-fork history and off-branch commits don't prove a manual cut is complete.
-	git(upstream, "checkout", "-b", "other", "master")
-	must(addMockFile(upstream, "other.txt", "Not on the release branch"))
-	offBranch := git(upstream, "rev-parse", "HEAD")
-	git(upstream, "checkout", "master")
 	for _, link := range []string{beforeCut, offBranch} {
 		git(target, "checkout", "-b", release, base)
 		git(target, "update-index", "--cacheinfo", "160000,"+link+",go")
