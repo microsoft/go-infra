@@ -180,10 +180,17 @@ func (g *gate) check(ctx context.Context, n int, mergeSHA string) (report, error
 		return report{summary: "No upstream importer changes.\n"}, nil
 	}
 	summary := r.summary(head, g.policy)
-	for _, label := range pr.Labels {
-		if label.GetName() == g.policy.label {
-			return report{summary: "**Acknowledged** by the `" + g.policy.label + "` PR label.\n\n" + summary, matched: true}, nil
-		}
+	if hasLabel(pr, g.policy.label) {
+		return report{summary: "**Acknowledged** by the `" + g.policy.label + "` PR label.\n\n" + summary, matched: true}, nil
 	}
 	return report{summary: "**Acknowledgment required.** Review the affected files and add the `" + g.policy.label + "` label to this PR.\n\n" + summary, matched: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+}
+
+func hasLabel(pr *github.PullRequest, name string) bool {
+	for _, label := range pr.Labels {
+		if label.GetName() == name {
+			return true
+		}
+	}
+	return false
 }

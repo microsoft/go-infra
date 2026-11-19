@@ -14,6 +14,7 @@ import (
 )
 
 func TestLinkSummary(t *testing.T) {
+	const label = "backend review complete"
 	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	pr := github.PullRequest{State: new("open"), Base: &github.PullRequestBranch{SHA: &base}, Head: &github.PullRequestBranch{SHA: &head}}
 	event := github.PullRequestEvent{Repo: &github.Repository{FullName: new("fork/runtime")}, Number: new(7), PullRequest: &pr}
@@ -57,7 +58,7 @@ func TestLinkSummary(t *testing.T) {
 	})
 	run := func(id int64, matched bool, wantWrites string) {
 		t.Helper()
-		if err := linkSummary(t.Context(), client, &event, id, matched); err != nil {
+		if err := linkSummary(t.Context(), client, &event, id, matched, label); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Join(writes, ","); got != wantWrites {
@@ -66,21 +67,27 @@ func TestLinkSummary(t *testing.T) {
 	}
 	run(10, false, "") // Clean PRs get no new comment.
 	run(11, true, "POST")
-	if !strings.HasPrefix(body, commentMarker) || !strings.Contains(body, "[See the affected files and how to check them locally](https://github.com/fork/runtime/actions/runs/11)") {
+	const filesLink = "[See the affected files](https://github.com/fork/runtime/actions/runs/11)"
+	if !strings.Contains(body, filesLink) || !strings.Contains(body, "After reviewing the diffs, add the `"+label+"` label") {
 		t.Fatalf("matching comment = %q", body)
 	}
 	run(11, true, "POST") // Same run already linked.
-	run(12, false, "POST,PATCH")
-	if !strings.Contains(body, "no matching upstream changes") || !strings.Contains(body, "[View the scan summary](https://github.com/fork/runtime/actions/runs/12)") {
+	live.Labels = []*github.Label{{Name: label}}
+	run(11, true, "POST,PATCH") // Look at the live PR, not the event's labels.
+	if !strings.Contains(body, "`"+label+"` label marks these changes as reviewed") || strings.Contains(body, "add the") {
+		t.Fatalf("acknowledged comment = %q", body)
+	}
+	run(12, false, "POST,PATCH,PATCH")
+	if !strings.Contains(body, "no matching upstream changes") || !strings.Contains(body, "[View the scan summary](https://github.com/fork/runtime/actions/runs/12)") || strings.Contains(body, label) {
 		t.Fatalf("updated comment = %q", body)
 	}
 	live.Head = &github.PullRequestBranch{SHA: new(strings.Repeat("c", 40))}
-	run(13, true, "POST,PATCH") // Older heads cannot overwrite the link.
+	run(13, true, "POST,PATCH,PATCH") // Older heads cannot overwrite the link.
 	live = pr
 	status = http.StatusForbidden
-	run(13, true, "POST,PATCH")
+	run(13, true, "POST,PATCH,PATCH")
 	status = http.StatusInternalServerError
-	if err := linkSummary(t.Context(), client, &event, 13, true); err == nil {
+	if err := linkSummary(t.Context(), client, &event, 13, true, label); err == nil {
 		t.Fatal("unexpected API error was ignored")
 	}
 }

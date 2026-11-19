@@ -26,6 +26,7 @@ const commentMarker = "<!-- upstreamreview:summary -->\n"
 func comment(args []string) error {
 	flags := flag.NewFlagSet("upstreamreview comment", flag.ContinueOnError)
 	matched := flags.Bool("matched", false, "create a comment for a match; otherwise only update an existing comment")
+	label := flags.String("label", "", "PR label that acknowledges matching changes")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -50,10 +51,10 @@ func comment(args []string) error {
 	if err != nil {
 		return err
 	}
-	return linkSummary(ctx, client, &event, runID, *matched)
+	return linkSummary(ctx, client, &event, runID, *matched, *label)
 }
 
-func linkSummary(ctx context.Context, client *github.Client, event *github.PullRequestEvent, runID int64, matched bool) error {
+func linkSummary(ctx context.Context, client *github.Client, event *github.PullRequestEvent, runID int64, matched bool, label string) error {
 	repository := event.GetRepo().GetFullName()
 	number := event.GetNumber()
 	base, head := event.GetPullRequest().GetBase().GetSHA(), event.GetPullRequest().GetHead().GetSHA()
@@ -61,12 +62,6 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 		return errors.New("expected a pull request event with repository, number, base and head")
 	}
 	owner, repo, _ := strings.Cut(repository, "/")
-	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d", repository, runID)
-	message := "The latest scan found no matching upstream changes. [View the scan summary](" + runURL + ")."
-	if matched {
-		message = "This update changes Go files that import a package under review. [See the affected files and how to check them locally](" + runURL + ")."
-	}
-	body := commentMarker + "### Upstream Go review\n\n" + message
 	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
 	var existing *github.IssueComment
 	for {
@@ -85,7 +80,7 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 		}
 		opts.Page = resp.NextPage
 	}
-	if existing.GetBody() == body || (existing == nil && !matched) {
+	if existing == nil && !matched {
 		return nil
 	}
 	pr, _, err := client.PullRequests.Get(ctx, owner, repo, number)
@@ -94,6 +89,11 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 	}
 	if pr.GetState() != "open" || pr.GetHead().GetSHA() != head || pr.GetBase().GetSHA() != base {
 		log.Print("Skipping the summary link: the PR changed since this scan.")
+		return nil
+	}
+	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d", repository, runID)
+	body := summaryComment(pr, runURL, matched, label)
+	if existing.GetBody() == body {
 		return nil
 	}
 	request := github.IssueCommentRequest{Body: body}
@@ -107,4 +107,19 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 		return nil
 	}
 	return err
+}
+
+func summaryComment(pr *github.PullRequest, runURL string, matched bool, label string) string {
+	const heading = commentMarker + "### Upstream Go review\n\n"
+	if !matched {
+		return heading + "The latest scan found no matching upstream changes. [View the scan summary](" + runURL + ")."
+	}
+	body := heading + "This update changes Go files that import a package under review. [See the affected files](" + runURL + ")."
+	if label == "" {
+		return body
+	}
+	if hasLabel(pr, label) {
+		return body + "\n\nThe `" + label + "` label marks these changes as reviewed."
+	}
+	return body + "\n\nAfter reviewing the diffs, add the `" + label + "` label to this PR to acknowledge the changes."
 }
