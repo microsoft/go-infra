@@ -23,9 +23,9 @@ import (
 
 const commentMarker = "<!-- upstreamreview:summary -->\n"
 
-func comment(args []string) error {
-	flags := flag.NewFlagSet("upstreamreview comment", flag.ContinueOnError)
-	review := flags.String("review", "", "verified JSON review output from ghreview")
+func updatePRComment(args []string) error {
+	flags := flag.NewFlagSet("upstreamreview update-pr-comment", flag.ContinueOnError)
+	review := flags.String("review", "", "verified JSON review output from check-pr-imports")
 	label := flags.String("label", "", "PR label that acknowledges matching changes")
 	if err := flags.Parse(args); err != nil {
 		return err

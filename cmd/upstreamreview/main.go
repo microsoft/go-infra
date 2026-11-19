@@ -14,9 +14,9 @@ import (
 
 const usage = `usage: upstreamreview <command> [arguments]
 
-  importdiff  List changed Go importers between two local Git revisions as JSON
-  ghreview    Check a GitHub PR's submodule update and print a Markdown summary
-  comment     Link to the workflow run summary in a single PR comment`
+  importdiff         List changed Go importers between two local Git revisions as JSON
+  check-pr-imports   Check a PR's upstream importer changes and acknowledgment label
+  update-pr-comment  Update the PR comment with the verdict and a link to the scan summary`
 
 func main() {
 	if err := run(os.Args[1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
@@ -31,10 +31,10 @@ func run(args []string) error {
 	switch args[0] {
 	case "importdiff":
 		return importDiff(args[1:])
-	case "ghreview":
-		return ghReview(args[1:])
-	case "comment":
-		return comment(args[1:])
+	case "check-pr-imports":
+		return checkPRImports(args[1:])
+	case "update-pr-comment":
+		return updatePRComment(args[1:])
 	case "-h", "-help", "--help", "help":
 		fmt.Fprintln(os.Stderr, usage)
 		return nil

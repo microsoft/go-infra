@@ -17,8 +17,8 @@ import (
 	"github.com/microsoft/go-infra/githubutil"
 )
 
-func ghReview(args []string) error {
-	flags := flag.NewFlagSet("upstreamreview ghreview", flag.ContinueOnError)
+func checkPRImports(args []string) error {
+	flags := flag.NewFlagSet("upstreamreview check-pr-imports", flag.ContinueOnError)
 	repo := flags.String("repo", "", "target GitHub repository (owner/name)")
 	n := flags.Int("pr", 0, "open pull request number")
 	merge := flags.String("merge", "", "test merge commit for this workflow run")
