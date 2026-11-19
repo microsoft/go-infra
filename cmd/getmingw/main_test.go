@@ -133,6 +133,65 @@ func TestCreateFreshChecksumRejectsNonOKResponse(t *testing.T) {
 	}
 }
 
+func TestLatestBuilds(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		versions []string
+		source   string
+		want     string
+		count    int
+	}{
+		{name: "GCC version", source: Nixman, versions: []string{"9.5.0-rt_v12-rev2", "15.1.0-rt_v11-rev0", "14.2.0-rt_v13-rev10"}, want: "15.1.0-rt_v11-rev0", count: 1},
+		{name: "runtime version", source: Nixman, versions: []string{"14.2.0-rt_v9-rev99", "14.2.0-rt_v12-rev2"}, want: "14.2.0-rt_v12-rev2", count: 1},
+		{name: "revision", source: Nixman, versions: []string{"14.2.0-rt_v12-rev2", "14.2.0-rt_v12-rev10"}, want: "14.2.0-rt_v12-rev10", count: 1},
+		{name: "Winlibs version", source: Winlibs, versions: []string{"13.2.0-17.0.6-11.0.1r3", "13.2.0-17.0.10-11.0.1r3"}, want: "13.2.0-17.0.10-11.0.1r3", count: 1},
+		{name: "Sourceforge version", source: Sourceforge, versions: []string{"8.1.0", "10.1.0", "9.5.0"}, want: "10.1.0", count: 1},
+		{name: "retain equal latest versions", source: Nixman, versions: []string{"14.2.0-rt_v12-rev2", "13.2.0-rt_v11-rev0", "14.2.0-rt_v12-rev2"}, want: "14.2.0-rt_v12-rev2", count: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var builds []*build
+			for _, version := range tt.versions {
+				builds = append(builds, &build{
+					Source: tt.source, Version: version,
+					URL: "https://example.invalid/" + version, SHA512: version,
+				})
+			}
+			got := latestBuilds(builds)
+			if len(got) != tt.count {
+				t.Fatalf("got %d builds, want %d", len(got), tt.count)
+			}
+			for _, b := range got {
+				if b.Version != tt.want {
+					t.Errorf("selected version %q, want %q", b.Version, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestLatestBuildsPreservesConfigurations(t *testing.T) {
+	configurations := []build{
+		{Source: Nixman, Arch: "x86_64", Threading: "posix", Exception: "seh", Runtime: "msvcrt"},
+		{Source: Winlibs, Arch: "x86_64", Threading: "posix", Exception: "seh", Runtime: "msvcrt"},
+		{Source: Nixman, Arch: "i686", Threading: "posix", Exception: "seh", Runtime: "msvcrt"},
+		{Source: Nixman, Arch: "x86_64", Threading: "win32", Exception: "seh", Runtime: "msvcrt"},
+		{Source: Nixman, Arch: "x86_64", Threading: "posix", Exception: "dwarf", Runtime: "msvcrt"},
+		{Source: Nixman, Arch: "x86_64", Threading: "posix", Exception: "seh", Runtime: "ucrt"},
+		{Source: Nixman, Arch: "x86_64", Threading: "posix", Exception: "seh", Runtime: "msvcrt", LLVM: "llvm"},
+	}
+	var builds, want []*build
+	for _, configuration := range configurations {
+		old, current := configuration, configuration
+		old.Version, old.URL, old.SHA512 = "1.0.0", "old-download", "old-checksum"
+		current.Version, current.URL, current.SHA512 = "2.0.0", "new-download", "new-checksum"
+		builds = append(builds, &old, &current)
+		want = append(want, &current)
+	}
+	if got := latestBuilds(builds); !reflect.DeepEqual(got, want) {
+		t.Errorf("latestBuilds() = %v, want %v", got, want)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

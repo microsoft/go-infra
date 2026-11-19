@@ -15,6 +15,8 @@ import (
 
 	"github.com/microsoft/go-infra/azdo"
 	"github.com/microsoft/go-infra/subcmd"
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
 )
 
 func init() {
@@ -29,6 +31,7 @@ func init() {
 func run(p subcmd.ParseFunc) error {
 	initFilterFlags()
 	multi := flag.Bool("multi", false, "Run the command once per matching MinGW version rather than only match one version.")
+	latest := flag.Bool("latest", false, "Keep only the latest version of each matching build configuration. Numbers within versions are compared numerically.")
 	ciType := flag.String("ci", "", "In addition to the command, prepend to PATH in a CI-specific way. 'github-actions-env', 'azdo', or none.")
 	if err := p(); err != nil {
 		return err
@@ -61,6 +64,9 @@ func run(p subcmd.ParseFunc) error {
 	matches := filter(builds)
 	if len(matches) == 0 {
 		return fmt.Errorf("no matching MinGW found")
+	}
+	if *latest {
+		matches = latestBuilds(matches)
 	}
 	if *multi {
 		log.Printf("Running comamnd with each of %v matches.\n", len(matches))
@@ -159,4 +165,29 @@ func run(p subcmd.ParseFunc) error {
 		}
 	}
 	return nil
+}
+
+func latestBuilds(builds []*build) []*build {
+	// configuration makes a copy of b that only contains build config information.
+	// The copy is used as a map key to find multiple versions of the same config.
+	configuration := func(b *build) build {
+		key := *b
+		key.Version, key.URL, key.SHA512 = "", "", ""
+		return key
+	}
+	order := collate.New(language.Und, collate.Numeric)
+	latest := make(map[build]string)
+	for _, b := range builds {
+		key := configuration(b)
+		if version, ok := latest[key]; !ok || order.CompareString(b.Version, version) > 0 {
+			latest[key] = b.Version
+		}
+	}
+	var matches []*build
+	for _, b := range builds {
+		if b.Version == latest[configuration(b)] {
+			matches = append(matches, b)
+		}
+	}
+	return matches
 }
