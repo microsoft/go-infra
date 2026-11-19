@@ -1,0 +1,67 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/microsoft/go-infra/githubutil"
+)
+
+func ghReview(args []string) error {
+	flags := flag.NewFlagSet("upstreamreview ghreview", flag.ContinueOnError)
+	repo := flags.String("repo", "", "target GitHub repository (owner/name)")
+	n := flags.Int("pr", 0, "open pull request number")
+	merge := flags.String("merge", "", "test merge commit for this workflow run")
+	var p policy
+	flags.StringVar(&p.upstream, "upstream", "", "upstream GitHub repository (owner/name)")
+	flags.StringVar(&p.submodule, "submodule", "", "submodule path in the target repository")
+	flags.StringVar(&p.label, "label", "", "PR label that acknowledges matching changes")
+	p.rule.BindFlags(flags)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %q", flags.Args())
+	}
+	if *n <= 0 || !objectID.MatchString(*merge) {
+		return errors.New("a positive PR number and a full test merge SHA are required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	client, err := githubutil.NewClient(ctx, os.Getenv("GH_TOKEN"))
+	if err != nil {
+		return err
+	}
+	g, err := newGate(client, *repo, p)
+	if err != nil {
+		return err
+	}
+	r, err := g.check(ctx, *n, *merge)
+	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
+		return writeErr
+	}
+	if outputErr := r.writeMatchOutput(os.Getenv("GITHUB_OUTPUT")); outputErr != nil {
+		log.Printf("could not write optional matched output: %v", outputErr)
+	}
+	return err
+}
+
+func (r report) writeMatchOutput(path string) error {
+	if path == "" || r.summary == "" { // Outside Actions, or no verified result.
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "matched=%t\n", r.matched)
+	return errors.Join(err, f.Close())
+}

@@ -50,7 +50,7 @@ func (r result) summary(head string, p policy) string {
 		}
 		fmt.Fprintf(&b, "- [`%s`](%s#diff-%x)\n", strings.ReplaceAll(file.Path, "`", "'"), link, sha256.Sum256([]byte(file.Path)))
 	}
-	b.WriteString("\nReproduce in an upstream clone:\n\n```sh\nimportdiff -repo PATH_TO_UPSTREAM")
+	b.WriteString("\nReproduce in an upstream clone:\n\n```sh\nupstreamreview importdiff -repo PATH_TO_UPSTREAM")
 	writeFlags := func(name string, values []string) {
 		for _, v := range values {
 			fmt.Fprintf(&b, " -%s '%s'", name, strings.ReplaceAll(v, "'", `'\''`))

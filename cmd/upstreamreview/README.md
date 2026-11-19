@@ -1,11 +1,23 @@
 # upstreamreview
 
-`upstreamreview` checks a GitHub.com pull request for changes to Go importers in an upstream submodule. It compares the revisions pinned in the PR base and proposed merge using the same rules as [`importdiff`](../importdiff/). The Markdown summary links to each match and gives the equivalent `importdiff` command.
+`upstreamreview` finds changes to upstream Go importers. Install the binary with `go install github.com/microsoft/go-infra/cmd/upstreamreview@VERSION`, or pin it in a consuming module with `go get -tool github.com/microsoft/go-infra/cmd/upstreamreview@VERSION`.
 
-Run it from a checkout of the PR test merge with `fetch-depth: 2` and a `GH_TOKEN` with read access to pull requests in the target repository. To use it as a Go tool, add `github.com/microsoft/go-infra/cmd/upstreamreview` to the consuming module's `tool` directives and pin the module version. For example, in a `pull_request` workflow with `PR` set to the event's PR number:
+## importdiff
+
+Compare two local Git revisions and list changed Go files that directly import a selected package or subpackage on either side of the change, including tests and build-tagged files. No GitHub token is needed.
 
 ```sh
-go tool upstreamreview -repo "$GITHUB_REPOSITORY" -pr "$PR" -merge "$GITHUB_SHA" \
+upstreamreview importdiff -repo /path/to/golang/go -exclude src/crypto/internal/fips140 OLD_SHA NEW_SHA
+```
+
+By default, this subcommand searches `src` for `crypto/internal/fips140` importers and excludes nothing. Repeat `-src`, `-import`, or `-exclude` to select multiple trees. Each flag replaces its own default on first use. The JSON array contains paths, old/new Git blob IDs, and matched imports on both sides; `[]` means no matches.
+
+## ghreview
+
+Check a GitHub.com pull request from a checkout of its test merge with `fetch-depth: 2` and a `GH_TOKEN` with read access to pull requests. The Markdown summary links to each matching file and gives the equivalent `upstreamreview importdiff` command. For example:
+
+```sh
+go tool upstreamreview ghreview -repo "$GITHUB_REPOSITORY" -pr "$PR" -merge "$GITHUB_SHA" \
   -upstream golang/go -submodule go -label upstream-crypto-reviewed \
   -src src -import crypto/internal/fips140 -exclude src/crypto/internal/fips140 \
   >> "$GITHUB_STEP_SUMMARY"
@@ -15,4 +27,10 @@ go tool upstreamreview -repo "$GITHUB_REPOSITORY" -pr "$PR" -merge "$GITHUB_SHA"
 
 The check passes if the scan is clean or the live PR has the configured label. The label applies to the whole PR, including later commits. Enable the `labeled` and `unlabeled` PR activities so adding or removing it reruns the check. A failed scan or a checkout that no longer matches the live PR fails even if the label is present.
 
-In Actions, a verified scan sets the `matched` step output to `true` or `false`, even when a missing acknowledgment makes the step fail. A failed or stale scan sets no output. To link to the run summary from a PR, pass `matched` to the [comment action](../../actions/upstreamreview-comment/) in a separate `pull-requests: write` job. The action creates a comment only for a match, updates its own comment on later scans, and skips commenting if the token is read-only.
+In Actions, a verified scan sets the `matched` step output to `true` or `false`, even when a missing acknowledgment makes the step fail. A failed or stale scan sets no output.
+
+## comment
+
+`upstreamreview comment -matched=true` posts a link to the workflow run summary, or updates its own existing PR comment. With `-matched=false` it only updates an existing comment. It reads the PR from `GITHUB_EVENT_PATH` and the run ID from `GITHUB_RUN_ID`, and skips the write when `GH_TOKEN` is read-only.
+
+Run this in a separate `pull-requests: write` job without checking out PR code. Invoke `go run github.com/microsoft/go-infra/cmd/upstreamreview@VERSION comment -matched="$MATCHED"` using a trusted, pinned version. Schedule it whenever `ghreview` sets `matched`, even if the review job fails for lack of acknowledgment.

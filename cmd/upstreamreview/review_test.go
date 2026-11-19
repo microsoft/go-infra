@@ -239,7 +239,7 @@ func TestPRCheck(t *testing.T) {
 	}
 	link := fmt.Sprintf("[`lib/example.go`](https://github.com/upstream/runtime/compare/%s..%s#diff-%x)", old, updated, sha256.Sum256([]byte("lib/example.go")))
 	run(errAckRequired, "Acknowledgment required", p.label, link, head,
-		`importdiff -repo PATH_TO_UPSTREAM -src 'lib' -src 'tools' -import 'example.org/a' -import 'example.org/b' -exclude 'lib/private' -exclude 'tools/dev'\''s files' `+old+" "+updated)
+		`upstreamreview importdiff -repo PATH_TO_UPSTREAM -src 'lib' -src 'tools' -import 'example.org/a' -import 'example.org/b' -exclude 'lib/private' -exclude 'tools/dev'\''s files' `+old+" "+updated)
 	labels = []*github.Label{{Name: "unrelated"}}
 	run(errAckRequired)
 	labels = append(labels, &github.Label{Name: p.label})
