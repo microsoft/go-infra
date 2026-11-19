@@ -31,6 +31,6 @@ In Actions, a verified scan sets the `matched` step output to `true` or `false`,
 
 ## comment
 
-`upstreamreview comment -matched=true` posts a link to the workflow run summary, or updates its own existing PR comment. With `-matched=false` it only updates an existing comment. It reads the PR from `GITHUB_EVENT_PATH` and the run ID from `GITHUB_RUN_ID`, and skips the write when `GH_TOKEN` is read-only.
+`upstreamreview comment -matched=true` explains why the change was flagged and links to the affected files and reproduction steps in the workflow summary. With `-matched=false` it updates an existing comment to say the scan is clean; it does not create one. It reads the PR from `GITHUB_EVENT_PATH` and the run ID from `GITHUB_RUN_ID`, and skips the write when `GH_TOKEN` is read-only.
 
-Run this in a separate `pull-requests: write` job without checking out PR code. Invoke `go run github.com/microsoft/go-infra/cmd/upstreamreview@VERSION comment -matched="$MATCHED"` using a trusted, pinned version. Schedule it whenever `ghreview` sets `matched`, even if the review job fails for lack of acknowledgment.
+Run this in a separate `pull-requests: write` job whenever `ghreview` sets `matched`, even if the review job fails for lack of acknowledgment. To use the tool pin from the PR checkout, restrict that job to branches in the target repository and run `go tool upstreamreview comment -matched="$MATCHED"` from the declaring module. To handle fork PRs, run a trusted, independently pinned copy without checking out PR code instead.

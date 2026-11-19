@@ -66,9 +66,12 @@ func TestLinkSummary(t *testing.T) {
 	}
 	run(10, false, "") // Clean PRs get no new comment.
 	run(11, true, "POST")
+	if !strings.HasPrefix(body, commentMarker) || !strings.Contains(body, "[See the affected files and how to check them locally](https://github.com/fork/runtime/actions/runs/11)") {
+		t.Fatalf("matching comment = %q", body)
+	}
 	run(11, true, "POST") // Same run already linked.
 	run(12, false, "POST,PATCH")
-	if !strings.HasPrefix(body, commentMarker) || !strings.Contains(body, "https://github.com/fork/runtime/actions/runs/12") {
+	if !strings.Contains(body, "no matching upstream changes") || !strings.Contains(body, "[View the scan summary](https://github.com/fork/runtime/actions/runs/12)") {
 		t.Fatalf("updated comment = %q", body)
 	}
 	live.Head = &github.PullRequestBranch{SHA: new(strings.Repeat("c", 40))}

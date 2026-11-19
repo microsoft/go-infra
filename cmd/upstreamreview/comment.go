@@ -61,7 +61,12 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 		return errors.New("expected a pull request event with repository, number, base and head")
 	}
 	owner, repo, _ := strings.Cut(repository, "/")
-	body := fmt.Sprintf("%s[View the upstream review summary](https://github.com/%s/actions/runs/%d).", commentMarker, repository, runID)
+	runURL := fmt.Sprintf("https://github.com/%s/actions/runs/%d", repository, runID)
+	message := "The latest scan found no matching upstream changes. [View the scan summary](" + runURL + ")."
+	if matched {
+		message = "This update changes Go files that import a package under review. [See the affected files and how to check them locally](" + runURL + ")."
+	}
+	body := commentMarker + "### Upstream Go review\n\n" + message
 	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
 	var existing *github.IssueComment
 	for {
