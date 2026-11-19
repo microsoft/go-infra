@@ -34,6 +34,11 @@ type result struct {
 	files    []importdiff.Change
 }
 
+type report struct {
+	summary string
+	matched bool
+}
+
 func (r result) summary(head string, p policy) string {
 	link := fmt.Sprintf("https://github.com/%s/compare/%s..%s", p.upstream, r.old, r.new)
 	var b strings.Builder
@@ -145,40 +150,40 @@ func (g *gate) scan(ctx context.Context, baseSHA, mergeSHA string) (result, erro
 	return r, nil
 }
 
-func (g *gate) check(ctx context.Context, n int, mergeSHA string) (string, error) {
+func (g *gate) check(ctx context.Context, n int, mergeSHA string) (report, error) {
 	out, err := gitOutput(ctx, "rev-list", "-1", "--parents", "HEAD", "--")
 	if err != nil {
-		return "", fmt.Errorf("read test merge parents: %w", err)
+		return report{}, fmt.Errorf("read test merge parents: %w", err)
 	}
 	revs := strings.Fields(out)
 	if len(revs) != 3 || revs[0] != mergeSHA {
-		return "", fmt.Errorf("expected a checkout of test merge %s with both parents", mergeSHA)
+		return report{}, fmt.Errorf("expected a checkout of test merge %s with both parents", mergeSHA)
 	}
 	base, head := revs[1], revs[2]
 	r, err := g.scan(ctx, base, mergeSHA)
 	if err != nil {
-		return "", err
+		return report{}, err
 	}
 
 	// The PR head, base, or labels may have changed during the upstream scan.
 	pr, _, err := g.client.PullRequests.Get(ctx, g.owner, g.repo, n)
 	if err != nil {
-		return "", err
+		return report{}, err
 	}
 	if pr.GetState() != "open" {
-		return "", fmt.Errorf("PR #%d is not open", n)
+		return report{}, fmt.Errorf("PR #%d is not open", n)
 	}
 	if base != pr.GetBase().GetSHA() || head != pr.GetHead().GetSHA() {
-		return "", fmt.Errorf("test merge %s does not match the current PR base %s and head %s", mergeSHA, pr.GetBase().GetSHA(), pr.GetHead().GetSHA())
+		return report{}, fmt.Errorf("test merge %s does not match the current PR base %s and head %s", mergeSHA, pr.GetBase().GetSHA(), pr.GetHead().GetSHA())
 	}
 	if len(r.files) == 0 {
-		return "No upstream importer changes.\n", nil
+		return report{summary: "No upstream importer changes.\n"}, nil
 	}
 	summary := r.summary(head, g.policy)
 	for _, label := range pr.Labels {
 		if label.GetName() == g.policy.label {
-			return "**Acknowledged** by the `" + g.policy.label + "` PR label.\n\n" + summary, nil
+			return report{summary: "**Acknowledged** by the `" + g.policy.label + "` PR label.\n\n" + summary, matched: true}, nil
 		}
 	}
-	return "**Acknowledgment required.** Review the affected files and add the `" + g.policy.label + "` label to this PR.\n\n" + summary, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+	return report{summary: "**Acknowledgment required.** Review the affected files and add the `" + g.policy.label + "` label to this PR.\n\n" + summary, matched: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
 }

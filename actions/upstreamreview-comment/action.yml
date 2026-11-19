@@ -1,0 +1,42 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Link to the upstream review summary
+description: Maintain one link to the latest reviewed run on a pull request.
+inputs:
+  matched:
+    description: The upstreamreview step's matched output.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        MATCHED: ${{ inputs.matched }}
+      with:
+        script: |
+          const issue = { ...context.repo, issue_number: context.issue.number };
+          const marker = '<!-- upstreamreview:summary -->';
+          const url = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const body = `${marker}\n[View the upstream review summary](${url}).`;
+          const api = github.rest.issues;
+          try {
+            const comments = await github.paginate(api.listComments, { ...issue, per_page: 100 });
+            const existing = comments.find(c => c.user?.login === 'github-actions[bot]' && c.body?.startsWith(marker + '\n'));
+            if (existing?.body === body || (!existing && process.env.MATCHED !== 'true')) return;
+
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: issue.issue_number });
+            const event = context.payload.pull_request;
+            if (pr.state !== 'open' || pr.head.sha !== event.head.sha || pr.base.sha !== event.base.sha) {
+              core.notice('Skipping the link: the PR changed since this scan.');
+              return;
+            }
+            if (existing) {
+              await api.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await api.createComment({ ...issue, body });
+            }
+          } catch (error) {
+            if (error.status !== 403) throw error;
+            core.notice(`Skipping the PR comment: ${error.message}`);
+          }

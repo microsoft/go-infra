@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -43,11 +44,26 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	summary, err := g.check(ctx, *n, *merge)
-	if _, writeErr := fmt.Print(summary); writeErr != nil {
+	r, err := g.check(ctx, *n, *merge)
+	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
 		log.Fatal(writeErr)
+	}
+	if outputErr := r.writeMatchOutput(os.Getenv("GITHUB_OUTPUT")); outputErr != nil {
+		log.Printf("could not write optional matched output: %v", outputErr)
 	}
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func (r report) writeMatchOutput(path string) error {
+	if path == "" || r.summary == "" { // Outside Actions, or no verified result.
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(f, "matched=%t\n", r.matched)
+	return errors.Join(err, f.Close())
 }

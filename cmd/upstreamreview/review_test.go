@@ -134,6 +134,21 @@ func TestInvalidPolicy(t *testing.T) {
 	}
 }
 
+func TestMatchOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "output")
+	if err := os.WriteFile(path, []byte("other=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []report{{}, {summary: "clean"}, {summary: "findings", matched: true}} {
+		if err := r.writeMatchOutput(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "other=value\nmatched=false\nmatched=true\n" {
+		t.Fatalf("step outputs = %q, %v", got, err)
+	}
+}
+
 func TestPRCheck(t *testing.T) {
 	t.Setenv("GIT_TRACE", "1")
 	p := testPolicy()
@@ -199,9 +214,15 @@ func TestPRCheck(t *testing.T) {
 	run := func(wantErr error, wantSummary ...string) {
 		t.Helper()
 		before := prReads.Load()
-		summary, err := g.check(t.Context(), 7, merge)
+		report, err := g.check(t.Context(), 7, merge)
 		if !errors.Is(err, wantErr) {
 			t.Fatalf("check = %v; want %v", err, wantErr)
+		}
+		if scanErr != nil && report.summary != "" {
+			t.Fatal("reported a scan error as a valid result")
+		}
+		if scanErr == nil && report.matched != (len(files) > 0) {
+			t.Errorf("matched = %t with %d files", report.matched, len(files))
 		}
 		wantReads := int32(1)
 		if scanErr != nil {
@@ -211,8 +232,8 @@ func TestPRCheck(t *testing.T) {
 			t.Errorf("check made %d PR requests; want %d", got, wantReads)
 		}
 		for _, want := range wantSummary {
-			if !strings.Contains(summary, want) {
-				t.Errorf("job summary %q does not contain %q", summary, want)
+			if !strings.Contains(report.summary, want) {
+				t.Errorf("job summary %q does not contain %q", report.summary, want)
 			}
 		}
 	}
