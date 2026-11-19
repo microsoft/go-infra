@@ -520,7 +520,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		if err := cut.selectGoCommit(dir, upstreamRemote, b, entry.UpstreamMirror != ""); err != nil {
 			return nil, err
 		}
-		if err := cut.preparePRBranches(dir, urlAuther.InsertAuth(entry.Target), urlAuther.InsertAuth(entry.PRBranchStorageRepo()), b); err != nil {
+		if err := cut.preparePRBranches(dir, entry, urlAuther, b); err != nil {
 			return nil, err
 		}
 		branches = append(branches, &cut.notes)
@@ -578,10 +578,6 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 			}
 			prTitle = "Prepare " + cut.notesVersion + " release notes doc"
 			commitMessage = prTitle
-			if cut.newBranch && entry.PRBranchStorageRepo() != entry.Target {
-				// The notes head can be the only durable record if the separate target push fails.
-				commitMessage += fmt.Sprintf("\n\n%s: %s %s", cutSelectionTrailer, cut.releaseBase, branches[0].Commit)
-			}
 		} else if entry.SyncDocs {
 			if err := syncDocs(dir, entry.Upstream, b); err != nil {
 				return nil, err
@@ -953,25 +949,14 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
 		mergePushLeases = append(mergePushLeases, b.pushLease())
 	}
-	// Publish a new target branch together with the heads that record the selection. If the
-	// heads live in a fork, publish them first so a retry can recover the original selection.
-	createTarget := cut != nil && cut.newBranch && !*f.DryRun
-	var targetLease, targetRefspec string
-	if createTarget {
+	// Create the release branch in the same atomic push as the PR branches.
+	if cut != nil && cut.newBranch && !*f.DryRun {
 		ref := "refs/heads/" + branches[0].Name
-		targetLease, targetRefspec = "--force-with-lease="+ref+":", cut.releaseBase+":"+ref
-		if entry.PRBranchStorageRepo() == entry.Target {
-			mergePushLeases = append(mergePushLeases, targetLease)
-			mergePushRefspecs = append(mergePushRefspecs, targetRefspec)
-		}
+		mergePushLeases = append(mergePushLeases, "--force-with-lease="+ref+":")
+		mergePushRefspecs = append(mergePushRefspecs, cut.releaseBase+":"+ref)
 	}
 	if len(mergePushRefspecs) > 0 {
 		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), mergePushLeases, mergePushRefspecs)); err != nil {
-			return nil, err
-		}
-	}
-	if createTarget && entry.PRBranchStorageRepo() != entry.Target {
-		if err := run(newGitPushCommand(entry.Target, []string{targetLease}, []string{targetRefspec})); err != nil {
 			return nil, err
 		}
 	}

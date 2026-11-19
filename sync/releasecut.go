@@ -4,7 +4,6 @@
 package sync
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -87,42 +86,6 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 	return err
 }
 
-func fullCommitSHA(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	_, err := hex.DecodeString(s)
-	return err == nil
-}
-
-// If only the notes branch made it to the fork before the target push failed,
-// the next run recovers the original selection from that commit:
-//
-//	Release-Cut: <Microsoft branch base> <Go submodule commit>
-const cutSelectionTrailer = "Release-Cut"
-
-func retainedNotesSelection(dir, notesHead, shared string) (string, string, error) {
-	trailer, err := gitcmd.ShowQuietPretty(dir, "%(trailers:key="+cutSelectionTrailer+",valueonly)", notesHead)
-	if err != nil {
-		return "", "", err
-	}
-	base, pin, _ := strings.Cut(strings.TrimSpace(trailer), " ")
-	if !fullCommitSHA(base) || !fullCommitSHA(pin) {
-		return "", "", fmt.Errorf("retained notes head %s has no valid %s trailer; review before retrying", notesHead, cutSelectionTrailer)
-	}
-	parent, err := preparationParent(dir, notesHead)
-	if err != nil {
-		return "", "", err
-	}
-	if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", base, parent); err != nil {
-		return "", "", fmt.Errorf("retained release base %s is not on the original main history: %w", base, err)
-	}
-	if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", pin, shared); err != nil {
-		return "", "", fmt.Errorf("cannot verify retained gitlink %s in the shared release history; review before retrying: %w", pin, err)
-	}
-	return base, pin, nil
-}
-
 func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet, hasMirror bool) error {
 	var err error
 	if hasMirror {
@@ -146,11 +109,23 @@ func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet,
 	return nil
 }
 
-func (c *releaseCut) preparePRBranches(dir, remote, headRemote string, b *gitpr.SyncPRRefSet) error {
-	if err := gitcmd.Run(dir, "fetch", "--no-tags", remote, c.notes.BaseBranchFetchRefspec()); err != nil {
+func (c *releaseCut) preparePRBranches(dir string, entry *ConfigEntry, auth gitcmd.URLAuther, b *gitpr.SyncPRRefSet) error {
+	remote := auth.InsertAuth(entry.Target)
+	var err error
+	c.releaseBase, err = fetchRemoteBranch(dir, remote, b.Name)
+	if err != nil {
 		return err
 	}
-	var err error
+	c.newBranch = c.releaseBase == ""
+	headRepo := entry.PRBranchStorageRepo()
+	if c.newBranch && headRepo != entry.Target {
+		return fmt.Errorf("create %s in the target repository before preparing release PRs from a fork", b.Name)
+	}
+	mainTip, err := gitcmd.FetchRefCommit(dir, remote, "refs/heads/"+entry.MainBranch)
+	if err != nil {
+		return err
+	}
+	headRemote := auth.InsertAuth(headRepo)
 	c.submoduleHead, err = fetchRemoteBranch(dir, headRemote, b.PRBranch())
 	if err != nil {
 		return err
@@ -159,32 +134,15 @@ func (c *releaseCut) preparePRBranches(dir, remote, headRemote string, b *gitpr.
 	if err != nil {
 		return err
 	}
-	c.releaseBase, err = fetchRemoteBranch(dir, remote, b.Name)
-	if err != nil {
-		return err
-	}
-	c.newBranch = c.releaseBase == ""
 	if c.newBranch {
-		// When Head is a fork, publishing the PR head and creating the target branch are
-		// separate pushes. Recover the original fork point if only the first one succeeded.
-		switch {
-		case c.submoduleHead != "":
-			c.releaseBase, err = preparationParent(dir, c.submoduleHead)
-		case headRemote != remote && c.notesHead != "":
-			c.releaseBase, b.Commit, err = retainedNotesSelection(dir, c.notesHead, b.Commit)
+		if c.submoduleHead != "" || c.notesHead != "" {
+			return fmt.Errorf("%s is missing but a preparation PR branch already exists; check the branches before retrying", b.Name)
 		}
-		if err != nil {
-			return err
-		}
-		if c.releaseBase == "" {
-			c.releaseBase, err = gitcmd.RevParse(dir, c.notes.PRBranch())
-			if err != nil {
-				return err
-			}
-		} else if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", c.releaseBase, c.notes.PRBranch()); err != nil {
-			return fmt.Errorf("retained release base %s is not on %s: %w", c.releaseBase, c.notes.Name, err)
-		}
+		c.releaseBase = mainTip
 		fmt.Printf("Preparing to create %s at %s.\n", b.Name, c.releaseBase)
+	}
+	if err := gitcmd.Run(dir, "branch", c.notes.PRBranch(), mainTip); err != nil {
+		return err
 	}
 	return gitcmd.Run(dir, "branch", b.PRBranch(), c.releaseBase)
 }

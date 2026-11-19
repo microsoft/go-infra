@@ -32,6 +32,7 @@ Sync opens these PRs if needed and leaves them for manual approval:
   * To avoid deleting possibly intentional changes, if the 1.N notes file in `microsoft/main` differs from the file in `microsoft/release-branch.go1.N`, it is not removed.
 
 If you need an earlier base, create the release branch at that commit in `microsoft/go` before the next sync.
+If you use a fork for PRs (`Head` differs from `Target`), create the release branch in `Target` first. Sync then opens the PRs from the fork.
 Sync never resets an existing release branch.
 
 To preview the cut without pushing branches or opening PRs, run `go run ./cmd/sync -n`.

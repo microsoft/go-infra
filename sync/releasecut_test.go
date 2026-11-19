@@ -170,6 +170,14 @@ func TestPrepareNextRelease(t *testing.T) {
 		t.Fatal("sync prepared a release with PrepareNextRelease disabled")
 	}
 	writeConfig(true)
+	git(target, "branch", notesPR, base)
+	orphaned := heads()
+	if err := prepareNextRelease(flags, filepath.Join(dir, "orphaned-head"), config); err == nil ||
+		!strings.Contains(err.Error(), release+" is missing") || heads() != orphaned || len(prs) != 0 {
+
+		t.Fatalf("expected the leftover notes branch to be left for manual review, got %v", err)
+	}
+	git(target, "branch", "-D", notesPR)
 	failPost = true
 	if err := MakePRs(flags); err == nil || len(prs) != 0 {
 		t.Fatalf("expected interrupted PR posting, got %v, PRs %v", err, prs)
@@ -229,7 +237,7 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 }
 
-func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
+func TestPrepareNextReleaseFromFork(t *testing.T) {
 	dir := t.TempDir()
 	upstream := filepath.ToSlash(filepath.Join(dir, "golang", "go"))
 	target := filepath.ToSlash(filepath.Join(dir, "microsoft", "go"))
@@ -252,11 +260,12 @@ func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
 		return strings.TrimSpace(out)
 	}
 	must(setupMockRepo(upstream, "master"))
-	pin := git(upstream, "rev-parse", "HEAD")
-	git(upstream, "branch", source)
 	must(setupMockRepo(target, main))
 	must(addMockSubmodule(target, upstream))
 	base := git(target, "rev-parse", "HEAD")
+	must(addMockFile(upstream, "change.txt", "Go advances before the release branch is cut"))
+	git(upstream, "branch", source)
+	pin := git(upstream, "rev-parse", source)
 	git(dir, "clone", "--branch", main, target, fork)
 	config := ConfigEntry{
 		Upstream: upstream, Target: target, Head: fork, MainBranch: main, SubmoduleTarget: "go",
@@ -271,44 +280,29 @@ func TestPrepareNextReleaseNotesOnlyForkRetry(t *testing.T) {
 	failPost := false
 	prs := mockCutPRs(t, bot, bot, &failPost)
 
-	// Reject only the target push. The fork should already have the notes head, but no
-	// submodule head: the inherited gitlink was exactly the shared release tip.
-	git(target, "config", "receive.hideRefs", "refs/heads/"+release)
-	if err := prepareNextRelease(flags, filepath.Join(dir, "first"), config); err == nil {
-		t.Fatal("expected target to reject release branch creation")
+	heads := func(repo string) string {
+		return git(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
 	}
-	retained := git(fork, "rev-parse", notes)
-	subPR := "dev/prepare-release/" + release
-	if git(target, "branch", "--list", release) != "" || git(fork, "branch", "--list", subPR) != "" || len(prs) != 0 {
-		t.Fatal("expected only the notes head to have been published")
+	targetHeads, forkHeads := heads(target), heads(fork)
+	if err := prepareNextRelease(flags, filepath.Join(dir, "missing-branch"), config); err == nil || !strings.Contains(err.Error(), "create "+release+" in the target") {
+		t.Fatalf("expected instructions to create the missing target branch, got %v", err)
 	}
-	git(target, "config", "--unset", "receive.hideRefs")
-	must(addMockFile(target, "after.txt", "Main advances before retry"))
-	git(upstream, "checkout", source)
-	must(addMockFile(upstream, "later.txt", "Go advances before retry"))
-	git(upstream, "checkout", "master")
-	// A notes head without its selection is not enough to guess a new fork point.
-	git(fork, "update-ref", "refs/heads/"+notes, base, retained)
-	if err := prepareNextRelease(flags, filepath.Join(dir, "missing-selection"), config); err == nil || !strings.Contains(err.Error(), "review before retrying") {
-		t.Fatalf("expected a missing selection to require review, got %v", err)
+	if heads(target) != targetHeads || heads(fork) != forkHeads || len(prs) != 0 {
+		t.Fatal("sync published branches or PRs before the target release branch existed")
 	}
-	if git(target, "branch", "--list", release) != "" || len(prs) != 0 {
-		t.Fatal("published a release branch or PR without a retained selection")
-	}
-	git(fork, "update-ref", "refs/heads/"+notes, retained, base)
 
-	must(prepareNextRelease(flags, filepath.Join(dir, "retry"), config))
-	if got := git(target, "rev-parse", release); got != base {
-		t.Fatalf("release branch = %s, want original fork point %s", got, base)
+	git(target, "branch", release, base)
+	targetHeads = heads(target)
+	must(prepareNextRelease(flags, filepath.Join(dir, "existing-branch"), config))
+	subPR := "dev/prepare-release/" + release
+	if heads(target) != targetHeads || len(prs) != 2 || prs[subPR] != release || prs[notes] != main {
+		t.Fatalf("expected two PRs from the fork without changing target branches, got %v", prs)
 	}
-	if got := git(target, "rev-parse", release+":go"); got != pin {
-		t.Fatalf("gitlink = %s, want original Go commit %s", got, pin)
+	if got := git(fork, "rev-parse", subPR+":go"); got != pin {
+		t.Fatalf("fork's submodule PR pins %s, want %s", got, pin)
 	}
-	if got := git(fork, "rev-parse", notes); got != retained {
-		t.Fatalf("notes head = %s, want retained %s", got, retained)
-	}
-	if len(prs) != 1 || prs[notes] != main || git(fork, "branch", "--list", subPR) != "" {
-		t.Fatalf("retry should submit only the notes PR, got %v", prs)
+	if got := git(fork, "rev-parse", notes+"^"); got != base {
+		t.Fatalf("fork's notes PR is based on %s, want %s", got, base)
 	}
 }
 
