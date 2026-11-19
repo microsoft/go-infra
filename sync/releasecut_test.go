@@ -69,7 +69,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		Auth: githubutil.GitHubAuthFlags{GitHubPat: &pat}, GitHubUser: &bot, SyncConfig: &configPath, TempGitDir: &work,
 	}
 	failPost := false
-	prs := mockCutPRs(t, bot, "microsoft", &failPost)
+	prs := mockCutPRs(t, bot, &failPost)
 	heads := func() string { return git(target, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads") }
 	initialHeads := heads()
 
@@ -237,73 +237,55 @@ func TestPrepareNextRelease(t *testing.T) {
 	}
 }
 
-func TestPrepareNextReleaseFromFork(t *testing.T) {
+func TestPrepareNextReleasePRHead(t *testing.T) {
 	dir := t.TempDir()
 	upstream := filepath.ToSlash(filepath.Join(dir, "golang", "go"))
 	target := filepath.ToSlash(filepath.Join(dir, "microsoft", "go"))
 	fork := filepath.ToSlash(filepath.Join(dir, "test-bot", "go"))
 	const main = "microsoft/main"
-	version := msmajorversions.Next.Version
-	source := "release-branch.go" + version
+	source := "release-branch.go" + msmajorversions.Next.Version
 	release := "microsoft/" + source
-	notes := "dev/prepare-notes-go" + version + "/" + main
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	git := func(repo string, args ...string) string {
-		t.Helper()
-		out, err := gitcmd.CombinedOutput(repo, args...)
-		must(err)
-		return strings.TrimSpace(out)
-	}
 	must(setupMockRepo(upstream, "master"))
 	must(setupMockRepo(target, main))
 	must(addMockSubmodule(target, upstream))
-	base := git(target, "rev-parse", "HEAD")
-	must(addMockFile(upstream, "change.txt", "Go advances before the release branch is cut"))
-	git(upstream, "branch", source)
-	pin := git(upstream, "rev-parse", source)
-	git(dir, "clone", "--branch", main, target, fork)
-	config := ConfigEntry{
-		Upstream: upstream, Target: target, Head: fork, MainBranch: main, SubmoduleTarget: "go",
-		BranchMap: map[string]string{source: release}, PrepareNextRelease: true,
-	}
-	dry, create := false, false
-	empty, none, bot, pat := "", "none", "test-bot", "test-token"
+	must(addMockFile(upstream, "change.txt", "Go advances"))
+	must(runGit(upstream, "branch", source))
+	must(runGit(target, "branch", release))
+	must(runGit(dir, "clone", target, fork))
+
+	configPath, work := filepath.Join(dir, "sync.json"), filepath.Join(dir, "work")
+	dry, create := true, false
+	empty, none := "", "none"
 	flags := &Flags{
-		DryRun: &dry, CreateBranches: &create, GitAuthString: &none, InitialCloneDir: &empty,
-		Auth: githubutil.GitHubAuthFlags{GitHubPat: &pat}, GitHubUser: &bot,
+		SyncConfig: &configPath, TempGitDir: &work, DryRun: &dry, CreateBranches: &create,
+		GitAuthString: &none, InitialCloneDir: &empty,
 	}
-	failPost := false
-	prs := mockCutPRs(t, bot, bot, &failPost)
-
-	heads := func(repo string) string {
-		return git(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+	config := ConfigEntry{
+		Upstream: upstream, Target: target, MainBranch: main, SubmoduleTarget: "go",
+		AutoSyncBranches: []string{"master"}, BranchMap: map[string]string{"master": main, source: release},
 	}
-	targetHeads, forkHeads := heads(target), heads(fork)
-	if err := prepareNextRelease(flags, filepath.Join(dir, "missing-branch"), config); err == nil || !strings.Contains(err.Error(), "create "+release+" in the target") {
-		t.Fatalf("expected instructions to create the missing target branch, got %v", err)
+	runSync := func(head string, prepare bool) error {
+		t.Helper()
+		config.Head, config.PrepareNextRelease = head, prepare
+		data, err := json.Marshal([]ConfigEntry{config})
+		must(err)
+		must(os.WriteFile(configPath, data, 0o600))
+		return MakePRs(flags)
 	}
-	if heads(target) != targetHeads || heads(fork) != forkHeads || len(prs) != 0 {
-		t.Fatal("sync published branches or PRs before the target release branch existed")
+	if err := runSync(fork, true); err == nil || !strings.Contains(err.Error(), "PrepareNextRelease requires Head") {
+		t.Fatalf("expected a config error for release PRs from a fork, got %v", err)
 	}
-
-	git(target, "branch", release, base)
-	targetHeads = heads(target)
-	must(prepareNextRelease(flags, filepath.Join(dir, "existing-branch"), config))
-	subPR := "dev/prepare-release/" + release
-	if heads(target) != targetHeads || len(prs) != 2 || prs[subPR] != release || prs[notes] != main {
-		t.Fatalf("expected two PRs from the fork without changing target branches, got %v", prs)
+	if _, err := os.Stat(work); !os.IsNotExist(err) {
+		t.Fatalf("sync started before rejecting the config: stat %s: %v", work, err)
 	}
-	if got := git(fork, "rev-parse", subPR+":go"); got != pin {
-		t.Fatalf("fork's submodule PR pins %s, want %s", got, pin)
-	}
-	if got := git(fork, "rev-parse", notes+"^"); got != base {
-		t.Fatalf("fork's notes PR is based on %s, want %s", got, base)
-	}
+	must(runSync(fork, false)) // Ordinary sync still supports a fork.
+	must(runSync(target, true))
 }
 
 type cutTransport func(*http.Request) (*http.Response, error)
@@ -311,7 +293,7 @@ type cutTransport func(*http.Request) (*http.Response, error)
 func (f cutTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // Only finding and opening PRs are allowed; even a successful auto-approval would fail this test.
-func mockCutPRs(t *testing.T, bot, headOwner string, failPost *bool) map[string]string {
+func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 	t.Helper()
 	open := map[string]string{}
 	old := http.DefaultTransport
@@ -333,7 +315,7 @@ func mockCutPRs(t *testing.T, bot, headOwner string, failPost *bool) map[string]
 			}
 			nodes := ""
 			if base, ok := open[q.Variables["headRefName"]]; ok && base == q.Variables["baseRefName"] {
-				nodes = fmt.Sprintf(`{"number":1,"id":"test","author":{"login":%q},"headRepositoryOwner":{"login":%q},"baseRepository":{"owner":{"login":"microsoft"},"nameWithOwner":"microsoft/go"}}`, bot, headOwner)
+				nodes = fmt.Sprintf(`{"number":1,"id":"test","author":{"login":%q},"headRepositoryOwner":{"login":"microsoft"},"baseRepository":{"owner":{"login":"microsoft"},"nameWithOwner":"microsoft/go"}}`, bot)
 			}
 			body = `{"data":{"repository":{"pullRequests":{"nodes":[` + nodes + `]}}}}`
 		case "/repos/microsoft/go/pulls":
@@ -345,7 +327,7 @@ func mockCutPRs(t *testing.T, bot, headOwner string, failPost *bool) map[string]
 			if err := json.NewDecoder(r.Body).Decode(&pr); err != nil {
 				return nil, err
 			}
-			head := strings.TrimPrefix(pr.Head, headOwner+":")
+			head := strings.TrimPrefix(pr.Head, "microsoft:")
 			if _, found := open[head]; found {
 				return nil, fmt.Errorf("duplicate PR for %s", head)
 			}

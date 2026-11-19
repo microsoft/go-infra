@@ -65,6 +65,7 @@ type ConfigEntry struct {
 	MainBranch string
 
 	// PrepareNextRelease enables preparation of the next Go release branch for this repository.
+	// Head must be unset or equal to Target.
 	PrepareNextRelease bool
 
 	// SyncDocs copies the paths listed in [docsSyncPaths] from MainBranch in Upstream to the active

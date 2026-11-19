@@ -191,6 +191,11 @@ func MakePRs(f *Flags) error {
 	if err != nil {
 		return err
 	}
+	for i, entry := range entries {
+		if entry.PrepareNextRelease && entry.PRBranchStorageRepo() != entry.Target {
+			return fmt.Errorf("sync config entry %d: PrepareNextRelease requires Head to be unset or equal to Target", i+1)
+		}
+	}
 
 	if len(entries) == 0 {
 		fmt.Printf("No entries found in config file: %v\n", *f.SyncConfig)
@@ -464,8 +469,9 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 	// For an overview of the sequence of Git commands below, see the command description.
 
 	upstreamRemote := urlAuther.InsertAuth(entry.Upstream)
+	targetRemote := urlAuther.InsertAuth(entry.Target)
 	fetchUpstream := newGitCmd("fetch", "--no-tags", upstreamRemote)
-	fetchOrigin := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Target))
+	fetchOrigin := newGitCmd("fetch", "--no-tags", targetRemote)
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
 		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
@@ -520,7 +526,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		if err := cut.selectGoCommit(dir, upstreamRemote, b, entry.UpstreamMirror != ""); err != nil {
 			return nil, err
 		}
-		if err := cut.preparePRBranches(dir, entry, urlAuther, b); err != nil {
+		if err := cut.preparePRBranches(dir, targetRemote, entry.MainBranch, b); err != nil {
 			return nil, err
 		}
 		branches = append(branches, &cut.notes)
@@ -565,7 +571,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 
 		if cut != nil {
 			prBody = fmt.Sprintf("Preparing the Microsoft build of Go %s release branch. Please review before merging.", cut.version)
-			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, parsedPRHeadRemote, parsedPRTargetRemote, c); err != nil {
+			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, parsedPRTargetRemote, c); err != nil {
 				return nil, err
 			}
 			if c.SkipReason != "" {

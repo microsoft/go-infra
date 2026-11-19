@@ -109,28 +109,22 @@ func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet,
 	return nil
 }
 
-func (c *releaseCut) preparePRBranches(dir string, entry *ConfigEntry, auth gitcmd.URLAuther, b *gitpr.SyncPRRefSet) error {
-	remote := auth.InsertAuth(entry.Target)
+func (c *releaseCut) preparePRBranches(dir, target, mainBranch string, b *gitpr.SyncPRRefSet) error {
 	var err error
-	c.releaseBase, err = fetchRemoteBranch(dir, remote, b.Name)
+	c.releaseBase, err = fetchRemoteBranch(dir, target, b.Name)
 	if err != nil {
 		return err
 	}
 	c.newBranch = c.releaseBase == ""
-	headRepo := entry.PRBranchStorageRepo()
-	if c.newBranch && headRepo != entry.Target {
-		return fmt.Errorf("create %s in the target repository before preparing release PRs from a fork", b.Name)
-	}
-	mainTip, err := gitcmd.FetchRefCommit(dir, remote, "refs/heads/"+entry.MainBranch)
+	mainTip, err := gitcmd.FetchRefCommit(dir, target, "refs/heads/"+mainBranch)
 	if err != nil {
 		return err
 	}
-	headRemote := auth.InsertAuth(headRepo)
-	c.submoduleHead, err = fetchRemoteBranch(dir, headRemote, b.PRBranch())
+	c.submoduleHead, err = fetchRemoteBranch(dir, target, b.PRBranch())
 	if err != nil {
 		return err
 	}
-	c.notesHead, err = fetchRemoteBranch(dir, headRemote, c.notes.PRBranch())
+	c.notesHead, err = fetchRemoteBranch(dir, target, c.notes.PRBranch())
 	if err != nil {
 		return err
 	}
@@ -158,7 +152,7 @@ func (c *releaseCut) onReleaseLine(dir, commit, tip string) (bool, error) {
 
 // Inspect the target first: a maintainer may already have finished the cut, regardless of
 // what remains on the PR head.
-func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, head, target *gitpr.Remote, branch *changedBranch) error {
+func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, target *gitpr.Remote, branch *changedBranch) error {
 	b := branch.Refs
 	if b == &c.notes {
 		branch.RemoteCommit = c.notesHead
@@ -182,7 +176,7 @@ func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, head, ta
 		if err != nil {
 			return err
 		}
-		existing, err := gitpr.FindExistingPR(&gitpr.GitHubRequest{Base: b.Name}, head, target, b.PRBranch(), *f.GitHubUser, auther)
+		existing, err := gitpr.FindExistingPR(&gitpr.GitHubRequest{Base: b.Name}, target, target, b.PRBranch(), *f.GitHubUser, auther)
 		if err != nil {
 			return err
 		}
