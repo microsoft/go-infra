@@ -4,6 +4,7 @@
 package importdiff
 
 import (
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,10 +47,15 @@ func TestCompare(t *testing.T) {
 		escaped = "package p\nimport _ \"example/\\x70rivate\"\n"
 		other   = "package p\nimport _ \"example/privateonly\"\nconst s = \"example/private\"\n"
 	)
-	rule := Rule{
-		SourceRoots: []string{"tools", "src/example", "src"},
-		ImportRoots: []string{pkg, pkg + "/a", "x.test/lib"},
-		ExcludeDir:  "src/example/private",
+	rule := Rule{SourceRoots: []string{"."}, ImportRoots: []string{"unused"}}
+	flags := flag.NewFlagSet("importdiff", flag.ContinueOnError)
+	rule.BindFlags(flags)
+	if err := flags.Parse([]string{
+		"-src", "tools", "-src", "src/example", "-src", "src",
+		"-import", pkg, "-import", pkg + "/a", "-import", "x.test/lib",
+		"-exclude", "src/example/private", "-exclude", "tools/generated",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	git("init", "-q")
 	write("src/body.go", watched)
@@ -66,6 +72,7 @@ func TestCompare(t *testing.T) {
 	write("src/second.go", "package p\nimport _ \"x.test/lib/sub\"\n")
 	write("src/testdata/bad.go", "not Go")
 	write("tools/both.go", "package p\nimport (\n _ \"x.test/lib\"\n _ \"example/private/a\"\n)\n")
+	write("tools/generated/hidden.go", watched)
 	write("outside.go", watched)
 	updated := commit()
 	write("src/body.go", "dirty working tree, not Go")
@@ -86,6 +93,11 @@ func TestCompare(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("changes = %#v\nwant %#v", got, want)
+	}
+	invalid := rule
+	invalid.ExcludeDirs = []string{"tools/generated", "../outside"}
+	if _, err := Compare(t.Context(), dir, old, updated, invalid); err == nil {
+		t.Error("accepted an invalid second exclusion")
 	}
 	bad := commit()
 	if _, err := Compare(t.Context(), dir, updated, bad, rule); err == nil {

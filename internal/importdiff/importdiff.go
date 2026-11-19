@@ -25,10 +25,10 @@ import (
 type Rule struct {
 	SourceRoots []string // Search all of these slash-separated Git directories.
 	ImportRoots []string // Match any of these import paths or their subpackages.
-	ExcludeDir  string   // Optional slash-separated source directory to skip.
+	ExcludeDirs []string // Skip files under any of these slash-separated directories.
 }
 
-func (r Rule) validate() error {
+func (r Rule) Validate() error {
 	if len(r.SourceRoots) == 0 || len(r.ImportRoots) == 0 {
 		return errors.New("at least one source root and one import root are required")
 	}
@@ -42,10 +42,18 @@ func (r Rule) validate() error {
 			return fmt.Errorf("invalid import root %q", root)
 		}
 	}
-	if r.ExcludeDir != "" && !fs.ValidPath(r.ExcludeDir) {
-		return fmt.Errorf("invalid exclude directory %q", r.ExcludeDir)
+	for _, dir := range r.ExcludeDirs {
+		if !fs.ValidPath(dir) {
+			return fmt.Errorf("invalid exclude directory %q", dir)
+		}
 	}
 	return nil
+}
+
+func (r Rule) excludes(name string) bool {
+	return slices.ContainsFunc(r.ExcludeDirs, func(dir string) bool {
+		return dir == "." || strings.HasPrefix(name, dir+"/")
+	})
 }
 
 type Change struct {
@@ -59,7 +67,7 @@ type Change struct {
 // Compare reports net changes between two commits, ordered by upstream path.
 // Renames are a deletion and an addition; both sides matter when an import is removed.
 func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Change, error) {
-	if err := rule.validate(); err != nil {
+	if err := rule.Validate(); err != nil {
 		return nil, err
 	}
 	git := func(args ...string) *exec.Cmd {
@@ -96,7 +104,7 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 			return nil, fmt.Errorf("unexpected git diff-tree record: %q", header)
 		}
 		entry = rest
-		if path.Ext(name) != ".go" || strings.HasPrefix(name, rule.ExcludeDir+"/") || fields[2] == fields[3] {
+		if path.Ext(name) != ".go" || fields[2] == fields[3] || rule.excludes(name) {
 			continue
 		}
 		blob := func(mode, id string) (string, error) {
