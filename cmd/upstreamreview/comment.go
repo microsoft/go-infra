@@ -110,16 +110,16 @@ func linkSummary(ctx context.Context, client *github.Client, event *github.PullR
 }
 
 func summaryComment(pr *github.PullRequest, runURL string, matched bool, label string) string {
-	const heading = commentMarker + "### Upstream Go review\n\n"
+	const heading = commentMarker + "### Upstream Go review \u2014 "
 	if !matched {
-		return heading + "The latest scan found no matching upstream changes. [View the scan summary](" + runURL + ")."
+		return heading + "no matching changes\n\nNo action needed. [View the scan summary](" + runURL + ")."
 	}
-	body := heading + "This update changes Go files that import a package under review. [See the affected files](" + runURL + ")."
+	files := "[See the affected files](" + runURL + ")."
 	if label == "" {
-		return body
+		return heading + "matching changes\n\n" + files
 	}
 	if hasLabel(pr, label) {
-		return body + "\n\nThe `" + label + "` label marks these changes as reviewed."
+		return heading + "acknowledged\n\n" + files + " This acknowledgment carries over to new commits. To request another review, remove `" + label + "` under **Labels**."
 	}
-	return body + "\n\nAfter reviewing the diffs, add the `" + label + "` label to this PR to acknowledge the changes."
+	return heading + "review needed\n\n" + files + " After reviewing the diffs, open **Labels** (shortcut: `L`) and select `" + label + "`."
 }

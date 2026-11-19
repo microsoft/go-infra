@@ -56,36 +56,51 @@ func TestLinkSummary(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	run := func(id int64, matched bool, wantWrites string) {
+	run := func(id int64, matched bool, wantWrite string) {
 		t.Helper()
+		writes = nil
 		if err := linkSummary(t.Context(), client, &event, id, matched, label); err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.Join(writes, ","); got != wantWrites {
-			t.Fatalf("writes = %q; want %q", got, wantWrites)
+		if got := strings.Join(writes, ","); got != wantWrite {
+			t.Fatalf("writes = %q; want %q", got, wantWrite)
+		}
+	}
+	checkBody := func(state string, parts ...string) {
+		t.Helper()
+		if !strings.HasPrefix(body, commentMarker+"### Upstream Go review \u2014 "+state+"\n\n") {
+			t.Fatalf("expected heading for %q in %q", state, body)
+		}
+		for _, part := range parts {
+			if !strings.Contains(body, part) {
+				t.Fatalf("comment %q is missing %q", body, part)
+			}
 		}
 	}
 	run(10, false, "") // Clean PRs get no new comment.
 	run(11, true, "POST")
 	const filesLink = "[See the affected files](https://github.com/fork/runtime/actions/runs/11)"
-	if !strings.Contains(body, filesLink) || !strings.Contains(body, "After reviewing the diffs, add the `"+label+"` label") {
-		t.Fatalf("matching comment = %q", body)
-	}
-	run(11, true, "POST") // Same run already linked.
+	checkBody("review needed", filesLink, "After reviewing the diffs", "open **Labels** (shortcut: `L`) and select `"+label+"`")
+	pending := body
+	run(11, true, "") // Same run already linked.
 	live.Labels = []*github.Label{{Name: label}}
-	run(11, true, "POST,PATCH") // Look at the live PR, not the event's labels.
-	if !strings.Contains(body, "`"+label+"` label marks these changes as reviewed") || strings.Contains(body, "add the") {
-		t.Fatalf("acknowledged comment = %q", body)
+	run(11, true, "PATCH") // Look at the live PR, not the event's labels.
+	checkBody("acknowledged", filesLink, "carries over to new commits", "remove `"+label+"` under **Labels**")
+	live.Labels = nil
+	run(11, true, "PATCH")
+	if body != pending {
+		t.Fatalf("removing the label did not restore the review instructions: %q", body)
 	}
-	run(12, false, "POST,PATCH,PATCH")
-	if !strings.Contains(body, "no matching upstream changes") || !strings.Contains(body, "[View the scan summary](https://github.com/fork/runtime/actions/runs/12)") || strings.Contains(body, label) {
-		t.Fatalf("updated comment = %q", body)
+	run(12, false, "PATCH")
+	checkBody("no matching changes", "No action needed", "[View the scan summary](https://github.com/fork/runtime/actions/runs/12)")
+	if strings.Contains(body, label) {
+		t.Fatalf("clean comment still mentions the label: %q", body)
 	}
 	live.Head = &github.PullRequestBranch{SHA: new(strings.Repeat("c", 40))}
-	run(13, true, "POST,PATCH,PATCH") // Older heads cannot overwrite the link.
+	run(13, true, "") // Older heads cannot overwrite the link.
 	live = pr
 	status = http.StatusForbidden
-	run(13, true, "POST,PATCH,PATCH")
+	run(13, true, "")
 	status = http.StatusInternalServerError
 	if err := linkSummary(t.Context(), client, &event, 13, true, label); err == nil {
 		t.Fatal("unexpected API error was ignored")
