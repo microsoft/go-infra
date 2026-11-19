@@ -1,9 +1,7 @@
 # Upstream crypto review
 
 [`upstreamreview`](../../cmd/upstreamreview) is a GitHub App webhook for `microsoft/go`.
-It checks the `go` submodule revision on the base against the revision in the PR's **test merge**.
-It does not compare the tip of a possibly stale topic branch against the latest base.
-It applies to all PRs, not just bot syncs, and never needs to modify their branches.
+For each PR it compares the `go` submodule revision on the base with the revision in the PR's **test merge**. This measures the upstream changes the PR would introduce on its target branch.
 
 If either revision of a changed upstream Go file under `src` imports `crypto/internal/fips140` or one of its subpackages, the App links the affected files in one PR comment and requests `@microsoft/golang-compiler` on non-draft PRs.
 Files inside `src/crypto/internal/fips140` are excluded. Tests and all build configurations are included. Edits through existing imports, deletions and renames are included.
@@ -27,12 +25,18 @@ With both commits available in a local `golang/go` clone:
 go run ./cmd/importdiff -repo /path/to/go -exclude src/crypto/internal/fips140 OLD_SHA NEW_SHA
 ```
 
-The JSON output lists paths, old/new blob IDs, and matched imports on each side. `[]` means no changes; failure to read or parse sources exits nonzero. `-src`, `-import` and `-exclude` configure the rule for other import trees. There is no baseline to regenerate.
+The JSON output lists paths, old/new blob IDs, and matched imports on each side. `[]` means no matching changes; failure to read or parse sources exits nonzero.
+
+Repeat `-src` to search multiple directories and `-import` to match multiple package trees. Each flag replaces its own default (`src` and `crypto/internal/fips140`, respectively) on first use. For example, to find changes in either source directory that import either package tree:
+
+```sh
+go run ./cmd/importdiff -repo /path/to/go -src src/crypto -src src/cmd -import crypto/internal/fips140 -import crypto/internal/boring OLD_SHA NEW_SHA
+```
 
 ## Deploy and enable enforcement
 
 1. Register a dedicated GitHub App and install it on the target repository. Repository permissions: **Contents: read**, **Commit statuses: write**, **Pull requests: write** (comment and request the team). Organization permission: **Members: read**. Subscribe to `pull_request`, `pull_request_review`, and `push`. Configure an HTTPS webhook pointing to `/webhook`, JSON payloads, and a strong webhook secret.
-2. Build `./cmd/upstreamreview` from reviewed `go-infra` code. On the host, `git clone --mirror https://github.com/golang/go.git go.git`. The App fetches from that mirror's operator-configured `origin` when commits are missing. It never uses the PR's `.gitmodules`, checks out PR code, or runs upstream source.
+2. Build `./cmd/upstreamreview` from reviewed `go-infra` code. On the host, `git clone --mirror https://github.com/golang/go.git go.git`. The App reads the commits from this mirror and fetches missing revisions from its operator-configured `origin`.
 3. Supply `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY` (base64-encoded PEM), and `GITHUB_WEBHOOK_SECRET` from the host's secret store. Run `upstreamreview -mirror /path/to/go.git` behind a TLS reverse proxy to `127.0.0.1:8080`. Use **one active instance** per installation/repository; it serializes decisions. `-repo` and `-team` allow a staging installation.
 4. Start in advisory mode: deploy without requiring the status. On a test PR verify a clean bump, a flagged push, a team approval, and a dismissal. Check that the **same status turns pending again**. Verify an unrelated PR whose base advances stays clean.
 5. Add `upstream-crypto-review` to **required status checks** on the target branch ruleset and select **this App** as the expected source. Don't use an unbound context name, a label, or the sync bot's approval as the enforcement signal. This service targets normal PR merges; do not enable it as a required check for a merge queue without also handling merge-group revisions.

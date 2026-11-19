@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package importdiff finds changed Go files which directly import a package
-// or one of its subpackages, without checking out or building either revision.
+// Package importdiff compares Git revisions and reports changed Go files that
+// directly import any of the selected packages or their subpackages.
 package importdiff
 
 import (
@@ -23,9 +23,29 @@ import (
 )
 
 type Rule struct {
-	SourceRoot string // Slash-separated Git directory, e.g. "src".
-	ImportRoot string // Match this import path and its subpackages.
-	ExcludeDir string // Optional slash-separated source directory to skip.
+	SourceRoots []string // Search all of these slash-separated Git directories.
+	ImportRoots []string // Match any of these import paths or their subpackages.
+	ExcludeDir  string   // Optional slash-separated source directory to skip.
+}
+
+func (r Rule) validate() error {
+	if len(r.SourceRoots) == 0 || len(r.ImportRoots) == 0 {
+		return errors.New("at least one source root and one import root are required")
+	}
+	for _, root := range r.SourceRoots {
+		if !fs.ValidPath(root) {
+			return fmt.Errorf("invalid source root %q", root)
+		}
+	}
+	for _, root := range r.ImportRoots {
+		if !fs.ValidPath(root) || root == "." {
+			return fmt.Errorf("invalid import root %q", root)
+		}
+	}
+	if r.ExcludeDir != "" && !fs.ValidPath(r.ExcludeDir) {
+		return fmt.Errorf("invalid exclude directory %q", r.ExcludeDir)
+	}
+	return nil
 }
 
 type Change struct {
@@ -39,10 +59,8 @@ type Change struct {
 // Compare reports net changes between two commits, ordered by upstream path.
 // Renames are a deletion and an addition; both sides matter when an import is removed.
 func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Change, error) {
-	if !fs.ValidPath(rule.SourceRoot) || !fs.ValidPath(rule.ImportRoot) || rule.ImportRoot == "." ||
-		(rule.ExcludeDir != "" && !fs.ValidPath(rule.ExcludeDir)) {
-
-		return nil, fmt.Errorf("invalid import diff rule: %+v", rule)
+	if err := rule.validate(); err != nil {
+		return nil, err
 	}
 	git := func(args ...string) *exec.Cmd {
 		return exec.CommandContext(ctx, "git", append([]string{"-C", repo, "--literal-pathspecs"}, args...)...)
@@ -62,7 +80,8 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 	if err != nil {
 		return nil, err
 	}
-	out, err := git("diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", oldID, newID, "--", rule.SourceRoot).Output()
+	args := []string{"diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", oldID, newID, "--"}
+	out, err := git(append(args, rule.SourceRoots...)...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("diff upstream revisions: %w", err)
 	}
@@ -119,11 +138,11 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 		for i := range changes {
 			c := &changes[i]
 			var err error
-			c.OldImports, err = readImports(reader, c.Path, c.OldBlob, rule.ImportRoot)
+			c.OldImports, err = readImports(reader, c.Path, c.OldBlob, rule.ImportRoots)
 			if err != nil {
 				return err
 			}
-			c.NewImports, err = readImports(reader, c.Path, c.NewBlob, rule.ImportRoot)
+			c.NewImports, err = readImports(reader, c.Path, c.NewBlob, rule.ImportRoots)
 			if err != nil {
 				return err
 			}
@@ -140,7 +159,7 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 	}), nil
 }
 
-func readImports(r *bufio.Reader, name, id, root string) ([]string, error) {
+func readImports(r *bufio.Reader, name, id string, roots []string) ([]string, error) {
 	if id == "" {
 		return nil, nil
 	}
@@ -166,13 +185,21 @@ func readImports(r *bufio.Reader, name, id, root string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
-		if p == root || strings.HasPrefix(p, root+"/") {
-			imports = append(imports, p)
+		for _, root := range roots {
+			if p == root || strings.HasPrefix(p, root+"/") {
+				imports = append(imports, p)
+				break
+			}
 		}
 	}
 	if parseErr != nil {
 		// Upstream includes intentionally malformed compiler/go command fixtures.
-		if strings.Contains("/"+name, "/testdata/") && len(imports) == 0 && !bytes.Contains(src, []byte(root)) {
+		if strings.Contains("/"+name, "/testdata/") && len(imports) == 0 {
+			for _, root := range roots {
+				if bytes.Contains(src, []byte(root)) {
+					return nil, parseErr
+				}
+			}
 			return nil, nil
 		}
 		return nil, parseErr

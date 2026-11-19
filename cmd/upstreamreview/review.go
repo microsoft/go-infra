@@ -26,8 +26,8 @@ type result struct {
 	files             []importdiff.Change
 }
 
-// The worker owns this cache. It contains only immutable Git comparisons,
-// never a cached review or team membership.
+// The worker caches immutable Git comparisons and checks reviews and team
+// membership on each reconciliation.
 type gate struct {
 	client                  *github.Client
 	owner, repo, team, slug string
@@ -39,7 +39,7 @@ func compareMirror(dir string) func(context.Context, string, string) ([]importdi
 	return func(ctx context.Context, old, updated string) ([]importdiff.Change, error) {
 		for _, id := range []string{old, updated} {
 			if err := exec.CommandContext(ctx, "git", "-C", dir, "cat-file", "-e", id+"^{commit}").Run(); err != nil {
-				// origin is configured by the operator, never from PR .gitmodules.
+				// Refresh from the upstream remote configured by the operator.
 				if out, err := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--quiet", "origin").CombinedOutput(); err != nil {
 					return nil, fmt.Errorf("refresh upstream mirror: %w: %s", err, out)
 				}
@@ -47,7 +47,9 @@ func compareMirror(dir string) func(context.Context, string, string) ([]importdi
 			}
 		}
 		return importdiff.Compare(ctx, dir, old, updated, importdiff.Rule{
-			SourceRoot: "src", ImportRoot: "crypto/internal/fips140", ExcludeDir: "src/crypto/internal/fips140",
+			SourceRoots: []string{"src"},
+			ImportRoots: []string{"crypto/internal/fips140"},
+			ExcludeDir:  "src/crypto/internal/fips140",
 		})
 	}
 }
