@@ -20,7 +20,7 @@ parameters:
 
   # Allow retrying a build pointing at an existing run.
   - name: poll1MicrosoftGoInnerloopBuildID
-    displayName: '1: internal innerloop build ID to poll for completion.'
+    displayName: '1: microsoft-go-innerloop build ID to poll for completion.'
     type: string
     default: nil
 
@@ -71,9 +71,8 @@ extends:
               releaseVersion: ${{ parameters.releaseVersion }}
               releaseIssue: ${{ parameters.releaseIssue }}
               variables:
-                # Set a variable for each polling parameter. If a variable starts off with 'nil', it will be
-                # overridden with a logging command as the pipeline moves on.
-                poll1MicrosoftGoInnerloopBuildID: ${{ parameters.poll1MicrosoftGoInnerloopBuildID }}
+                # Only report a build ID we queued or verified.
+                poll1MicrosoftGoInnerloopBuildID: nil
               steps:
                 # Resume the build at the furthest step based on the inputs. A fresh build has all 'nil', a
                 # retry build will have a non-nil value in one of these parameters. Only the value of the last
@@ -126,15 +125,21 @@ extends:
                       start: true
                       reason: queued build
 
-                # Now we have poll1MicrosoftGoInnerloopBuildID
                 - script: |
                     releasego wait-build \
-                      -id '$(poll1MicrosoftGoInnerloopBuildID)' \
+                      -id "$INNERLOOP_BUILD_ID" \
+                      -pipeline-id '$(GoInnerloopPipelineID)' \
+                      -set-azdo-variable poll1MicrosoftGoInnerloopBuildID \
                       -org 'https://dev.azure.com/dnceng/' \
                       -proj 'internal' \
                       -azdopat '$(System.AccessToken)'
                   displayName: ⌚ Wait for innerloop
                   timeoutInMinutes: 120
+                  env:
+                    ${{ if eq(parameters.poll1MicrosoftGoInnerloopBuildID, 'nil') }}:
+                      INNERLOOP_BUILD_ID: $(poll1MicrosoftGoInnerloopBuildID)
+                    ${{ else }}:
+                      INNERLOOP_BUILD_ID: ${{ parameters.poll1MicrosoftGoInnerloopBuildID }}
                 - template: ../steps/report.yml
                   parameters:
                     releaseIssue: ${{ parameters.releaseIssue }}
