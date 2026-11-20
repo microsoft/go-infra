@@ -55,9 +55,14 @@ func TestProcessSelectionNavigation(t *testing.T) {
 			status: http.StatusOK,
 			present: []string{
 				`<title>Run a process · Release UI</title>`,
-				`id="process-list"`, `src="/assets/processes.js"`,
+				`id="process-list"`,
+				`<a class="process-card" href="/processes/example">`,
+				`<a class="process-card" href="/processes/processes">`,
 			},
-			absent: []string{`id="ongoing-releases"`},
+			absent: []string{
+				`id="ongoing-releases"`, `src="/assets/processes.js"`,
+				`Loading release processes`, `id="processes-error"`, `Open release process`,
+			},
 		},
 		{
 			path:   "/processes/example",
@@ -136,6 +141,55 @@ func TestProcessSelectionNavigation(t *testing.T) {
 		dashboard.Processes[1].Href != "/processes/processes" {
 
 		t.Fatalf("dashboard processes = %#v", dashboard.Processes)
+	}
+}
+
+func TestProcessSelectionRendersGroupCards(t *testing.T) {
+	first := exampleProcess()
+	variant := exampleProcess()
+	variant.definition = testProcessDefinition("variant")
+	group := newFakeProcessGroup(first, variant)
+	group.identity.Name = "Group <one>"
+	group.identity.Mark = "<&>"
+	group.identity.Description = `Release "one" & two`
+	second := exampleProcess()
+	second.definition = testProcessDefinition("second")
+	ui := newTestUIWithProcess(t, first,
+		WithProcesses(group, newFakeProcessGroup(second)),
+		WithReleaseRunStore(newMemoryProcessRunStore()),
+	)
+	response, err := ui.client.Get(ui.http.URL + "/processes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	closeResponse(t, response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	page := string(body)
+	for _, text := range []string{
+		`<span class="process-mark">&lt;&amp;&gt;</span>`,
+		`<h2>Group &lt;one&gt;</h2>`,
+		`<p>Release &#34;one&#34; &amp; two</p>`,
+	} {
+		if !strings.Contains(page, text) {
+			t.Errorf("page is missing %q", text)
+		}
+	}
+	if count := strings.Count(page, `class="process-card"`); count != 2 {
+		t.Errorf("page has %d process cards, want 2", count)
+	}
+	firstIndex := strings.Index(page, `href="/processes/example"`)
+	secondIndex := strings.Index(page, `href="/processes/second"`)
+	if firstIndex < 0 || secondIndex <= firstIndex {
+		t.Error("process cards are missing or out of registration order")
+	}
+	if strings.Contains(page, `href="/processes/variant"`) {
+		t.Error("page has a separate card for a group variant")
 	}
 }
 
