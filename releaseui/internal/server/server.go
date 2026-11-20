@@ -234,7 +234,13 @@ func (s *Server) handlePage(response http.ResponseWriter, request *http.Request)
 		Brand           string
 		InstructionsURL string
 		HistoryQueryURL string
-	}{Brand: s.brand, InstructionsURL: s.instructionsURL, HistoryQueryURL: historyQueryURL}); err != nil {
+		Processes       []webview.ProcessSummary
+	}{
+		Brand:           s.brand,
+		InstructionsURL: s.instructionsURL,
+		HistoryQueryURL: historyQueryURL,
+		Processes:       s.processes.Summaries(),
+	}); err != nil {
 		http.Error(response, "embedded UI template is invalid", http.StatusInternalServerError)
 		return
 	}

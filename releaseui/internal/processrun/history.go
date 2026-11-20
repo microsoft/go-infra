@@ -15,7 +15,6 @@ import (
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
-	"github.com/microsoft/go-infra/releaseui/internal/processregistry"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
@@ -35,7 +34,7 @@ type History struct {
 func (h *History) Dashboard(ctx context.Context) webview.DashboardResponse {
 	result := webview.DashboardResponse{
 		Ongoing: []webview.ReleaseSummary{},
-		Recent:  []webview.ReleaseSummary{}, Processes: h.processSummaries(),
+		Recent:  []webview.ReleaseSummary{}, Processes: h.manager.processes.Summaries(),
 	}
 	active, activeErr := h.reader.QueryViews(ctx, false, dashboardActiveLimit)
 	recent, recentErr := h.reader.QueryViews(ctx, true, dashboardRecentLimit)
@@ -199,19 +198,6 @@ func (h *History) validateImport(
 		return nil, nil, errors.New("building the repaired graph changed its checkpoint")
 	}
 	return run, steps, nil
-}
-
-func (h *History) processSummaries() []webview.ProcessSummary {
-	groups := h.manager.processes.Groups()
-	summaries := make([]webview.ProcessSummary, 0, len(groups))
-	for _, group := range groups {
-		process := group.Processes[0]
-		summaries = append(summaries, webview.ProcessSummary{
-			ID: process.Definition.ID, Name: group.Identity.Name, Mark: group.Identity.Mark,
-			Description: group.Identity.Description, Href: processregistry.Path(process.Definition.ID),
-		})
-	}
-	return summaries
 }
 
 func releaseViewPath(id int) string { return fmt.Sprintf("/releases/%d", id) }
