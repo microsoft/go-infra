@@ -146,35 +146,87 @@ func TestGitHubReleaseDayIssueRequest(t *testing.T) {
 }
 
 func TestGitHubCreatePatchRelease(t *testing.T) {
-	for _, dryRun := range []bool{false, true} {
-		t.Run(fmt.Sprint(dryRun), func(t *testing.T) {
-			var created atomic.Bool
-			newReleaseGitHubServer(t, func(w http.ResponseWriter, r *http.Request) {
-				switch {
-				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r":
-					releaseGitHubJSON(t, w, 200, `{"default_branch":"main"}`)
-				case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/releases/latest":
-					releaseGitHubJSON(t, w, 200, `{"tag_name":"v0.0.17"}`)
-				case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/releases":
-					var body map[string]any
-					if json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{
-						"tag_name": "v0.0.18", "name": "v0.0.18", "target_commitish": "main", "generate_release_notes": true,
-					}) {
-
-						t.Errorf("wrong patch release payload: %v", body)
+	for _, tc := range []struct {
+		name    string
+		module  string
+		minor   bool
+		wantTag string
+		wantErr string
+	}{
+		{name: "default root", wantTag: "v0.0.18"},
+		{name: "root minor", module: ".", minor: true, wantTag: "v0.1.0"},
+		{name: "nested patch", module: "goinstallscript", wantTag: "goinstallscript/v1.3.11"},
+		{name: "nested minor", module: "goinstallscript", minor: true, wantTag: "goinstallscript/v1.4.0"},
+		{name: "telemetry", module: "telemetry", wantTag: "telemetry/v0.1.3"},
+		{name: "nested config", module: "telemetry/config", wantTag: "telemetry/config/v0.2.4"},
+		{name: "no stable release", module: "assets", wantErr: "no published stable release"},
+		{name: "invalid module", module: "eng", wantErr: "unsupported module"},
+	} {
+		for _, dryRun := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/dry=%v", tc.name, dryRun), func(t *testing.T) {
+				var created atomic.Bool
+				var pages atomic.Int32
+				newReleaseGitHubServer(t, func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r":
+						releaseGitHubJSON(t, w, 200, `{"default_branch":"main"}`)
+					case r.Method == http.MethodGet && r.URL.Path == "/repos/o/r/releases":
+						pages.Add(1)
+						if r.URL.Query().Get("page") == "" {
+							w.Header().Set("Link", `<https://api.github.com/repos/o/r/releases?page=2>; rel="next"`)
+							releaseGitHubJSON(t, w, 200, `[
+							{"tag_name":"goinstallscript/v1.3.9"},
+							{"tag_name":"v0.0.17"},
+							{"tag_name":"telemetry/config/v0.2.3"},
+							{"tag_name":"telemetry/v0.1.2"},
+							{"tag_name":"goinstallscript/v9.0.0","draft":true},
+							{"tag_name":"v9.0.0","prerelease":true},
+							{"tag_name":"assets/v0.1.0-rc.1"},
+							{"tag_name":"assets/v0.1.0","draft":true}
+						]`)
+						} else {
+							if r.URL.Query().Get("page") != "2" {
+								t.Errorf("unexpected release page: %s", r.URL.RawQuery)
+							}
+							releaseGitHubJSON(t, w, 200, `[
+							{"tag_name":"goinstallscript/v1.3.10"},
+							{"tag_name":"goinstallscript/v2.0.0-rc.1"},
+							{"tag_name":"goinstallscript/v8.0.0","prerelease":true},
+							{"tag_name":"goinstallscript/v9.0.0+build"},
+							{"tag_name":"v0.0.9"},
+							{"tag_name":"telemetry/config/v0.2.2"}
+						]`)
+						}
+					case r.Method == http.MethodPost && r.URL.Path == "/repos/o/r/releases":
+						var body map[string]any
+						if json.NewDecoder(r.Body).Decode(&body) != nil || !reflect.DeepEqual(body, map[string]any{
+							"tag_name": tc.wantTag, "name": tc.wantTag, "target_commitish": "main", "generate_release_notes": true,
+						}) {
+							t.Errorf("wrong patch release payload: %v", body)
+						}
+						created.Store(true)
+						releaseGitHubJSON(t, w, 201, fmt.Sprintf(`{"id":8,"tag_name":%q,"html_url":%q}`, tc.wantTag, "https://github.com/o/r/releases/tag/"+tc.wantTag))
+					default:
+						t.Errorf("unexpected release request: %s %s", r.Method, r.URL.Path)
+						http.NotFound(w, r)
 					}
-					created.Store(true)
-					releaseGitHubJSON(t, w, 201, `{"id":8,"tag_name":"v0.0.18","html_url":"https://github.com/o/r/releases/tag/v0.0.18"}`)
-				default:
-					t.Errorf("unexpected release request: %s %s", r.Method, r.URL.Path)
-					http.NotFound(w, r)
+				})
+				args := []string{"-repo=o/r", fmt.Sprintf("-dry-run=%v", dryRun), fmt.Sprintf("-minor=%v", tc.minor)}
+				if tc.module != "" {
+					args = append(args, "-module="+tc.module)
+				}
+				err := runGitHubCommand(t, handleCreateGoInfraPatch, args...)
+				if tc.wantErr != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.wantErr) || created.Load() {
+						t.Fatalf("release created=%v, error=%v, want error containing %q", created.Load(), err, tc.wantErr)
+					}
+					return
+				}
+				if err != nil || created.Load() == dryRun || pages.Load() != 2 {
+					t.Fatalf("release created=%v, dryRun=%v, pages=%v, error=%v", created.Load(), dryRun, pages.Load(), err)
 				}
 			})
-			err := runGitHubCommand(t, handleCreateGoInfraPatch, "-repo=o/r", fmt.Sprintf("-dry-run=%v", dryRun))
-			if err != nil || created.Load() == dryRun {
-				t.Fatalf("release created=%v, dryRun=%v, error=%v", created.Load(), dryRun, err)
-			}
-		})
+		}
 	}
 }
 
