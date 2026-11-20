@@ -10,6 +10,7 @@ The package derives the adjacent releases from that value:
 - `Previous` is the stable release immediately before `Current`.
 - `Current` is the latest stable release that the release process has promoted.
 - `Next` is the release planned immediately after `Current`.
+- `AfterNextVersion` is the version number used for the new notes on `microsoft/main` when the `Next` release branch is created.
 
 `Next` is a utility that allows us to plan out what shape the next release will have and lets release tooling understand when it needs to alter its behavior because it's producing `Next`.
 It doesn't indicate that the release is available or supported.

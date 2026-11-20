@@ -263,5 +263,6 @@
         "checksumURL": "https://aka.ms/golang/release/latest/go1.28.windows-arm64.zip.sha256"
       }
     ]
-  }
+  },
+  "afterNextVersion": "1.29"
 }
