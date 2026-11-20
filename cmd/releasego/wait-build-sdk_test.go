@@ -91,6 +91,59 @@ func TestWaitBuildAPIResponses(t *testing.T) {
 	}
 }
 
+func TestWaitBuildPipeline(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, wantError string
+		wantVariable          bool
+	}{
+		{
+			name:         "matching successful run",
+			body:         `{"id":123,"definition":{"id":456},"status":"completed","result":"succeeded"}`,
+			wantVariable: true,
+		},
+		{
+			name:      "successful run from the wrong pipeline",
+			body:      `{"id":123,"definition":{"id":789},"status":"completed","result":"succeeded"}`,
+			wantError: "build 123 belongs to pipeline 789, expected pipeline 456",
+		},
+		{
+			name:      "missing pipeline definition",
+			body:      `{"id":123,"status":"completed","result":"succeeded"}`,
+			wantError: "build 123 has no pipeline definition ID",
+		},
+		{
+			name:         "matching failed run",
+			body:         `{"id":123,"definition":{"id":456},"status":"completed","result":"failed"}`,
+			wantError:    "build completed, but was not successful",
+			wantVariable: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newAzureSDKServer(t, func(w http.ResponseWriter, r *http.Request) {
+				writeAzureSDKResponse(t, w, tt.body)
+			})
+			output, err := captureCommandOutput(t, func() error {
+				return runAzureCommand(t, handleWaitBuild, azureCommandArgs(server,
+					"-id=123", "-pipeline-id=456", "-set-azdo-variable=InnerloopBuild")...)
+			})
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want %q", err, tt.wantError)
+			}
+			wantOutput := ""
+			if tt.wantVariable {
+				wantOutput = "##vso[task.setvariable variable=InnerloopBuild]123\n"
+			}
+			if output != wantOutput {
+				t.Errorf("output = %q, want %q", output, wantOutput)
+			}
+		})
+	}
+}
+
 func TestWaitBuildRetryLimit(t *testing.T) {
 	logs := captureLogs(t)
 	const body = "<html>persistent outage</html>"

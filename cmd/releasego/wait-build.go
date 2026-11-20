@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -35,6 +36,8 @@ and logs.
 
 func handleWaitBuild(p subcmd.ParseFunc) error {
 	id := flag.Int("id", 0, "[Required] The AzDO build ID (not build number) to query.")
+	pipelineID := flag.Int("pipeline-id", 0, "If set, require the build to belong to this AzDO pipeline.")
+	setVariable := flag.String("set-azdo-variable", "", "An AzDO variable name to set to the build ID after verifying the pipeline.")
 	pollDelaySeconds := flag.Int("poll-delay", 5, "Number of seconds to wait between each poll attempt.")
 	azdoFlags := azdo.BindClientFlags()
 
@@ -45,6 +48,9 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 	if *id == 0 {
 		flag.Usage()
 		log.Fatalln("No ID specified.")
+	}
+	if *setVariable != "" && *pipelineID == 0 {
+		return errors.New("-set-azdo-variable requires -pipeline-id")
 	}
 	if err := azdoFlags.EnsureAssigned(); err != nil {
 		flag.Usage()
@@ -82,6 +88,7 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 	}
 	sequentialFlakyErrors = 0
 
+	checkPipeline := *pipelineID != 0
 	for {
 		b, err := c.GetBuild(ctx, build.GetBuildArgs{
 			BuildId: id,
@@ -97,6 +104,18 @@ func handleWaitBuild(p subcmd.ParseFunc) error {
 
 		if b == nil || b.Status == nil {
 			return fmt.Errorf("build %d response did not contain a status", *id)
+		}
+		if checkPipeline {
+			if b.Definition == nil || b.Definition.Id == nil {
+				return fmt.Errorf("build %d has no pipeline definition ID", *id)
+			}
+			if got := *b.Definition.Id; got != *pipelineID {
+				return fmt.Errorf("build %d belongs to pipeline %d, expected pipeline %d", *id, got, *pipelineID)
+			}
+			if *setVariable != "" {
+				azdo.LogCmdSetVariable(*setVariable, strconv.Itoa(*id))
+			}
+			checkPipeline = false
 		}
 		url, _ := azdo.GetBuildWebURL(b)
 

@@ -103,6 +103,7 @@ The release pipelines don't take advantage of the "retry failed jobs" or stage r
         * Polling a fixed PR number submitted by a dev rather than a broken PR that will never merge.
 
 Instead, the pipelines are written to be as easy to re-run with modified parameters as possible. Usually a retry involves copy-pasting a single number into the "run new build" dialog. See [the release instructions on retrying](https://github.com/microsoft/go-lab/blob/main/docs/release/toolset/release-toolset.md#diagnosing-and-fixing-build-errors).
+When retrying `release-innerloop`, use the build ID from `microsoft-go-innerloop`. The retry rejects IDs from other pipelines.
 
 Another AzDO feature we aren't using is [Release Pipelines](https://docs.microsoft.com/en-us/azure/devops/pipelines/release/?view=azure-devops). These seem to have more flexiblity than pipelines to modify and retry in the middle of a release that's running. However, there is no YAML (source-controlled) workflow, and they are called "classic" now, so we don't think we should add new dependencies on them.
 
