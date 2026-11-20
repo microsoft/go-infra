@@ -22,7 +22,6 @@ It creates missing repository labels.
 
 For repositories with `PrepareNextRelease` enabled in [the sync configuration](/eng/sync-config.json), sync looks for `release-branch.go1.N`, where `1.N` is [`msmajorversions.Next`](/msmajorversions).
 Manual and scheduled runs use the same configuration.
-Release preparation opens both PRs from the target repository: leave `Head` unset or set it to `Target`.
 On the first run that sees the branch in both upstream Go and its GitHub mirror, sync creates `microsoft/release-branch.go1.N` from `microsoft/main` unless the Microsoft branch already exists.
 It does not wait for an RC tag.
 
