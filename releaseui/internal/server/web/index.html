@@ -3,45 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Microsoft build of Go Release UI</title>
+  <title>{{if .Brand}}{{.Brand}} {{end}}Release UI</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/status.js" defer></script>
   <script src="/assets/dashboard.js" defer></script>
 </head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Microsoft build of Go Release UI home">
-      <span class="brand-mark" aria-hidden="true">Go</span>
-      <span>
-        <strong>Release UI</strong>
-        <small>Microsoft build of Go</small>
-      </span>
-    </a>
-    <div class="connection" title="This server is available only on this computer">
-      <span class="connection-dot"></span>
-      <span>Tracked releases</span>
-    </div>
-  </header>
+<body data-brand="{{.Brand}}">
+{{template "topbar" .}}
 
   <main class="dashboard-main">
     <section class="hero dashboard-hero">
       <div>
-        <p class="eyebrow">Release control center</p>
-        <h1>Manage releases from one place.</h1>
-        <p class="hero-copy">
-          Track work already in progress or start a focused release process. Each process owns its
-          inputs, validation, and safety boundaries.
-        </p>
-        <a class="release-guide-link" href="https://github.com/microsoft/go-lab/tree/main/docs/release" target="_blank" rel="noreferrer">
-          Release documentation <span aria-hidden="true">↗</span>
-        </a>
+        <h1>Release control center</h1>
       </div>
     </section>
 
     <section class="dashboard-section" aria-labelledby="ongoing-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Tracked work</p>
           <h2 id="ongoing-title">Ongoing releases</h2>
           <p>Runs stay here until they finish and their tracking item is closed.</p>
         </div>
@@ -52,26 +31,19 @@
       <p id="tracking-error" class="tracking-error" hidden></p>
     </section>
 
-    <section class="dashboard-section" aria-labelledby="processes-title">
+    <section id="recent-section" class="dashboard-section" aria-labelledby="recent-title">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Start new work</p>
-          <h2 id="processes-title">Release processes</h2>
-          <p>Choose a release process.</p>
-        </div>
-      </div>
-      <div id="process-grid" class="process-grid" aria-live="polite"></div>
-    </section>
-
-    <section id="recent-section" class="dashboard-section" aria-labelledby="recent-title" hidden>
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">Release history</p>
           <h2 id="recent-title">Recent history</h2>
           <p>Finished runs with closed tracking items.</p>
         </div>
+        {{if .HistoryQueryURL}}
+        <a class="button button-secondary compact-button" href="{{.HistoryQueryURL}}" target="_blank" rel="noreferrer" aria-label="Query all release work items (opens in a new tab)">Query <span aria-hidden="true">↗</span></a>
+        {{end}}
       </div>
-      <div id="recent-releases" class="release-list"></div>
+      <div id="recent-releases" class="release-list" aria-live="polite">
+        <article class="release-empty loading-card">Loading recent history…</article>
+      </div>
     </section>
 
   </main>

@@ -242,10 +242,9 @@ func (c *Client) Query(ctx context.Context, closed bool, limit int) ([]*WorkItem
 		stateOperator = "="
 	}
 	wiql := fmt.Sprintf(
-		"SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = '%s' "+
-			"AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s' AND [System.State] %s 'Closed' "+
+		"SELECT [System.Id] FROM WorkItems WHERE %s AND [System.State] %s 'Closed' "+
 			"ORDER BY [System.ChangedDate] DESC",
-		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag), stateOperator,
+		c.releaseFilter(), stateOperator,
 	)
 	sdk, token, err := c.newClient(ctx)
 	if err != nil {
@@ -481,6 +480,23 @@ func hasTag(tags, want string) bool {
 		}
 	}
 	return false
+}
+
+// QueryURL returns an Azure DevOps page that lists all release work items, newest first.
+func (c *Client) QueryURL() string {
+	wiql := fmt.Sprintf(
+		"SELECT [System.Id], [System.Title], [System.State], [System.AssignedTo], [System.ChangedDate] "+
+			"FROM WorkItems WHERE %s ORDER BY [System.ChangedDate] DESC",
+		c.releaseFilter(),
+	)
+	return c.baseURL + "/" + url.PathEscape(c.project) + "/_queries/query/?" + url.Values{"wiql": {wiql}}.Encode()
+}
+
+func (c *Client) releaseFilter() string {
+	return fmt.Sprintf(
+		"[System.WorkItemType] = '%s' AND [System.AreaPath] = '%s' AND [System.Tags] CONTAINS '%s'",
+		escapeWIQL(c.workItemType), escapeWIQL(AreaPath), escapeWIQL(SelectorTag),
+	)
 }
 
 func escapeWIQL(value string) string {

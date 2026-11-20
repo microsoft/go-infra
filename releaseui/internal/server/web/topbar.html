@@ -1,0 +1,22 @@
+{{define "topbar"}}
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="{{if .Brand}}{{.Brand}} {{end}}Release UI home">
+      <span class="brand-mark" aria-hidden="true">📦</span>
+      <span>
+        <strong>Release UI</strong>
+        {{if .Brand}}<small>{{.Brand}}</small>{{end}}
+      </span>
+    </a>
+    <nav class="topbar-nav" aria-label="Release navigation">
+      <a class="topbar-link" href="/processes">New process</a>
+      {{if .InstructionsURL}}
+      <a class="topbar-link" href="{{.InstructionsURL}}" target="_blank" rel="noreferrer" aria-label="Instructions (opens in a new tab)">Instructions <span aria-hidden="true">↗</span></a>
+      {{end}}
+    </nav>
+    <div class="connection" id="server-connection" role="status">
+      <span class="connection-dot"></span>
+      <span class="connection-label">Connecting…</span>
+    </div>
+  </header>
+  <script src="/assets/topbar.js" defer></script>
+{{end}}

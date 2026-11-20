@@ -16,6 +16,7 @@ import (
 )
 
 type config struct {
+	style       Style
 	processes   []contract.ProcessGroup
 	runStore    runstore.Store
 	openBrowser bool
@@ -23,6 +24,22 @@ type config struct {
 
 // Option configures the release UI.
 type Option func(*config)
+
+// Style configures the release UI brand and documentation link.
+type Style struct {
+	// Brand appears in the release UI title and header.
+	Brand string
+
+	// InstructionsURL is an optional link to release instructions shown in the top bar.
+	InstructionsURL string
+}
+
+// WithStyle sets the release UI brand and optional instructions link.
+func WithStyle(style Style) Option {
+	return func(config *config) {
+		config.style = style
+	}
+}
 
 // WithProcesses sets the release process groups shown in the UI.
 func WithProcesses(processes ...contract.ProcessGroup) Option {
@@ -54,6 +71,12 @@ func ListenAndServe(ctx context.Context, address string, options ...Option) erro
 		option(&config)
 	}
 	serverOptions := []server.Option{server.WithProcesses(config.processes...)}
+	if config.style.Brand != "" {
+		serverOptions = append(serverOptions, server.WithBrand(config.style.Brand))
+	}
+	if config.style.InstructionsURL != "" {
+		serverOptions = append(serverOptions, server.WithInstructionsURL(config.style.InstructionsURL))
+	}
 	if config.runStore != nil {
 		serverOptions = append(serverOptions, server.WithReleaseRunStore(config.runStore))
 	}

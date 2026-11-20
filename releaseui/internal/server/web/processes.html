@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run a process · {{if .Brand}}{{.Brand}} {{end}}Release UI</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/processes.js" defer></script>
+</head>
+<body data-brand="{{.Brand}}">
+{{template "topbar" .}}
+
+  <main class="dashboard-main">
+    <section class="hero dashboard-hero">
+      <div>
+        <p class="eyebrow">Start new work</p>
+        <h1>Run a process</h1>
+        <p class="hero-copy">Choose a release process.</p>
+      </div>
+    </section>
+    <div id="process-list" class="process-list" aria-live="polite">
+      <p class="release-empty loading-card">Loading release processes...</p>
+    </div>
+    <p id="processes-error" class="tracking-error" role="alert" hidden></p>
+  </main>
+</body>
+</html>
