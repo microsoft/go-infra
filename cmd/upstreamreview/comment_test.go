@@ -14,7 +14,7 @@ import (
 	"github.com/google/go-github/v92/github"
 )
 
-func TestLinkSummary(t *testing.T) {
+func TestUpdatePRComment(t *testing.T) {
 	const label = "backend review complete"
 	base, head := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	pr := github.PullRequest{State: new("open"), Base: &github.PullRequestBranch{SHA: &base}, Head: &github.PullRequestBranch{SHA: &head}, UpdatedAt: &github.Timestamp{Time: time.Unix(100, 0).UTC()}}
@@ -71,12 +71,15 @@ func TestLinkSummary(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		}
 	})
-	scan := scanResult{Base: base, Head: head, Old: strings.Repeat("1", 40), New: strings.Repeat("2", 40), Attempt: 2}
+	g := gate{client: client, owner: "fork", repo: "runtime", policy: policy{label: label}}
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+	scan := scanResult{Base: base, Head: head, Old: strings.Repeat("1", 40), New: strings.Repeat("2", 40)}
 	run := func(id int64, v verdict, wantWrite string) {
 		t.Helper()
 		writes = nil
 		scan.Verdict = v
-		if err := linkSummary(t.Context(), client, &event, id, scan, label); err != nil {
+		t.Setenv("GITHUB_RUN_ID", fmt.Sprint(id))
+		if err := g.updatePRComment(t.Context(), 7, &event, scan); err != nil {
 			t.Fatal(err)
 		}
 		if got := strings.Join(writes, ","); got != wantWrite {
@@ -131,11 +134,14 @@ func TestLinkSummary(t *testing.T) {
 	live = pr
 	invalid := scan
 	invalid.Verdict = "unknown"
-	if err := linkSummary(t.Context(), client, &event, 13, invalid, label); err == nil {
+	if err := g.updatePRComment(t.Context(), 7, &event, invalid); err == nil {
 		t.Fatal("accepted an unknown verdict")
 	}
+	if err := g.updatePRComment(t.Context(), 8, &event, scan); err == nil {
+		t.Fatal("accepted the event for a different PR")
+	}
 	status = http.StatusForbidden
-	if err := linkSummary(t.Context(), client, &event, 13, scan, label); err == nil {
+	if err := g.updatePRComment(t.Context(), 7, &event, scan); err == nil {
 		t.Fatal("comment write failure was ignored")
 	}
 	status = http.StatusOK
@@ -155,7 +161,7 @@ func TestLinkSummary(t *testing.T) {
 	body = "" // A clean diff must still clear stale labels when there's no comment to edit.
 	run(15, clean, "DELETE")
 	deleteStatus = http.StatusForbidden
-	if err := linkSummary(t.Context(), client, &event, 15, scan, label); err == nil || !strings.Contains(err.Error(), "remove stale label") {
+	if err := g.updatePRComment(t.Context(), 7, &event, scan); err == nil || !strings.Contains(err.Error(), "remove stale label") {
 		t.Fatalf("want label cleanup error, got %v", err)
 	}
 }

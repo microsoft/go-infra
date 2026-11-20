@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/google/go-github/v92/github"
@@ -23,6 +22,7 @@ func checkPRImports(args []string) error {
 	repo := flags.String("repo", "", "target GitHub repository (owner/name)")
 	n := flags.Int("pr", 0, "open pull request number")
 	merge := flags.String("merge", "", "test merge commit for this workflow run")
+	updateComment := flags.Bool("update-pr-comment", false, "update the PR review comment and remove stale review labels (requires pull-requests: write)")
 	var p policy
 	flags.StringVar(&p.upstream, "upstream", "", "upstream GitHub repository (owner/name)")
 	flags.StringVar(&p.submodule, "submodule", "", "submodule path in the target repository")
@@ -37,8 +37,7 @@ func checkPRImports(args []string) error {
 	if *n <= 0 || !objectID.MatchString(*merge) {
 		return errors.New("a positive PR number and a full test merge SHA are required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	client, err := githubutil.NewClient(ctx, os.Getenv("GH_TOKEN"))
 	if err != nil {
 		return err
@@ -54,33 +53,35 @@ func checkPRImports(args []string) error {
 			return err
 		}
 	}
-	r, err := g.check(ctx, *n, *merge, event)
+	return g.runCheck(ctx, *n, *merge, event, *updateComment)
+}
+
+func readPREvent(path string) (*github.PullRequestEvent, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read pull request event: %w", err)
+	}
+	var event github.PullRequestEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		return nil, fmt.Errorf("decode pull request event: %w", err)
+	}
+	return &event, nil
+}
+
+func (g *gate) runCheck(ctx context.Context, n int, merge string, event *github.PullRequestEvent, updateComment bool) error {
+	scanCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	r, scanErr := g.check(scanCtx, n, merge, event)
 	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
 		return writeErr
 	}
-	if outputErr := r.writeOutput(os.Getenv("GITHUB_OUTPUT"), os.Getenv("GITHUB_RUN_ATTEMPT")); outputErr != nil {
-		log.Printf("could not write optional review output: %v", outputErr)
+	// A missing acknowledgment is a verified verdict worth publishing even though the check fails.
+	if updateComment && r.updateComment {
+		commentCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		if err := g.updatePRComment(commentCtx, n, event, r.scan); err != nil {
+			log.Printf("warning: could not update PR comment or review label: %v", err)
+		}
 	}
-	return err
-}
-
-func (r report) writeOutput(path, attempt string) error {
-	if path == "" || r.scan.Verdict == "" { // Outside Actions, or no verified result.
-		return nil
-	}
-	n, err := strconv.Atoi(attempt)
-	if err != nil || n <= 0 {
-		return errors.New("GITHUB_RUN_ATTEMPT must be a positive number")
-	}
-	r.scan.Attempt = n
-	data, err := json.Marshal(r.scan)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(f, "review=%s\nupdate-comment=%t\n", data, r.updateComment)
-	return errors.Join(err, f.Close())
+	return scanErr
 }

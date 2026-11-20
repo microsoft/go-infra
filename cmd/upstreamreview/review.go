@@ -43,13 +43,10 @@ const (
 )
 
 type scanResult struct {
-	Verdict    verdict `json:"verdict"`
-	Base       string  `json:"base"`
-	Head       string  `json:"head"`
-	Old        string  `json:"old"` // Upstream pins, independent of the PR commits.
-	New        string  `json:"new"`
-	LabelEvent int64   `json:"labelEvent,omitempty"`
-	Attempt    int     `json:"attempt"`
+	Verdict    verdict
+	Base, Head string
+	Old, New   string // Upstream pins, independent of the PR commits.
+	LabelEvent int64
 }
 
 type report struct {

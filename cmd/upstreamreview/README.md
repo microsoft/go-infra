@@ -14,7 +14,7 @@ By default, this subcommand searches `src` for `crypto/internal/fips140` importe
 
 ## check-pr-imports
 
-Check a GitHub.com pull request from a checkout of its test merge with `fetch-depth: 2` and a `GH_TOKEN` with read access to pull requests. The Markdown summary links to each matching file and gives the equivalent `upstreamreview importdiff` command. For example:
+Check a GitHub.com pull request from a checkout of its test merge with `fetch-depth: 2`. The command is read-only by default: it needs a `GH_TOKEN` with read access to pull requests and prints a Markdown summary with links to matching files and a reproduction command. For example:
 
 ```sh
 go tool upstreamreview check-pr-imports -repo "$GITHUB_REPOSITORY" -pr "$PR" -merge "$GITHUB_SHA" \
@@ -27,10 +27,10 @@ go tool upstreamreview check-pr-imports -repo "$GITHUB_REPOSITORY" -pr "$PR" -me
 
 The check passes if the scan is clean or the PR label acknowledges the exact pair of upstream pins in the base and proposed merge. Enable the `labeled` and `unlabeled` PR activities: the label's own `labeled` event (`GITHUB_EVENT_PATH`) establishes a new acknowledgment. Other runs can reuse it only when the bot's summary comment records both pins and the same label application from the PR's issue history. Changing either pin or removing the label invalidates that acknowledgment. A label with no verifiable record (for example, if the comment was deleted or could not be posted) does not acknowledge a new scan. Remove and reapply it after review.
 
-In Actions, a verified scan sets `review` to JSON with the `verdict` (`clean`, `review-needed`, or `acknowledged`), the outer PR `base` and `head`, the upstream `old` and `new` pins, the workflow run `attempt`, and the active `labelEvent` ID when applicable. It also sets `update-comment`: `false` for a clean PR known to have no conversation comments or label to clear. `review-needed` is emitted even though the check fails for missing acknowledgment. Failed and stale scans emit no verdict. If the PR head moved, see the checks for the new head. If only the base moved, update the PR branch to start a fresh check; retrying the original job uses the same commit.
+If the PR head moved, see the checks for the new head. If only the base moved, update the PR branch to start a fresh check; retrying the original job uses the same commit.
 
-## update-pr-comment
+### Opt in to PR comments
 
-`upstreamreview update-pr-comment -review "$REVIEW" -label "$REVIEW_LABEL"` publishes the verified verdict. Pass the same label as the checker. The comment links to the scanned PR head and base commits and to the exact workflow attempt. For `acknowledged`, it also records the reviewed pins and label application. For a stale label, the writer removes only the application identified by the scan. A `clean` verdict updates an existing comment to **no matching changes** without creating a new one. The writer reads the PR from `GITHUB_EVENT_PATH` and the run ID from `GITHUB_RUN_ID`, and checks that the PR and label are still current before writing.
+In Actions, add `-update-pr-comment` to the same command to publish the verdict in one bot comment, record pin acknowledgments for future runs, and remove stale review labels. Give the same-repository job `pull-requests: write` and serialize runs per PR. Do not execute code from a fork in a write-enabled job.
 
-On same-repository PRs the writer can be a final step in the scan job, sharing checkout and Go setup. Give only that job `pull-requests: write`, serialize runs per PR, and pass the scan output through a `REVIEW` environment variable. Run the step with `if: ${{ !cancelled() && steps.review.outputs.review != '' && steps.review.outputs.update-comment == 'true' }}` and `continue-on-error: true`. A comment or label cleanup error must not change the scan result. Do not execute code from a fork in a write-enabled job.
+The comment links to the scanned PR head, base, and exact workflow attempt. A missing acknowledgment still gets a comment before the check exits unsuccessfully. A clean scan updates an existing comment without creating one; if there are no conversation comments or labels to clear, it skips publication entirely. A failed or stale comparison never posts. The checker rechecks PR and label freshness before writing, and logs comment or label cleanup errors without changing the scan result.

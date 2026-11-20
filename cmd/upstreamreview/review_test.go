@@ -135,30 +135,6 @@ func TestInvalidPolicy(t *testing.T) {
 	}
 }
 
-func TestReviewOutput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "output")
-	if err := os.WriteFile(path, []byte("other=value\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	scan := scanResult{Verdict: reviewNeeded, Base: strings.Repeat("a", 40), Head: strings.Repeat("b", 40)}
-	for _, r := range []report{{}, {summary: "stale scan"}, {summary: "findings", scan: scan, updateComment: true}} {
-		if err := r.writeOutput(path, "2"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	output, ok := strings.CutPrefix(string(data), "other=value\nreview=")
-	output, update := strings.CutSuffix(output, "\nupdate-comment=true\n")
-	var got scanResult
-	scan.Attempt = 2
-	if !ok || !update || json.Unmarshal([]byte(output), &got) != nil || got != scan {
-		t.Fatalf("expected only the verified scan in the step outputs, got %q", data)
-	}
-}
-
 func TestCurrentLabelApplication(t *testing.T) {
 	const label = "reviewed"
 	event := func(id int64, action, name string) *github.IssueEvent {
@@ -235,6 +211,7 @@ func TestPRCheck(t *testing.T) {
 	var duringScan func()
 	var scans int
 	var prReads atomic.Int32
+	var commentReads int
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/fork/go/pulls/7", func(w http.ResponseWriter, r *http.Request) {
 		prReads.Add(1)
@@ -259,6 +236,7 @@ func TestPRCheck(t *testing.T) {
 		}
 	})
 	mux.HandleFunc("GET /repos/fork/go/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
+		commentReads++
 		comments := []*github.IssueComment{{Body: &comment, User: &github.User{Login: &commentAuthor}}}
 		if err := json.NewEncoder(w).Encode(comments); err != nil {
 			t.Error(err)
@@ -278,6 +256,37 @@ func TestPRCheck(t *testing.T) {
 		}
 		return files, scanErr
 	}
+	t.Run("optional comment", func(t *testing.T) {
+		t.Setenv("GITHUB_RUN_ID", "100")
+		t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+		var posts int
+		status := http.StatusCreated
+		mux.HandleFunc("POST /repos/fork/go/issues/7/comments", func(w http.ResponseWriter, r *http.Request) {
+			posts++
+			w.WriteHeader(status)
+			fmt.Fprint(w, `{}`)
+		})
+		found := files
+		t.Cleanup(func() { files, labels, scanErr = found, nil, nil })
+		check := func(enable bool, wantErr error, wantReads, wantPosts int) {
+			t.Helper()
+			readsBefore, postsBefore := commentReads, posts
+			err := g.runCheck(t.Context(), 7, merge, labelWebhook(), enable)
+			if !errors.Is(err, wantErr) || commentReads-readsBefore != wantReads || posts-postsBefore != wantPosts {
+				t.Fatalf("comment=%t: got (%v, %d reads, %d posts); want (%v, %d, %d)", enable, err, commentReads-readsBefore, posts-postsBefore, wantErr, wantReads, wantPosts)
+			}
+		}
+		check(false, errAckRequired, 0, 0) // Read-only, even for findings.
+		check(true, errAckRequired, 1, 1)  // Post before returning the failed verdict.
+		status = http.StatusForbidden
+		check(true, errAckRequired, 1, 1)
+		labels = []*github.Label{{Name: p.label}}
+		check(true, nil, 1, 1) // A posting error cannot fail an acknowledged scan.
+		labels, files = nil, nil
+		check(true, nil, 0, 0) // Clean PR with no comment to update.
+		scanErr = errors.New("comparison failed")
+		check(true, scanErr, 0, 0)
+	})
 	run := func(wantErr error, wantVerdict verdict, wantSummary ...string) scanResult {
 		t.Helper()
 		before := prReads.Load()
@@ -338,7 +347,7 @@ func TestPRCheck(t *testing.T) {
 	ack := run(nil, acknowledged, "Acknowledged", p.label, "lib/example.go")
 	event = nil
 	run(errAckRequired, reviewNeeded) // A failed/missing comment write is not durable proof.
-	comment, err = ack.summaryComment("fork/go", 100, p.label)
+	comment, err = ack.summaryComment("fork/go", 100, 1, p.label)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +374,7 @@ func TestPRCheck(t *testing.T) {
 	run(errAckRequired, reviewNeeded) // A missed unlabel/relabel can't revive the old record.
 	event = labelWebhook()
 	ack = run(nil, acknowledged)
-	comment, err = ack.summaryComment("fork/go", 101, p.label)
+	comment, err = ack.summaryComment("fork/go", 101, 1, p.label)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +398,7 @@ func TestPRCheck(t *testing.T) {
 	appliedAt.Time = appliedAt.Add(time.Minute)
 	event = labelWebhook()
 	ack = run(nil, acknowledged)
-	comment, err = ack.summaryComment("fork/go", 102, p.label)
+	comment, err = ack.summaryComment("fork/go", 102, 1, p.label)
 	if err != nil {
 		t.Fatal(err)
 	}
