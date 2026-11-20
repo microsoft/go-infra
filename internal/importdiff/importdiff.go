@@ -71,7 +71,7 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 		return nil, err
 	}
 	git := func(args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "git", append([]string{"-C", repo, "--literal-pathspecs"}, args...)...)
+		return exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
 	}
 	rev := func(ref string) (string, error) {
 		out, err := git("rev-parse", "--verify", "--end-of-options", ref+"^{commit}").Output()
@@ -88,8 +88,15 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 	if err != nil {
 		return nil, err
 	}
-	args := []string{"diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", oldID, newID, "--"}
-	out, err := git(append(args, rule.SourceRoots...)...).Output()
+	args := []string{"--no-literal-pathspecs", "diff-tree", "-r", "-z", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", "--no-relative", oldID, newID, "--"}
+	// Source roots are relative to the repository, not the caller's directory.
+	// A "." root selects the whole tree, so no pathspecs are needed.
+	if !slices.Contains(rule.SourceRoots, ".") {
+		for _, root := range rule.SourceRoots {
+			args = append(args, ":(top,literal)"+root)
+		}
+	}
+	out, err := git(args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("diff upstream revisions: %w", err)
 	}
@@ -141,30 +148,32 @@ func Compare(ctx context.Context, repo, oldRev, newRev string, rule Rule) ([]Cha
 	if err := cat.Start(); err != nil {
 		return nil, err
 	}
-	reader := bufio.NewReader(r)
-	read := func() error {
-		for i := range changes {
-			c := &changes[i]
-			var err error
-			c.OldImports, err = readImports(reader, c.Path, c.OldBlob, rule.ImportRoots)
-			if err != nil {
-				return err
-			}
-			c.NewImports, err = readImports(reader, c.Path, c.NewBlob, rule.ImportRoots)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	scanErr := read()
+	matches, scanErr := readMatches(bufio.NewReader(r), changes, rule.ImportRoots)
+	// A parse error can leave cat-file blocked writing unread blobs.
 	_ = r.Close()
 	if err := errors.Join(scanErr, cat.Wait()); err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(changes, func(c Change) bool {
-		return len(c.OldImports)+len(c.NewImports) == 0
-	}), nil
+	return matches, nil
+}
+
+func readMatches(r *bufio.Reader, changes []Change, roots []string) ([]Change, error) {
+	var matches []Change
+	for _, c := range changes {
+		var err error
+		c.OldImports, err = readImports(r, c.Path, c.OldBlob, roots)
+		if err != nil {
+			return nil, err
+		}
+		c.NewImports, err = readImports(r, c.Path, c.NewBlob, roots)
+		if err != nil {
+			return nil, err
+		}
+		if len(c.OldImports)+len(c.NewImports) != 0 {
+			matches = append(matches, c)
+		}
+	}
+	return matches, nil
 }
 
 func readImports(r *bufio.Reader, name, id string, roots []string) ([]string, error) {

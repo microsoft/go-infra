@@ -1,6 +1,6 @@
 # upstreamreview
 
-`upstreamreview` finds changed Go files that directly import a package or one of its subpackages in either revision. This catches removed imports and edits that leave the imports unchanged, including in tests and build-tagged files.
+`upstreamreview` helps maintainers of a Go fork review upstream updates. It finds changed Go files that directly import a package of interest or one of its subpackages in either revision. This catches removed imports and edits that leave the imports unchanged, including in tests and build-tagged files.
 
 Install with `go install github.com/microsoft/go-infra/cmd/upstreamreview@VERSION`, or pin it with `go get -tool github.com/microsoft/go-infra/cmd/upstreamreview@VERSION` and run it as `go tool upstreamreview`.
 
@@ -14,7 +14,7 @@ upstreamreview importdiff -repo /path/to/golang/go -exclude src/crypto/internal/
 
 The JSON output lists each matching path, its old and new Git blob IDs, and the matching imports on each side. An empty result is `[]`.
 
-The defaults are `-src src -import crypto/internal/fips140` with no exclusions. Each of `-src`, `-import`, and `-exclude` can be repeated; the first explicit value replaces that flag's default.
+The defaults are `-src src -import crypto/internal/fips140` with no exclusions. Each of `-src`, `-import`, and `-exclude` can be repeated; the first explicit value replaces that flag's default. Source and exclusion paths are relative to the repository root, even when running from a subdirectory.
 
 ## check-pr-imports
 

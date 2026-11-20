@@ -51,9 +51,9 @@ func TestCompare(t *testing.T) {
 	flags := flag.NewFlagSet("importdiff", flag.ContinueOnError)
 	rule.BindFlags(flags)
 	if err := flags.Parse([]string{
-		"-src", "tools", "-src", "src/example", "-src", "src",
+		"-src", "tools [sdk]", "-src", "src/example", "-src", "src",
 		"-import", pkg, "-import", pkg + "/a", "-import", "x.test/lib",
-		"-exclude", "src/example/private", "-exclude", "tools/generated",
+		"-exclude", "src/example/private", "-exclude", "tools [sdk]/generated",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -71,16 +71,14 @@ func TestCompare(t *testing.T) {
 	write("src/not-an-import.go", other)
 	write("src/second.go", "package p\nimport _ \"x.test/lib/sub\"\n")
 	write("src/testdata/bad.go", "not Go")
-	write("tools/both.go", "package p\nimport (\n _ \"x.test/lib\"\n _ \"example/private/a\"\n)\n")
-	write("tools/generated/hidden.go", watched)
+	write("tools [sdk]/both.go", "package p\nimport (\n _ \"x.test/lib\"\n _ \"example/private/a\"\n)\n")
+	write("tools [sdk]/generated/hidden.go", watched)
 	write("outside.go", watched)
 	updated := commit()
 	write("src/body.go", "dirty working tree, not Go")
 
-	got, err := Compare(t.Context(), dir, old, updated, rule)
-	if err != nil {
-		t.Fatal(err)
-	}
+	git("config", "diff.relative", "true")
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
 	want := []Change{
 		{"src/body.go", git("rev-parse", old+":src/body.go"), git("rev-parse", updated+":src/body.go"), []string{pkg}, []string{pkg}},
 		{"src/example/privateonly/sibling.go", "", git("rev-parse", updated+":src/example/privateonly/sibling.go"), nil, []string{pkg}},
@@ -89,13 +87,26 @@ func TestCompare(t *testing.T) {
 		{"src/removed.go", git("rev-parse", old+":src/removed.go"), "", []string{pkg}, nil},
 		{"src/renamed.go", "", git("rev-parse", updated+":src/renamed.go"), nil, []string{pkg}},
 		{"src/second.go", "", git("rev-parse", updated+":src/second.go"), nil, []string{"x.test/lib/sub"}},
-		{"tools/both.go", "", git("rev-parse", updated+":tools/both.go"), nil, []string{pkg + "/a", "x.test/lib"}},
+		{"tools [sdk]/both.go", "", git("rev-parse", updated+":tools [sdk]/both.go"), nil, []string{pkg + "/a", "x.test/lib"}},
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("changes = %#v\nwant %#v", got, want)
+	check := func(subdir string, roots []string, want []Change) {
+		t.Helper()
+		r := rule
+		r.SourceRoots = roots
+		got, err := Compare(t.Context(), filepath.Join(dir, subdir), old, updated, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("from %q, roots %q: changes = %#v\nwant %#v", subdir, roots, got, want)
+		}
 	}
+	check(".", rule.SourceRoots, want)
+	check("src/example", rule.SourceRoots, want)
+	outside := Change{"outside.go", "", git("rev-parse", updated+":outside.go"), nil, []string{pkg}}
+	check("src/example", []string{"."}, append([]Change{outside}, want...))
 	invalid := rule
-	invalid.ExcludeDirs = []string{"tools/generated", "../outside"}
+	invalid.ExcludeDirs = []string{"tools [sdk]/generated", "../outside"}
 	if _, err := Compare(t.Context(), dir, old, updated, invalid); err == nil {
 		t.Error("accepted an invalid second exclusion")
 	}
@@ -103,7 +114,7 @@ func TestCompare(t *testing.T) {
 	if _, err := Compare(t.Context(), dir, updated, bad, rule); err == nil {
 		t.Error("malformed source reported as a clean scan")
 	}
-	write("tools/testdata/bad.go", "not Go: x.test/lib\n")
+	write("tools [sdk]/testdata/bad.go", "not Go: x.test/lib\n")
 	if _, err := Compare(t.Context(), dir, bad, commit(), rule); err == nil {
 		t.Error("malformed fixture mentioning another import root reported as a clean scan")
 	}
