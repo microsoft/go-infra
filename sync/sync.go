@@ -266,22 +266,22 @@ func (b *changedBranch) pushLease() string {
 	return "--force-with-lease=refs/heads/" + b.Refs.PRBranch() + ":" + b.RemoteCommit
 }
 
-func (b *changedBranch) fetchRemoteCommit(dir, remote string) error {
+func (b *changedBranch) fetchRemoteCommit(dir, remote string, auth gitcmd.URLAuther) error {
 	var err error
-	b.RemoteCommit, err = fetchRemoteBranch(dir, remote, b.Refs.PRBranch())
+	b.RemoteCommit, err = fetchRemoteBranch(dir, remote, b.Refs.PRBranch(), auth)
 	return err
 }
 
-func fetchRemoteBranch(dir, remote, branch string) (string, error) {
-	exists, err := remoteBranchExists(dir, remote, branch)
+func fetchRemoteBranch(dir, remote, branch string, auth gitcmd.URLAuther) (string, error) {
+	exists, err := remoteBranchExists(dir, remote, branch, auth)
 	if err != nil || !exists {
 		return "", err
 	}
-	return gitcmd.FetchRefCommit(dir, remote, "refs/heads/"+branch)
+	return gitcmd.FetchRefCommit(dir, auth.InsertAuth(remote), "refs/heads/"+branch)
 }
 
-func remoteBranchExists(dir, remote, branch string) (bool, error) {
-	output, err := executil.Output(executil.Dir(dir, "git", "ls-remote", "--heads", remote, "refs/heads/"+branch))
+func remoteBranchExists(dir, remote, branch string, auth gitcmd.URLAuther) (bool, error) {
+	output, err := executil.Output(executil.Dir(dir, "git", "ls-remote", "--heads", auth.InsertAuth(remote), "refs/heads/"+branch))
 	return strings.TrimSpace(output) != "", err
 }
 
@@ -323,24 +323,21 @@ type SyncResult struct {
 	Commit string
 }
 
+// A branchPlan lists the updates for one invocation. Scheduled sync and release
+// preparation use the same repositories but update different branches and files.
+type branchPlan struct {
+	branches          []*gitpr.SyncPRRefSet
+	mirrorBranches    []*gitpr.MirrorRefSet
+	goVersion         string
+	microsoftRevision string
+	cut               *releaseCut
+}
+
 // MakeBranchPRs creates sync changes for each branch in the given entry and submits them as PRs.
 // Multiple branches are processed at the same time in order to efficiently use Git: it is better to
 // tell Git to fetch/push multiple branches at the same time than run the operations individually.
 // Returns an error, or the sync results of each branch.
 func MakeBranchPRs(f *Flags, dir string, entry *ConfigEntry) ([]SyncResult, error) {
-	return makeBranchPRs(f, dir, entry, nil)
-}
-
-func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([]SyncResult, error) {
-	if entry.RegenerateDockerfiles {
-		if entry.SubmoduleTarget == "" {
-			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget")
-		}
-		if err := dockerfilegen.EnsurePrerequisites(); err != nil {
-			return nil, err
-		}
-	}
-
 	if entry.SyncDocs {
 		if entry.MainBranch == "" ||
 			entry.SubmoduleTarget != "" ||
@@ -348,6 +345,61 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 			len(entry.AutoSyncBranches) != 0 {
 
 			return nil, errors.New("SyncDocs requires MainBranch and cannot be combined with SubmoduleTarget, BranchMap, or AutoSyncBranches")
+		}
+	}
+
+	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.AutoSyncBranches))
+	for _, upstream := range entry.AutoSyncBranches {
+		target, err := entry.TargetBranch(upstream)
+		if err != nil {
+			return nil, err
+		}
+		if target == "" {
+			return nil, fmt.Errorf("no target match found for auto sync branch %q", upstream)
+		}
+		branches = append(branches, &gitpr.SyncPRRefSet{
+			UpstreamName: upstream,
+			Commit:       entry.SourceBranchLatestCommit[upstream],
+			PRRefSet: gitpr.PRRefSet{
+				Name:    target,
+				Purpose: "auto-sync",
+			},
+		})
+	}
+	if entry.SyncDocs {
+		for _, version := range []string{msmajorversions.Previous.Version, msmajorversions.Current.Version} {
+			branches = append(branches, &gitpr.SyncPRRefSet{
+				UpstreamName: entry.MainBranch,
+				PRRefSet: gitpr.PRRefSet{
+					Name:    "microsoft/release-branch.go" + version,
+					Purpose: "auto-sync-docs",
+				},
+			})
+		}
+	}
+	// Auto-mirrored branches are simpler: always get the latest commits to
+	// push to the mirror repo with the same branch name.
+	autoMirrorBranches := make([]*gitpr.MirrorRefSet, 0, len(entry.AutoMirrorBranches))
+	for _, upstreamPattern := range entry.AutoMirrorBranches {
+		autoMirrorBranches = append(autoMirrorBranches, &gitpr.MirrorRefSet{
+			UpstreamPattern: upstreamPattern,
+		})
+	}
+	return makeBranchPRs(f, dir, entry, branchPlan{
+		branches:          branches,
+		mirrorBranches:    autoMirrorBranches,
+		goVersion:         entry.GoVersionFileContent,
+		microsoftRevision: entry.GoMicrosoftRevisionFileContent,
+	})
+}
+
+func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, plan branchPlan) ([]SyncResult, error) {
+	if entry.RegenerateDockerfiles {
+		if entry.SubmoduleTarget == "" {
+			return nil, errors.New("RegenerateDockerfiles requires SubmoduleTarget")
+		}
+		if err := dockerfilegen.EnsurePrerequisites(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -373,47 +425,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		return c
 	}
 
-	branches := make([]*gitpr.SyncPRRefSet, 0, len(entry.AutoSyncBranches))
-	for _, upstream := range entry.AutoSyncBranches {
-		target, err := entry.TargetBranch(upstream)
-		if err != nil {
-			return nil, err
-		}
-		if target == "" {
-			return nil, fmt.Errorf("no target match found for auto sync branch %q", upstream)
-		}
-		nb := &gitpr.SyncPRRefSet{
-			UpstreamName: upstream,
-			PRRefSet: gitpr.PRRefSet{
-				Name:    target,
-				Purpose: "auto-sync",
-			},
-		}
-		if commit, ok := entry.SourceBranchLatestCommit[upstream]; ok {
-			nb.Commit = commit
-		}
-		branches = append(branches, nb)
-	}
-	if entry.SyncDocs {
-		for _, version := range []string{msmajorversions.Previous.Version, msmajorversions.Current.Version} {
-			branches = append(branches, &gitpr.SyncPRRefSet{
-				UpstreamName: entry.MainBranch,
-				PRRefSet: gitpr.PRRefSet{
-					Name:    "microsoft/release-branch.go" + version,
-					Purpose: "auto-sync-docs",
-				},
-			})
-		}
-	}
-	// Auto-mirrored branches are simpler: always get the latest commits to
-	// push to the mirror repo with the same branch name.
-	autoMirrorBranches := make([]*gitpr.MirrorRefSet, 0, len(entry.AutoMirrorBranches))
-	for _, upstreamPattern := range entry.AutoMirrorBranches {
-		autoMirrorBranches = append(autoMirrorBranches, &gitpr.MirrorRefSet{
-			UpstreamPattern: upstreamPattern,
-		})
-	}
-
+	branches, cut := plan.branches, plan.cut
 	if cut == nil && *f.CreateBranches {
 		if entry.MainBranch == "" {
 			return nil, errors.New("the create-branches flag requires MainBranch to be configured, but it is not")
@@ -468,22 +480,22 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 	//
 	// For an overview of the sequence of Git commands below, see the command description.
 
-	upstreamRemote := urlAuther.InsertAuth(entry.Upstream)
-	targetRemote := urlAuther.InsertAuth(entry.Target)
-	fetchUpstream := newGitCmd("fetch", "--no-tags", upstreamRemote)
-	fetchOrigin := newGitCmd("fetch", "--no-tags", targetRemote)
+	fetchUpstream := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Upstream))
 	for _, b := range branches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamFetchRefspec())
-		fetchOrigin.Args = append(fetchOrigin.Args, b.BaseBranchFetchRefspec())
 	}
-	for _, b := range autoMirrorBranches {
+	for _, b := range plan.mirrorBranches {
 		fetchUpstream.Args = append(fetchUpstream.Args, b.UpstreamMirrorFetchRefspec())
 	}
 	if err := run(fetchUpstream); err != nil {
 		return nil, err
 	}
 	if cut == nil {
-		if err := run(fetchOrigin); err != nil {
+		fetchTarget := newGitCmd("fetch", "--no-tags", urlAuther.InsertAuth(entry.Target))
+		for _, b := range branches {
+			fetchTarget.Args = append(fetchTarget.Args, b.BaseBranchFetchRefspec())
+		}
+		if err := run(fetchTarget); err != nil {
 			return nil, err
 		}
 	}
@@ -507,7 +519,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		for _, b := range branches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
-		for _, b := range autoMirrorBranches {
+		for _, b := range plan.mirrorBranches {
 			mirror.Args = append(mirror.Args, b.UpstreamMirrorRefspec())
 		}
 		if *f.DryRun {
@@ -522,14 +534,13 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 	if cut != nil {
 		// A cut has one upstream submodule update and a separate notes PR based on target main.
 		b := branches[0]
-		b.Purpose = "prepare-release"
-		if err := cut.selectGoCommit(dir, upstreamRemote, b, entry.UpstreamMirror != ""); err != nil {
+		if err := cut.selectGoCommit(dir, entry, urlAuther, b); err != nil {
 			return nil, err
 		}
-		if err := cut.preparePRBranches(dir, targetRemote, entry.MainBranch, b); err != nil {
+		if err := cut.preparePRBranches(dir, entry, urlAuther, b); err != nil {
 			return nil, err
 		}
-		branches = append(branches, &cut.notes)
+		branches = append(branches, &cut.notesRefs)
 	}
 
 	// Parse the URLs involved in the PR to get segment information.
@@ -564,13 +575,16 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		})
 		c := &changedBranches[len(changedBranches)-1]
 
-		prBody := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃" +
-			"\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration." +
-			"\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
+		prBody := "Hi! I'm a bot, and this is an automatically generated upstream sync PR. 🔃"
+		if cut == nil {
+			prBody += "\n\nAfter submitting the PR, I will attempt to enable auto-merge in the \"merge commit\" configuration."
+		} else {
+			prBody += "\n\nPlease review this release preparation PR before merging."
+		}
+		prBody += "\n\nFor more information, visit [sync documentation in microsoft/go-infra](https://github.com/microsoft/go-infra/tree/main/docs/automation/sync.md)."
 		var prTitle, commitMessage string
 
 		if cut != nil {
-			prBody = fmt.Sprintf("Preparing the Microsoft build of Go %s release branch. Please review before merging.", cut.version)
 			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, parsedPRTargetRemote, c); err != nil {
 				return nil, err
 			}
@@ -578,11 +592,12 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 				continue
 			}
 		}
-		if cut != nil && b == &cut.notes {
+		if cut != nil && b == &cut.notesRefs {
 			if err := cut.stageNotes(dir); err != nil {
 				return nil, err
 			}
 			prTitle = "Prepare " + cut.notesVersion + " release notes doc"
+			prBody += fmt.Sprintf("\n\nThis PR starts the Go %s release notes on `%s`.", cut.notesVersion, b.Name)
 			commitMessage = prTitle
 		} else if entry.SyncDocs {
 			if err := syncDocs(dir, entry.Upstream, b); err != nil {
@@ -692,7 +707,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 			//
 			// If there is no expected version, (e.g. the sync entry simply wants to sync to
 			// latest), don't even check.
-			if entry.GoVersionFileContent != "" {
+			if plan.goVersion != "" {
 				upstreamVersion, err := getTrimmedCmdOutput("show", newCommit+":VERSION")
 				if err != nil {
 					if _, ok := err.(*exec.ExitError); ok {
@@ -705,8 +720,8 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 				var content string
 				// We only need an outer repo VERSION file if the expected version mismatches the
 				// submodule's VERSION file.
-				if entry.GoVersionFileContent != upstreamVersion {
-					content = entry.GoVersionFileContent
+				if plan.goVersion != upstreamVersion {
+					content = plan.goVersion
 				}
 
 				if err := updateFile(filepath.Join(dir, "VERSION"), content); err != nil {
@@ -716,7 +731,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 
 			// Ensure the Microsoft revision file is what we expect it to be. If there is no
 			// expected revision, leave it alone.
-			if rev := entry.GoMicrosoftRevisionFileContent; rev != "" {
+			if rev := plan.microsoftRevision; rev != "" {
 				if err := updateFile(filepath.Join(dir, "MICROSOFT_REVISION"), rev); err != nil {
 					return nil, err
 				}
@@ -754,17 +769,18 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 				}
 			}
 
-			upstreamCommitMessage, err := getTrimmedCmdOutput("log", "--format=%B", "-n", "1", newCommit)
-			if err != nil {
-				return nil, err
-			}
-			snippet := createCommitMessageSnippet(upstreamCommitMessage)
-
-			prTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
-			commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 			if cut != nil {
 				prTitle = fmt.Sprintf("[%s] Prepare Go %s at %s", b.UpstreamName, cut.version, newCommit[:12])
+				prBody += fmt.Sprintf("\n\nThis PR updates the `%s` submodule on `%s` to `%s`.", entry.SubmoduleTarget, b.Name, newCommit)
 				commitMessage = prTitle
+			} else {
+				upstreamCommitMessage, err := getTrimmedCmdOutput("log", "--format=%B", "-n", "1", newCommit)
+				if err != nil {
+					return nil, err
+				}
+				snippet := createCommitMessageSnippet(upstreamCommitMessage)
+				prTitle = fmt.Sprintf("Update submodule to latest %#q in %#q", b.UpstreamName, b.Name)
+				commitMessage = fmt.Sprintf("Update submodule to latest %v (%v): %v", b.UpstreamName, newCommit[:8], snippet)
 			}
 
 			// Add a compare link and commit list so reviewers can see what changed upstream.
@@ -903,7 +919,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 				return nil, err
 			}
 			// A branch may exist even without an open PR, such as after PR submission fails.
-			if err := c.fetchRemoteCommit(dir, urlAuther.InsertAuth(entry.PRBranchStorageRepo())); err != nil {
+			if err := c.fetchRemoteCommit(dir, entry.PRBranchStorageRepo(), urlAuther); err != nil {
 				return nil, err
 			}
 		}
@@ -923,20 +939,6 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		fmt.Println("Checked branches for changes to sync: none found.")
 		fmt.Println("Success.")
 		return results, nil
-	}
-
-	newGitPushCommand := func(remote string, leases, refspecs []string) *exec.Cmd {
-		c := newGitCmd("push")
-		if cut != nil {
-			c.Args = append(c.Args, "--atomic")
-		}
-		c.Args = append(c.Args, leases...)
-		c.Args = append(c.Args, urlAuther.InsertAuth(remote))
-		c.Args = append(c.Args, refspecs...)
-		if *f.DryRun {
-			c.Args = append(c.Args, "-n")
-		}
-		return c
 	}
 
 	// Force push the merge branches. We can't do a fast-forward push: our new merge commit is based
@@ -962,12 +964,20 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, cut *releaseCut) ([
 		mergePushRefspecs = append(mergePushRefspecs, cut.releaseBase+":"+ref)
 	}
 	if len(mergePushRefspecs) > 0 {
-		if err := run(newGitPushCommand(entry.PRBranchStorageRepo(), mergePushLeases, mergePushRefspecs)); err != nil {
+		push := newGitCmd("push")
+		if cut != nil {
+			push.Args = append(push.Args, "--atomic")
+		}
+		push.Args = append(push.Args, mergePushLeases...)
+		push.Args = append(push.Args, urlAuther.InsertAuth(entry.PRBranchStorageRepo()))
+		push.Args = append(push.Args, mergePushRefspecs...)
+		if *f.DryRun {
+			push.Args = append(push.Args, "-n")
+		}
+		if err := run(push); err != nil {
 			return nil, err
 		}
 	}
-
-	// All Git operations are complete! Next, ensure there's a GitHub PR for each auto-merge branch.
 
 	// Accumulate overall failure. This lets PR submission continue even if there's a problem for a
 	// specific branch.

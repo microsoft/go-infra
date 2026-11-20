@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -94,7 +93,7 @@ func TestPrepareNextRelease(t *testing.T) {
 
 	git(upstream, "checkout", source)
 	must(addMockFile(upstream, "first.txt", "First release-only change"))
-	manualPin := git(upstream, "rev-parse", "HEAD")
+	manualGoCommit := git(upstream, "rev-parse", "HEAD")
 	must(addMockFile(upstream, "shared.txt", "Shared release work"))
 	selected := git(upstream, "rev-parse", "HEAD")
 	git(mirror, "fetch", upstream, "refs/heads/"+source+":refs/heads/"+source)
@@ -104,15 +103,21 @@ func TestPrepareNextRelease(t *testing.T) {
 	git(upstream, "checkout", "-b", "development", "master")
 	must(addMockFile(upstream, "development.txt", "Development after the cut"))
 	offBranch := git(upstream, "rev-parse", "HEAD")
-	must(prepareNextRelease(flags, preview, config))
-	n, err := strconv.Atoi(strings.TrimPrefix(version, "1."))
-	must(err)
-	newNotes := fmt.Sprintf("docs/go1.%d.md", n+1)
+	// Release preparation must not mirror unrelated branches or stamp a release version.
+	previewConfig := config
+	previewConfig.AutoMirrorBranches = []string{"ordinary-sync-only"}
+	previewConfig.SourceBranchLatestCommit = map[string]string{source: later}
+	previewConfig.GoVersionFileContent, previewConfig.GoMicrosoftRevisionFileContent = "go"+version+"rc1", "1"
+	must(prepareNextRelease(flags, preview, previewConfig))
+	newNotes := "docs/go" + msmajorversions.AfterNextVersion + ".md"
 	if got := git(preview, "rev-parse", subPR+"^"); got != mainTip {
 		t.Fatalf("default fork = %s, want main %s", got, mainTip)
 	}
 	if got := git(preview, "rev-parse", subPR+":go"); got != selected {
 		t.Fatalf("submodule = %s, want shared tip %s (not upstream-only %s)", got, selected, later)
+	}
+	if got := git(preview, "diff", "--name-only", subPR+"^", subPR); got != "go" {
+		t.Fatalf("submodule PR changed %q, want only go", got)
 	}
 	if got := git(preview, "ls-tree", "--name-only", notesPR, "--", oldNotes, newNotes); got != newNotes {
 		t.Fatalf("notes on main after default cut: %s", got)
@@ -121,11 +126,11 @@ func TestPrepareNextRelease(t *testing.T) {
 		t.Fatal("dry run wrote remote state")
 	}
 
-	// A maintainer pinned a release commit older than the mirror tip. Only the notes need a PR.
+	// A maintainer chose a release commit older than the mirror tip. Only the notes need a PR.
 	dry = false
 	git(target, "checkout", "-b", release, base)
-	git(target, "update-index", "--cacheinfo", "160000,"+manualPin+",go")
-	git(target, "commit", "-m", "Pin an earlier Go release commit")
+	git(target, "update-index", "--cacheinfo", "160000,"+manualGoCommit+",go")
+	git(target, "commit", "-m", "Update the submodule to an earlier Go release commit")
 	manualBase := git(target, "rev-parse", "HEAD")
 	git(target, "checkout", main)
 	must(prepareNextRelease(flags, filepath.Join(dir, "precut"), config))
@@ -133,7 +138,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		t.Fatalf("moved the existing release branch from %s to %s", manualBase, got)
 	}
 	if len(prs) != 1 || prs[notesPR] != main {
-		t.Fatalf("expected only the notes PR for the manually pinned release branch, got %v", prs)
+		t.Fatalf("expected only the notes PR after the manual submodule update, got %v", prs)
 	}
 	if got := git(target, "show", notesPR+":"+oldNotes); got != "Newer notes on main" {
 		t.Fatalf("notes not on the release branch were dropped: %q", got)
@@ -208,7 +213,7 @@ func TestPrepareNextRelease(t *testing.T) {
 	if got := git(target, "rev-parse", release); got != mainTip {
 		t.Fatalf("created branch at %s, want original main tip %s", got, mainTip)
 	}
-	if got := git(target, "show", notesPR+":"+newNotes); !strings.Contains(got, fmt.Sprintf("Go 1.%d release notes", n+1)) ||
+	if got := git(target, "show", notesPR+":"+newNotes); !strings.Contains(got, "Go "+msmajorversions.AfterNextVersion+" release notes") ||
 		!strings.Contains(got, msmajorversions.Current.Version+" is no longer supported") {
 
 		t.Fatalf("unexpected new notes: %s", got)
@@ -323,9 +328,14 @@ func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 				code, body = http.StatusServiceUnavailable, `{"message":"simulated interruption"}`
 				break
 			}
-			var pr struct{ Base, Head string }
+			var pr struct{ Base, Head, Body string }
 			if err := json.NewDecoder(r.Body).Decode(&pr); err != nil {
 				return nil, err
+			}
+			if !strings.Contains(pr.Body, "automatically generated") || !strings.Contains(pr.Body, "docs/automation/sync.md") ||
+				!strings.Contains(pr.Body, "review") || strings.Contains(pr.Body, "auto-merge") {
+
+				return nil, fmt.Errorf("unexpected release preparation PR description for %s: %s", pr.Base, pr.Body)
 			}
 			head := strings.TrimPrefix(pr.Head, "microsoft:")
 			if _, found := open[head]; found {

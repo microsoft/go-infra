@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/microsoft/go-infra/executil"
@@ -21,18 +20,19 @@ import (
 
 type releaseCut struct {
 	version, notesVersion string
-	branchPoint           string // Where the shared upstream release history diverges from the default branch.
-	releaseBase           string // Actual target SHA, before creating either PR.
+	goBranchPoint         string // SHA of the merge base of upstream HEAD and the selected Go release commit.
+	releaseBase           string // SHA at the tip of the target release branch, or of main if creating it.
 	newBranch             bool
-	submoduleHead         string // A published preparation head records the selected upstream commit.
-	notesHead             string
-	notes                 gitpr.SyncPRRefSet
+
+	// Tip SHA of each PR branch in the target repo, or empty if the branch doesn't exist.
+	submodulePRHead, notesPRHead string
+	notesRefs                    gitpr.SyncPRRefSet
 }
 
-// For a new release, prepareNextRelease picks the latest Go commit available on
-// the release branch in both upstream and its mirror (if configured). It creates
-// the Microsoft release branch from main if needed, then opens separate PRs to
-// pin Go on that branch and start the following release's notes on main.
+// prepareNextRelease creates the Microsoft branch for a new Go major version
+// once its release branch exists upstream and in any configured mirror. It
+// opens separate PRs to update the Go submodule on the release branch and to
+// start the following major version's release notes on main.
 func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 	version := msmajorversions.Next.Version
 	upstream := "release-branch.go" + version
@@ -52,7 +52,7 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 		sources = append(sources, entry.UpstreamMirror)
 	}
 	for _, source := range sources {
-		exists, err := remoteBranchExists("", auth.InsertAuth(source), upstream)
+		exists, err := remoteBranchExists("", source, upstream, auth)
 		if err != nil {
 			return err
 		}
@@ -66,29 +66,28 @@ func prepareNextRelease(f *Flags, dir string, entry ConfigEntry) error {
 			return fmt.Errorf("release branch preparation needs PR submission credentials: %w", err)
 		}
 	}
-	n, err := strconv.Atoi(strings.TrimPrefix(version, "1."))
-	if err != nil {
-		return fmt.Errorf("invalid next Go major %q: %w", version, err)
-	}
 	cut := &releaseCut{
 		version:      version,
-		notesVersion: fmt.Sprintf("1.%d", n+1),
-		notes: gitpr.SyncPRRefSet{
+		notesVersion: msmajorversions.AfterNextVersion,
+		notesRefs: gitpr.SyncPRRefSet{
 			UpstreamName: target,
 			PRRefSet:     gitpr.PRRefSet{Name: entry.MainBranch, Purpose: "prepare-notes-go" + version},
 		},
 	}
-	entry.AutoSyncBranches = []string{upstream}
-	entry.AutoMirrorBranches = nil
-	entry.SourceBranchLatestCommit = nil
-	entry.GoVersionFileContent, entry.GoMicrosoftRevisionFileContent = "", ""
-	_, err = makeBranchPRs(f, dir, &entry, cut)
+	plan := branchPlan{
+		branches: []*gitpr.SyncPRRefSet{{
+			UpstreamName: upstream,
+			PRRefSet:     gitpr.PRRefSet{Name: target, Purpose: "prepare-release"},
+		}},
+		cut: cut,
+	}
+	_, err = makeBranchPRs(f, dir, &entry, plan)
 	return err
 }
 
-func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet, hasMirror bool) error {
+func (c *releaseCut) selectGoCommit(dir string, entry *ConfigEntry, auth gitcmd.URLAuther, b *gitpr.SyncPRRefSet) error {
 	var err error
-	if hasMirror {
+	if entry.UpstreamMirror != "" {
 		b.Commit, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", b.UpstreamLocalBranch(), b.UpstreamMirrorLocalBranch()))
 	} else {
 		b.Commit, err = gitcmd.RevParse(dir, b.UpstreamLocalBranch())
@@ -97,56 +96,56 @@ func (c *releaseCut) selectGoCommit(dir, upstream string, b *gitpr.SyncPRRefSet,
 		return err
 	}
 	// Commits from before the cut are ancestors of the release tip too. Find where
-	// the branches split so we can tell whether a maintainer already pinned a release commit.
-	defaultTip, err := gitcmd.FetchRefCommit(dir, upstream, "HEAD")
+	// the branches split so we can tell whether a maintainer already updated the submodule.
+	defaultTip, err := gitcmd.FetchRefCommit(dir, auth.InsertAuth(entry.Upstream), "HEAD")
 	if err != nil {
 		return fmt.Errorf("fetching upstream HEAD: %w", err)
 	}
-	c.branchPoint, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", defaultTip, b.Commit))
+	c.goBranchPoint, err = executil.SpaceTrimmedCombinedOutput(executil.Dir(dir, "git", "merge-base", defaultTip, b.Commit))
 	if err != nil {
 		return fmt.Errorf("finding the upstream branch point for %s: %w", b.UpstreamName, err)
 	}
 	return nil
 }
 
-func (c *releaseCut) preparePRBranches(dir, target, mainBranch string, b *gitpr.SyncPRRefSet) error {
+func (c *releaseCut) preparePRBranches(dir string, entry *ConfigEntry, auth gitcmd.URLAuther, b *gitpr.SyncPRRefSet) error {
 	var err error
-	c.releaseBase, err = fetchRemoteBranch(dir, target, b.Name)
+	c.releaseBase, err = fetchRemoteBranch(dir, entry.Target, b.Name, auth)
 	if err != nil {
 		return err
 	}
 	c.newBranch = c.releaseBase == ""
-	mainTip, err := gitcmd.FetchRefCommit(dir, target, "refs/heads/"+mainBranch)
+	mainTip, err := gitcmd.FetchRefCommit(dir, auth.InsertAuth(entry.Target), "refs/heads/"+entry.MainBranch)
 	if err != nil {
 		return err
 	}
-	c.submoduleHead, err = fetchRemoteBranch(dir, target, b.PRBranch())
+	c.submodulePRHead, err = fetchRemoteBranch(dir, entry.Target, b.PRBranch(), auth)
 	if err != nil {
 		return err
 	}
-	c.notesHead, err = fetchRemoteBranch(dir, target, c.notes.PRBranch())
+	c.notesPRHead, err = fetchRemoteBranch(dir, entry.Target, c.notesRefs.PRBranch(), auth)
 	if err != nil {
 		return err
 	}
 	if c.newBranch {
-		if c.submoduleHead != "" || c.notesHead != "" {
+		if c.submodulePRHead != "" || c.notesPRHead != "" {
 			return fmt.Errorf("%s is missing but a preparation PR branch already exists; check the branches before retrying", b.Name)
 		}
 		c.releaseBase = mainTip
 		fmt.Printf("Preparing to create %s at %s.\n", b.Name, c.releaseBase)
 	}
-	if err := gitcmd.Run(dir, "branch", c.notes.PRBranch(), mainTip); err != nil {
+	if err := gitcmd.Run(dir, "branch", c.notesRefs.PRBranch(), mainTip); err != nil {
 		return err
 	}
 	return gitcmd.Run(dir, "branch", b.PRBranch(), c.releaseBase)
 }
 
 func (c *releaseCut) onReleaseLine(dir, commit, tip string) (bool, error) {
-	if commit == c.branchPoint {
+	if commit == c.goBranchPoint {
 		return true, nil
 	}
 	// A gitlink inherited from upstream master may not be in our object database.
-	out, err := gitcmd.CombinedOutput(dir, "rev-list", "--ancestry-path", c.branchPoint+".."+tip)
+	out, err := gitcmd.CombinedOutput(dir, "rev-list", "--ancestry-path", c.goBranchPoint+".."+tip)
 	return slices.Contains(strings.Fields(out), commit), err
 }
 
@@ -154,8 +153,8 @@ func (c *releaseCut) onReleaseLine(dir, commit, tip string) (bool, error) {
 // what remains on the PR head.
 func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, target *gitpr.Remote, branch *changedBranch) error {
 	b := branch.Refs
-	if b == &c.notes {
-		branch.RemoteCommit = c.notesHead
+	if b == &c.notesRefs {
+		branch.RemoteCommit = c.notesPRHead
 	} else {
 		prepared, err := c.submodulePrepared(dir, b, submodule)
 		if err != nil {
@@ -166,7 +165,7 @@ func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, target *
 			branch.Result.Commit = c.releaseBase
 			return nil
 		}
-		branch.RemoteCommit = c.submoduleHead
+		branch.RemoteCommit = c.submodulePRHead
 	}
 	if branch.RemoteCommit == "" {
 		return nil
@@ -185,17 +184,17 @@ func (c *releaseCut) resumePreparation(f *Flags, dir, submodule string, target *
 			return nil
 		}
 	}
-	if b != &c.notes {
+	if b != &c.notesRefs {
 		// The first push records the selected release tip in this gitlink, even if posting
 		// its PR failed. Never replace that selection with a more recent upstream tip.
-		pinned, err := gitcmd.GetSubmoduleCommitAtRev(dir, submodule, branch.RemoteCommit)
+		selected, err := gitcmd.GetSubmoduleCommitAtRev(dir, submodule, branch.RemoteCommit)
 		if err != nil {
 			return err
 		}
-		if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", pinned, b.Commit); err != nil {
-			return fmt.Errorf("cannot verify retained %s gitlink %s in the shared release history; review before retrying: %w", b.PRBranch(), pinned, err)
+		if err := gitcmd.Run(dir, "merge-base", "--is-ancestor", selected, b.Commit); err != nil {
+			return fmt.Errorf("cannot verify retained %s gitlink %s in the shared release history; review before retrying: %w", b.PRBranch(), selected, err)
 		}
-		b.Commit = pinned
+		b.Commit = selected
 	}
 	return nil
 }
@@ -205,17 +204,18 @@ func (c *releaseCut) submodulePrepared(dir string, b *gitpr.SyncPRRefSet, submod
 	if err != nil {
 		return false, err
 	}
-	if current == b.Commit {
-		return true, nil
+	atSelectedCommit := current == b.Commit
+	if c.newBranch || atSelectedCommit {
+		return atSelectedCommit, nil
 	}
 	onLine, err := c.onReleaseLine(dir, current, b.UpstreamLocalBranch())
 	if err != nil {
 		return false, err
 	}
-	if !c.newBranch && onLine && c.submoduleHead == "" {
+	if onLine && c.submodulePRHead == "" {
 		return true, nil // A maintainer already prepared the release branch.
 	}
-	fork, err := gitcmd.CombinedOutput(dir, "merge-base", c.releaseBase, c.notes.PRBranch())
+	fork, err := gitcmd.CombinedOutput(dir, "merge-base", c.releaseBase, c.notesRefs.PRBranch())
 	if err != nil {
 		return false, err
 	}
@@ -228,11 +228,11 @@ func (c *releaseCut) submodulePrepared(dir string, b *gitpr.SyncPRRefSet, submod
 			return true, nil
 		}
 		return false, fmt.Errorf("%s: %s changed manually from %s to %s, which is not on %s at or after the upstream branch point %s; review the gitlink before retrying",
-			b.Name, submodule, inherited, current, b.UpstreamName, c.branchPoint)
+			b.Name, submodule, inherited, current, b.UpstreamName, c.goBranchPoint)
 	}
-	if onLine && c.submoduleHead != "" {
+	if onLine && c.submodulePRHead != "" {
 		// Don't rewind a branch that has already gone beyond the retained selection.
-		selected, err := gitcmd.GetSubmoduleCommitAtRev(dir, submodule, c.submoduleHead)
+		selected, err := gitcmd.GetSubmoduleCommitAtRev(dir, submodule, c.submodulePRHead)
 		if err != nil {
 			return false, err
 		}
