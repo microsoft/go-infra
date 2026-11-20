@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -53,7 +54,7 @@ func checkPRImports(args []string) error {
 			return err
 		}
 	}
-	return g.runCheck(ctx, *n, *merge, event, *updateComment)
+	return g.runCheck(ctx, os.Stdout, *n, *merge, event, *updateComment)
 }
 
 func readPREvent(path string) (*github.PullRequestEvent, error) {
@@ -68,11 +69,11 @@ func readPREvent(path string) (*github.PullRequestEvent, error) {
 	return &event, nil
 }
 
-func (g *gate) runCheck(ctx context.Context, n int, merge string, event *github.PullRequestEvent, updateComment bool) error {
+func (g *gate) runCheck(ctx context.Context, summary io.Writer, n int, merge string, event *github.PullRequestEvent, updateComment bool) error {
 	scanCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	r, scanErr := g.check(scanCtx, n, merge, event)
-	if _, writeErr := fmt.Print(r.summary); writeErr != nil {
+	if _, writeErr := fmt.Fprint(summary, r.summary); writeErr != nil {
 		return writeErr
 	}
 	// A missing acknowledgment is a verified verdict worth publishing even though the check fails.
@@ -81,6 +82,15 @@ func (g *gate) runCheck(ctx context.Context, n int, merge string, event *github.
 		defer cancel()
 		if err := g.updatePRComment(commentCtx, n, event, r.scan); err != nil {
 			log.Printf("warning: could not update PR comment or review label: %v", err)
+			warning := "The PR comment or review label could not be updated. See the step log for details."
+			if r.scan.Verdict == acknowledged {
+				warning += " The acknowledgment may not have been saved. If the next check requests review, remove and reapply the label."
+			} else if r.scan.LabelEvent != 0 {
+				warning += " If the stale review label is still present, remove it."
+			}
+			if _, err := fmt.Fprintf(summary, "\n> [!WARNING]\n> %s\n", warning); err != nil {
+				log.Printf("could not write the warning to the scan summary: %v", err)
+			}
 		}
 	}
 	return scanErr

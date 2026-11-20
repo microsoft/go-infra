@@ -266,26 +266,36 @@ func TestPRCheck(t *testing.T) {
 			w.WriteHeader(status)
 			fmt.Fprint(w, `{}`)
 		})
+		mux.HandleFunc("DELETE /repos/fork/go/issues/7/labels/{name}", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"message":"cannot remove label"}`, http.StatusForbidden)
+		})
 		found := files
 		t.Cleanup(func() { files, labels, scanErr = found, nil, nil })
-		check := func(enable bool, wantErr error, wantReads, wantPosts int) {
+		check := func(enable bool, wantErr error, wantReads, wantPosts int, wantWarning string) {
 			t.Helper()
 			readsBefore, postsBefore := commentReads, posts
-			err := g.runCheck(t.Context(), 7, merge, labelWebhook(), enable)
+			var summary strings.Builder
+			err := g.runCheck(t.Context(), &summary, 7, merge, labelWebhook(), enable)
 			if !errors.Is(err, wantErr) || commentReads-readsBefore != wantReads || posts-postsBefore != wantPosts {
 				t.Fatalf("comment=%t: got (%v, %d reads, %d posts); want (%v, %d, %d)", enable, err, commentReads-readsBefore, posts-postsBefore, wantErr, wantReads, wantPosts)
 			}
+			_, warning, ok := strings.Cut(summary.String(), "\n> [!WARNING]\n> ")
+			if ok != (wantWarning != "") || !strings.Contains(warning, wantWarning) {
+				t.Errorf("summary warning = %q; want %q", warning, wantWarning)
+			}
 		}
-		check(false, errAckRequired, 0, 0) // Read-only, even for findings.
-		check(true, errAckRequired, 1, 1)  // Post before returning the failed verdict.
+		check(false, errAckRequired, 0, 0, "") // Read-only, even for findings.
+		check(true, errAckRequired, 1, 1, "")  // Post before returning the failed verdict.
 		status = http.StatusForbidden
-		check(true, errAckRequired, 1, 1)
+		check(true, errAckRequired, 1, 1, "See the step log")
 		labels = []*github.Label{{Name: p.label}}
-		check(true, nil, 1, 1) // A posting error cannot fail an acknowledged scan.
-		labels, files = nil, nil
-		check(true, nil, 0, 0) // Clean PR with no comment to update.
+		check(true, nil, 1, 1, "remove and reapply the label")
+		files = nil
+		check(true, nil, 1, 0, "If the stale review label is still present, remove it")
+		labels = nil
+		check(true, nil, 0, 0, "") // Clean PR with no comment to update.
 		scanErr = errors.New("comparison failed")
-		check(true, scanErr, 0, 0)
+		check(true, scanErr, 0, 0, "")
 	})
 	run := func(wantErr error, wantVerdict verdict, wantSummary ...string) scanResult {
 		t.Helper()
