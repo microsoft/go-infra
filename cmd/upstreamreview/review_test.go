@@ -151,12 +151,13 @@ func TestCurrentLabelApplication(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	got, err := currentApplication(t.Context(), client, "org", "repo", 7, label)
+	g := gate{client: client, owner: "org", repo: "repo", policy: policy{label: label}}
+	got, err := g.currentLabelApplication(t.Context(), 7)
 	if err != nil || got.id != 13 || !got.ambiguous {
 		t.Fatalf("same-second reapplication = %+v, %v; want ambiguous event 13", got, err)
 	}
 	last = append(last, event(14, "unlabeled", label))
-	if got, err := currentApplication(t.Context(), client, "org", "repo", 7, label); err != nil || got.id != 0 {
+	if got, err := g.currentLabelApplication(t.Context(), 7); err != nil || got.id != 0 {
 		t.Fatalf("revoked application = %+v, %v", got, err)
 	}
 }
@@ -315,8 +316,8 @@ func TestPRCheck(t *testing.T) {
 			t.Errorf("scan = %+v; want %+v", report.scan, want)
 		}
 		wantUpdate := wantVerdict != "" && (wantVerdict != clean || want.LabelEvent != 0 || commentCount == nil || *commentCount > 0)
-		if report.updateComment != wantUpdate {
-			t.Errorf("%s, comments=%v, label event=%d: update-comment = %t; want %t", wantVerdict, commentCount, want.LabelEvent, report.updateComment, wantUpdate)
+		if report.needsUpdate != wantUpdate {
+			t.Errorf("%s, comments=%v, label event=%d: needsUpdate = %t; want %t", wantVerdict, commentCount, want.LabelEvent, report.needsUpdate, wantUpdate)
 		}
 		wantReads := int32(1)
 		if scanErr != nil {

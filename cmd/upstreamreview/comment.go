@@ -18,10 +18,10 @@ import (
 
 const commentMarker = "<!-- upstreamreview:summary -->\n"
 
-func findSummaryComment(ctx context.Context, client *github.Client, owner, repo string, number int) (*github.IssueComment, error) {
+func (g *gate) findSummaryComment(ctx context.Context, number int) (*github.IssueComment, error) {
 	opts := &github.IssueListCommentsOptions{ListOptions: github.ListOptions{PerPage: 100}}
 	for {
-		comments, resp, err := client.Issues.ListComments(ctx, owner, repo, number, opts)
+		comments, resp, err := g.client.Issues.ListComments(ctx, g.owner, g.repo, number, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -55,15 +55,17 @@ func (g *gate) updatePRComment(ctx context.Context, number int, event *github.Pu
 	if err != nil {
 		return err
 	}
-	existing, err := findSummaryComment(ctx, g.client, g.owner, g.repo, number)
+	existing, err := g.findSummaryComment(ctx, number)
 	if err != nil {
 		return err
 	}
-	if existing == nil && scan.Verdict == clean && scan.LabelEvent == 0 {
+	noCommentNeeded := existing == nil && scan.Verdict == clean
+	removeLabel := scan.LabelEvent != 0 && scan.Verdict != acknowledged
+	if noCommentNeeded && !removeLabel {
 		return nil
 	}
 	if scan.LabelEvent != 0 {
-		a, err := currentApplication(ctx, g.client, g.owner, g.repo, number, label)
+		a, err := g.currentLabelApplication(ctx, number)
 		if err != nil {
 			return err
 		}
@@ -71,7 +73,8 @@ func (g *gate) updatePRComment(ctx context.Context, number int, event *github.Pu
 			log.Print("Skipping the update: the label was removed or reapplied since this scan.")
 			return nil
 		}
-		if scan.Verdict != acknowledged && (a.ambiguous || !a.existedAt(event) || scan.Verdict == reviewNeeded && scan.recordedIn(existing)) {
+		alreadyAcknowledged := scan.Verdict == reviewNeeded && scan.recordedIn(existing)
+		if removeLabel && (a.ambiguous || !a.existedAt(event) || alreadyAcknowledged) {
 			log.Print("Skipping cleanup: a newer label application or acknowledgment superseded this run.")
 			return nil
 		}
@@ -89,13 +92,13 @@ func (g *gate) updatePRComment(ctx context.Context, number int, event *github.Pu
 		return nil
 	}
 	var removeErr error
-	if scan.LabelEvent != 0 && scan.Verdict != acknowledged {
+	if removeLabel {
 		resp, err := g.client.Issues.RemoveLabelForIssue(ctx, g.owner, g.repo, number, label)
 		if err != nil && (resp == nil || resp.StatusCode != http.StatusNotFound) {
 			removeErr = fmt.Errorf("remove stale label %q: %w", label, err)
 		}
 	}
-	if existing.GetBody() == body || existing == nil && scan.Verdict == clean {
+	if noCommentNeeded || existing.GetBody() == body {
 		return removeErr
 	}
 	request := github.IssueCommentRequest{Body: body}

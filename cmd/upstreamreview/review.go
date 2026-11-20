@@ -29,7 +29,7 @@ type policy struct {
 	rule                       importdiff.Rule
 }
 
-type result struct {
+type comparison struct {
 	old, new string
 	files    []importdiff.Change
 }
@@ -50,12 +50,12 @@ type scanResult struct {
 }
 
 type report struct {
-	summary       string
-	scan          scanResult
-	updateComment bool
+	summary     string
+	scan        scanResult
+	needsUpdate bool
 }
 
-func (r result) summary(head string, p policy) string {
+func (r comparison) summary(head string, p policy) string {
 	link := fmt.Sprintf("https://github.com/%s/compare/%s..%s", p.upstream, r.old, r.new)
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Upstream diff](%s): %d changed Go importer(s) at PR head `%s`.\n\n", link, len(r.files), head)
@@ -147,20 +147,20 @@ func gitlink(ctx context.Context, rev, submodule string) (string, error) {
 	return fields[2], nil
 }
 
-func (g *gate) scan(ctx context.Context, baseSHA, mergeSHA string) (result, error) {
+func (g *gate) scan(ctx context.Context, baseSHA, mergeSHA string) (comparison, error) {
 	old, err := gitlink(ctx, baseSHA, g.policy.submodule)
 	if err != nil {
-		return result{}, err
+		return comparison{}, err
 	}
 	updated, err := gitlink(ctx, mergeSHA, g.policy.submodule)
 	if err != nil {
-		return result{}, err
+		return comparison{}, err
 	}
-	r := result{old: old, new: updated}
+	r := comparison{old: old, new: updated}
 	if r.old != r.new {
 		r.files, err = g.compare(ctx, r.old, r.new)
 		if err != nil {
-			return result{}, err
+			return comparison{}, err
 		}
 	}
 	return r, nil
@@ -186,22 +186,22 @@ func (g *gate) check(ctx context.Context, n int, mergeSHA string, event *github.
 	if err != nil {
 		return report{summary: err.Error() + "\n"}, err
 	}
-	var existing *github.IssueComment
 	var labelErr error
-	var freshLabel bool
+	var pinsAcknowledged bool
 	if hasLabel(pr, g.policy.label) {
 		var a labelApplication
-		a, labelErr = currentApplication(ctx, g.client, g.owner, g.repo, n, g.policy.label)
+		a, labelErr = g.currentLabelApplication(ctx, n)
 		scan.LabelEvent = a.id
 		if labelErr == nil && a.id == 0 {
 			labelErr = fmt.Errorf("cannot verify the current application of label %q; rerun the check", g.policy.label)
 		}
-		freshLabel = a.matchesEvent(event, g.owner+"/"+g.repo, n, g.policy.label, scan)
-		if len(r.files) != 0 && labelErr == nil && !freshLabel && mayHaveComment(pr) {
-			existing, err = findSummaryComment(ctx, g.client, g.owner, g.repo, n)
+		pinsAcknowledged = a.matchesEvent(event, g.owner+"/"+g.repo, n, g.policy.label, scan)
+		if len(r.files) != 0 && labelErr == nil && !pinsAcknowledged && mayHaveComment(pr) {
+			comment, err := g.findSummaryComment(ctx, n)
 			if err != nil {
 				return report{}, err
 			}
+			pinsAcknowledged = scan.recordedIn(comment)
 		}
 		// Looking up a prior acknowledgment can take multiple pages. Check
 		// the revisions again before attributing it to this comparison.
@@ -220,22 +220,22 @@ func (g *gate) check(ctx context.Context, n int, mergeSHA string, event *github.
 		if labelErr != nil { // Label cleanup is best-effort; the comparison is still clean.
 			summary += fmt.Sprintf("\nSkipping label cleanup: %v\n", labelErr)
 		}
-		return report{summary: summary, scan: scan, updateComment: scan.LabelEvent != 0 || mayHaveComment(pr)}, nil
+		return report{summary: summary, scan: scan, needsUpdate: scan.LabelEvent != 0 || mayHaveComment(pr)}, nil
 	}
 	if labelErr != nil {
 		return report{}, labelErr
 	}
 	summary := r.summary(head, g.policy)
-	instructions := "Review the affected files and add the `" + g.policy.label + "` label to this PR."
-	if scan.LabelEvent != 0 {
-		if freshLabel || scan.recordedIn(existing) {
-			scan.Verdict = acknowledged
-			return report{summary: "**Acknowledged** for these upstream pins by the `" + g.policy.label + "` PR label.\n\n" + summary, scan: scan, updateComment: true}, nil
-		}
-		instructions += " The current label does not acknowledge these pins. If it is still present, remove it before reapplying it."
+	if scan.LabelEvent != 0 && pinsAcknowledged {
+		scan.Verdict = acknowledged
+		return report{summary: "**Acknowledged** for these upstream pins by the `" + g.policy.label + "` PR label.\n\n" + summary, scan: scan, needsUpdate: true}, nil
 	}
 	scan.Verdict = reviewNeeded
-	return report{summary: "**Acknowledgment required.** " + instructions + "\n\n" + summary, scan: scan, updateComment: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
+	instructions := "Review the affected files and add the `" + g.policy.label + "` label to this PR."
+	if scan.LabelEvent != 0 {
+		instructions += " The current label does not acknowledge these pins. If it is still present, remove it before reapplying it."
+	}
+	return report{summary: "**Acknowledgment required.** " + instructions + "\n\n" + summary, scan: scan, needsUpdate: true}, fmt.Errorf("%w: add PR label %q", errAckRequired, g.policy.label)
 }
 
 func (g *gate) currentPR(ctx context.Context, n int, scan scanResult) (*github.PullRequest, error) {

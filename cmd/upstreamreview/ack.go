@@ -21,17 +21,17 @@ type labelApplication struct {
 	ambiguous bool
 }
 
-func currentApplication(ctx context.Context, client *github.Client, owner, repo string, n int, label string) (labelApplication, error) {
+func (g *gate) currentLabelApplication(ctx context.Context, n int) (labelApplication, error) {
 	var active labelApplication
 	var lastAdded time.Time
 	opts := &github.ListOptions{PerPage: 100}
 	for {
-		events, resp, err := client.Issues.ListIssueEvents(ctx, owner, repo, n, opts)
+		events, resp, err := g.client.Issues.ListIssueEvents(ctx, g.owner, g.repo, n, opts)
 		if err != nil {
 			return labelApplication{}, fmt.Errorf("read label history: %w", err)
 		}
 		for _, e := range events {
-			if e.GetLabel().GetName() != label {
+			if e.GetLabel().GetName() != g.policy.label {
 				continue
 			}
 			switch e.GetEvent() {
