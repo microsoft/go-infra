@@ -116,7 +116,7 @@ func (r *Registry) register(process contract.Process) (*Process, error) {
 
 // Page returns the embedded page name for a process route.
 func (r *Registry) Page(path string) (string, bool) {
-	id := strings.TrimPrefix(path, "/")
+	id := strings.TrimPrefix(path, "/processes/")
 	_, ok := r.byID[id]
 	return "process.html", ok && path == Path(id)
 }
@@ -139,7 +139,7 @@ func (r *Registry) Ordered() []*Process {
 
 // Path returns the browser path for a process.
 func Path(id string) string {
-	return "/" + id
+	return "/processes/" + id
 }
 
 func validateIdentity(subject string, identity contract.Identity) error {

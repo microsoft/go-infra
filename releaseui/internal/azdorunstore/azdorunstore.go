@@ -32,6 +32,7 @@ type workItemClient interface {
 	Get(context.Context, int) (*azdoworkitem.WorkItem, error)
 	Update(context.Context, *azdoworkitem.WorkItem, *azdoworkitem.Snapshot) (*azdoworkitem.WorkItem, error)
 	Query(context.Context, bool, int) ([]*azdoworkitem.WorkItem, error)
+	QueryURL() string
 }
 
 type store struct {
@@ -169,6 +170,10 @@ func (s *store) QueryViews(ctx context.Context, closed bool, limit int) ([]*runs
 		records = append(records, record)
 	}
 	return records, errors.Join(recordErrors...)
+}
+
+func (s *store) QueryURL() string {
+	return s.client.QueryURL()
 }
 
 func releaseQueryError(err error) error {
@@ -319,4 +324,7 @@ func releaseViewRecord(item *azdoworkitem.WorkItem) (*runstore.ViewRecord, error
 	return record, nil
 }
 
-var _ runstore.Store = (*store)(nil)
+var (
+	_ runstore.Store       = (*store)(nil)
+	_ runstore.QueryLinker = (*store)(nil)
+)

@@ -24,6 +24,12 @@ type Reader interface {
 	QueryViews(ctx context.Context, closed bool, limit int) ([]*ViewRecord, error)
 }
 
+// QueryLinker is implemented by stores that can show all their release records outside releaseui.
+type QueryLinker interface {
+	// QueryURL returns a browser link listing all release records in the backing service.
+	QueryURL() string
+}
+
 // ViewRecord adds storage metadata to a published view.
 type ViewRecord struct {
 	ID       int    `json:"id"`

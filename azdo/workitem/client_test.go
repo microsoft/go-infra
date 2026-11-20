@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -428,6 +429,31 @@ func TestQueryReturnsWIQLOrder(t *testing.T) {
 	}
 	if got := []int{items[0].ID, items[1].ID}; !slices.Equal(got, []int{2, 1}) {
 		t.Fatalf("work item order = %v, want [2 1]", got)
+	}
+}
+
+func TestQueryURLListsAllReleaseWorkItems(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL: "https://dev.example/org/", Project: "Release Project", WorkItemType: "Issue",
+	}, staticToken("token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(client.QueryURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "https" || parsed.Host != "dev.example" || parsed.EscapedPath() != "/org/Release%20Project/_queries/query/" {
+		t.Fatalf("query URL = %q", parsed)
+	}
+	wiql := parsed.Query().Get("wiql")
+	for _, clause := range []string{"[System.WorkItemType] = 'Issue'", "[System.AreaPath] = 'DevDiv\\GoLang'", "[System.Tags] CONTAINS 'releaseagent'"} {
+		if !strings.Contains(wiql, clause) {
+			t.Errorf("WIQL %q does not contain %q", wiql, clause)
+		}
+	}
+	if _, filter, _ := strings.Cut(wiql, " WHERE "); strings.Contains(filter, "[System.State]") {
+		t.Errorf("WIQL %q filters by state, want all release work items", wiql)
 	}
 }
 

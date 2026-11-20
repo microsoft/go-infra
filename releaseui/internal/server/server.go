@@ -5,11 +5,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"io/fs"
 	"net"
@@ -54,6 +56,20 @@ func WithProcesses(processes ...contract.ProcessGroup) Option {
 	}
 }
 
+// WithBrand sets the brand shown in the release UI title and header.
+func WithBrand(brand string) Option {
+	return func(server *Server) {
+		server.brand = brand
+	}
+}
+
+// WithInstructionsURL sets the release instructions link shown in the top bar.
+func WithInstructionsURL(instructionsURL string) Option {
+	return func(server *Server) {
+		server.instructionsURL = instructionsURL
+	}
+}
+
 // WithReleaseRunStore replaces the built-in Azure-backed release store.
 // Most callers should omit this option.
 func WithReleaseRunStore(store runstore.Store) Option {
@@ -66,6 +82,8 @@ func WithReleaseRunStore(store runstore.Store) Option {
 type Server struct {
 	ctx                 context.Context
 	localSession        *localserver.Session
+	brand               string
+	instructionsURL     string
 	configuredProcesses []contract.ProcessGroup
 	processes           *processregistry.Registry
 	processRunStore     runstore.Store
@@ -117,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handlePage)
+	mux.HandleFunc("GET /processes", s.handlePage)
 	for _, registered := range s.processes.Ordered() {
 		definition := registered.Definition
 		processID := definition.ID
@@ -137,6 +156,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+prefix+"/events", s.requireActiveProcess(processID, s.handleEvents))
 	}
 	mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(assets))))
+	mux.HandleFunc("GET /api/health", func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Cache-Control", "no-store")
+		response.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /releases/{id}", s.handlePage)
 	mux.HandleFunc("GET /api/releases/{id}/view", s.handleReleaseView)
@@ -182,7 +205,9 @@ func (s *Server) captureProcessRequest(processID string) (processRequest, error)
 
 func (s *Server) handlePage(response http.ResponseWriter, request *http.Request) {
 	name := "index.html"
-	if strings.HasPrefix(request.URL.Path, "/releases/") {
+	if request.URL.Path == "/processes" {
+		name = "processes.html"
+	} else if strings.HasPrefix(request.URL.Path, "/releases/") {
 		if _, ok := releaseRecordID(response, request); !ok {
 			return
 		}
@@ -195,13 +220,26 @@ func (s *Server) handlePage(response http.ResponseWriter, request *http.Request)
 			return
 		}
 	}
-	content, err := webFiles.ReadFile("web/" + name)
+	page, err := template.ParseFS(webFiles, "web/"+name, "web/topbar.html")
 	if err != nil {
-		http.Error(response, "embedded UI is unavailable", http.StatusInternalServerError)
+		http.Error(response, "embedded UI template is invalid", http.StatusInternalServerError)
+		return
+	}
+	var historyQueryURL string
+	if linker, ok := s.processRunStore.(runstore.QueryLinker); ok {
+		historyQueryURL = linker.QueryURL()
+	}
+	var rendered bytes.Buffer
+	if err := page.ExecuteTemplate(&rendered, name, struct {
+		Brand           string
+		InstructionsURL string
+		HistoryQueryURL string
+	}{Brand: s.brand, InstructionsURL: s.instructionsURL, HistoryQueryURL: historyQueryURL}); err != nil {
+		http.Error(response, "embedded UI template is invalid", http.StatusInternalServerError)
 		return
 	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = response.Write(content)
+	_, _ = response.Write(rendered.Bytes())
 }
 
 func (s *Server) handleProcess(response http.ResponseWriter, request *http.Request) {
