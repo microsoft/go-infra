@@ -33,6 +33,8 @@ Sync opens these PRs if needed and leaves them for manual approval:
 
 If you need an earlier base, create the release branch at that commit in `microsoft/go` before the next sync.
 Sync never resets an existing release branch.
+It leaves open preparation PRs alone so maintainers can edit them.
+If sync pushes a preparation branch but fails to open its PR, the next run rebuilds any still-needed change from the current base and replaces that branch.
 
 To preview the cut without pushing branches or opening PRs, run `go run ./cmd/sync -n`.
 

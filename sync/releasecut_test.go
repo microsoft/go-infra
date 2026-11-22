@@ -68,7 +68,7 @@ func TestPrepareNextRelease(t *testing.T) {
 		Auth: githubutil.GitHubAuthFlags{GitHubPat: &pat}, GitHubUser: &bot, SyncConfig: &configPath, TempGitDir: &work,
 	}
 	failPost := false
-	prs := mockCutPRs(t, bot, &failPost)
+	prs := mockCutPRs(t, &failPost)
 	heads := func() string { return git(target, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads") }
 	initialHeads := heads()
 
@@ -97,6 +97,8 @@ func TestPrepareNextRelease(t *testing.T) {
 	must(addMockFile(upstream, "shared.txt", "Shared release work"))
 	selected := git(upstream, "rev-parse", "HEAD")
 	git(mirror, "fetch", upstream, "refs/heads/"+source+":refs/heads/"+source)
+	must(addMockFile(upstream, "retry.txt", "Shared by the time sync retries"))
+	retryGo := git(upstream, "rev-parse", "HEAD")
 	must(addMockFile(upstream, "later.txt", "Later release work"))
 	later := git(upstream, "rev-parse", "HEAD")
 	// This repo advertises its checked-out branch as HEAD. Make the default and release tips diverge.
@@ -187,25 +189,27 @@ func TestPrepareNextRelease(t *testing.T) {
 	if err := MakePRs(flags); err == nil || len(prs) != 0 {
 		t.Fatalf("expected interrupted PR posting, got %v, PRs %v", err, prs)
 	}
-	firstSub, firstNotes := git(target, "rev-parse", subPR), git(target, "rev-parse", notesPR)
 	if got := git(target, "rev-parse", subPR+":go"); got != selected {
-		t.Fatalf("first push selected %s, want %s", got, selected)
+		t.Fatalf("submodule after interrupted PR submission = %s, want %s", got, selected)
 	}
-	must(addMockFile(target, "unrelated.txt", "Unrelated change on main before retry"))
-	git(mirror, "fetch", upstream, "refs/heads/"+source+":refs/heads/"+source)
+	// Neither branch has an open PR. Ignore abandoned changes and use the
+	// current main and shared Go commit, not the inputs from the interrupted run.
+	git(target, "checkout", notesPR)
+	git(target, "commit", "--allow-empty", "--author=Maintainer <maintainer@example.com>", "-m", "Abandoned notes draft")
+	git(target, "checkout", main)
+	must(addMockFile(target, oldNotes, "Notes edited on main before retry"))
+	retryMain := git(target, "rev-parse", main)
+	git(mirror, "fetch", upstream, retryGo+":refs/heads/"+source)
 	failPost = false
-	// The author and original parent alone do not authorize a different patch.
-	wrong := git(target, "rev-parse", main)
-	git(target, "update-ref", "refs/heads/"+notesPR, wrong, firstNotes)
-	if err := prepareNextRelease(flags, filepath.Join(dir, "unexpected-patch"), config); err == nil ||
-		!strings.Contains(err.Error(), "retained patch differs") || len(prs) != 0 {
-
-		t.Fatalf("unexpected retained patch was not rejected: %v, PRs %v", err, prs)
-	}
-	git(target, "update-ref", "refs/heads/"+notesPR, firstNotes, wrong)
 	must(MakePRs(flags))
-	if git(target, "rev-parse", subPR) != firstSub || git(target, "rev-parse", notesPR) != firstNotes {
-		t.Fatal("retry changed a published head instead of posting its original patch")
+	if got := git(target, "rev-parse", subPR+":go"); got != retryGo {
+		t.Fatalf("submodule on retry = %s, want latest shared commit %s", got, retryGo)
+	}
+	if got := git(target, "rev-parse", notesPR+"^"); got != retryMain {
+		t.Fatalf("notes PR base on retry = %s, want current main %s", got, retryMain)
+	}
+	if got := git(target, "show", notesPR+":"+oldNotes); got != "Notes edited on main before retry" {
+		t.Fatalf("retry did not preserve the revised notes on main: %q", got)
 	}
 	if len(prs) != 2 || prs[subPR] != release || prs[notesPR] != main {
 		t.Fatalf("unexpected preparation PRs: %v", prs)
@@ -221,6 +225,7 @@ func TestPrepareNextRelease(t *testing.T) {
 	git(target, "checkout", subPR)
 	must(addMockFile(target, "repair.txt", "Maintainer's patch fix"))
 	git(target, "checkout", main)
+	prs[notesPR] = release // A maintainer retargeted this PR; its head is still in use.
 	pending := heads()
 	must(MakePRs(flags))
 	if heads() != pending {
@@ -298,7 +303,7 @@ type cutTransport func(*http.Request) (*http.Response, error)
 func (f cutTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // Only finding and opening PRs are allowed; even a successful auto-approval would fail this test.
-func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
+func mockCutPRs(t *testing.T, failPost *bool) map[string]string {
 	t.Helper()
 	open := map[string]string{}
 	old := http.DefaultTransport
@@ -306,24 +311,21 @@ func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 	http.DefaultTransport = cutTransport(func(r *http.Request) (*http.Response, error) {
 		code := http.StatusOK
 		var body string
-		switch r.URL.Path {
-		case "/graphql":
-			var q struct {
-				Query     string
-				Variables map[string]string
+		if r.URL.Path != "/repos/microsoft/go/pulls" {
+			return nil, fmt.Errorf("unexpected GitHub request: %s", r.URL)
+		}
+		switch r.Method {
+		case http.MethodGet:
+			q := r.URL.Query()
+			head, ok := strings.CutPrefix(q.Get("head"), "microsoft:")
+			if !ok || q.Get("state") != "open" {
+				return nil, fmt.Errorf("unexpected PR query: %s", r.URL)
 			}
-			if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-				return nil, err
+			body = `[]`
+			if base, ok := open[head]; ok && (q.Get("base") == "" || q.Get("base") == base) {
+				body = `[{"number":1}]`
 			}
-			if !strings.HasPrefix(q.Query, "query ") {
-				return nil, fmt.Errorf("unexpected GitHub mutation: %s", q.Query)
-			}
-			nodes := ""
-			if base, ok := open[q.Variables["headRefName"]]; ok && base == q.Variables["baseRefName"] {
-				nodes = fmt.Sprintf(`{"number":1,"id":"test","author":{"login":%q},"headRepositoryOwner":{"login":"microsoft"},"baseRepository":{"owner":{"login":"microsoft"},"nameWithOwner":"microsoft/go"}}`, bot)
-			}
-			body = `{"data":{"repository":{"pullRequests":{"nodes":[` + nodes + `]}}}}`
-		case "/repos/microsoft/go/pulls":
+		case http.MethodPost:
 			if *failPost {
 				code, body = http.StatusServiceUnavailable, `{"message":"simulated interruption"}`
 				break
@@ -344,7 +346,7 @@ func mockCutPRs(t *testing.T, bot string, failPost *bool) map[string]string {
 			open[head] = pr.Base
 			code, body = http.StatusCreated, `{"number":1,"node_id":"test"}`
 		default:
-			return nil, fmt.Errorf("unexpected GitHub request: %s", r.URL)
+			return nil, fmt.Errorf("unexpected GitHub method: %s", r.Method)
 		}
 		return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})

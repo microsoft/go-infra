@@ -273,16 +273,25 @@ func (b *changedBranch) fetchRemoteCommit(dir, remote string, auth gitcmd.URLAut
 }
 
 func fetchRemoteBranch(dir, remote, branch string, auth gitcmd.URLAuther) (string, error) {
-	exists, err := remoteBranchExists(dir, remote, branch, auth)
-	if err != nil || !exists {
+	tip, err := remoteBranchTip(dir, remote, branch, auth)
+	if err != nil || tip == "" {
 		return "", err
 	}
 	return gitcmd.FetchRefCommit(dir, auth.InsertAuth(remote), "refs/heads/"+branch)
 }
 
-func remoteBranchExists(dir, remote, branch string, auth gitcmd.URLAuther) (bool, error) {
-	output, err := executil.Output(executil.Dir(dir, "git", "ls-remote", "--heads", auth.InsertAuth(remote), "refs/heads/"+branch))
-	return strings.TrimSpace(output) != "", err
+// remoteBranchTip returns the advertised SHA, or "" for a missing branch, without fetching it.
+func remoteBranchTip(dir, remote, branch string, auth gitcmd.URLAuther) (string, error) {
+	ref := "refs/heads/" + branch
+	output, err := executil.Output(executil.Dir(dir, "git", "ls-remote", "--heads", auth.InsertAuth(remote), ref))
+	if err != nil || output == "" {
+		return "", err
+	}
+	fields := strings.Fields(output)
+	if len(fields) != 2 || fields[1] != ref {
+		return "", fmt.Errorf("unexpected ls-remote output for %s: %q", ref, output)
+	}
+	return fields[0], nil
 }
 
 func (b *changedBranch) checkRemoteAuthor(dir string) error {
@@ -585,7 +594,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, plan branchPlan) ([
 		var prTitle, commitMessage string
 
 		if cut != nil {
-			if err := cut.resumePreparation(f, dir, entry.SubmoduleTarget, parsedPRTargetRemote, c); err != nil {
+			if err := cut.checkPreparation(f, dir, entry.SubmoduleTarget, parsedPRTargetRemote, c); err != nil {
 				return nil, err
 			}
 			if c.SkipReason != "" {
@@ -922,16 +931,9 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, plan branchPlan) ([
 			if err := c.fetchRemoteCommit(dir, entry.PRBranchStorageRepo(), urlAuther); err != nil {
 				return nil, err
 			}
-		}
-		if err := c.checkRemoteAuthor(dir); err != nil {
-			return nil, err
-		}
-		if cut != nil && c.RemoteCommit != "" {
-			// Compare each commit to its own parent: unrelated changes on main don't change the PR.
-			if err := validateRetainedPreparation(dir, c.RemoteCommit, c.Result.Commit); err != nil {
-				return nil, fmt.Errorf("retained release preparation branch %s differs; reconcile before retrying: %w", c.Refs.PRBranch(), err)
+			if err := c.checkRemoteAuthor(dir); err != nil {
+				return nil, err
 			}
-			c.Result.Commit = c.RemoteCommit
 		}
 	}
 
@@ -951,7 +953,7 @@ func makeBranchPRs(f *Flags, dir string, entry *ConfigEntry, plan branchPlan) ([
 	mergePushRefspecs := make([]string, 0, len(changedBranches))
 	mergePushLeases := make([]string, 0, len(changedBranches))
 	for _, b := range changedBranches {
-		if b.SkipReason != "" || (cut != nil && b.RemoteCommit != "") {
+		if b.SkipReason != "" {
 			continue
 		}
 		mergePushRefspecs = append(mergePushRefspecs, b.Refs.PRBranchRefspec())
