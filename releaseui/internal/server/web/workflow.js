@@ -55,6 +55,10 @@
   const releaseStateValues = document.querySelector("#release-state-values");
   const releaseStateRevision = document.querySelector("#release-state-revision");
   const releaseSnapshotError = document.querySelector("#release-snapshot-error");
+  const connectionLost = document.querySelector("#connection-lost");
+
+  connectionLost.addEventListener("cancel", (event) => event.preventDefault());
+  document.querySelector("#connection-reload").addEventListener("click", () => location.reload());
 
   const inputRecords = new Map();
   let processDefinition = null;
@@ -74,7 +78,6 @@
   let publishedRecord = null;
   let resumeURL = "";
   let liveSnapshot = null;
-  let liveConnected = false;
   let releaseSnapshot = null;
   let snapshotLoading = false;
 
@@ -695,7 +698,12 @@
         if (publishedRecord?.revision !== response.record.revision) runConfirmationPending = false;
         publishedRecord = response.record;
         resumeURL = response.resumeUrl || "";
-        connectReleaseEvents(response.eventsUrl || "", refresh);
+        connectReleaseEvents(response.eventsUrl || "", refresh, () => {
+          controller.abort();
+          clearTimeout(timer);
+          clearInterval(heartbeatTimer);
+          showConnectionLost();
+        });
         renderSavedRelease();
         if (!releaseInputs.hidden || !releaseState.hidden) await refreshReleaseSnapshot(controller.signal);
       } catch (error) {
@@ -735,22 +743,18 @@
     }
   }
 
-  function connectReleaseEvents(url, refresh) {
+  function connectReleaseEvents(url, refresh, onConnectionLost) {
     if (url && eventSource?.url === new URL(url, location.href).href) return;
     if (eventSource) eventSource.close();
     eventSource = null;
-    liveConnected = false;
-    if (!liveSnapshot?.checkpointError) liveSnapshot = null;
+    liveSnapshot = null;
     if (!url) return;
     const source = new EventSource(url);
-    let connectionLost = false;
     eventSource = source;
     source.addEventListener("state", (event) => {
       if (eventSource !== source) return;
       try {
         liveSnapshot = JSON.parse(event.data);
-        liveConnected = true;
-        connectionLost = false;
         renderSavedHeartbeat();
         if (!liveSnapshot.active) refresh();
       } catch (error) {
@@ -759,11 +763,7 @@
     });
     source.addEventListener("error", () => {
       if (eventSource !== source) return;
-      if (!connectionLost) showError("Live progress connection lost. Showing published progress until it reconnects.");
-      connectionLost = true;
-      liveConnected = false;
-      if (!liveSnapshot?.checkpointError) liveSnapshot = null;
-      renderSavedHeartbeat();
+      onConnectionLost();
     });
   }
 
@@ -802,7 +802,7 @@
 
   function renderSavedHeartbeat() {
     const view = publishedRecord.view;
-    const live = liveConnected && Boolean(liveSnapshot);
+    const live = Boolean(liveSnapshot);
     const status = view.status === "running" && !view.executing ? "saved" : view.status;
     const published = publishedReleaseStatus(status, view.updatedAt);
     releaseStatus.hidden = false;
@@ -966,6 +966,16 @@
         });
       }
     });
+    source.addEventListener("error", () => {
+      if (selectedSession !== session || eventSource !== source) return;
+      session.controller.abort();
+      showConnectionLost();
+    });
+  }
+
+  function showConnectionLost() {
+    if (eventSource) eventSource.close();
+    connectionLost.showModal();
   }
 
   async function refreshPlan(session) {
