@@ -157,10 +157,10 @@ func TestReleaseEventsStayBoundToStartedRecord(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer responseView.Body.Close()
 		var view webview.ReleaseViewResponse[*runstore.ViewRecord]
 		decodeResponse(t, responseView, &view)
 		if view.EventsURL != fmt.Sprintf("/api/releases/%d/events", id) || view.ResumeURL != "" {
-
 			t.Fatalf("live release view = %#v", view)
 		}
 	}
@@ -220,6 +220,7 @@ func TestReleaseEventsStayBoundToStartedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer response.Body.Close()
 	var old webview.ReleaseViewResponse[*runstore.ViewRecord]
 	decodeResponse(t, response, &old)
 	if old.EventsURL != "" || old.Record.View.Status != runstore.StatusSucceeded {
@@ -281,6 +282,7 @@ func TestSnapshotInspectionReadsLegacyInputsAndState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer response.Body.Close()
 			if response.StatusCode != http.StatusOK {
 				t.Fatalf("snapshot status = %d", response.StatusCode)
 			}
