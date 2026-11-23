@@ -600,7 +600,7 @@ func TestShutdownWaitsForCheckpointAndAllowsResume(t *testing.T) {
 		request := webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}
-		if err := manager.Resume(context.Background(), "example", request); err != nil {
+		if _, err := manager.Resume(context.Background(), "example", request); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
@@ -620,7 +620,7 @@ func TestShutdownWaitsForCheckpointAndAllowsResume(t *testing.T) {
 			t.Fatalf("shutdown returned before saving the checkpoint: %v", err)
 		default:
 		}
-		if err := manager.Resume(context.Background(), "example", request); err == nil {
+		if _, err := manager.Resume(context.Background(), "example", request); err == nil {
 			t.Fatal("shutdown accepted another execution")
 		}
 		close(save)
@@ -643,7 +643,7 @@ func TestShutdownWaitsForCheckpointAndAllowsResume(t *testing.T) {
 		}
 		close(release)
 		request.Revision = record.Revision
-		if err := other.Resume(context.Background(), "example", request); err != nil {
+		if _, err := other.Resume(context.Background(), "example", request); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
@@ -664,7 +664,7 @@ func TestShutdownReportsCheckpointFailure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager, store, _, _, cancel := publishedTestManager(t, make(chan struct{}))
 		defer cancel()
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -685,7 +685,7 @@ func TestShutdownDeadlineDoesNotReleaseReservation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager, store, _, _, cancel := publishedTestManager(t, make(chan struct{}))
 		defer cancel()
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -720,9 +720,10 @@ func TestShutdownWaitsForStartingExecution(t *testing.T) {
 		store.updateRelease = save
 		started := make(chan error, 1)
 		go func() {
-			started <- manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+			_, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 				RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 			})
+			started <- err
 		}()
 		synctest.Wait()
 		stopped := make(chan error, 1)
@@ -1003,7 +1004,7 @@ func TestStartReturnsSnapshotCaptureError(t *testing.T) {
 	}
 	failure := errors.New("snapshot encoding failed")
 	run.snapshotErr = failure
-	err = manager.Start(context.Background(), "example", webview.ReleaseStartRequest{
+	_, err = manager.Start(context.Background(), "example", webview.ReleaseStartRequest{
 		PlanDigest: prepared.Execution.PlanDigest, Confirmed: true,
 	})
 	if !errors.Is(err, failure) || manager.Running("example") || store.updates.Load() != 0 {

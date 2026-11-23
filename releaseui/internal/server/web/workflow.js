@@ -43,6 +43,18 @@
   const executionButton = document.querySelector("#execution-button");
   const toast = document.querySelector("#toast");
   const brand = document.body.dataset.brand;
+  const existingRelease = document.querySelector("#existing-release");
+  const existingReleaseTitle = document.querySelector("#existing-release-title");
+  const existingReleaseLink = document.querySelector("#existing-release-link");
+  const releaseInputsToggle = document.querySelector("#release-inputs-toggle");
+  const releaseInputs = document.querySelector("#release-inputs");
+  const releaseInputValues = document.querySelector("#release-input-values");
+  const releaseInputRevision = document.querySelector("#release-input-revision");
+  const releaseStateToggle = document.querySelector("#release-state-toggle");
+  const releaseState = document.querySelector("#release-state");
+  const releaseStateValues = document.querySelector("#release-state-values");
+  const releaseStateRevision = document.querySelector("#release-state-revision");
+  const releaseSnapshotError = document.querySelector("#release-snapshot-error");
 
   const inputRecords = new Map();
   let processDefinition = null;
@@ -61,6 +73,10 @@
   const savedRecordID = location.pathname.startsWith("/releases/") ? Number(location.pathname.split("/").at(-1)) : 0;
   let publishedRecord = null;
   let resumeURL = "";
+  let liveSnapshot = null;
+  let liveConnected = false;
+  let releaseSnapshot = null;
+  let snapshotLoading = false;
 
   initialize().catch((error) => showError(error.message));
 
@@ -113,7 +129,7 @@
     variantNoticeTitle.textContent = variant.noticeTitle || "";
     variantNoticeCopy.textContent = variant.notice || "";
     inputRecords.clear();
-    processInputs.replaceChildren(...(variant.inputs || []).map(createInput));
+    processInputs.replaceChildren(...(variant.inputs || []).map(input => createInput(input)));
   }
 
   async function selectVariant() {
@@ -135,6 +151,9 @@
     lastRefreshSignature = "";
     refreshInFlight = null;
     renderVariant();
+    existingRelease.hidden = true;
+    processInputs.hidden = false;
+    planButton.hidden = false;
     history.replaceState(null, "", `/processes/${encodeURIComponent(session.processID)}`);
     planContent.hidden = true;
     emptyState.hidden = false;
@@ -159,7 +178,17 @@
       if (selectedSession !== session) return;
       preflight = report;
       renderPreflight();
-      if (currentPlan) {
+      if (currentPlan?.execution.record) {
+        existingRelease.hidden = false;
+        existingReleaseLink.href = `/releases/${currentPlan.execution.record.id}`;
+        executionActive = !currentPlan.execution.run.complete;
+        existingReleaseTitle.textContent = executionActive ? "Existing release" : "Previous release";
+        if (executionActive) {
+          processInputs.hidden = true;
+          planButton.hidden = true;
+          emptyState.hidden = true;
+        }
+      } else if (currentPlan) {
         renderPlan(currentPlan);
         await refreshState(session);
         if (selectedSession !== session) return;
@@ -292,15 +321,12 @@
     submitting = "start";
     updateActionButtons();
     try {
-      await requestJSON(`${session.endpoint}/${resume ? "resume" : "start"}`, {
+      const response = await requestJSON(`${session.endpoint}/${resume ? "resume" : "start"}`, {
         method: "POST",
         body: JSON.stringify({ planDigest: digest, confirmed: true, revision, recordId }),
       });
       if (selectedSession !== session) return;
-      runConfirmationPending = false;
-      connectEvents(session);
-      await refreshPlan(session);
-      await refreshState(session);
+      location.assign(response.href);
     } catch (error) {
       if (selectedSession === session) showError(error.message);
     } finally {
@@ -316,6 +342,7 @@
       throw new Error("The returned plan does not belong to the selected release process.");
     }
     plan = nextPlan;
+    existingRelease.hidden = true;
     emptyState.hidden = true;
     planContent.hidden = false;
 
@@ -621,7 +648,10 @@
     workflowSection.hidden = false;
     workflowSection.classList.add("saved-release");
     form.closest("aside").hidden = true;
-    document.querySelector(".release-plan-panel .panel-heading h2").textContent = "Published progress";
+    document.querySelector(".release-plan-panel .panel-heading h2").textContent = "Release progress";
+    document.querySelector(".release-plan-panel .step-number").hidden = true;
+    releaseInputsToggle.hidden = false;
+    releaseStateToggle.hidden = false;
     processSafety.hidden = false;
     safetyTitle.textContent = "Published release progress";
     safetyCopy.textContent = "Only the runner publishes progress. This page reads the saved view, not the process checkpoint.";
@@ -632,7 +662,18 @@
       renderSavedControls();
     });
     const controller = new AbortController();
+    const toggleSnapshot = (button, panel, label) => {
+      panel.hidden = !panel.hidden;
+      button.setAttribute("aria-expanded", String(!panel.hidden));
+      button.textContent = `${panel.hidden ? "Show" : "Hide"} ${label}`;
+      if (!panel.hidden) refreshReleaseSnapshot(controller.signal);
+      if (releaseInputs.hidden && releaseState.hidden) releaseSnapshotError.hidden = true;
+      renderGraphEdges();
+    };
+    releaseInputsToggle.addEventListener("click", () => toggleSnapshot(releaseInputsToggle, releaseInputs, "inputs"));
+    releaseStateToggle.addEventListener("click", () => toggleSnapshot(releaseStateToggle, releaseState, "state"));
     let timer;
+    let refreshing = false;
     const heartbeatTimer = setInterval(() => {
       if (publishedRecord) renderSavedHeartbeat();
     }, 5000);
@@ -640,8 +681,12 @@
       controller.abort();
       clearTimeout(timer);
       clearInterval(heartbeatTimer);
+      if (eventSource) eventSource.close();
     }, { once: true });
     const refresh = async () => {
+      if (refreshing || controller.signal.aborted) return;
+      refreshing = true;
+      clearTimeout(timer);
       try {
         const response = await requestJSON(`/api/releases/${savedRecordID}/view`, {
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
@@ -650,15 +695,76 @@
         if (publishedRecord?.revision !== response.record.revision) runConfirmationPending = false;
         publishedRecord = response.record;
         resumeURL = response.resumeUrl || "";
+        connectReleaseEvents(response.eventsUrl || "", refresh);
         renderSavedRelease();
+        if (!releaseInputs.hidden || !releaseState.hidden) await refreshReleaseSnapshot(controller.signal);
       } catch (error) {
         if (controller.signal.aborted) return;
         showError(`Unable to refresh published progress: ${error.message}`);
+      } finally {
+        refreshing = false;
       }
       if (!controller.signal.aborted) timer = setTimeout(refresh, 5000);
     };
     if ("ResizeObserver" in globalThis) new ResizeObserver(renderGraphEdges).observe(stepList);
     await refresh();
+  }
+
+  async function refreshReleaseSnapshot(signal) {
+    if (snapshotLoading || signal.aborted) return;
+    snapshotLoading = true;
+    try {
+      const snapshot = await requestJSON(`/api/releases/${savedRecordID}/snapshot`, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]),
+      });
+      if (signal.aborted) return;
+      releaseSnapshotError.hidden = true;
+      if (releaseSnapshot?.revision === snapshot.revision) return;
+      releaseSnapshot = snapshot;
+      releaseInputValues.textContent = snapshot.inputJson;
+      releaseStateValues.textContent = snapshot.stateJson;
+      releaseStateRevision.textContent = `Saved revision ${snapshot.revision}.`;
+      releaseInputRevision.textContent = releaseStateRevision.textContent;
+      renderGraphEdges();
+    } catch (error) {
+      if (signal.aborted) return;
+      releaseSnapshotError.textContent = `Unable to load saved inputs and state: ${error.message}`;
+      releaseSnapshotError.hidden = releaseInputs.hidden && releaseState.hidden;
+    } finally {
+      snapshotLoading = false;
+    }
+  }
+
+  function connectReleaseEvents(url, refresh) {
+    if (url && eventSource?.url === new URL(url, location.href).href) return;
+    if (eventSource) eventSource.close();
+    eventSource = null;
+    liveConnected = false;
+    if (!liveSnapshot?.checkpointError) liveSnapshot = null;
+    if (!url) return;
+    const source = new EventSource(url);
+    let connectionLost = false;
+    eventSource = source;
+    source.addEventListener("state", (event) => {
+      if (eventSource !== source) return;
+      try {
+        liveSnapshot = JSON.parse(event.data);
+        liveConnected = true;
+        connectionLost = false;
+        renderSavedHeartbeat();
+        if (!liveSnapshot.active) refresh();
+      } catch (error) {
+        showError(`Unable to read live progress: ${error.message}`);
+      }
+    });
+    source.addEventListener("error", () => {
+      if (eventSource !== source) return;
+      if (!connectionLost) showError("Live progress connection lost. Showing published progress until it reconnects.");
+      connectionLost = true;
+      liveConnected = false;
+      if (!liveSnapshot?.checkpointError) liveSnapshot = null;
+      renderSavedHeartbeat();
+    });
   }
 
   function renderSavedRelease() {
@@ -670,6 +776,8 @@
     emptyState.hidden = true;
     planContent.hidden = false;
     planSubtitle.textContent = view.plan?.Subtitle || "Published release graph";
+    releaseInputsToggle.disabled = false;
+    releaseStateToggle.disabled = false;
     planFacts.replaceChildren(...(view.plan?.Facts || []).map((fact) => {
       const card = document.createElement("article");
       card.className = "source-card";
@@ -694,17 +802,19 @@
 
   function renderSavedHeartbeat() {
     const view = publishedRecord.view;
+    const live = liveConnected && Boolean(liveSnapshot);
     const status = view.status === "running" && !view.executing ? "saved" : view.status;
     const published = publishedReleaseStatus(status, view.updatedAt);
     releaseStatus.hidden = false;
-    releaseStatus.dataset.status = published.status;
-    releaseStatus.textContent = published.label;
-    const interrupted = published.status === "saved" || published.status === "stale";
-    processSafety.dataset.status = published.status;
+    releaseStatus.dataset.status = live ? status : published.status;
+    releaseStatus.textContent = live ? releaseStatusText(status) : published.label;
+    const interrupted = !live && (published.status === "saved" || published.status === "stale");
+    processSafety.dataset.status = live ? status : published.status;
     processSafety.querySelector(".safety-icon").textContent = interrupted ? "!" : "i";
+    const observedGraph = liveSnapshot || view.graph;
     const graph = {
-      ...view.graph,
-      steps: view.graph.steps.map((step) => {
+      ...observedGraph,
+      steps: observedGraph.steps.map((step) => {
         if (!interrupted || step.status !== "running" && step.status !== "canceled") return step;
         return {
           ...step, status: published.status,
@@ -716,19 +826,22 @@
     };
     updateSteps(graph);
     updateProgress(graph);
-    progressLabel.textContent = status === "running" || status === "saved"
+    progressLabel.textContent = live ? "Live progress"
+      : status === "running" || status === "saved"
       ? `Last heartbeat: ${new Date(view.updatedAt).toLocaleString()}`
       : `Last published ${new Date(view.updatedAt).toLocaleString()}`;
-    safetyTitle.textContent = interrupted ? published.label : "Published release progress";
-    safetyCopy.textContent = published.status === "stale"
-      ? "No heartbeat has been saved for at least a minute. The worker may have stopped or lost storage access. External work may still be running."
-      : published.status === "saved"
-        ? "The RelUI worker stopped. External work may still be running. Resume this saved release to continue its steps and check existing external work."
-        : "This page reads published progress. It does not check external runs or execute release steps.";
+    safetyTitle.textContent = live ? "Live release progress" : interrupted ? published.label : "Published release progress";
+    safetyCopy.textContent = live
+      ? "This server is running this release. Step progress updates live."
+      : published.status === "stale"
+        ? "No heartbeat has been saved for at least a minute. The worker may have stopped or lost storage access. External work may still be running."
+        : published.status === "saved"
+          ? "The RelUI worker stopped. External work may still be running. Resume this saved release to continue its steps and check existing external work."
+          : "This page reads published progress. It does not check external runs or execute release steps.";
   }
 
   function renderSavedControls() {
-    executionControls.hidden = false;
+    executionControls.hidden = Boolean(eventSource);
     executionTitle.textContent = resumeURL ? "Resume saved release" : "Read-only release";
     executionWarning.textContent = publishedRecord.closed
       ? "This tracking item is closed. Closed releases cannot be resumed."

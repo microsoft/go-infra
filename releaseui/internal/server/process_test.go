@@ -206,6 +206,15 @@ func TestProcessPlanIsReadBeforeBuildAndExecutionUsesFreshRun(t *testing.T) {
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("start status = %d, body = %s", response.Code, response.Body.String())
 	}
+	var started struct {
+		Href string `json:"href"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.Href != "/releases/1" {
+		t.Fatalf("start href = %q", started.Href)
+	}
 	store.waitForCompleted(t, 1)
 	if !executed.Load() || builds.Load() != 2 {
 		t.Fatalf("executed = %v, builds = %d", executed.Load(), builds.Load())

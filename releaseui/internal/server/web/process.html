@@ -69,7 +69,15 @@
             <h2>Review and run</h2>
             <p id="plan-subtitle">Configure the release to prepare a validated plan.</p>
           </div>
+          <button id="release-inputs-toggle" class="button button-secondary compact-button" type="button" aria-expanded="false" aria-controls="release-inputs" disabled hidden>Show inputs</button>
+          <button id="release-state-toggle" class="button button-secondary compact-button" type="button" aria-expanded="false" aria-controls="release-state" disabled hidden>Show state</button>
         </div>
+
+        <section id="existing-release" class="empty-state" hidden>
+          <h3 id="existing-release-title">Existing release</h3>
+          <p>Open the release page to follow its progress or resume it.</p>
+          <a id="existing-release-link" class="button button-secondary">Open release</a>
+        </section>
 
         <div id="empty-state" class="empty-state">
           <div class="empty-graphic" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -80,6 +88,17 @@
         <div id="plan-content" class="plan-content" hidden>
           <span id="release-status" class="status-badge" hidden></span>
           <p id="checkpoint-warning" class="input-error" role="alert" hidden></p>
+          <p id="release-snapshot-error" class="tracking-error" role="alert" hidden></p>
+          <section id="release-inputs" class="release-inputs" aria-labelledby="release-inputs-title" hidden>
+            <h3 id="release-inputs-title">Release inputs</h3>
+            <p id="release-input-revision" class="field-help"></p>
+            <pre id="release-input-values">Loading saved inputs…</pre>
+          </section>
+          <section id="release-state" class="release-inputs" aria-labelledby="release-state-title" hidden>
+            <h3 id="release-state-title">Saved release state</h3>
+            <p id="release-state-revision" class="field-help"></p>
+            <pre id="release-state-values">Loading saved state…</pre>
+          </section>
           <div id="plan-facts" class="source-grid"></div>
 
           <div class="progress-summary" aria-live="polite">

@@ -323,7 +323,7 @@ func TestResumeRequiresConfirmationRevisionAndAvailableCheckpoint(t *testing.T) 
 			defer cancel()
 			request := webview.ReleaseStartRequest{RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true}
 			test.change(store.record, &request)
-			if err := manager.Resume(context.Background(), "example", request); err == nil {
+			if _, err := manager.Resume(context.Background(), "example", request); err == nil {
 				t.Fatal("unsafe resume accepted")
 			}
 			if executions.Load() != 0 || store.updates.Load() != 0 || manager.Running("example") {
@@ -341,7 +341,7 @@ func TestResumeStaleCheckpoint(t *testing.T) {
 		store.record.UpdatedAt = time.Now().Add(-time.Minute)
 		// Execution uses the checkpoint, not the published view.
 		store.view = nil
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -377,7 +377,7 @@ func TestResumeUsesFreshRunnerForRebuiltGraph(t *testing.T) {
 		before := previous.Snapshot()
 		session, _ := manager.processSession("example")
 		session.runner = previous
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -427,7 +427,7 @@ func TestStaleResumeRejectsInvalidCheckpointOrClaim(t *testing.T) {
 			}
 			test.change(store, &request)
 			before := cloneTestRecord(store.record)
-			if err := manager.Resume(context.Background(), "example", request); err == nil {
+			if _, err := manager.Resume(context.Background(), "example", request); err == nil {
 				t.Fatal("invalid Resume accepted")
 			}
 			if executions.Load() != 0 || manager.Running("example") || !reflect.DeepEqual(before, store.record) {
@@ -445,14 +445,22 @@ func TestStaleResumeDoesNotDuplicateLocalExecution(t *testing.T) {
 		request := webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}
-		if err := manager.Resume(context.Background(), "example", request); err != nil {
+		if _, err := manager.Resume(context.Background(), "example", request); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
 		store.record.UpdatedAt = time.Now().Add(-2 * time.Minute)
+		store.view.UpdatedAt = store.record.UpdatedAt
+		view, err := manager.History().View(context.Background(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if view.EventsURL != "/api/releases/1/events" || view.ResumeURL != "" {
+			t.Fatalf("active local release offered resume instead of live progress: %#v", view)
+		}
 		request.Revision = store.record.Revision
 		before := store.updates.Load()
-		if err := manager.Resume(context.Background(), "example", request); err == nil {
+		if _, err := manager.Resume(context.Background(), "example", request); err == nil {
 			t.Fatal("Resume duplicated an active local execution")
 		}
 		if store.updates.Load() != before || executions.Load() != 1 {
@@ -473,7 +481,7 @@ func TestResumeDoesNotReadPublishedViewAsExecutionState(t *testing.T) {
 		RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 	}
 	store.view = nil
-	if err := manager.Resume(context.Background(), "example", request); err != nil {
+	if _, err := manager.Resume(context.Background(), "example", request); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -519,7 +527,7 @@ func TestResumeChecksPreflightBeforeLoadingExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.processes = registry
-	err = manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+	_, err = manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 		RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "target rejected") || loads.Load() != 0 ||
@@ -535,7 +543,7 @@ func TestRecordReservationPreventsSecondServerExecution(t *testing.T) {
 	manager, store, _, executions, cancel := publishedTestManager(t, release)
 	defer cancel()
 	request := webview.ReleaseStartRequest{RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true}
-	if err := manager.Resume(context.Background(), "example", request); err != nil {
+	if _, err := manager.Resume(context.Background(), "example", request); err != nil {
 		t.Fatal(err)
 	}
 	other := New(manager.ctx, manager.processes, store)
@@ -544,7 +552,7 @@ func TestRecordReservationPreventsSecondServerExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Revision = record.Revision
-	if err := other.Resume(context.Background(), "example", request); err == nil {
+	if _, err := other.Resume(context.Background(), "example", request); err == nil {
 		t.Fatal("another server acquired a running record")
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -561,7 +569,7 @@ func TestRunnerPublishesProgressAndHeartbeatThroughCheckpointWriter(t *testing.T
 		release := make(chan struct{})
 		manager, store, _, _, cancel := publishedTestManager(t, release)
 		defer cancel()
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)
@@ -608,7 +616,7 @@ func TestDisplayFailureKeepsExecutionRunningAndRetries(t *testing.T) {
 		release := make(chan struct{})
 		manager, store, _, _, cancel := publishedTestManager(t, release)
 		defer cancel()
-		if err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
+		if _, err := manager.Resume(context.Background(), "example", webview.ReleaseStartRequest{
 			RecordID: 1, Revision: 3, PlanDigest: store.record.Run.Digest, Confirmed: true,
 		}); err != nil {
 			t.Fatal(err)

@@ -5,7 +5,8 @@ The server runs on the release runner's machine and opens in their default brows
 
 `releaseui serve` starts the local release UI.
 
-The landing page lists the two implemented release process groups.
+The landing page lists ongoing releases and recent history.
+Use **New process** in the top bar to choose a release process.
 Go images provides planning, execution, and monitoring.
 Go infrastructure provides reviewed, confirmed actions for the GitHub-owned patch release paths documented by the team.
 
@@ -247,9 +248,9 @@ The current prototype can show older test records as **Cannot open in this sessi
 This is an unreleased prototype. Compatibility with data from earlier prototype builds is not
 guaranteed, and older test records may remain read-only. Supported current-format records can
 still be reopened in another UI session.
-The runner publishes a self-contained graph view alongside its execution checkpoint. It contains
-step names, dependencies, progress, errors, and external-run links. The shared writer saves each
-checkpoint, publishes progress and a heartbeat every five seconds, and saves the final outcome.
+The runner publishes a self-contained graph view alongside its execution checkpoint.
+It contains step names, dependencies, progress, errors, and external-run links.
+The shared writer saves each checkpoint, publishes progress and a heartbeat every five seconds, and saves the final outcome.
 All writes use the same revision-checked persistence path.
 
 Opening a release reads only this published view. It does not load the process checkpoint,
@@ -257,7 +258,19 @@ construct executable steps, or query Azure builds or GitHub workflows. The view 
 even when the matching process is not configured or its checkpoint uses an unsupported format.
 The dashboard uses the same published data.
 
-Release pages refresh the stored view every five seconds and show its last-published timestamp.
+Starting or resuming a release opens `/releases/<recordId>`.
+This page hides the setup sidebar.
+**Show inputs** reveals the process's input JSON.
+**Show state** reveals the process's non-input state as JSON.
+Both buttons explicitly read the saved snapshot, including older records whose display view does not contain inputs.
+Visible input and state panels refresh every five seconds and show the saved revision.
+Inspection does not load a process run, construct executable steps, or modify the record.
+If a process already has an unfinished release, its setup page links to that release instead of displaying its execution in the input form.
+
+Release pages subscribe to live step events when this server owns the record's runner.
+Event streams are bound to the record ID, not the process ID, so a page cannot switch to a later release of the same process.
+The page also refreshes the stored view every five seconds for metadata and falls back to that view when live events are unavailable.
+Saved release pages show the last-published timestamp.
 The host assigns this timestamp when publishing checkpoints, progress, heartbeats, and the final outcome.
 Processes report live step progress through `ctl.ReportProgress`; `RunView` does not carry a timestamp.
 The dashboard and saved release page show the last heartbeat timestamp for unfinished runs.

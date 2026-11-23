@@ -163,6 +163,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /releases/{id}", s.handlePage)
 	mux.HandleFunc("GET /api/releases/{id}/view", s.handleReleaseView)
+	mux.HandleFunc("GET /api/releases/{id}/snapshot", s.handleReleaseSnapshot)
+	mux.HandleFunc("GET /api/releases/{id}/events", s.handleReleaseEvents)
 	mux.HandleFunc("GET /api/releases/{id}/export", s.handleExportRelease)
 	mux.HandleFunc("POST /api/releases/{id}/import", s.handleImportRelease)
 	mux.HandleFunc("GET /api/processes/{id}", s.handleProcess)
@@ -345,12 +347,13 @@ func (s *Server) handleStartProcessRun(
 	if resume {
 		execute = s.runs.Resume
 	}
-	if err := execute(request.Context(), processID, start); err != nil {
+	id, err := execute(request.Context(), processID, start)
+	if err != nil {
 		writeProcessRunError(response, request, err)
 		return
 	}
 	writeJSON(response, http.StatusAccepted, map[string]string{
-		"status": "external action started", "href": processregistry.Path(processID),
+		"status": "external action started", "href": fmt.Sprintf("/releases/%d", id),
 	})
 }
 
@@ -369,6 +372,32 @@ func (s *Server) handleReleaseView(response http.ResponseWriter, request *http.R
 		return
 	}
 	writeJSON(response, http.StatusOK, view)
+}
+
+func (s *Server) handleReleaseEvents(response http.ResponseWriter, request *http.Request) {
+	id, ok := releaseRecordID(response, request)
+	if !ok {
+		return
+	}
+	runner, live := s.runs.ReleaseRunner(id)
+	if !live {
+		writeError(response, http.StatusConflict, "this release is not running on this server")
+		return
+	}
+	streamRunnerEvents(response, request, runner)
+}
+
+func (s *Server) handleReleaseSnapshot(response http.ResponseWriter, request *http.Request) {
+	id, ok := releaseRecordID(response, request)
+	if !ok {
+		return
+	}
+	snapshot, err := s.history.Snapshot(request.Context(), id)
+	if err != nil {
+		writeProcessRunError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleExportRelease(response http.ResponseWriter, request *http.Request) {

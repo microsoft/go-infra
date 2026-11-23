@@ -332,6 +332,10 @@ a.process-card:hover { transform: translateY(-3px); border-color: rgb(57 213 255
 .compact-safety { max-width: none; }
 .release-layout { display: grid; grid-template-columns: minmax(360px, 450px) minmax(0, 1fr); gap: 22px; align-items: start; }
 .release-layout > * { min-width: 0; }
+.release-layout.saved-release { grid-template-columns: minmax(0, 1fr); }
+.release-inputs { margin-bottom: 15px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.release-inputs h3 { margin: 0 0 10px; font-size: 16px; }
+.release-inputs pre { margin: 0; overflow: auto; font-size: 13px; line-height: 1.5; }
 .release-options-panel { position: sticky; top: 94px; padding: 25px; }
 .release-plan-panel { min-width: 0; min-height: 700px; padding: 25px; }
 .variant-input { margin-top: 15px; padding-top: 2px; }
