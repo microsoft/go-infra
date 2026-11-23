@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
@@ -14,7 +15,9 @@ import (
 
 const processTestCommit = "0123456789abcdef0123456789abcdef01234567"
 
-type fakeProcessService struct{}
+type fakeProcessService struct {
+	runService RunService
+}
 
 type recordingProcessService struct {
 	fakeProcessService
@@ -47,13 +50,40 @@ func (fakeProcessService) ValidateRollback(context.Context, int) (RollbackSource
 	return RollbackSource{}, errors.New("unexpected rollback validation")
 }
 
-func (fakeProcessService) NewRunService(RunRequest) (RunService, error) {
+func (s fakeProcessService) NewRunService(RunRequest) (RunService, error) {
+	if s.runService != nil {
+		return s.runService, nil
+	}
 	return &fakeService{}, nil
 }
 
 func (service *recordingProcessService) NewRunService(request RunRequest) (RunService, error) {
 	service.request = &request
 	return &fakeService{}, nil
+}
+
+func newWorkflowTestRun(t *testing.T, input *Input, state *State, service RunService) *goImagesRun {
+	t.Helper()
+	initial, err := NewState(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := NewDocument(input, initial, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != nil {
+		initial = state
+	}
+	return &goImagesRun{
+		service: fakeProcessService{runService: service},
+		input:   PlanInput{Mode: input.Mode, SourceBuildID: input.SourceBuildID},
+		state: goImagesSnapshotState{
+			SchemaVersion: goImagesStateSchema, Document: *document,
+			Source:   Source{Branch: SourceBranch, Commit: input.SourceVersion, Versions: input.Versions},
+			Workflow: *initial, UpdatedAt: document.CreatedAt,
+		},
+	}
 }
 
 func TestProcessGroupBuildsConcreteNormalRelease(t *testing.T) {

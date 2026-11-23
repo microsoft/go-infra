@@ -364,9 +364,13 @@ func TestCaptureFailureCancelsAndSurvivesNilStepReturn(t *testing.T) {
 	var runner StepRunner
 	finalized := false
 	err = runner.ExecuteWithCallbacks(context.Background(), steps, ExecutionCallbacks{
-		Update: func() (func() error, error) {
+		Capture: func() error {
 			captures++
-			return nil, failure
+			return failure
+		},
+		Persist: func() error {
+			t.Error("capture failure attempted persistence")
+			return nil
 		},
 		Finalize: func(err error) error {
 			finalized = true
@@ -382,6 +386,29 @@ func TestCaptureFailureCancelsAndSurvivesNilStepReturn(t *testing.T) {
 	}
 	if graph := runner.Snapshot(); graph.Error == "" || graph.Steps[0].Status == StepStatusSucceeded {
 		t.Fatalf("failed update reported success: %#v", graph)
+	}
+}
+
+func TestStepRunnerRejectsIncompletePersistenceCallbacks(t *testing.T) {
+	for _, captureOnly := range []bool{false, true} {
+		var callbacks ExecutionCallbacks
+		callback := func() error {
+			t.Error("incomplete persistence callbacks were called")
+			return nil
+		}
+		if captureOnly {
+			callbacks.Capture = callback
+		} else {
+			callbacks.Persist = callback
+		}
+		step := NewRootStep("Work", NoTimeout, func(context.Context, StepControl) error {
+			t.Error("incomplete persistence configuration executed work")
+			return nil
+		})
+		var runner StepRunner
+		if err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, callbacks); err == nil {
+			t.Fatal("incomplete persistence callbacks were accepted")
+		}
 	}
 }
 
@@ -416,6 +443,7 @@ func TestStorageFailureDoesNotCancelAndEnsurePersistedRetries(t *testing.T) {
 	attempts := 0
 	storageErr := failure
 	value, saved := 0, 0
+	captured, pending := 0, false
 	step := NewRootStep("Work", NoTimeout, func(ctx context.Context, ctl StepControl) error {
 		ctl.Update(func() { value = 1 })
 		if ctx.Err() != nil || runner.Snapshot().CheckpointError == "" {
@@ -442,16 +470,20 @@ func TestStorageFailureDoesNotCancelAndEnsurePersistedRetries(t *testing.T) {
 		return nil
 	})
 	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
-		Update: func() (func() error, error) {
-			captured := value
-			return func() error {
-				attempts++
-				if storageErr != nil {
-					return storageErr
-				}
-				saved = captured
+		Capture: func() error {
+			captured, pending = value, true
+			return nil
+		},
+		Persist: func() error {
+			if !pending {
 				return nil
-			}, nil
+			}
+			attempts++
+			if storageErr != nil {
+				return storageErr
+			}
+			saved, pending = captured, false
+			return nil
 		},
 	})
 	if err != nil || attempts != 4 {
@@ -463,6 +495,7 @@ func TestLaterUpdateCanRecoverStorageFailure(t *testing.T) {
 	var runner StepRunner
 	attempts := 0
 	continued := false
+	pending := false
 	step := NewRootStep("Work", NoTimeout, func(ctx context.Context, ctl StepControl) error {
 		ctl.Update(func() {})
 		if ctx.Err() != nil {
@@ -472,14 +505,20 @@ func TestLaterUpdateCanRecoverStorageFailure(t *testing.T) {
 		return nil
 	})
 	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
-		Update: func() (func() error, error) {
-			return func() error {
-				attempts++
-				if attempts == 1 {
-					return errors.New("temporary outage")
-				}
+		Capture: func() error {
+			pending = true
+			return nil
+		},
+		Persist: func() error {
+			if !pending {
 				return nil
-			}, nil
+			}
+			attempts++
+			if attempts == 1 {
+				return errors.New("temporary outage")
+			}
+			pending = false
+			return nil
 		},
 	})
 	if err != nil || !continued || runner.Snapshot().CheckpointError != "" {
@@ -495,16 +534,16 @@ func TestStepRunnerReplacesCheckpointStateBetweenRuns(t *testing.T) {
 	})
 	failure := errors.New("storage unavailable")
 	err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
-		Update: func() (func() error, error) {
-			return func() error { return failure }, nil
-		},
+		Capture: func() error { return nil },
+		Persist: func() error { return failure },
 	})
 	if !errors.Is(err, failure) || runner.Snapshot().CheckpointError != failure.Error() {
 		t.Fatalf("first run error=%v, snapshot=%#v", err, runner.Snapshot())
 	}
 
 	if err := runner.ExecuteWithCallbacks(context.Background(), []*Step{step}, ExecutionCallbacks{
-		Update: func() (func() error, error) { return nil, nil },
+		Capture: func() error { return nil },
+		Persist: func() error { return nil },
 	}); err != nil {
 		t.Fatalf("second run error=%v", err)
 	}
@@ -520,6 +559,7 @@ func TestEnsurePersistedWaitsForEarlierUpdate(t *testing.T) {
 	barrierStarted := make(chan struct{})
 	barrierDone := make(chan struct{})
 	saved := false
+	pending := false
 	writer := NewRootStep("Writer", NoTimeout, func(_ context.Context, ctl StepControl) error {
 		ctl.Update(func() {})
 		return nil
@@ -537,13 +577,18 @@ func TestEnsurePersistedWaitsForEarlierUpdate(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- runner.ExecuteWithCallbacks(context.Background(), []*Step{writer, reader}, ExecutionCallbacks{
-			Update: func() (func() error, error) {
-				return func() error {
-					close(saving)
-					<-release
-					saved = true
+			Capture: func() error {
+				pending = true
+				return nil
+			},
+			Persist: func() error {
+				if !pending {
 					return nil
-				}, nil
+				}
+				close(saving)
+				<-release
+				saved, pending = true, false
+				return nil
 			},
 		})
 	}()
@@ -605,7 +650,7 @@ func TestStepReadLockReleasedAfterPanic(t *testing.T) {
 
 func TestStepControlRunLockReleasedAfterPanic(t *testing.T) {
 	var runner StepRunner
-	runner.process.beginExecution(nil, nil)
+	runner.process.beginExecution(nil, nil, nil)
 	ctl := stepControl{runner: &runner, ctx: context.Background()}
 	sentinel := errors.New("callback panic")
 	func() {
@@ -707,12 +752,13 @@ func TestStepControlPreservesCancellationAndTimeout(t *testing.T) {
 				done := make(chan error, 1)
 				go func() {
 					done <- runner.ExecuteWithCallbacks(ctx, []*Step{step}, ExecutionCallbacks{
-						Update: func() (func() error, error) {
+						Capture: func() error {
 							if !mutated {
 								t.Error("capture ran before the canceled callback")
 							}
-							return func() error { saved = true; return nil }, nil
+							return nil
 						},
+						Persist: func() error { saved = true; return nil },
 					})
 				}()
 				synctest.Wait()
