@@ -4,6 +4,8 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	"github.com/microsoft/go-infra/releaseui/contract"
 	"github.com/microsoft/go-infra/releaseui/coordinator"
 	"github.com/microsoft/go-infra/releaseui/internal/webview"
+	"github.com/microsoft/go-infra/releaseui/releaseinput"
 	"github.com/microsoft/go-infra/releaseui/runstore"
 )
 
@@ -106,12 +109,199 @@ func TestPublishedViewRoutesDoNotLoadProcessOrCheckpoint(t *testing.T) {
 			var data webview.ReleaseViewResponse[*runstore.ViewRecord]
 			decodeResponse(t, response, &data)
 			if data.Record.View.Graph.Steps[0].Name != "Run example" ||
+				data.EventsURL != "" ||
 				foreign && data.ResumeURL != "" || !foreign && data.ResumeURL == "" {
 
 				t.Fatalf("published view=%#v", data)
 			}
 			if store.records[42].Revision != 1 || ui.server.runs.Running("example") {
 				t.Fatal("reading published data changed execution state")
+			}
+		})
+	}
+}
+
+func TestReleaseEventsStayBoundToStartedRecord(t *testing.T) {
+	store := newMemoryProcessRunStore()
+	process := exampleProcess()
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	process.prepare = func(context.Context, any) (*contract.StateSnapshot, error) {
+		return &contract.StateSnapshot{
+			Input: json.RawMessage(`{"dimensions":12}`), State: json.RawMessage(`{}`),
+		}, nil
+	}
+	process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
+		done, ready := release, entered
+		return exampleProcessSteps(func(ctx context.Context, ctl coordinator.StepControl) error {
+			ctl.ReportProgress(coordinator.StepProgress{Completed: 3, Total: 12})
+			close(ready)
+			select {
+			case <-done:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}), nil
+	}
+	ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+	start := func(id int) {
+		t.Helper()
+		prepared := prepareExample(t, ui.server)
+		response := startExample(t, ui.server, prepared.Execution.PlanDigest)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("start status = %d, body = %s", response.Code, response.Body)
+		}
+		waitForSignal(t, entered)
+		responseView, err := ui.client.Get(fmt.Sprintf("%s/api/releases/%d/view", ui.http.URL, id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer responseView.Body.Close()
+		var view webview.ReleaseViewResponse[*runstore.ViewRecord]
+		decodeResponse(t, responseView, &view)
+		if view.EventsURL != fmt.Sprintf("/api/releases/%d/events", id) || view.ResumeURL != "" {
+			t.Fatalf("live release view = %#v", view)
+		}
+	}
+	start(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, ui.http.URL+"/api/releases/1/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := ui.client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK || stream.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("live events status = %d, headers = %v", stream.StatusCode, stream.Header)
+	}
+	scanner := bufio.NewScanner(stream.Body)
+	var snapshot coordinator.Snapshot
+	found := false
+	for scanner.Scan() {
+		if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
+			if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+			break
+		}
+	}
+	if !found || len(snapshot.Steps) != 1 || snapshot.Steps[0].Progress == nil ||
+		snapshot.Steps[0].Progress.Completed != 3 {
+
+		t.Fatalf("live snapshot = %#v, read error = %v", snapshot, scanner.Err())
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for ui.server.runs.Running("example") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if ui.server.runs.Running("example") {
+		t.Fatal("first release did not stop")
+	}
+	release, entered = make(chan struct{}), make(chan struct{})
+	start(2)
+	for _, path := range []string{"/api/releases/1/events", "/api/releases/999/events"} {
+		response, err := ui.client.Get(ui.http.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeResponse(t, response)
+		if response.StatusCode != http.StatusConflict {
+			t.Errorf("GET %s status = %d, want conflict", path, response.StatusCode)
+		}
+	}
+	response, err := ui.client.Get(ui.http.URL + "/api/releases/1/view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var old webview.ReleaseViewResponse[*runstore.ViewRecord]
+	decodeResponse(t, response, &old)
+	if old.EventsURL != "" || old.Record.View.Status != runstore.StatusSucceeded {
+		t.Fatalf("older record acquired the new runner: %#v", old)
+	}
+	close(release)
+}
+
+func TestSnapshotInspectionReadsLegacyInputsAndState(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		foreign bool
+		input   string
+	}{
+		{name: "configured", input: `{"Dimensions":12,"SourceBuild":345}`},
+		{name: "unconfigured", foreign: true, input: `{"Dimensions":12,"SourceBuild":345}`},
+		{name: "large raw integer", input: `{"Dimensions":9007199254740993,"SourceBuild":345}`},
+		{name: "incompatible input", input: `{"Dimensions":"not a number","SourceBuild":345}`},
+		{name: "no inputs", input: `{}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := testProcessRun(t)
+			state.Started = true
+			state.Snapshot.Input = json.RawMessage(test.input)
+			state.Snapshot.State = json.RawMessage(`{"Progress":7}`)
+			if test.foreign {
+				state.ProcessID = "foreign-project"
+			}
+			store := newMemoryProcessRunStore()
+			seedReleaseRecord(store, testReleaseRunRecord(42, state, false, time.Now()))
+			process := exampleProcess()
+			inspecting := false
+			process.inputForm = func(set *releaseinput.Set) any {
+				if inspecting {
+					t.Error("inspection requested process input fields")
+				}
+				input := new(struct{ Dimensions, SourceBuild int })
+				set.PositiveIntVar(&input.Dimensions, releaseinput.FieldOptions{
+					Label: "Number of dimensions", Description: "The dimension count.",
+				})
+				set.PositiveIntVar(&input.SourceBuild, releaseinput.FieldOptions{Label: "Source build"})
+				return input
+			}
+			process.validate = func(*contract.StateSnapshot) error {
+				t.Error("inspection validated a process checkpoint")
+				return nil
+			}
+			process.preflight = func(context.Context) (error, error) {
+				t.Error("inspection called preflight")
+				return nil, nil
+			}
+			process.build = func(*fakeReleaseRun) ([]*coordinator.Step, error) {
+				t.Error("inspection built executable steps")
+				return nil, errors.New("forbidden")
+			}
+			ui := newTestUIWithProcess(t, process, WithReleaseRunStore(store))
+			inspecting = true
+			response, err := ui.client.Get(ui.http.URL + "/api/releases/42/snapshot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("snapshot status = %d", response.StatusCode)
+			}
+			var snapshot webview.ReleaseSnapshotResponse
+			decodeResponse(t, response, &snapshot)
+			var inputJSON, stateJSON bytes.Buffer
+			if err := json.Compact(&inputJSON, []byte(snapshot.InputJSON)); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Compact(&stateJSON, []byte(snapshot.StateJSON)); err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Revision != 1 || inputJSON.String() != test.input ||
+				stateJSON.String() != `{"Progress":7}` {
+
+				t.Fatalf("snapshot lost saved JSON: %#v", snapshot)
+			}
+			if store.records[42].Revision != 1 || ui.server.runs.Running("example") {
+				t.Fatal("inspection changed release state")
 			}
 		})
 	}
@@ -233,7 +423,7 @@ func TestStaleReleaseResumesThroughExistingEndpoint(t *testing.T) {
 		Href string `json:"href"`
 	}
 	decodeResponse(t, response, &resumed)
-	if resumed.Href != "/processes/example" {
+	if resumed.Href != "/releases/42" {
 		t.Fatalf("Resume href = %q", resumed.Href)
 	}
 	store.waitForCompleted(t, 1)

@@ -6,6 +6,7 @@ package processrun
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -75,7 +76,9 @@ func (h *History) View(ctx context.Context, id int) (webview.ReleaseViewResponse
 		return webview.ReleaseViewResponse[*runstore.ViewRecord]{}, newError(ErrorStore, err)
 	}
 	result := webview.ReleaseViewResponse[*runstore.ViewRecord]{Record: record}
-	if _, configured := h.manager.processes.Lookup(record.View.ProcessID); configured &&
+	if _, live := h.manager.ReleaseRunner(id); live {
+		result.EventsURL = fmt.Sprintf("/api/releases/%d/events", id)
+	} else if _, configured := h.manager.processes.Lookup(record.View.ProcessID); configured &&
 		!record.Closed && record.View.Status == runstore.StatusRunning &&
 		(!record.View.Executing || time.Since(record.View.UpdatedAt) >= staleHeartbeatTimeout) {
 
@@ -93,6 +96,25 @@ func (h *History) Export(ctx context.Context, id int) (webview.ReleaseRecordExpo
 		return webview.ReleaseRecordExport[*runstore.State]{}, newError(ErrorStore, err)
 	}
 	return exportRecord(record), nil
+}
+
+// Snapshot inspects saved JSON without loading a process run or constructing executable steps.
+func (h *History) Snapshot(ctx context.Context, id int) (webview.ReleaseSnapshotResponse, error) {
+	record, err := h.Export(ctx, id)
+	if err != nil {
+		return webview.ReleaseSnapshotResponse{}, err
+	}
+	inputJSON, err := json.MarshalIndent(record.Run.Snapshot.Input, "", "  ")
+	if err != nil {
+		return webview.ReleaseSnapshotResponse{}, errorf(ErrorStore, "format saved inputs: %v", err)
+	}
+	stateJSON, err := json.MarshalIndent(record.Run.Snapshot.State, "", "  ")
+	if err != nil {
+		return webview.ReleaseSnapshotResponse{}, errorf(ErrorStore, "format saved state: %v", err)
+	}
+	return webview.ReleaseSnapshotResponse{
+		Revision: record.Revision, InputJSON: string(inputJSON), StateJSON: string(stateJSON),
+	}, nil
 }
 
 func (h *History) Import(

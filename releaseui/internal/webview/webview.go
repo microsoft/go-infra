@@ -26,6 +26,13 @@ type Input struct {
 	Placeholder string `json:"placeholder,omitempty"`
 }
 
+// ReleaseSnapshotResponse contains the last saved process input and non-input state.
+type ReleaseSnapshotResponse struct {
+	Revision  int    `json:"revision"`
+	InputJSON string `json:"inputJson"`
+	StateJSON string `json:"stateJson"`
+}
+
 // PlanStep describes one step in a planned release.
 type PlanStep struct {
 	// Name identifies the step to the operator and in dependency lists.
@@ -297,6 +304,8 @@ type ReleaseStartRequest struct {
 type ReleaseViewResponse[T any] struct {
 	Record    T      `json:"record"`
 	ResumeURL string `json:"resumeUrl,omitempty"`
+	// EventsURL streams live progress only for this record's local runner.
+	EventsURL string `json:"eventsUrl,omitempty"`
 }
 
 // ReleaseRecordExport is the portable representation of a durable release record.

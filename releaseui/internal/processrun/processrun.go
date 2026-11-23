@@ -195,6 +195,20 @@ func (s *Manager) Running(processID string) bool {
 	return session.running
 }
 
+// ReleaseRunner returns the local runner for this record, never a later run of its process.
+func (s *Manager) ReleaseRunner(id int) (*coordinator.StepRunner, bool) {
+	for _, session := range s.sessions {
+		session.mu.Lock()
+		if session.running && session.checkpointer != nil && session.record != nil && session.record.ID == id {
+			runner := session.runner
+			session.mu.Unlock()
+			return runner, true
+		}
+		session.mu.Unlock()
+	}
+	return nil, false
+}
+
 // Preflight checks whether processID is ready to plan and execute.
 func (s *Manager) Preflight(ctx context.Context, processID string) (webview.PreflightReport, bool) {
 	report := webview.PreflightReport{PlanningEnabled: true, Checks: []webview.PreflightCheck{{
@@ -330,45 +344,45 @@ func (s *Manager) Prepare(
 	return result, nil
 }
 
-// Start confirms and starts a new release.
-func (s *Manager) Start(ctx context.Context, processID string, start webview.ReleaseStartRequest) error {
+// Start confirms and starts a new release, returning its durable record ID.
+func (s *Manager) Start(ctx context.Context, processID string, start webview.ReleaseStartRequest) (int, error) {
 	return s.start(ctx, processID, start, false)
 }
 
-// Resume explicitly continues an open saved checkpoint after revision and confirmation checks.
-func (s *Manager) Resume(ctx context.Context, processID string, start webview.ReleaseStartRequest) error {
+// Resume continues an open saved checkpoint after revision and confirmation checks, returning its ID.
+func (s *Manager) Resume(ctx context.Context, processID string, start webview.ReleaseStartRequest) (int, error) {
 	return s.start(ctx, processID, start, true)
 }
 
-func (s *Manager) start(ctx context.Context, processID string, start webview.ReleaseStartRequest, resume bool) error {
+func (s *Manager) start(ctx context.Context, processID string, start webview.ReleaseStartRequest, resume bool) (int, error) {
 	if s.ctx.Err() != nil {
-		return newError(ErrorConflict, errors.New("release UI is shutting down"))
+		return 0, newError(ErrorConflict, errors.New("release UI is shutting down"))
 	}
 	registered, ok := s.processes.Lookup(processID)
 	if !ok {
-		return newError(ErrorNotFound, errors.New("release process is not configured"))
+		return 0, newError(ErrorNotFound, errors.New("release process is not configured"))
 	}
 	session, _ := s.processSession(processID)
 	var saved *runstore.Record
 	if resume {
 		if !start.Confirmed || start.RecordID <= 0 {
-			return newError(ErrorInvalid, errors.New("confirm the saved release before resuming"))
+			return 0, newError(ErrorInvalid, errors.New("confirm the saved release before resuming"))
 		}
 		var err error
 		saved, err = s.store.Get(ctx, start.RecordID)
 		if err != nil {
-			return errorf(ErrorStore, "load release checkpoint: %v", err)
+			return 0, errorf(ErrorStore, "load release checkpoint: %v", err)
 		}
 		if err := validateRecordForExecution(saved); err != nil {
-			return newError(ErrorConflict, err)
+			return 0, newError(ErrorConflict, err)
 		}
 		if saved.Run.ProcessID != processID {
-			return newError(ErrorConflict, errors.New("release checkpoint belongs to a different process"))
+			return 0, newError(ErrorConflict, errors.New("release checkpoint belongs to a different process"))
 		}
 	}
 	update, err := session.reserveStart(start, saved)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	launched := false
 	defer func() {
@@ -380,45 +394,45 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	state := update.state
 
 	if _, blocking := registered.Implementation.Preflight(ctx); blocking != nil {
-		return errorf(ErrorPrecondition, "external action preflight failed before mutation: %v", blocking)
+		return 0, errorf(ErrorPrecondition, "external action preflight failed before mutation: %v", blocking)
 	}
 	run, err := loadReleaseRun(registered.Implementation, state.Snapshot)
 	if err != nil {
-		return errorf(ErrorInternal, "load process run for execution: %v", err)
+		return 0, errorf(ErrorInternal, "load process run for execution: %v", err)
 	}
 	plan := run.Plan()
 	steps, err := run.Build()
 	if err != nil {
-		return errorf(ErrorConflict, "build process graph: %v", err)
+		return 0, errorf(ErrorConflict, "build process graph: %v", err)
 	}
 	builtSnapshot, err := s.snapshotReleaseRun(processID, run)
 	if err != nil || !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
 		if err != nil {
-			return newError(ErrorInternal, err)
+			return 0, newError(ErrorInternal, err)
 		}
-		return newError(ErrorConflict, errors.New("building the execution graph changed the reviewed release state"))
+		return 0, newError(ErrorConflict, errors.New("building the execution graph changed the reviewed release state"))
 	}
 	if err := validateProcessRunGraph(steps); err != nil {
-		return newError(ErrorConflict, errors.New("execution graph no longer matches the reviewed plan"))
+		return 0, newError(ErrorConflict, errors.New("execution graph no longer matches the reviewed plan"))
 	}
 	runner := update.runner
 	if !resume {
 		if err := runner.ValidateSteps(steps); err != nil {
-			return newError(ErrorConflict, err)
+			return 0, newError(ErrorConflict, err)
 		}
 	}
 	state.Started = true
 	state.Executing = true
 	initial, err := coordinator.NewStepRunner(steps)
 	if err != nil {
-		return newError(ErrorInternal, err)
+		return 0, newError(ErrorInternal, err)
 	}
 	if resume {
 		runner = initial
 	}
 	view, err := s.publishedView(state, run.TakeView(), plan, initial.Snapshot())
 	if err != nil {
-		return newError(ErrorInternal, err)
+		return 0, newError(ErrorInternal, err)
 	}
 	var record *runstore.Record
 	if resume {
@@ -428,9 +442,9 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	}
 	if err != nil {
 		if errors.Is(err, runstore.ErrConflict) {
-			return errorf(ErrorConflict, "release record changed before execution: %v", err)
+			return 0, errorf(ErrorConflict, "release record changed before execution: %v", err)
 		}
-		return errorf(ErrorInternal, "save release record before execution: %v", err)
+		return 0, errorf(ErrorInternal, "save release record before execution: %v", err)
 	}
 	executionContext, cancel := context.WithCancel(s.ctx)
 	checkpointer := s.newProcessCheckpointer(session, processID, state.Digest, run, cancel)
@@ -443,7 +457,7 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	checkpointer.persisted.Store(state.Checkpointed)
 	err = session.publishStartedRun(update, run, record, plan, steps, runner, checkpointer)
 	if err != nil {
-		return newError(ErrorConflict, err)
+		return 0, newError(ErrorConflict, err)
 	}
 
 	launched = true
@@ -451,7 +465,7 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 		defer close(update.done)
 		s.executeProcessRun(session, state.Digest, executionContext, runner, steps, run, checkpointer)
 	}()
-	return nil
+	return record.ID, nil
 }
 
 func (s *Manager) newProcessCheckpointer(
