@@ -373,65 +373,44 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	launched := false
 	defer func() {
 		if !launched {
+			session.stopStart(update.state.Digest)
 			close(update.done)
 		}
 	}()
 	state := update.state
 
 	if _, blocking := registered.Implementation.Preflight(ctx); blocking != nil {
-		session.stopStart(state.Digest)
 		return errorf(ErrorPrecondition, "external action preflight failed before mutation: %v", blocking)
 	}
 	run, err := loadReleaseRun(registered.Implementation, state.Snapshot)
 	if err != nil {
-		session.stopStart(state.Digest)
 		return errorf(ErrorInternal, "load process run for execution: %v", err)
 	}
 	plan := run.Plan()
-	executionContext, cancel := context.WithCancel(s.ctx)
-	checkpointer := s.newProcessCheckpointer(session, processID, state.Digest, run, cancel)
 	steps, err := run.Build()
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		return errorf(ErrorConflict, "build process graph: %v", err)
 	}
 	builtSnapshot, err := s.snapshotReleaseRun(processID, run)
 	if err != nil || !reflect.DeepEqual(builtSnapshot, state.Snapshot) {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		if err != nil {
 			return newError(ErrorInternal, err)
 		}
 		return newError(ErrorConflict, errors.New("building the execution graph changed the reviewed release state"))
 	}
 	if err := validateProcessRunGraph(steps); err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		return newError(ErrorConflict, errors.New("execution graph no longer matches the reviewed plan"))
 	}
 	runner := update.runner
 	if !resume {
 		if err := runner.ValidateSteps(steps); err != nil {
-			checkpointer.Close()
-			cancel()
-			session.stopStart(state.Digest)
 			return newError(ErrorConflict, err)
 		}
-	}
-	if state.Checkpointed {
-		checkpointer.persisted.Store(true)
 	}
 	state.Started = true
 	state.Executing = true
 	initial, err := coordinator.NewStepRunner(steps)
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		return newError(ErrorInternal, err)
 	}
 	if resume {
@@ -439,9 +418,6 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 	}
 	view, err := s.publishedView(state, run.TakeView(), plan, initial.Snapshot())
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		return newError(ErrorInternal, err)
 	}
 	var record *runstore.Record
@@ -451,19 +427,22 @@ func (s *Manager) start(ctx context.Context, processID string, start webview.Rel
 		record, err = s.store.Create(ctx, registered.DisplayName(), state, view)
 	}
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		if errors.Is(err, runstore.ErrConflict) {
 			return errorf(ErrorConflict, "release record changed before execution: %v", err)
 		}
 		return errorf(ErrorInternal, "save release record before execution: %v", err)
 	}
+	executionContext, cancel := context.WithCancel(s.ctx)
+	checkpointer := s.newProcessCheckpointer(session, processID, state.Digest, run, cancel)
+	defer func() {
+		if !launched {
+			cancel()
+			checkpointer.Close()
+		}
+	}()
+	checkpointer.persisted.Store(state.Checkpointed)
 	err = session.publishStartedRun(update, run, record, plan, steps, runner, checkpointer)
 	if err != nil {
-		checkpointer.Close()
-		cancel()
-		session.stopStart(state.Digest)
 		return newError(ErrorConflict, err)
 	}
 
@@ -484,7 +463,7 @@ func (s *Manager) newProcessCheckpointer(
 ) *processCheckpointer {
 	checkpointer := &processCheckpointer{
 		manager: s, session: session, processID: processID, digest: digest, run: run, cancel: cancel,
-		requests: make(chan checkpointRequest), view: run.TakeView(),
+		requests: make(chan checkpointRequest, 1), view: run.TakeView(),
 		stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go checkpointer.runLoop()
@@ -504,7 +483,8 @@ func (s *Manager) executeProcessRun(
 	defer checkpointer.Close()
 	finalized := false
 	if err := runner.ExecuteWithCallbacks(ctx, steps, coordinator.ExecutionCallbacks{
-		Update: checkpointer.Capture,
+		Capture: checkpointer.Capture,
+		Persist: checkpointer.Persist,
 		Finalize: func(executionErr error) error {
 			err := s.finishProcessRun(session, digest, run, checkpointer, executionErr)
 			finalized = true
@@ -601,6 +581,25 @@ func (s *Manager) publishedView(
 		return nil, err
 	}
 	return published, nil
+}
+
+func (s *Manager) snapshotReleaseRun(processID string, run contract.Run) (*contract.StateSnapshot, error) {
+	if run == nil {
+		return nil, errors.New("release run is nil")
+	}
+	registered, ok := s.processes.Lookup(processID)
+	if !ok {
+		return nil, errors.New("release process is not configured")
+	}
+	snapshot, err := run.TakeSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("capture release run snapshot: %w", err)
+	}
+	snapshot = runstore.CloneSnapshot(snapshot)
+	if err := validateProcessSnapshot(registered.Implementation, snapshot); err != nil {
+		return nil, fmt.Errorf("validate release run snapshot: %w", err)
+	}
+	return snapshot, nil
 }
 
 func (s *processSession) captureCurrent() (webview.ProcessRunResponse[*contract.Plan], contract.Run, *coordinator.StepRunner, bool) {
@@ -792,17 +791,25 @@ func (s *processSession) publishOutcome(
 }
 
 // Capture runs under the runner's state lock. Persistence uses only the captured copies.
-func (c *processCheckpointer) Capture() (func() error, error) {
+func (c *processCheckpointer) Capture() error {
 	snapshot, err := c.manager.snapshotReleaseRun(c.processID, c.run)
 	if err != nil {
 		c.fail(err)
-		return nil, err
+		return err
 	}
-	request := checkpointRequest{snapshot: snapshot, view: c.run.TakeView(), done: make(chan error, 1)}
-	return func() error { return c.save(request) }, nil
+	// One capture can queue while a heartbeat save is in flight. Step updates remain serialized
+	// until Persist returns, so this send does not wait for storage while holding the state lock.
+	request := checkpointRequest{snapshot: snapshot, view: c.run.TakeView()}
+	select {
+	case c.requests <- request:
+		return nil
+	case <-c.done:
+		return c.stoppedError()
+	}
 }
 
-func (c *processCheckpointer) save(request checkpointRequest) error {
+func (c *processCheckpointer) Persist() error {
+	request := checkpointRequest{done: make(chan error, 1)}
 	select {
 	case c.requests <- request:
 	case <-c.done:
@@ -837,17 +844,19 @@ func (c *processCheckpointer) runLoop() {
 	for {
 		select {
 		case request := <-c.requests:
-			err := c.persist(&request)
+			if request.snapshot != nil {
+				c.pending = &request
+				continue
+			}
+			var err error
+			if c.pending != nil {
+				err = c.persist()
+			}
 			request.done <- err
 			if c.failed.Load() {
 				return
 			}
 		case <-c.stop:
-			select {
-			case request := <-c.requests:
-				request.done <- c.persist(&request)
-			default:
-			}
 			return
 		case <-ticker.C:
 			c.session.mu.Lock()
@@ -855,7 +864,7 @@ func (c *processCheckpointer) runLoop() {
 			c.session.mu.Unlock()
 			if active {
 				// persist reports failures and retains pending state for the next retry.
-				_ = c.persist(nil)
+				_ = c.persist()
 				if c.failed.Load() {
 					return
 				}
@@ -864,18 +873,15 @@ func (c *processCheckpointer) runLoop() {
 	}
 }
 
-func (c *processCheckpointer) persist(checkpoint *checkpointRequest) error {
+func (c *processCheckpointer) persist() error {
 	update, err := c.session.captureRunUpdate(c.digest)
 	if err != nil {
 		c.fail(err)
 		return err
 	}
 	state := update.state
-	if checkpoint == nil {
-		checkpoint = c.pending
-	}
+	checkpoint := c.pending
 	if checkpoint != nil {
-		c.pending = checkpoint
 		state.Snapshot = checkpoint.snapshot
 		state.Checkpointed = true
 		c.view = checkpoint.view
@@ -945,25 +951,6 @@ func newProcessSessions(processes *processregistry.Registry) map[string]*process
 		sessions[process.Definition.ID] = &processSession{runner: &coordinator.StepRunner{}}
 	}
 	return sessions
-}
-
-func (s *Manager) snapshotReleaseRun(processID string, run contract.Run) (*contract.StateSnapshot, error) {
-	if run == nil {
-		return nil, errors.New("release run is nil")
-	}
-	registered, ok := s.processes.Lookup(processID)
-	if !ok {
-		return nil, errors.New("release process is not configured")
-	}
-	snapshot, err := run.TakeSnapshot()
-	if err != nil {
-		return nil, fmt.Errorf("capture release run snapshot: %w", err)
-	}
-	snapshot = runstore.CloneSnapshot(snapshot)
-	if err := validateProcessSnapshot(registered.Implementation, snapshot); err != nil {
-		return nil, fmt.Errorf("validate release run snapshot: %w", err)
-	}
-	return snapshot, nil
 }
 
 func loadReleaseRun(process contract.Process, snapshot *contract.StateSnapshot) (contract.Run, error) {

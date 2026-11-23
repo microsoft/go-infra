@@ -317,10 +317,11 @@ func TestKnownWorkflowMonitorPreservesTerminalProviderConclusions(t *testing.T) 
 				t.Fatal(err)
 			}
 			err = (&coordinator.StepRunner{}).ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
-				Update: func() (func() error, error) {
+				Capture: func() error {
 					checkpoints++
-					return nil, nil
+					return nil
 				},
+				Persist: func() error { return nil },
 			})
 			if (err == nil) != (conclusion == "success") ||
 				errors.Is(err, coordinator.ErrCanceled) != (conclusion == "cancelled") {
@@ -384,25 +385,27 @@ func TestDryRunCheckpointsWorkflowState(t *testing.T) {
 		runner := new(coordinator.StepRunner)
 		var progress []coordinator.StepProgress
 		checkpoints := 0
-		checkpoint := func() (func() error, error) {
+		checkpoint := func() error {
 			checkpoints++
 			if graph := runner.Snapshot(); len(graph.Steps) == 2 && graph.Steps[1].Progress != nil {
 				progress = append(progress, *graph.Steps[1].Progress)
 			}
 			saved, err := run.TakeSnapshot()
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if _, err := process.Load(saved); err != nil {
 				t.Errorf("load checkpoint: %v", err)
 			}
-			return nil, nil
+			return nil
 		}
 		steps, err := run.Build()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{Update: checkpoint}); err != nil {
+		if err := runner.ExecuteWithCallbacks(context.Background(), steps, coordinator.ExecutionCallbacks{
+			Capture: checkpoint, Persist: func() error { return nil },
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if checkpoints != 3 {
