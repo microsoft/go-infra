@@ -1,15 +1,31 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-name: Create go-infra patch release
+name: Create module release
 
 on:
   pull_request:
     types: [closed]
   workflow_dispatch:
     inputs:
+      module:
+        description: "Module to release (. is the root go-infra module)."
+        required: true
+        type: choice
+        default: .
+        options:
+          - .
+          - assets
+          - goinstallscript
+          - telemetry
+          - telemetry/config
+      advance-minor:
+        description: "Advance the minor version instead of the patch version."
+        required: true
+        type: boolean
+        default: false
       dry-run:
-        description: "Dry run: calculate the next v0.0.x release without creating it."
+        description: "Dry run: calculate the module's next release without creating it."
         required: true
         type: boolean
         default: false
@@ -26,6 +42,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release-on-merge'))
     runs-on: ubuntu-latest
     env:
+      MODULE: ${{ inputs.module || '.' }}
+      ADVANCE_MINOR: ${{ inputs.advance-minor || false }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,11 +58,13 @@ jobs:
           echo "::error::This workflow cannot create releases when triggered by merged PRs from forks because GITHUB_TOKEN does not have write access. Ask a maintainer with workflow dispatch permissions to re-run this workflow with workflow_dispatch from the base repository, or create the release manually."
           exit 1
 
-      - name: "Create next go-infra patch release (dry: ${{ env.DRY_RUN }})"
+      - name: "Create next ${{ env.MODULE }} release (dry: ${{ env.DRY_RUN }})"
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           go run ./cmd/releasego create-go-infra-patch
           -repo="${{ github.repository }}"
+          -module="$MODULE"
+          -minor="$ADVANCE_MINOR"
           -github-pat="$GH_TOKEN"
           -dry-run="${{ env.DRY_RUN }}"
