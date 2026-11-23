@@ -1,9 +1,7 @@
 "use strict";
 
 const ongoingReleases = document.querySelector("#ongoing-releases");
-const recentSection = document.querySelector("#recent-section");
 const recentReleases = document.querySelector("#recent-releases");
-const processGrid = document.querySelector("#process-grid");
 const trackingError = document.querySelector("#tracking-error");
 const jsonDialog = document.querySelector("#json-dialog");
 const jsonDialogTitle = document.querySelector("#json-dialog-title");
@@ -38,9 +36,9 @@ async function loadDashboard() {
     const focused = document.activeElement;
     const focusKey = focused?.dataset.focusKey;
     renderReleases(ongoingReleases, dashboardState.ongoing, "No ongoing releases are listed.");
-    processGrid.replaceChildren(...dashboardState.processes.map(createProcessCard));
-    recentSection.hidden = dashboardState.recent.length === 0;
-    renderReleases(recentReleases, dashboardState.recent, "");
+    renderReleases(recentReleases, dashboardState.recent, dashboardState.trackingError
+      ? "Recent history may be incomplete."
+      : "No finished releases with closed tracking items found.");
     trackingError.hidden = !dashboardState.trackingError;
     trackingError.textContent = dashboardState.trackingError || "";
     refreshHeartbeats();
@@ -48,6 +46,9 @@ async function loadDashboard() {
       document.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     }
   } catch (error) {
+    if (recentReleases.querySelector(".loading-card")) {
+      renderReleases(recentReleases, [], "Unable to load recent history.");
+    }
     showTrackingError(`Unable to refresh published progress: ${error.message}`);
   } finally {
     loadingDashboard = false;
@@ -264,28 +265,6 @@ function showTrackingError(message) {
 function showJSONError(message) {
   jsonError.textContent = message;
   jsonError.hidden = false;
-}
-
-function createProcessCard(process) {
-  const card = document.createElement("a");
-  card.className = "process-card";
-  card.dataset.focusKey = `process-${process.id}`;
-  card.href = process.href;
-
-  const mark = document.createElement("span");
-  mark.className = "process-mark";
-  mark.textContent = process.mark;
-
-  const title = document.createElement("h3");
-  title.textContent = process.name;
-  const description = document.createElement("p");
-  description.textContent = process.description;
-  const action = document.createElement("span");
-  action.className = "process-action";
-  action.textContent = "Open release process →";
-
-  card.append(mark, title, description, action);
-  return card;
 }
 
 function formatMode(mode) {

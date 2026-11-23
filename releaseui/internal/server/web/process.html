@@ -3,23 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Release Process · Microsoft build of Go Release UI</title>
+  <title>Release Process · {{if .Brand}}{{.Brand}} {{end}}Release UI</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/process.js" defer></script>
   <script src="/assets/status.js" defer></script>
   <script src="/assets/workflow.js" defer></script>
 </head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Back to release dashboard">
-      <span class="brand-mark" aria-hidden="true">Go</span>
-      <span>
-        <strong>Release UI</strong>
-        <small>Microsoft build of Go</small>
-      </span>
-    </a>
-    <a class="back-link" href="/">← All release processes</a>
-  </header>
+<body data-brand="{{.Brand}}">
+{{template "topbar" .}}
 
   <main class="release-main">
     <section class="release-hero">

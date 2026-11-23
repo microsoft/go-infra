@@ -64,6 +64,12 @@ func handleServe(parse subcmd.ParseFunc) error {
 		processes = append(processes, demo.NewProcess())
 	}
 	options := []releaseui.Option{
+		releaseui.WithStyle(
+			releaseui.Style{
+				Brand:           "Microsoft build of Go",
+				InstructionsURL: "https://github.com/microsoft/go-lab/tree/main/docs/release",
+			},
+		),
 		releaseui.WithProcesses(processes...),
 	}
 	if !*noOpen {

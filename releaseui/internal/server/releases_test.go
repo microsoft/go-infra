@@ -225,9 +225,16 @@ func TestStaleReleaseResumesThroughExistingEndpoint(t *testing.T) {
 	}
 	request.Confirmed = true
 	response = postJSONValue(t, ui, saved.ResumeURL, request)
-	closeResponse(t, response)
 	if response.StatusCode != http.StatusAccepted {
+		closeResponse(t, response)
 		t.Fatalf("Resume status = %d, want accepted", response.StatusCode)
+	}
+	var resumed struct {
+		Href string `json:"href"`
+	}
+	decodeResponse(t, response, &resumed)
+	if resumed.Href != "/processes/example" {
+		t.Fatalf("Resume href = %q", resumed.Href)
 	}
 	store.waitForCompleted(t, 1)
 	record, err := store.Get(context.Background(), 42)

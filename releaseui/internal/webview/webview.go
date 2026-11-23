@@ -146,7 +146,7 @@ type ReleaseIssue struct {
 	Detail string `json:"detail"`
 }
 
-// ProcessSummary describes one release process card on the dashboard.
+// ProcessSummary describes one release process card.
 type ProcessSummary struct {
 	// ID is the stable identifier of the process opened by the card.
 	ID string `json:"id"`

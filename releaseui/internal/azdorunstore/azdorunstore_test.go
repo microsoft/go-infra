@@ -65,6 +65,8 @@ func (f *fakeWorkItemClient) Query(context.Context, bool, int) ([]*azdoworkitem.
 	return []*azdoworkitem.WorkItem{testWorkItem(42, 1, "Active", f.created)}, nil
 }
 
+func (f *fakeWorkItemClient) QueryURL() string { return "https://example.test/query" }
+
 func TestStoreRoundTrip(t *testing.T) {
 	client := &fakeWorkItemClient{}
 	store, err := newStore(client, "Release Operator")

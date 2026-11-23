@@ -75,7 +75,7 @@ func TestRegistryIndexesProcessesAndGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page, ok := registry.Page("/one"); !ok || page != "process.html" {
+	if page, ok := registry.Page("/processes/one"); !ok || page != "process.html" {
 		t.Fatalf("page = %q, ok = %v", page, ok)
 	}
 	process, ok := registry.Lookup("two")

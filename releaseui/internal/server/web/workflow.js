@@ -42,6 +42,7 @@
   const executionCancel = document.querySelector("#execution-cancel");
   const executionButton = document.querySelector("#execution-button");
   const toast = document.querySelector("#toast");
+  const brand = document.body.dataset.brand;
 
   const inputRecords = new Map();
   let processDefinition = null;
@@ -134,7 +135,7 @@
     lastRefreshSignature = "";
     refreshInFlight = null;
     renderVariant();
-    history.replaceState(null, "", `/${encodeURIComponent(session.processID)}`);
+    history.replaceState(null, "", `/processes/${encodeURIComponent(session.processID)}`);
     planContent.hidden = true;
     emptyState.hidden = false;
     planSubtitle.textContent = "Configure the release to prepare a validated plan.";
@@ -662,7 +663,7 @@
 
   function renderSavedRelease() {
     const view = publishedRecord.view;
-    document.title = `${view.name} · Release UI`;
+    document.title = `${view.name} · ${brand ? `${brand} ` : ""}Release UI`;
     document.querySelector("#process-name").textContent = view.name;
     document.querySelector("#process-mark").textContent = view.mark;
     document.querySelector("#process-description").textContent = view.detail || "";
