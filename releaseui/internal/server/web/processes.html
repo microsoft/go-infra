@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Run a process · {{if .Brand}}{{.Brand}} {{end}}Release UI</title>
   <link rel="stylesheet" href="/assets/styles.css">
-  <script src="/assets/processes.js" defer></script>
 </head>
 <body data-brand="{{.Brand}}">
 {{template "topbar" .}}
@@ -18,10 +17,17 @@
         <p class="hero-copy">Choose a release process.</p>
       </div>
     </section>
-    <div id="process-list" class="process-list" aria-live="polite">
-      <p class="release-empty loading-card">Loading release processes...</p>
+    <div id="process-list" class="process-list">
+      {{range .Processes}}
+      <a class="process-card" href="{{.Href}}">
+        <span class="process-mark">{{.Mark}}</span>
+        <div>
+          <h2>{{.Name}}</h2>
+          <p>{{.Description}}</p>
+        </div>
+      </a>
+      {{end}}
     </div>
-    <p id="processes-error" class="tracking-error" role="alert" hidden></p>
   </main>
 </body>
 </html>

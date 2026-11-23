@@ -132,6 +132,22 @@ func (r *Registry) Groups() []*Group {
 	return append([]*Group(nil), r.groups...)
 }
 
+// Summaries returns process group cards in display order.
+func (r *Registry) Summaries() []webview.ProcessSummary {
+	summaries := make([]webview.ProcessSummary, 0, len(r.groups))
+	for _, group := range r.groups {
+		process := group.Processes[0]
+		summaries = append(summaries, webview.ProcessSummary{
+			ID:          process.Definition.ID,
+			Name:        group.Identity.Name,
+			Mark:        group.Identity.Mark,
+			Description: group.Identity.Description,
+			Href:        Path(process.Definition.ID),
+		})
+	}
+	return summaries
+}
+
 // Ordered returns all registered processes in display order.
 func (r *Registry) Ordered() []*Process {
 	return append([]*Process(nil), r.ordered...)
