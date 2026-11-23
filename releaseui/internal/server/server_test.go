@@ -129,6 +129,7 @@ func TestProcessSelectionNavigation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer response.Body.Close()
 	var dashboard webview.DashboardResponse
 	decodeResponse(t, response, &dashboard)
 	if len(dashboard.Processes) != 2 || dashboard.Processes[0].Href != "/processes/example" ||
