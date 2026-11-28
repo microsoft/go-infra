@@ -64,6 +64,11 @@ type ConfigEntry struct {
 	// branch, it is forked from the tip of this branch.
 	MainBranch string
 
+	// PrepareNextRelease enables preparation of the next Go release branch for this repository.
+	//
+	// Head must be unset or equal to Target. PrepareNextRelease doesn't support submitting PRs from a fork.
+	PrepareNextRelease bool
+
 	// SyncDocs copies the paths listed in [docsSyncPaths] from MainBranch in Upstream to the active
 	// support branches in Target, as defined by msmajorversions. This is a documentation-only sync,
 	// using separate PR branches from submodule updates. BranchMap and AutoSyncBranches must be

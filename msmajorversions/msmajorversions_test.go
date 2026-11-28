@@ -18,13 +18,15 @@ import (
 
 func TestBranches(t *testing.T) {
 	got, err := json.MarshalIndent(struct {
-		Previous assets.Branch `json:"previous"`
-		Current  assets.Branch `json:"current"`
-		Next     assets.Branch `json:"next"`
+		Previous         assets.Branch `json:"previous"`
+		Current          assets.Branch `json:"current"`
+		Next             assets.Branch `json:"next"`
+		AfterNextVersion string        `json:"afterNextVersion"`
 	}{
-		Previous: Previous,
-		Current:  Current,
-		Next:     Next,
+		Previous:         Previous,
+		Current:          Current,
+		Next:             Next,
+		AfterNextVersion: AfterNextVersion,
 	}, "", "  ")
 	if err != nil {
 		t.Fatal(err)

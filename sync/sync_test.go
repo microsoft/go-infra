@@ -156,7 +156,7 @@ func Test_changedBranch_pushLease(t *testing.T) {
 				}
 			}
 			// Inspect branches independently of whether an open PR exists.
-			if err := b.fetchRemoteCommit(local, remote); err != nil {
+			if err := b.fetchRemoteCommit(local, remote, gitcmd.NoAuther{}); err != nil {
 				t.Fatal(err)
 			}
 			if (b.RemoteCommit != "") != tt.exists {
@@ -227,7 +227,7 @@ func Test_changedBranch_fetchRemoteCommitMissingWithTrace(t *testing.T) {
 		RemoteCommit: "previously checked tip",
 	}
 	t.Setenv("GIT_TRACE", "1")
-	if err := b.fetchRemoteCommit(dir, dir); err != nil {
+	if err := b.fetchRemoteCommit(dir, dir, gitcmd.NoAuther{}); err != nil {
 		t.Fatal(err)
 	}
 	if b.RemoteCommit != "" {

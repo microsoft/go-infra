@@ -32,37 +32,37 @@ var Current = latestStable()
 // updated as the development of the Next release progresses.
 var Next = nextStable()
 
+// AfterNextVersion is the version after Next, in "1.N" form. Its release notes
+// start on main when the release branch for Next is created.
+var AfterNextVersion = majorVersion(2)
+
 //go:embed CURRENT_MAJOR
 var currentMajor string
 
-func mustCurrentMajorInt() int {
+func majorVersion(offset int) string {
 	m, err := strconv.Atoi(strings.TrimSpace(currentMajor))
 	if err != nil {
 		panic(fmt.Sprintf("invalid current major version: %v", err))
 	}
-	return m
+	return fmt.Sprintf("1.%d", m+offset)
 }
 
 func previousStable() assets.Branch {
-	m := mustCurrentMajorInt()
-	m--
-	branch := parseBranch(goversion.New(fmt.Sprintf("1.%v", m)))
+	branch := parseBranch(goversion.New(majorVersion(-1)))
 	branch.Stable = true
 	branch.PreviousStable = true
 	return branch
 }
 
 func latestStable() assets.Branch {
-	branch := parseBranch(goversion.New(fmt.Sprintf("1.%v", mustCurrentMajorInt())))
+	branch := parseBranch(goversion.New(majorVersion(0)))
 	branch.Stable = true
 	branch.LatestStable = true
 	return branch
 }
 
 func nextStable() assets.Branch {
-	m := mustCurrentMajorInt()
-	m++
-	return parseBranch(goversion.New(fmt.Sprintf("1.%v", m)))
+	return parseBranch(goversion.New(majorVersion(1)))
 }
 
 func parseBranch(v *goversion.GoVersion) assets.Branch {
